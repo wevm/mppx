@@ -103,6 +103,13 @@ describe('FeePayerResolution', () => {
           requestFeePayer: false,
         }),
       ).toBe(false)
+
+      expect(
+        resolveRequestFeePayer({
+          credential: credential(),
+          parameterFeePayer: feePayerUrl,
+        }),
+      ).toBe(true)
     })
 
     test('allows credential fee sponsorship only when method details and request permit it', () => {

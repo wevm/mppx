@@ -329,6 +329,7 @@ export function session<const parameters extends session.Parameters>(
   const lastOnChainVerified = new Map<Hex, number>()
   const { account, feePayer, feePayerUrl, recipient } = Account.resolve(parameters)
   const configuredFeePayer = feePayer ?? feePayerUrl
+  const settlementFeePayer = feePayer ?? (feePayerUrl ? true : undefined)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     feePayerUrl,
@@ -341,7 +342,7 @@ export function session<const parameters extends session.Parameters>(
       account,
       channel,
       client: await getClient({ chainId: channel.chainId }),
-      ...(feePayer ? { feePayer } : {}),
+      ...(settlementFeePayer ? { feePayer: settlementFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: parameters.feeToken,
       onSessionSettlement,
@@ -463,7 +464,7 @@ export function session<const parameters extends session.Parameters>(
         maybeSettleScheduled({
           account,
           client: context.client,
-          ...(typeof context.feePayer === 'object' ? { feePayer: context.feePayer } : {}),
+          ...(context.feePayer ? { feePayer: context.feePayer } : {}),
           feePayerPolicy: parameters.feePayerPolicy,
           feeToken: parameters.feeToken,
           onSessionSettlement,

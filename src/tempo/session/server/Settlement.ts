@@ -92,14 +92,9 @@ export function resolveRequestFeePayer(
   if (requestFeePayer === false) return credential ? false : undefined
 
   const account = typeof requestFeePayer === 'object' ? requestFeePayer : defaultFeePayer
-  if (credential) return account ?? undefined
-  if (
-    account ||
-    defaultFeePayer ||
-    parameterFeePayer === true ||
-    typeof parameterFeePayer === 'string'
-  )
-    return true
+  const hosted = parameterFeePayer === true || typeof parameterFeePayer === 'string'
+  if (credential) return account ?? (hosted ? true : undefined)
+  if (account || hosted) return true
   return undefined
 }
 
@@ -352,8 +347,8 @@ export type SettlementTransactionOptions = {
   candidateFeeTokens?: readonly Address[] | undefined
   /** TIP20EscrowChannel precompile address override. */
   escrowContract?: Address | undefined
-  /** Optional fee-payer account for sponsored settlement. */
-  feePayer?: viem_Account | undefined
+  /** Fee-payer account, or `true` when the client transport uses a configured hosted fee-payer service. */
+  feePayer?: viem_Account | true | undefined
   /** Optional policy for sponsored settlement. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Optional fee token override for settlement. */
@@ -370,8 +365,8 @@ export type MaybeSettleScheduledParameters = {
   channel: ChannelStore.State
   /** viem client used to settle on-chain. */
   client: Chain.TransactionClient
-  /** Optional fee-payer account for sponsored settlement. */
-  feePayer?: viem_Account | undefined
+  /** Fee-payer account, or `true` when the client transport uses a configured hosted fee-payer service. */
+  feePayer?: viem_Account | true | undefined
   /** Optional policy for sponsored settlement. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Optional fee token override for settlement. */

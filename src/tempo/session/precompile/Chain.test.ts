@@ -333,6 +333,49 @@ describe('precompile receipt wait', () => {
 })
 
 describe('precompile server transactions', () => {
+  test('marks server-driven close and settle transactions for hosted fee-payer sponsorship', async () => {
+    const rpcMethods: string[] = []
+    const preparedRequests: Record<string, unknown>[] = []
+    const signedRequests: Record<string, unknown>[] = []
+    const sender = {
+      ...feePayer,
+      async signTransaction(transaction: Record<string, unknown>) {
+        signedRequests.push(transaction)
+        return `0x76${'00'.repeat(32)}` as `0x${string}`
+      },
+    }
+    const prepare = async (parameters: Record<string, unknown>) => {
+      preparedRequests.push(parameters)
+      return parameters
+    }
+    const client = createMockClient({ rpcMethods }).extend(() => ({
+      prepareTransactionRequest: prepare as never,
+    }))
+
+    await Chain.closeOnChain(
+      client,
+      descriptor,
+      1n,
+      1n,
+      `0x${'11'.repeat(65)}`,
+      tip20ChannelEscrow,
+      {
+        account: sender,
+        feePayer: true,
+      },
+    )
+    await Chain.settleOnChain(client, descriptor, 1n, `0x${'11'.repeat(65)}`, tip20ChannelEscrow, {
+      account: sender,
+      feePayer: true,
+    })
+
+    expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
+    expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
+    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
+    expect(rpcMethods).not.toContain('eth_sendTransaction')
+    expect(rpcMethods).not.toContain('eth_call')
+  })
+
   test('does not add a fee-payer signature when the sender and fee payer are the same account', async () => {
     const rpcMethods: string[] = []
     const client = createMockClient({ rpcMethods })

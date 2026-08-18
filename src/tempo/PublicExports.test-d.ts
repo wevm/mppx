@@ -76,7 +76,7 @@ test('tempo session chain exports canonical transaction options', () => {
   expectTypeOf<ChannelTransactionOptions>().toEqualTypeOf<{
     account?: import('viem').Account | undefined
     candidateFeeTokens?: readonly import('viem').Address[] | undefined
-    feePayer?: import('viem').Account | undefined
+    feePayer?: import('viem').Account | true | undefined
     feePayerPolicy?: Partial<import('./internal/fee-payer.js').Policy> | undefined
     feeToken?: import('viem').Address | undefined
   }>()

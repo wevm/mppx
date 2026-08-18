@@ -1028,7 +1028,7 @@ async function handleCloseCredential(
       account
         ? {
             account,
-            ...(typeof parameters.feePayer === 'object' ? { feePayer: parameters.feePayer } : {}),
+            ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
             ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
             candidateFeeTokens: [channel.token],

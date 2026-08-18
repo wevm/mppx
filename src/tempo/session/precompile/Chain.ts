@@ -391,8 +391,8 @@ export type ChannelTransactionOptions = {
   account?: Account | undefined
   /** Candidate fee tokens used when resolving a fee token for fee-sponsored transactions. */
   candidateFeeTokens?: readonly Address[] | undefined
-  /** Fee-payer account used to co-sign Tempo fee-sponsored transactions. */
-  feePayer?: Account | undefined
+  /** Fee-payer account, or `true` when the client transport uses a configured hosted fee-payer service. */
+  feePayer?: Account | true | undefined
   /** Optional fee-payer gas and total-fee limits enforced before co-signing. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Explicit fee token for the transaction. */
@@ -600,17 +600,19 @@ function sendPrecompileContractCall(
   parameters: {
     account?: Account | undefined
     data: Hex
+    feePayer?: true | undefined
     feeToken?: Address | undefined
     to: Address
   },
 ): Promise<Hex> {
-  const { account, data, feeToken, to } = parameters
+  const { account, data, feePayer, feeToken, to } = parameters
   // `feeToken` is Tempo-specific and not represented on viem's base
   // transaction request type.
   return sendViemTransaction(client, {
     ...(account ? { account } : {}),
     to,
     data,
+    ...(feePayer ? { feePayer } : {}),
     ...(feeToken ? { feeToken } : {}),
   } as never)
 }
@@ -1216,15 +1218,26 @@ async function sendPrecompileTransaction(
   options?: ChannelTransactionOptions,
 ): Promise<Hex> {
   const account = options?.account ?? client.account
+  const feePayer = options?.feePayer
   const selfSponsored =
-    account && options?.feePayer && isAddressEqual(account.address, options.feePayer.address)
+    account && typeof feePayer === 'object' && isAddressEqual(account.address, feePayer.address)
 
-  if (options?.feePayer && !selfSponsored) {
+  if (feePayer === true) {
+    if (!account) throw new Error(`Cannot ${label} precompile channel: no account available.`)
+    return sendPrecompileContractCall(client, {
+      account,
+      data,
+      feePayer: true,
+      to,
+    })
+  }
+
+  if (feePayer && !selfSponsored) {
     if (!account) throw new Error(`Cannot ${label} precompile channel: no account available.`)
     const feeToken =
       options.feeToken ??
       (await resolveFeeToken({
-        account: options.feePayer.address,
+        account: feePayer.address,
         candidateTokens: options.candidateFeeTokens,
         client,
       }))
@@ -1238,7 +1251,7 @@ async function sendPrecompileTransaction(
     const serialized = await signTempoTransaction(client, {
       ...prepared,
       account,
-      feePayer: options.feePayer,
+      feePayer,
     })
     const receipt = await sendRawTransactionSync(client, {
       serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
