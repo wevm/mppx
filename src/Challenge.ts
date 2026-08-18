@@ -318,7 +318,15 @@ export function serialize(challenge: Challenge): string {
 /** @internal */
 function authParam(name: string, value: string): string {
   if (/[\r\n]/.test(value)) throw new Error('Invalid quoted-string value.')
-  return `${name}="${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    // Header values must be ByteStrings (code points ≤ 0xFF): escape anything
+    // above Latin-1 (em dashes, smart quotes, emoji in descriptions) so the
+    // serialized challenge is always a legal header value instead of crashing
+    // Response construction.
+    .replace(/[\u0100-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  return `${name}="${escaped}"`
 }
 
 /**
@@ -431,7 +439,14 @@ function readQuotedAuthParamValue(
 
     if (escaped) {
       parts ??= []
-      parts.push(char)
+      // `\\uXXXX` unescapes characters above Latin-1. Unambiguous: serializers
+      // always double raw backslashes, so a bare `\\u` only ever comes from
+      // the unicode escape in `authParam`.
+      const hex = char === 'u' ? input.slice(i, i + 4) : undefined
+      if (hex && /^[0-9A-Fa-f]{4}$/.test(hex)) {
+        parts.push(String.fromCharCode(Number.parseInt(hex, 16)))
+        i += 4
+      } else parts.push(char)
       segmentStart = i
       escaped = false
       continue

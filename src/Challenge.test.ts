@@ -508,6 +508,16 @@ describe('serialize', () => {
       escaped: 'Ends with slash \\\\',
       label: 'trailing backslash',
     },
+    {
+      description: '1 \u00d7 Classmatic \u2014 General Admission',
+      escaped: '1 \u00d7 Classmatic \\u2014 General Admission',
+      label: 'characters above Latin-1 (em dash)',
+    },
+    {
+      description: 'Tickets \ud83c\udf9f\ufe0f "VIP"',
+      escaped: 'Tickets \\ud83c\\udf9f\\ufe0f \\"VIP\\"',
+      label: 'surrogate pairs and quotes',
+    },
   ])('behavior: escapes quoted-string values: $label', ({ description, escaped }) => {
     const challenge = Challenge.from({
       id: 'abc123',
@@ -520,6 +530,25 @@ describe('serialize', () => {
 
     const header = Challenge.serialize(challenge)
     expect(header).toContain(`description="${escaped}"`)
+    expect(Challenge.deserialize(header).description).toBe(description)
+  })
+
+  test('behavior: serialized challenges are valid HTTP header values', () => {
+    const description = '1 \u00d7 Classmatic \u2014 General Admission \ud83c\udf9f\ufe0f'
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      description,
+    })
+
+    const header = Challenge.serialize(challenge)
+    // Header values are ByteStrings: anything above 0xFF makes Response
+    // construction throw in fetch-compliant runtimes.
+    expect([...header].every((char) => char.charCodeAt(0) <= 0xff)).toBe(true)
+    expect(() => new Headers({ 'WWW-Authenticate': header })).not.toThrow()
     expect(Challenge.deserialize(header).description).toBe(description)
   })
 
