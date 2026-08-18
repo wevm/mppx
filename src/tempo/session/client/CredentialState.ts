@@ -20,6 +20,7 @@ import type { SessionSnapshot } from '../Snapshot.js'
 import {
   createClosePayload,
   createOpenPayload,
+  deriveMachineUsdSessionSalt,
   createTopUpPayload,
   createVoucherPayload,
   isSameAddress,
@@ -206,6 +207,10 @@ export type ClientSessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
+  /** Contract receiving escrow funds and converting them for the logical recipient. */
+  settlementAdapter?: Address | undefined
+  settlementRouteSalt?: Hex | undefined
+  settlementTargetToken?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
   sessionSnapshot?: SessionSnapshot | undefined
 }
@@ -278,10 +283,14 @@ export type ChallengeContext = {
   key: string
   operator?: Address | undefined
   payee: Address
+  /** Logical merchant recipient, distinct from `payee` for adapter-backed sessions. */
+  recipient?: Address | undefined
+  routeSalt?: Hex | undefined
   snapshot?: SessionSnapshot | undefined
   /** Server-provided raw deposit hint for opening a channel, before local maxDeposit capping. */
   suggestedDepositRaw?: string | undefined
   token: Address
+  targetToken?: Address | undefined
 }
 
 /** Inputs used to choose the next client-side session credential operation. */
@@ -398,6 +407,12 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     operator: readOptionalAddress(methodDetails.operator),
+    settlementAdapter: readOptionalAddress(methodDetails.settlementAdapter),
+    settlementRouteSalt:
+      typeof methodDetails.settlementRouteSalt === 'string'
+        ? (methodDetails.settlementRouteSalt as Hex)
+        : undefined,
+    settlementTargetToken: readOptionalAddress(methodDetails.settlementTargetToken),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
       Constants.MethodDetailKeys.sessionSnapshot,
@@ -430,7 +445,17 @@ export async function resolveChallengeContext(
   if (!chainId) throw new Error('No chainId configured for TIP-1034 session challenge.')
 
   const escrow = resolveEscrow(challenge, escrowOverride, allowCustomEscrow)
-  const payee = readAddress(challenge.request.recipient, 'recipient')
+  const recipient = readAddress(challenge.request.recipient, 'recipient')
+  const routeFields = [
+    methodDetails.settlementAdapter,
+    methodDetails.settlementRouteSalt,
+    methodDetails.settlementTargetToken,
+  ]
+  if (routeFields.some(Boolean) && !routeFields.every(Boolean))
+    throw new Error(
+      'tempo session settlementAdapter, settlementRouteSalt, and settlementTargetToken are required together',
+    )
+  const payee = methodDetails.settlementAdapter ?? recipient
   const token = readAddress(challenge.request.currency, 'currency')
 
   return {
@@ -440,9 +465,19 @@ export async function resolveChallengeContext(
     client,
     escrow,
     feePayer: methodDetails.feePayer,
-    key: channelKey({ payee, token, escrow, chainId }),
+    key: channelKey({
+      payee,
+      recipient,
+      targetToken: methodDetails.settlementTargetToken,
+      token,
+      escrow,
+      chainId,
+    }),
     operator: methodDetails.operator,
+    routeSalt: methodDetails.settlementRouteSalt,
+    targetToken: methodDetails.settlementTargetToken,
     payee,
+    recipient,
     snapshot: methodDetails.sessionSnapshot,
     suggestedDepositRaw: readSuggestedDeposit(challenge.request.suggestedDeposit),
     token,
@@ -724,6 +759,15 @@ async function open(
       client: resolved.client,
       tokenOut: resolved.token,
     }),
+    ...(resolved.routeSalt && resolved.targetToken && resolved.recipient
+      ? {
+          salt: deriveMachineUsdSessionSalt({
+            recipient: resolved.recipient,
+            targetToken: resolved.targetToken,
+            routeSalt: resolved.routeSalt,
+          }),
+        }
+      : {}),
     token: resolved.token,
   })
   await storeChannelEntry(sink, {
@@ -734,6 +778,12 @@ async function open(
     escrow: resolved.escrow,
     chainId: resolved.chainId,
     opened: true,
+    ...(resolved.recipient && resolved.payee.toLowerCase() !== resolved.recipient.toLowerCase()
+      ? {
+          settlementRecipient: resolved.recipient,
+          settlementTargetToken: resolved.targetToken,
+        }
+      : {}),
   })
   return payload
 }

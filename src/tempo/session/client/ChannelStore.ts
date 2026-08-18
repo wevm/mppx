@@ -22,18 +22,25 @@ export type ChannelSink = {
 /** Returns the scope key for a reusable payer session channel. */
 export function channelKey(scope: {
   payee: Address
+  recipient?: Address | undefined
+  targetToken?: Address | undefined
   token: Address
   escrow: Address
   chainId: number
 }): string {
-  const { payee, token, escrow, chainId } = scope
-  return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:${chainId}`
+  const { payee, recipient, targetToken, token, escrow, chainId } = scope
+  const base = `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:${chainId}`
+  return recipient && recipient.toLowerCase() !== payee.toLowerCase()
+    ? `${base}:${recipient.toLowerCase()}:${(targetToken ?? token).toLowerCase()}`
+    : base
 }
 
 /** Returns the scope key for a stored channel entry. */
 export function entryKey(entry: ChannelEntry): string {
   return channelKey({
     payee: entry.descriptor.payee,
+    recipient: entry.settlementRecipient,
+    targetToken: entry.settlementTargetToken,
     token: entry.descriptor.token,
     escrow: entry.escrow,
     chainId: entry.chainId,

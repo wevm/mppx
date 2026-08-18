@@ -315,6 +315,8 @@ export interface BaseState {
   lastSettlementSpent?: bigint | undefined
   /** Charge operation count when the last server-scheduled settlement ran. */
   lastSettlementUnits?: number | undefined
+  /** Route metadata committed into adapter-backed channel salt. */
+  settlementRoute?: { recipient: Address; targetToken: Address; routeSalt: Hex } | undefined
 }
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */

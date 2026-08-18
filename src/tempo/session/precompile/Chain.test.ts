@@ -20,6 +20,7 @@ import * as ServerChannelOps from '../server/ChannelOps.js'
 import * as Chain from './Chain.js'
 import * as Channel from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
+import { machineUsdSwapperAbi } from './machineUsdSwapper.abi.js'
 import { tip20ChannelEscrow } from './Protocol.js'
 import * as Types from './Protocol.js'
 
@@ -1258,6 +1259,30 @@ describe('precompile broadcastTopUpTransaction', () => {
 })
 
 describe('precompile escrowAbi parity', () => {
+  test('encodes adapter settlement against the exact channel descriptor', () => {
+    const route = {
+      recipient: descriptor.operator,
+      targetToken: descriptor.token,
+      routeSalt: `0x${'12'.repeat(32)}` as Hex,
+    }
+    const call = Chain.machineUsdSessionSettlementCall(descriptor.payee, descriptor, route)
+    expect(call.to).toBe(descriptor.payee)
+    expect(call.data).toBe(
+      encodeFunctionData({
+        abi: machineUsdSwapperAbi,
+        functionName: 'settleSession',
+        args: [descriptor, route.recipient, route.targetToken, route.routeSalt],
+      }),
+    )
+    expect(() =>
+      Chain.machineUsdSessionSettlementCall(
+        '0x9999999999999999999999999999999999999999',
+        descriptor,
+        route,
+      ),
+    ).toThrow('settlement adapter is not the channel payee')
+  })
+
   test('contains all TIP-1034 functions and events', () => {
     const functions = escrowAbi.filter((item) => item.type === 'function').map((item) => item.name)
     expect(functions).toEqual([

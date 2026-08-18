@@ -67,6 +67,31 @@ describe('precompile Uint96', () => {
   })
 })
 
+describe('MachineUsd session route', () => {
+  test('binds merchant, target token, and nonce into descriptor salt', () => {
+    const route = {
+      recipient: '0x0000000000000000000000000000000000000001' as const,
+      targetToken: '0x0000000000000000000000000000000000000002' as const,
+      routeSalt: `0x${'11'.repeat(32)}` as Hex,
+    }
+    const commitment = Types.deriveMachineUsdSessionSalt(route)
+
+    expect(Types.deriveMachineUsdSessionSalt(route)).toBe(commitment)
+    expect(
+      Types.deriveMachineUsdSessionSalt({
+        ...route,
+        recipient: '0x0000000000000000000000000000000000000003',
+      }),
+    ).not.toBe(commitment)
+    expect(
+      Types.deriveMachineUsdSessionSalt({
+        ...route,
+        targetToken: '0x0000000000000000000000000000000000000004',
+      }),
+    ).not.toBe(commitment)
+  })
+})
+
 const credentialContextChannelId = `0x${'11'.repeat(32)}` as const
 
 describe('session credential context guards', () => {

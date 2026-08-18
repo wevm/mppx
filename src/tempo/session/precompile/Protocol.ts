@@ -1,9 +1,26 @@
 import { Base64 } from 'ox'
-import type { Address, Hex } from 'viem'
+import { encodeAbiParameters, keccak256, stringToHex, type Address, type Hex } from 'viem'
 
 import type * as Challenge from '../../../Challenge.js'
 
 const maxUint96 = (1n << 96n) - 1n
+const machineUsdSessionRouteTypehash = keccak256(
+  stringToHex('MachineUsdSessionRoute(address merchant,address targetToken,bytes32 routeSalt)'),
+)
+
+/** Derives the MachineUsdSwapper route commitment stored as the descriptor salt. */
+export function deriveMachineUsdSessionSalt(route: {
+  recipient: Address
+  targetToken: Address
+  routeSalt: Hex
+}): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: 'bytes32' }, { type: 'address' }, { type: 'address' }, { type: 'bytes32' }],
+      [machineUsdSessionRouteTypehash, route.recipient, route.targetToken, route.routeSalt],
+    ),
+  )
+}
 
 /** Amount encoded by TIP20EscrowChannel as a `uint96` on-chain value. */
 export type Uint96 = bigint
