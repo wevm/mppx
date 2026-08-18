@@ -3,7 +3,6 @@ import * as childProcess from 'node:child_process'
 import { type Address, type Chain, createClient, erc20Abi, http } from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { readContract, waitForTransactionReceipt } from 'viem/actions'
-import * as viemChains from 'viem/chains'
 import { Actions } from 'viem/tempo'
 import { tempoModerato, tempo as tempoMainnetChain } from 'viem/tempo/chains'
 
@@ -17,6 +16,7 @@ import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import { loadConfig, resolvePlugin } from '../internal.js'
+import { resolveEvmChain } from '../plugins/internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
 import { buildUrl } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
@@ -116,11 +116,6 @@ async function fetchEvmTokenInfo(
     ),
   ])
   return { balance, symbol: symbol ?? undefined }
-}
-
-function resolveEvmChain(chainId: number): Chain | undefined {
-  const all = Object.values(viemChains) as Chain[]
-  return all.find((c) => c.id === chainId)
 }
 
 function formatAmount(amount: bigint, decimals: number): string {
