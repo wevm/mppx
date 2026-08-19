@@ -42,7 +42,7 @@ export type MeteredStreamOptions = {
   onChargeCommitted?: ((channel: ChannelStore.State) => MaybePromise<unknown>) | undefined
   /** Store polling interval when `waitForUpdate` is unavailable. */
   pollIntervalMs: number
-  /** Pre-authorized units that may be emitted without reserving new voucher headroom. */
+  /** Pre-authorized implicit tick-cost units that may be emitted without a new reservation. */
   prepaidUnits?: number | undefined
   /** Optional abort signal for stream cancellation. */
   signal?: AbortSignal | undefined
@@ -58,23 +58,25 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
   let reservedAmount = 0n
   let reservedUnits = 0
 
-  const charge = async (amount = options.tickCost) => {
-    if (prepaidUnits > 0) {
+  const charge = async (amount?: bigint) => {
+    if (amount === undefined && prepaidUnits > 0) {
       prepaidUnits -= 1
       return
     }
 
+    const resolvedAmount = amount ?? options.tickCost
+
     await reserveChargeOrWait({
       store: options.store,
       channelId: options.channelId,
-      amount,
+      amount: resolvedAmount,
       reservedAmount,
       emit: options.emitNeedVoucher,
       formatNeedVoucher: options.formatNeedVoucher,
       pollIntervalMs: options.pollIntervalMs,
       signal: options.signal,
     })
-    reservedAmount += amount
+    reservedAmount += resolvedAmount
     reservedUnits += 1
   }
 

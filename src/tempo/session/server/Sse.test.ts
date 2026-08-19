@@ -288,6 +288,32 @@ describe('serve', () => {
     expect(committed).toEqual([{ spent: 2000000n, units: 2 }])
   })
 
+  test('uses the provided amount for an explicit charge when a prepaid unit exists', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 4015n)
+    await storage.updateChannel(channelId, (current) =>
+      current ? { ...current, spent: 1n, units: 1 } : current,
+    )
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: async function* (stream) {
+        await stream.charge(4014n)
+        yield 'charged'
+      },
+      prepaidUnits: 1,
+    })
+
+    await readStream(stream)
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel!.spent).toBe(4015n)
+    expect(channel!.units).toBe(2)
+  })
+
   test('runs the post-commit hook before emitting each charged value', async () => {
     const storage = memoryStore()
     const committed: Array<{ spent: bigint; units: number }> = []

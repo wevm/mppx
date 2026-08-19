@@ -2369,6 +2369,7 @@ describe('precompile server session unit guardrails', () => {
       options: {
         amount?: string
         chunkDelayMs?: number
+        explicitCharge?: bigint
         maxDeposit?: bigint
         onSessionSettlement?: session.Parameters['onSessionSettlement']
         settlementSchedule?: session.Parameters['settlementSchedule']
@@ -2471,6 +2472,11 @@ describe('precompile server session unit guardrails', () => {
 
           currentPayload = undefined
           return result.withReceipt(async function* (stream) {
+            if (options.explicitCharge !== undefined) {
+              await stream.charge(options.explicitCharge)
+              yield 'chunk-1'
+              return
+            }
             await stream.charge()
             yield 'chunk-1'
             if (options.chunkDelayMs)
@@ -2523,6 +2529,32 @@ describe('precompile server session unit guardrails', () => {
       expect(channelId).toBeTruthy()
       const persisted = await channelStore(harness.rawStore).getChannel(channelId!)
       expect(persisted?.finalized).toBe(true)
+    })
+
+    test('captures an explicit stream charge after a prepaid request tick', async () => {
+      const harness = createManagedSseFetch({ explicitCharge: 4014n, maxDeposit: 4015n })
+      const manager = precompileSessionManager({
+        account: payer,
+        client: createSigningClient(),
+        decimals: 0,
+        fetch: harness.fetch,
+        maxDeposit: '4015',
+      })
+
+      const chunks: string[] = []
+      for await (const chunk of await manager.sse('https://api.example.com/stream')) {
+        chunks.push(chunk)
+      }
+
+      expect(chunks).toEqual(['chunk-1'])
+      expect(harness.voucherPosts).toBeGreaterThan(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.acceptedCumulative).toBe('4015')
+      expect(closeReceipt?.spent).toBe('4015')
+
+      const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
+      expect(persisted).toMatchObject({ finalized: true, spent: 4015n, units: 2 })
     })
 
     test.each([
