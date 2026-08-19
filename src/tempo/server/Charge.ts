@@ -34,7 +34,7 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
-import * as MachineToken from '../internal/machine-token.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
@@ -149,7 +149,7 @@ export function charge<const parameters extends charge.Parameters>(
     const memo = methodDetails?.memo as `0x${string}` | undefined
     const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
     const settlementSender = machineTokenEnabled
-      ? MachineToken.getSettlementSender(chainId)
+      ? MachineTokenCharge.getSettlementSender(chainId)
       : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
@@ -310,8 +310,8 @@ export function charge<const parameters extends charge.Parameters>(
       !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || feePayerUrl)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
     const machineTokenRoute = machineTokenEnabled
-      ? MachineToken.matchRoute({
-          calls: (transaction.calls ?? []) as readonly MachineToken.Call[],
+      ? MachineTokenCharge.matchRoute({
+          calls: transaction.calls ?? [],
           chainId: chainId ?? client.chain?.id,
           currency,
           transfers,
@@ -466,7 +466,7 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
-      if (request.machineTokenEnabled && !MachineToken.isSupported(chainId))
+      if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       const resolvedFeePayer = (() => {
@@ -790,7 +790,9 @@ export declare namespace charge {
     source?: { address: `0x${string}`; chainId: number } | undefined
   }
 
-  type Parameters = MachineToken.Options & {
+  type Parameters = {
+    /** Enables first-party machine-token settlement for supported Tempo charges. */
+    machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
     /**

@@ -20,6 +20,7 @@ import type { MaybePromise } from '../../../internal/types.js'
 import type * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import { isSessionContentRequest } from '../../server/internal/request-body.js'
 import * as Chain from '../precompile/Chain.js'
 import { readSettledReceiptFields } from '../precompile/Chain.js'
@@ -406,6 +407,30 @@ export function assertSettlementSender(parameters: SettlementSenderParameters) {
   })
 }
 
+/**
+ * Assembles transaction options for settle/close transactions. Direct
+ * channels pay fees in their payment token; machine channels use PathUSD.
+ */
+export function resolveChannelTransactionOptions(
+  channel: Pick<ChannelStore.StoredPrecompileChannel, 'chainId' | 'token'>,
+  options: SettlementTransactionOptions | undefined,
+  account: viem_Account | undefined,
+): Chain.ChannelTransactionOptions | undefined {
+  if (!account) return undefined
+  const feeToken = MachineTokenSession.resolveFeeToken({
+    chainId: channel.chainId,
+    override: options?.feeToken,
+    paymentToken: channel.token,
+  })
+  return {
+    account,
+    ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+    ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+    feeToken,
+    candidateFeeTokens: options?.candidateFeeTokens ?? [feeToken],
+  }
+}
+
 /** Applies automatic settlement when the server-owned schedule is due. */
 export async function maybeSettleScheduled(
   parameters: MaybeSettleScheduledParameters,
@@ -441,30 +466,46 @@ export async function settle(
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
   const escrow = options?.escrowContract ?? channel.escrowContract
   const account = options?.account ?? getClientAccount(client)
-  assertSettlementSender({
-    operation: 'settle',
-    channelId,
-    operator: channel.operator,
-    payee: channel.payee,
-    sender: account?.address,
-  })
+  const machineRouter = MachineTokenSession.matchDeployment({
+    chainId: channel.chainId,
+    descriptor: channel.descriptor,
+  })?.swap
+  if (!machineRouter || !account)
+    assertSettlementSender({
+      operation: 'settle',
+      channelId,
+      operator: channel.operator,
+      payee: channel.payee,
+      sender: account?.address,
+    })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const txHash = await Chain.settleOnChain(
-    client,
-    channel.descriptor,
-    amount,
-    channel.highestVoucher.signature,
-    escrow,
-    account
-      ? {
-          account,
-          ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
-          ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-          ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
-          candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
-        }
-      : undefined,
-  )
+  const transactionOptions = resolveChannelTransactionOptions(channel, options, account)
+  let txHash: Hex
+  if (machineRouter) {
+    const authorizationSignature = channel.highestVoucher.authorizationSignature
+    if (!authorizationSignature)
+      throw new VerificationFailedError({
+        reason: 'machine-token voucher is missing its router authorization',
+      })
+    txHash = await Chain.settleMachineSessionOnChain(
+      client,
+      channel.descriptor,
+      amount,
+      channel.highestVoucher.signature,
+      authorizationSignature,
+      machineRouter,
+      transactionOptions,
+    )
+  } else {
+    txHash = await Chain.settleOnChain(
+      client,
+      channel.descriptor,
+      amount,
+      channel.highestVoucher.signature,
+      escrow,
+      transactionOptions,
+    )
+  }
   const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
   const { newSettled } = settled

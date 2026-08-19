@@ -11,6 +11,7 @@ import * as Constants from '../../../Constants.js'
 import type * as Credential from '../../../Credential.js'
 import { VerificationFailedError } from '../../../Errors.js'
 import type { Challenge } from '../../../index.js'
+import type { MaybePromise } from '../../../internal/types.js'
 import type * as z from '../../../zod.js'
 import * as Methods from '../../Methods.js'
 import {
@@ -38,6 +39,8 @@ export type ResolveSessionSnapshotParameters = {
   channelId: Hex | undefined
   /** Payment fields the reusable channel must match before it is advertised. */
   expected?: SessionSnapshotPaymentFields | undefined
+  /** Optional alternate-rail matcher when the stored descriptor differs from logical payment fields. */
+  matchPaymentFields?: MatchSessionSnapshotPaymentFields | undefined
   /** Server channel store. */
   store: ChannelStore.ChannelStore
 }
@@ -53,6 +56,12 @@ export type SessionSnapshotPaymentFields = {
   /** Payee address expected by the challenge. */
   recipient: Address
 }
+
+/** Validates an alternate channel descriptor against the logical session payment fields. */
+export type MatchSessionSnapshotPaymentFields = (
+  channel: ChannelStore.StoredPrecompileChannel,
+  expected: SessionSnapshotPaymentFields,
+) => MaybePromise<boolean>
 
 /** Request metadata available to `resolveChannelId` without exposing a mutable `Request`. */
 export type SessionChannelIdRequest = {
@@ -138,7 +147,7 @@ export async function resolveSessionChannelId(parameters: {
 export async function resolveSessionSnapshot(
   parameters: ResolveSessionSnapshotParameters,
 ): Promise<SessionSnapshot | undefined> {
-  const { amount, channelId, expected, store } = parameters
+  const { amount, channelId, expected, matchPaymentFields, store } = parameters
   if (!channelId) return undefined
   const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
@@ -146,7 +155,16 @@ export async function resolveSessionSnapshot(
   if (channel.closeRequestedAt !== 0n) return undefined
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
-  if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
+  if (expected && !matchesSnapshotPaymentFields(channel, expected)) {
+    // The snapshot is an optional reuse hint: a failing matcher (for example a
+    // transient RPC error during the route check) must omit the hint rather
+    // than fail challenge issuance or bootstrap preflight.
+    let matched = false
+    try {
+      matched = (await matchPaymentFields?.(channel, expected)) ?? false
+    } catch {}
+    if (!matched) return undefined
+  }
   const requiredCumulative = channel.spent + amount
   return {
     acceptedCumulative: channel.highestVoucherAmount.toString(),
@@ -242,6 +260,10 @@ export type SessionMethodDetails = {
   escrowContract: Address
   /** Whether this challenge allows fee-sponsored management transactions. */
   feePayer?: boolean | undefined
+  /** Fee token clients must use for open/top-up transactions. */
+  feeToken?: Address | undefined
+  /** Whether clients may fund this logical session through the first-party machine-token rail. */
+  machineTokenEnabled?: boolean | undefined
   /** Minimum raw-unit increase required for voucher credentials. */
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
@@ -264,6 +286,7 @@ export type ResolveSessionPaymentRequestParameters = {
   decimals: number
   defaultFeePayer?: viem_Account | undefined
   getClient: ResolveRequestChainIdParameters['getClient']
+  matchSnapshotPaymentFields?: MatchSessionSnapshotPaymentFields | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   parameterFeePayer?: ParameterFeePayer
@@ -328,6 +351,9 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     typeof value.escrowContract === 'string' &&
     isAddress(value.escrowContract, { strict: false }) &&
     (value.feePayer === undefined || typeof value.feePayer === 'boolean') &&
+    (value.feeToken === undefined ||
+      (typeof value.feeToken === 'string' && isAddress(value.feeToken, { strict: false }))) &&
+    (value.machineTokenEnabled === undefined || typeof value.machineTokenEnabled === 'boolean') &&
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
@@ -384,6 +410,7 @@ export async function resolveSessionPaymentRequest(
     decimals,
     defaultFeePayer,
     getClient,
+    matchSnapshotPaymentFields,
     parameterChainId,
     parameterEscrowContract,
     parameterFeePayer,
@@ -427,6 +454,7 @@ export async function resolveSessionPaymentRequest(
       escrowContract,
       recipient: readChallengeAddress(request.recipient, 'recipient'),
     },
+    matchPaymentFields: request.machineTokenEnabled ? matchSnapshotPaymentFields : undefined,
     store,
   })
   const { operator: _operator, ...requestWithoutOperator } = request

@@ -19,7 +19,7 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import * as MachineToken from '../internal/machine-token.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
@@ -169,7 +169,7 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       const machineTokenRoute = machineTokenEnabled
-        ? await MachineToken.findRoute(client, {
+        ? await MachineTokenCharge.findRoute(client, {
             account: account.address,
             chainId,
             currency,

@@ -31,7 +31,7 @@ import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/v
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
-import * as MachineToken from '../internal/machine-token.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 
 const realm = 'api.example.com'
@@ -1230,7 +1230,7 @@ describe('tempo', () => {
         machineTokenEnabled: true,
         supportedModes: ['pull'],
       })
-      const calls = MachineToken.getRoute({
+      const calls = MachineTokenCharge.getRoute({
         chainId: defaults.chainId.testnet,
         currency: asset,
         transfers: [

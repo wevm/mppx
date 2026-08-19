@@ -13,12 +13,6 @@ export type ChannelStore = {
   delete(key: string): MaybePromise<void>
 }
 
-/** Channel persistence and update notification for credential results. */
-export type ChannelSink = {
-  store: ChannelStore
-  notifyUpdate: (entry: ChannelEntry) => void
-}
-
 /** Returns the scope key for a reusable payer session channel. */
 export function channelKey(scope: {
   payee: Address
@@ -33,8 +27,8 @@ export function channelKey(scope: {
 /** Returns the scope key for a stored channel entry. */
 export function entryKey(entry: ChannelEntry): string {
   return channelKey({
-    payee: entry.descriptor.payee,
-    token: entry.descriptor.token,
+    payee: entry.paymentScope?.payee ?? entry.descriptor.payee,
+    token: entry.paymentScope?.token ?? entry.descriptor.token,
     escrow: entry.escrow,
     chainId: entry.chainId,
   })

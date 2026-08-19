@@ -3,9 +3,8 @@ import { Abis } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as defaults from './defaults.js'
-import type { Transfer } from './machine-token.js'
 
-const chainId = defaults.chainId.testnet
+const chainId = defaults.chainId.mainnet
 const deployment = defaults.machineToken[chainId]
 const targetToken = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x2222222222222222222222222222222222222222'
@@ -14,9 +13,9 @@ const memo = `0x${'ab'.repeat(32)}` as const
 const client = createClient({
   transport: custom({ request: async () => undefined as never }),
 })
-const transfers = [{ amount: 1_000_000n, memo, recipient }] satisfies readonly Transfer[]
+const transfers = [{ amount: 1_000_000n, memo, recipient }] as const
 
-describe('Tempo machine token', () => {
+describe('Tempo machine-token charges', () => {
   test('builds and validates the exact first-party approve + swapTo calls', async () => {
     vi.resetModules()
     vi.doMock('viem/actions', () => ({
@@ -25,8 +24,8 @@ describe('Tempo machine token', () => {
     }))
 
     try {
-      const MachineToken = await import('./machine-token.js')
-      const route = await MachineToken.findRoute(client, {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const route = await MachineTokenCharge.findRoute(client, {
         account: payer,
         chainId,
         currency: targetToken,
@@ -35,7 +34,7 @@ describe('Tempo machine token', () => {
 
       expect(route?.calls).toHaveLength(2)
       expect(
-        MachineToken.matchRoute({
+        MachineTokenCharge.matchRoute({
           calls: route!.calls,
           chainId,
           currency: targetToken,
@@ -43,7 +42,7 @@ describe('Tempo machine token', () => {
         })?.transfers,
       ).toEqual(transfers)
       expect(
-        MachineToken.matchRoute({
+        MachineTokenCharge.matchRoute({
           calls: route!.calls,
           chainId,
           currency: targetToken,
@@ -65,9 +64,9 @@ describe('Tempo machine token', () => {
     }))
 
     try {
-      const MachineToken = await import('./machine-token.js')
+      const MachineTokenCharge = await import('./machine-token-charge.js')
       await expect(
-        MachineToken.findRoute(client, {
+        MachineTokenCharge.findRoute(client, {
           account: payer,
           chainId,
           currency: targetToken,
@@ -90,9 +89,9 @@ describe('Tempo machine token', () => {
     }))
 
     try {
-      const MachineToken = await import('./machine-token.js')
+      const MachineTokenCharge = await import('./machine-token-charge.js')
       await expect(
-        MachineToken.findRoute(client, {
+        MachineTokenCharge.findRoute(client, {
           account: payer,
           chainId,
           currency: targetToken,
@@ -113,8 +112,8 @@ describe('Tempo machine token', () => {
     }))
 
     try {
-      const MachineToken = await import('./machine-token.js')
-      const route = await MachineToken.findRoute(client, {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const route = await MachineTokenCharge.findRoute(client, {
         account: payer,
         chainId,
         currency: targetToken,
@@ -122,7 +121,7 @@ describe('Tempo machine token', () => {
       })
 
       expect(
-        MachineToken.matchRoute({
+        MachineTokenCharge.matchRoute({
           calls: [...route!.calls, route!.calls[0]!],
           chainId,
           currency: targetToken,
@@ -130,7 +129,7 @@ describe('Tempo machine token', () => {
         }),
       ).toBeUndefined()
       expect(
-        MachineToken.matchRoute({
+        MachineTokenCharge.matchRoute({
           calls: [
             route!.calls[0]!,
             {
@@ -154,26 +153,27 @@ describe('Tempo machine token', () => {
   })
 
   test('does not use unconfigured chains', async () => {
-    const MachineToken = await import('./machine-token.js')
+    const MachineTokenCharge = await import('./machine-token-charge.js')
     await expect(
-      MachineToken.findRoute(client, {
+      MachineTokenCharge.findRoute(client, {
         account: payer,
         chainId: 69420,
         currency: targetToken,
         transfers,
       }),
     ).resolves.toBeUndefined()
-    expect(MachineToken.getSettlementSender(69420)).toBeUndefined()
+    expect(MachineTokenCharge.getSettlementSender(69420)).toBeUndefined()
   })
 
   test('falls back for split charges', async () => {
-    const MachineToken = await import('./machine-token.js')
-    expect(
-      MachineToken.getRoute({
+    const MachineTokenCharge = await import('./machine-token-charge.js')
+    await expect(
+      MachineTokenCharge.findRoute(client, {
+        account: payer,
         chainId,
         currency: targetToken,
         transfers: [...transfers, transfers[0]!],
       }),
-    ).toBeUndefined()
+    ).resolves.toBeUndefined()
   })
 })

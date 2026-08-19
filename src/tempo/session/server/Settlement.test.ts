@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
 import type * as Method from '../../../Method.js'
+import * as defaults from '../../internal/defaults.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
 import type * as ChannelStore from './ChannelStore.js'
 import {
@@ -12,6 +13,7 @@ import {
   isSettlementDue,
   readRequestFeePayer,
   resolveCredentialFeePayer,
+  resolveChannelTransactionOptions,
   resolveRequestFeePayer,
   resolveSettlementProgress,
 } from './Settlement.js'
@@ -170,6 +172,37 @@ describe('FeePayerResolution', () => {
           request: { feePayer: {} },
         }),
       ).toBe(defaultFeePayer)
+    })
+
+    test('derives settlement fee tokens from the channel token', () => {
+      const chainId = defaults.chainId.mainnet
+      expect(
+        resolveChannelTransactionOptions(
+          {
+            chainId,
+            token: defaults.machineToken[chainId].token,
+          },
+          undefined,
+          defaultFeePayer,
+        ),
+      ).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.pathUsd],
+        feeToken: defaults.tokens.pathUsd,
+      })
+      expect(
+        resolveChannelTransactionOptions(
+          {
+            chainId,
+            token: defaults.tokens.usdc,
+          },
+          { feePayer: true },
+          defaultFeePayer,
+        ),
+      ).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.usdc],
+        feePayer: true,
+        feeToken: defaults.tokens.usdc,
+      })
     })
   })
 })

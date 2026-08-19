@@ -1,6 +1,6 @@
 import type { Address, Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import type * as Credential from '../../../Credential.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
@@ -542,6 +542,40 @@ describe('SessionSnapshotHints', () => {
           item.name,
         ).resolves.toBeUndefined()
       }
+    })
+
+    test('uses alternate descriptor matchers only as optional reuse hints', async () => {
+      const logicalRecipient = '0x0000000000000000000000000000000000000005' as Address
+      const logicalCurrency = '0x0000000000000000000000000000000000000006' as Address
+      const matchPaymentFields = vi.fn(() => true)
+      const parameters = {
+        amount: 50n,
+        channelId,
+        expected: {
+          chainId: 4217,
+          currency: logicalCurrency,
+          escrowContract,
+          recipient: logicalRecipient,
+        },
+        store: store(channel()),
+      }
+
+      await expect(resolveSessionSnapshot({ ...parameters, matchPaymentFields })).resolves.toEqual(
+        expect.objectContaining({ descriptor }),
+      )
+      expect(matchPaymentFields).toHaveBeenCalledWith(
+        expect.objectContaining({ descriptor }),
+        expect.objectContaining({ currency: logicalCurrency, recipient: logicalRecipient }),
+      )
+
+      await expect(
+        resolveSessionSnapshot({
+          ...parameters,
+          matchPaymentFields: async () => {
+            throw new Error('rpc unavailable')
+          },
+        }),
+      ).resolves.toBeUndefined()
     })
 
     test('omits hints for missing, non-precompile, closing, or finalized channels', async () => {

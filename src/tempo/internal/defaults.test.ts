@@ -5,6 +5,7 @@ import {
   currency,
   decimals,
   escrowContract,
+  machineToken,
   resolveCurrency,
   rpcUrl,
   tokens,
@@ -56,6 +57,18 @@ describe('escrowContract', () => {
   test('testnet escrow contract', () => {
     expect(escrowContract[chainId.testnet]).toBe('0xe1c4d3dce17bc111181ddf716f75bae49e61a336')
   })
+})
+
+describe('machineToken', () => {
+  test.each([chainId.mainnet, chainId.testnet])(
+    'chain %i uses the unified machine-token deployment',
+    (id) => {
+      expect(machineToken[id]).toEqual({
+        swap: '0xd588ED9Ae08643A450157Adaf61c3C0C1BBd0dbb',
+        token: '0x20c0000000000000000000006637932dE5413804',
+      })
+    },
+  )
 })
 
 describe('currency', () => {

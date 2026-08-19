@@ -18,6 +18,7 @@ import {
   isTempoSessionChallenge,
   type TempoSessionChallenge,
 } from '../../tempo/session/client/Transports.js'
+import * as Channel from '../../tempo/session/precompile/Channel.js'
 import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import * as z from '../../zod.js'
 
@@ -161,6 +162,12 @@ const storedChannelSchema = z.object({
   escrow: z.address(),
   chainId: z.number(),
   opened: z.boolean(),
+  paymentScope: z.optional(
+    z.object({
+      payee: z.address(),
+      token: z.address(),
+    }),
+  ),
 })
 const accountSchema = z.object({
   name: z.optional(z.string()),
@@ -253,8 +260,8 @@ export function sessionScopeKey(scope: SessionScope): string {
 export function sessionScope(channel: ChannelEntry): SessionScope {
   return {
     payer: channel.descriptor.payer,
-    payee: channel.descriptor.payee,
-    token: channel.descriptor.token,
+    payee: channel.paymentScope?.payee ?? channel.descriptor.payee,
+    token: channel.paymentScope?.token ?? channel.descriptor.token,
     escrow: channel.escrow,
     chainId: channel.chainId,
   }
@@ -321,9 +328,8 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
     const previousValue = await readJson(file)
     const previous =
       previousValue === undefined ? undefined : parseStoredSession(previousValue, file)
-    if (previous) assertSameSession(previous, input, file)
-
     const challenge = parseSessionChallenge(input.challenge, file)
+    if (previous) assertSameSession(previous, input, file)
     assertChallengeMatchesChannel(challenge, channel, file)
     const receipt = input.receipt
       ? sanitizeReceipt(input.receipt, channel.channelId, file)
@@ -743,6 +749,12 @@ function channelIdentity(channel: ChannelEntry): object {
     ),
     escrow: channel.escrow.toLowerCase(),
     chainId: channel.chainId,
+    paymentScope: channel.paymentScope
+      ? {
+          payee: channel.paymentScope.payee.toLowerCase(),
+          token: channel.paymentScope.token.toLowerCase(),
+        }
+      : undefined,
   }
 }
 
@@ -751,12 +763,16 @@ function assertChallengeMatchesChannel(
   channel: ChannelEntry,
   file?: string | undefined,
 ): void {
+  const expectedChannelId = Channel.computeId({
+    ...channel.descriptor,
+    chainId: channel.chainId,
+    escrow: channel.escrow,
+  })
+  if (expectedChannelId.toLowerCase() !== channel.channelId.toLowerCase())
+    throw stateError(file, 'Session channel ID does not match its descriptor.')
   const payee = normalizeAddress(challenge.request.recipient, 'challenge recipient', file)
   const token = normalizeAddress(challenge.request.currency, 'challenge currency', file)
-  if (payee !== channel.descriptor.payee.toLowerCase())
-    throw stateError(file, 'Session challenge payee does not match the channel.')
-  if (token !== channel.descriptor.token.toLowerCase())
-    throw stateError(file, 'Session challenge token does not match the channel.')
+  const scope = normalizeScope(sessionScope(channel))
   if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw stateError(file, 'Session challenge escrow does not match the channel.')
   if (isObject(challenge.request.methodDetails)) {
@@ -764,6 +780,10 @@ function assertChallengeMatchesChannel(
     if (methodDetails.chainId !== undefined && methodDetails.chainId !== channel.chainId)
       throw stateError(file, 'Session challenge chain does not match the channel.')
   }
+  if (payee !== scope.payee)
+    throw stateError(file, 'Session challenge payee does not match the channel.')
+  if (token !== scope.token)
+    throw stateError(file, 'Session challenge token does not match the channel.')
 }
 
 function assertChannelScope(
@@ -771,14 +791,7 @@ function assertChannelScope(
   scope: SessionScope,
   file?: string | undefined,
 ): void {
-  const normalized = normalizeScope(scope)
-  if (
-    channel.descriptor.payer.toLowerCase() !== normalized.payer ||
-    channel.descriptor.payee.toLowerCase() !== normalized.payee ||
-    channel.descriptor.token.toLowerCase() !== normalized.token ||
-    channel.escrow.toLowerCase() !== normalized.escrow ||
-    channel.chainId !== normalized.chainId
-  )
+  if (sessionScopeKey(sessionScope(channel)) !== sessionScopeKey(scope))
     throw stateError(file, 'Session channel does not match the selected payment scope.')
 }
 

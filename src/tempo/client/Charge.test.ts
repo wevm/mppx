@@ -276,7 +276,7 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: findMachineTokenRoute,
     }))
     vi.doMock('../internal/auto-swap.js', () => ({
@@ -345,7 +345,7 @@ describe('tempo.charge client', () => {
       ])
     } finally {
       vi.doUnmock('viem/actions')
-      vi.doUnmock('../internal/machine-token.js')
+      vi.doUnmock('../internal/machine-token-charge.js')
       vi.doUnmock('../internal/auto-swap.js')
       vi.resetModules()
     }
@@ -368,7 +368,7 @@ describe('tempo.charge client', () => {
       signTransaction: vi.fn(),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
     }))
 
@@ -411,7 +411,7 @@ describe('tempo.charge client', () => {
       expect(credential.payload).toEqual({ hash, type: 'hash' })
     } finally {
       vi.doUnmock('viem/actions')
-      vi.doUnmock('../internal/machine-token.js')
+      vi.doUnmock('../internal/machine-token-charge.js')
       vi.resetModules()
     }
   })

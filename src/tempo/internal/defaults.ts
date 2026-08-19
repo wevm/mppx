@@ -20,15 +20,15 @@ export const currency = {
   [chainId.testnet]: tokens.pathUsd,
 } as const satisfies Record<ChainId, string>
 
-/** First-party machine-token swap deployments. */
+/** Unified first-party machine-token deployments used by charges and sessions. */
 export const machineToken = {
   [chainId.mainnet]: {
-    swap: '0xC6D32f013E0fA3e83B63Dc680E99826761595732',
-    token: '0x20C0000000000000000000003793c39601711f19',
+    swap: '0xd588ED9Ae08643A450157Adaf61c3C0C1BBd0dbb',
+    token: '0x20c0000000000000000000006637932dE5413804',
   },
   [chainId.testnet]: {
-    swap: '0x07f1FE0467Ae01DE340024aa4b7DD9729b1c169b',
-    token: '0x20c000000000000000000000f85bbCa724044De0',
+    swap: '0xd588ED9Ae08643A450157Adaf61c3C0C1BBd0dbb',
+    token: '0x20c0000000000000000000006637932dE5413804',
   },
 } as const satisfies Partial<Record<ChainId, { swap: `0x${string}`; token: `0x${string}` }>>
 

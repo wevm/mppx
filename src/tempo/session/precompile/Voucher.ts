@@ -5,6 +5,10 @@ import { signTypedData } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
 
 import * as TempoAddress from '../../internal/address.js'
+import {
+  parseCanonicalEnvelope,
+  serializeCanonicalEnvelope,
+} from '../../internal/signature-envelope.js'
 import type { Voucher, SignedVoucher } from './Protocol.js'
 import { uint96 } from './Protocol.js'
 
@@ -58,10 +62,6 @@ function getVoucherPayload(verifyingContract: Address, chainId: number, voucher:
   })
 }
 
-function isPrimitiveEnvelope(type: string): boolean {
-  return type === 'secp256k1' || type === 'p256' || type === 'webAuthn'
-}
-
 function signCanonicalTempoVoucher(
   account: Account,
   parameters: {
@@ -109,13 +109,7 @@ export async function signVoucher(
     })
   })()
 
-  const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-  if (!isPrimitiveEnvelope(envelope.type))
-    throw new Error(
-      `TIP-1034 vouchers require a TIP-1020 primitive signature; received "${envelope.type}".`,
-    )
-
-  return SignatureEnvelope.serialize(envelope)
+  return serializeCanonicalEnvelope(signature, 'TIP-1034 vouchers')
 }
 
 /**
@@ -131,11 +125,8 @@ export function verifyVoucher(
   expectedSigner: Address,
 ): boolean {
   try {
-    const envelope = SignatureEnvelope.from(voucher.signature as SignatureEnvelope.Serialized)
-
-    if (!isPrimitiveEnvelope(envelope.type)) return false
-    if (SignatureEnvelope.serialize(envelope).toLowerCase() !== voucher.signature.toLowerCase())
-      return false
+    const envelope = parseCanonicalEnvelope(voucher.signature)
+    if (!envelope) return false
 
     const payload = getVoucherPayload(escrowContract, chainId, voucher)
     const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
@@ -153,10 +144,12 @@ export function parseVoucherFromPayload(
   channelId: Hex,
   cumulativeAmount: string,
   signature: Hex,
-): SignedVoucher {
+  authorizationSignature?: Hex | undefined,
+): SignedVoucher & { authorizationSignature?: Hex | undefined } {
   return {
     channelId,
     cumulativeAmount: uint96(BigInt(cumulativeAmount)),
     signature,
+    ...(authorizationSignature ? { authorizationSignature } : {}),
   }
 }

@@ -27,7 +27,7 @@ const swapAbi = [
   },
 ] as const
 
-export type Call = {
+type Call = {
   data?: Hex.Hex | undefined
   to?: Address | undefined
   value?: bigint | undefined
@@ -44,16 +44,10 @@ type Route = {
   transfers: readonly [{ amount: bigint; memo: Hex.Hex; recipient: Address }]
 }
 
-export type Transfer = {
+type Transfer = {
   amount: bigint | string
   memo?: string | undefined
   recipient: Address
-}
-
-/** Shared first-party machine-token configuration for Tempo methods. */
-export type Options = {
-  /** Enables first-party machine-token settlement for supported Tempo methods. */
-  machineTokenEnabled?: boolean | undefined
 }
 
 function getDeployment(chainId: number | undefined) {
@@ -61,7 +55,7 @@ function getDeployment(chainId: number | undefined) {
   return defaults.machineToken[chainId as keyof typeof defaults.machineToken]
 }
 
-/** Returns whether a first-party machine-token route is deployed on a chain. */
+/** Returns whether a first-party machine-token charge route is deployed on a chain. */
 export function isSupported(chainId: number | undefined): boolean {
   return !!getDeployment(chainId)
 }
@@ -171,7 +165,7 @@ export function matchRoute(parameters: {
   }
 }
 
-/** Returns the trusted sender that settles the configured route on a chain. */
+/** Returns the trusted sender that settles the configured charge route on a chain. */
 export function getSettlementSender(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.swap
 }
