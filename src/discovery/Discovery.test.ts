@@ -65,6 +65,20 @@ describe('PaymentInfo', () => {
     expect(result.success).toBe(false)
   })
 
+  test('ignores unknown fields next to offers', () => {
+    // Only the spec-defined flat fields conflict with `offers`; unknown
+    // extension keys are ignored, as documented on the schema.
+    const result = PaymentInfo.safeParse({
+      offers: [{ amount: '1000', intent: 'charge', method: 'tempo' }],
+      price: '0.001',
+      protocols: ['mpp'],
+    })
+    expect(result.success).toBe(true)
+    expect(result.data).toEqual({
+      offers: [{ amount: '1000', intent: 'charge', method: 'tempo' }],
+    })
+  })
+
   test('rejects malformed offers', () => {
     const result = PaymentInfo.safeParse({
       offers: [{ amount: '01', intent: 'charge', method: 'tempo' }],

@@ -38,7 +38,8 @@ export const PaymentInfo = z.pipe(
     .check(
       z.refine(
         (value) =>
-          value.offers === undefined || Object.keys(value).every((key) => key === 'offers'),
+          value.offers === undefined ||
+          Object.keys(value).every((key) => key === 'offers' || !paymentInfoFieldNames.has(key)),
         'Cannot mix offers with flat payment info fields',
       ),
     ),

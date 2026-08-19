@@ -169,6 +169,36 @@ describe('validate', () => {
     )
   })
 
+  test('accepts unknown fields next to offers', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+                price: '0.0001',
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors).not.toContainEqual(
+      expect.objectContaining({
+        message: 'Cannot mix offers with flat payment info fields',
+      }),
+    )
+  })
+
   test('returns errors for empty offers arrays', () => {
     const errors = validate(
       makeDoc({
