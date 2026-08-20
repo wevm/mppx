@@ -347,6 +347,7 @@ export function session<const parameters extends session.Parameters>(
   const matchSnapshotPaymentFields: MatchSessionSnapshotPaymentFields = async (
     channel,
     expected,
+    options,
   ) => {
     if (
       channel.chainId !== expected.chainId ||
@@ -355,7 +356,7 @@ export function session<const parameters extends session.Parameters>(
     )
       return false
     return !!(await MachineTokenSession.matchRoute(await getClient({ chainId: expected.chainId }), {
-      active: true,
+      active: options?.activeRoute ?? true,
       chainId: expected.chainId,
       descriptor: channel.descriptor,
       merchant: expected.recipient,

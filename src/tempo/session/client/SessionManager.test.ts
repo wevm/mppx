@@ -757,6 +757,45 @@ describe('Session', () => {
       expect(map.get(entryKey(seeded))).toMatchObject({ channelId: machineChannelId })
     })
 
+    test('keeps a rewritten-scope channel from a rotated deployment', async () => {
+      // Opened against a deployment the current table no longer lists: only the
+      // differing payment scope marks the entry as non-derivable.
+      const rotatedDescriptor = {
+        ...machineDescriptor,
+        operator: '0x00000000000000000000000000000000000000AA' as Address,
+        token: '0x20c0000000000000000000000000000000000009' as Address,
+      }
+      const seeded = channelEntry({
+        channelId: Channel.computeId({
+          ...rotatedDescriptor,
+          chainId: 4217,
+          escrow: tip20ChannelEscrow,
+        }),
+        descriptor: rotatedDescriptor,
+        paymentScope: {
+          payee: storedDescriptor.payee,
+          token: storedDescriptor.token,
+        },
+      })
+      const { store, delete: remove, map } = makeChannelStore([seeded])
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        throw new Error('unexpected credential for a rotated machine channel')
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: store,
+      })
+
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow()
+      expect(remove).not.toHaveBeenCalled()
+      expect(map.get(entryKey(seeded))).toMatchObject({ channelId: seeded.channelId })
+    })
+
     test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {
       const seeded = channelEntry({ cumulativeAmount: 10_000_000n, deposit: 10_000_000n })
       const { store, delete: remove, map } = makeChannelStore([seeded])

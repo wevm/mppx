@@ -413,17 +413,25 @@ export function assertSettlementSender(parameters: SettlementSenderParameters) {
  * fee token unset so balance-aware selection can pick a funded candidate.
  */
 export function resolveChannelTransactionOptions(
-  channel: Pick<ChannelStore.StoredPrecompileChannel, 'chainId' | 'token'>,
+  channel: Pick<ChannelStore.StoredPrecompileChannel, 'chainId' | 'descriptor' | 'token'>,
   options: SettlementTransactionOptions | undefined,
   account: viem_Account | undefined,
 ): Chain.ChannelTransactionOptions | undefined {
   if (!account) return undefined
-  const feeToken = MachineTokenSession.resolveFeeToken({
-    chainId: channel.chainId,
-    override: options?.feeToken,
-    paymentToken: channel.token,
-  })
-  const pinned = options?.feeToken !== undefined || !isAddressEqual(feeToken, channel.token)
+  const machine =
+    MachineTokenSession.matchDeployment({
+      chainId: channel.chainId,
+      descriptor: channel.descriptor,
+    }) !== undefined
+  const feeToken =
+    options?.feeToken ??
+    (machine
+      ? MachineTokenSession.resolveFeeToken({
+          chainId: channel.chainId,
+          paymentToken: channel.token,
+        })
+      : channel.token)
+  const pinned = options?.feeToken !== undefined || machine
   return {
     account,
     ...(options?.feePayer ? { feePayer: options.feePayer } : {}),

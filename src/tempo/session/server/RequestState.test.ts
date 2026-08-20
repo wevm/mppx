@@ -402,10 +402,17 @@ describe('SessionSnapshotHints', () => {
       expect(resolved).toBeUndefined()
     })
 
-    test('trusts a close credential channel ID once its voucher signature verifies', async () => {
+    test('advertises a close snapshot once the close voucher signature verifies', async () => {
       const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
       try {
-        const resolved = await resolveSessionChannelId({
+        // A machine-rail channel: stored payee/token differ from the challenge
+        // scope, so the snapshot needs the alternate-rail matcher.
+        const machineChannel = channel({
+          payee: `0x${'99'.repeat(20)}` as Address,
+          token: '0x20c0000000000000000000000000000000000009' as Address,
+        })
+        const matchPaymentFields = vi.fn().mockResolvedValue(true)
+        const resolved = await resolveSessionPaymentRequest({
           credential: {
             challenge: {},
             payload: {
@@ -415,23 +422,35 @@ describe('SessionSnapshotHints', () => {
               signature: `0x${'44'.repeat(64)}`,
             },
           } as Credential.Credential,
+          decimals: 0,
+          getClient: async () => ({ chain: { id: 4217 } }),
+          matchSnapshotPaymentFields: matchPaymentFields,
           request: {
             amount: '1',
+            chainId: 4217,
             currency: descriptor.token,
             decimals: 0,
+            escrowContract,
             recipient: descriptor.payee,
             unitType: 'request',
           },
-          store: store(channel()),
+          store: store(machineChannel),
         })
 
-        expect(resolved).toBe(channelId)
         expect(verify).toHaveBeenCalledWith(
           escrowContract,
           4217,
           { channelId, cumulativeAmount: 500n, signature: `0x${'44'.repeat(64)}` },
           descriptor.authorizedSigner,
         )
+        // Close credentials accept retired routes, so the recovery snapshot is
+        // matched without requiring an active route or `machineTokenEnabled`.
+        expect(matchPaymentFields).toHaveBeenCalledWith(
+          expect.objectContaining({ channelId }),
+          expect.objectContaining({ recipient: descriptor.payee }),
+          { activeRoute: false },
+        )
+        expect(resolved.sessionSnapshot).toMatchObject({ channelId, spent: '300' })
       } finally {
         verify.mockRestore()
       }
@@ -440,7 +459,7 @@ describe('SessionSnapshotHints', () => {
     test('ignores close credential channel IDs when the voucher signature fails', async () => {
       const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(false)
       try {
-        const resolved = await resolveSessionChannelId({
+        const resolved = await resolveSessionPaymentRequest({
           credential: {
             challenge: {},
             payload: {
@@ -450,17 +469,21 @@ describe('SessionSnapshotHints', () => {
               signature: `0x${'44'.repeat(64)}`,
             },
           } as Credential.Credential,
+          decimals: 0,
+          getClient: async () => ({ chain: { id: 4217 } }),
           request: {
             amount: '1',
+            chainId: 4217,
             currency: descriptor.token,
             decimals: 0,
+            escrowContract,
             recipient: descriptor.payee,
             unitType: 'request',
           },
           store: store(channel()),
         })
 
-        expect(resolved).toBeUndefined()
+        expect(resolved.sessionSnapshot).toBeUndefined()
       } finally {
         verify.mockRestore()
       }

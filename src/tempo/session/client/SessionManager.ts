@@ -148,6 +148,21 @@ function isMachineChannel(entry: Pick<ChannelEntry, 'chainId' | 'descriptor' | '
   )
 }
 
+/**
+ * Returns whether a stored entry's logical payment scope differs from its
+ * on-chain descriptor. Such entries cannot be re-derived from a challenge, so
+ * their descriptor is the only copy — even when the deployment table no longer
+ * recognizes the route (for example after a rotation).
+ */
+function hasRewrittenScope(entry: Pick<ChannelEntry, 'descriptor' | 'paymentScope'>) {
+  const scope = entry.paymentScope
+  if (!scope) return false
+  return (
+    scope.payee.toLowerCase() !== entry.descriptor.payee.toLowerCase() ||
+    scope.token.toLowerCase() !== entry.descriptor.token.toLowerCase()
+  )
+}
+
 function requestInitWithSessionHint(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -738,7 +753,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         // A machine-token entry holds the only local copy of its channel
         // descriptor; evicting it would strand the deposit, so fail loudly
         // instead of retrying without it.
-        if (resumed.opened && isMachineChannel(resumed)) return false
+        if (resumed.opened && (isMachineChannel(resumed) || hasRewrittenScope(resumed)))
+          return false
         canRetryResumed = false
         await ignoreChannel(resumed)
         effectiveInit = requestInitWithSessionHint(input, init, undefined)

@@ -66,7 +66,17 @@ export type SessionSnapshotPaymentFields = {
 export type MatchSessionSnapshotPaymentFields = (
   channel: ChannelStore.StoredPrecompileChannel,
   expected: SessionSnapshotPaymentFields,
+  options?: MatchSessionSnapshotPaymentFieldsOptions | undefined,
 ) => MaybePromise<boolean>
+
+/** Options for alternate-rail snapshot matching. */
+export type MatchSessionSnapshotPaymentFieldsOptions = {
+  /**
+   * Whether the route must still be actively bound. Close credentials accept
+   * retired routes, so their recovery snapshots must too (default: `true`).
+   */
+  activeRoute?: boolean | undefined
+}
 
 /** Request metadata available to `resolveChannelId` without exposing a mutable `Request`. */
 export type SessionChannelIdRequest = {
@@ -164,12 +174,6 @@ export async function resolveSessionChannelId(parameters: {
   const { capturedRequest, credential, request, resolveChannelId, source, store } = parameters
   const explicitChannelId = normalizeSessionChannelId(request.channelId)
   if (explicitChannelId) return explicitChannelId
-  // A close credential names the channel it settles; advertising that channel's
-  // snapshot on the retry challenge lets clients without a configured
-  // `resolveChannelId` learn the exact capture amount a machine-token close
-  // voucher must match. Only trusted once the voucher signature verifies.
-  const closeChannelId = await verifiedCloseCredentialChannelId(credential, store)
-  if (closeChannelId) return closeChannelId
   if (!resolveChannelId) return undefined
   return normalizeResolvedSessionChannelId(
     await resolveChannelId({
@@ -476,14 +480,22 @@ export async function resolveSessionPaymentRequest(
   )
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
-  const channelId = await resolveSessionChannelId({
-    capturedRequest,
-    credential,
-    request,
-    resolveChannelId,
-    source,
-    store,
-  })
+  // A close credential names the channel it settles; advertising that channel's
+  // snapshot on the retry challenge lets clients without a configured
+  // `resolveChannelId` learn the exact capture amount a machine-token close
+  // voucher must match. Only trusted once the voucher signature verifies, and
+  // matched with close semantics so retired routes stay closable.
+  const closeChannelId = await verifiedCloseCredentialChannelId(credential, store)
+  const channelId =
+    closeChannelId ??
+    (await resolveSessionChannelId({
+      capturedRequest,
+      credential,
+      request,
+      resolveChannelId,
+      source,
+      store,
+    }))
   const sessionSnapshot = await resolveSessionSnapshot({
     amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
     channelId,
@@ -493,7 +505,13 @@ export async function resolveSessionPaymentRequest(
       escrowContract,
       recipient: readChallengeAddress(request.recipient, 'recipient'),
     },
-    matchPaymentFields: request.machineTokenEnabled ? matchSnapshotPaymentFields : undefined,
+    matchPaymentFields:
+      closeChannelId && matchSnapshotPaymentFields
+        ? (channel, expected) =>
+            matchSnapshotPaymentFields(channel, expected, { activeRoute: false })
+        : request.machineTokenEnabled
+          ? matchSnapshotPaymentFields
+          : undefined,
     store,
   })
   const { operator: _operator, ...requestWithoutOperator } = request

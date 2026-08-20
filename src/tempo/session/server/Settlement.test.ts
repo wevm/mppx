@@ -1,4 +1,4 @@
-import type { Hex } from 'viem'
+import { zeroAddress, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
@@ -174,26 +174,35 @@ describe('FeePayerResolution', () => {
       ).toBe(defaultFeePayer)
     })
 
-    test('derives settlement fee tokens from the channel token', () => {
+    test('derives settlement fee tokens from the channel rail', () => {
       const chainId = defaults.chainId.mainnet
+      const deployment = defaults.machineToken[chainId]
+      const descriptor = (overrides: { operator: Address; token: Address }) => ({
+        authorizedSigner: defaultFeePayer.address,
+        expiringNonceHash: `0x${'11'.repeat(32)}` as Hex,
+        payee: requestFeePayer.address,
+        payer: defaultFeePayer.address,
+        salt: `0x${'22'.repeat(32)}` as Hex,
+        ...overrides,
+      })
+      const machineChannel = {
+        chainId,
+        descriptor: descriptor({ operator: deployment.swap, token: deployment.token }),
+        token: deployment.token,
+      }
+      const directChannel = {
+        chainId,
+        descriptor: descriptor({ operator: zeroAddress, token: defaults.tokens.usdc }),
+        token: defaults.tokens.usdc,
+      }
       expect(
-        resolveChannelTransactionOptions(
-          {
-            chainId,
-            token: defaults.machineToken[chainId].token,
-          },
-          undefined,
-          defaultFeePayer,
-        ),
+        resolveChannelTransactionOptions(machineChannel, undefined, defaultFeePayer),
       ).toMatchObject({
         candidateFeeTokens: [defaults.tokens.pathUsd],
         feeToken: defaults.tokens.pathUsd,
       })
       const directOptions = resolveChannelTransactionOptions(
-        {
-          chainId,
-          token: defaults.tokens.usdc,
-        },
+        directChannel,
         { feePayer: true },
         defaultFeePayer,
       )
@@ -204,12 +213,23 @@ describe('FeePayerResolution', () => {
       // Direct channels leave the fee token unset so balance-aware selection
       // can pick a funded candidate.
       expect(directOptions).not.toHaveProperty('feeToken')
+      // A direct channel denominated in the machine token is still direct.
+      const machineCurrencyDirect = resolveChannelTransactionOptions(
+        {
+          chainId,
+          descriptor: descriptor({ operator: zeroAddress, token: deployment.token }),
+          token: deployment.token,
+        },
+        undefined,
+        defaultFeePayer,
+      )
+      expect(machineCurrencyDirect).toMatchObject({
+        candidateFeeTokens: [deployment.token],
+      })
+      expect(machineCurrencyDirect).not.toHaveProperty('feeToken')
       expect(
         resolveChannelTransactionOptions(
-          {
-            chainId,
-            token: defaults.tokens.usdc,
-          },
+          directChannel,
           { feeToken: defaults.tokens.pathUsd },
           defaultFeePayer,
         ),
