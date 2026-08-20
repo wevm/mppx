@@ -1016,34 +1016,14 @@ describe('precompile server session unit guardrails', () => {
     })
 
     expect(request.methodDetails.feeToken).toBe(feeToken)
-    expect(rpcCalls).toEqual([])
-  })
 
-  test('accepts sponsored fees in the payment currency alongside a configured fee token', async () => {
-    const { method, rpcCalls } = createServer({
-      feePayer: payer,
-      feeToken: defaults.tokens.pathUsd,
-    })
     // Clients released before the fee-token advertisement always pay sponsored
-    // open/top-up fees in the payment currency.
-    const payload = await createSponsoredOpenPayload(token)
-    const request = Methods.session.schema.request.parse(
-      await method.request!({
-        credential: null,
-        request: {
-          amount: '100',
-          currency: token,
-          decimals: 0,
-          recipient: payee,
-          unitType: 'request',
-        },
-      } as never),
-    )
-
+    // open/top-up fees in the payment currency; both stay accepted.
+    const legacyPayload = await createSponsoredOpenPayload(token)
     await method.validate!({
       credential: {
-        challenge: { ...makeChallenge(payload.channelId), request },
-        payload,
+        challenge: { ...makeChallenge(legacyPayload.channelId), request },
+        payload: legacyPayload,
       },
       request: request as unknown as VerifyRequest,
     })

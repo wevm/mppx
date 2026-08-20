@@ -725,75 +725,52 @@ describe('Session', () => {
       expect(s.channelId).not.toBe(storedChannelId)
     })
 
-    test('keeps a stored machine channel instead of retrying without it', async () => {
-      const seeded = channelEntry({
-        channelId: machineChannelId,
-        descriptor: machineDescriptor,
-        paymentScope: {
-          payee: storedDescriptor.payee,
-          token: storedDescriptor.token,
-        },
-      })
-      const { store, delete: remove, map } = makeChannelStore([seeded])
-      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
-        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-        if (!authorization) return Promise.resolve(make402Response())
-        throw new Error('unexpected credential for a machine channel the challenge disowned')
-      })
-      const s = sessionManager({
-        account,
-        client,
-        fetch: mockFetch as typeof globalThis.fetch,
-        maxDeposit: '10',
-        channelStore: store,
-      })
-
-      // The challenge no longer advertises `machineTokenEnabled`; evicting the
-      // entry would discard the only copy of the channel descriptor.
-      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
-        /machine-token channel is not bound/i,
-      )
-      expect(remove).not.toHaveBeenCalled()
-      expect(map.get(entryKey(seeded))).toMatchObject({ channelId: machineChannelId })
-    })
-
-    test('keeps a rewritten-scope channel from a rotated deployment', async () => {
-      // Opened against a deployment the current table no longer lists: only the
-      // differing payment scope marks the entry as non-derivable.
+    // The retry after a failed paid request must never evict entries whose
+    // descriptor is the only local copy (machine-rail, or any rewritten scope
+    // the current deployment table no longer recognizes).
+    test('keeps non-derivable channels instead of retrying without them', async () => {
       const rotatedDescriptor = {
         ...machineDescriptor,
         operator: '0x00000000000000000000000000000000000000AA' as Address,
         token: '0x20c0000000000000000000000000000000000009' as Address,
       }
-      const seeded = channelEntry({
-        channelId: Channel.computeId({
-          ...rotatedDescriptor,
-          chainId: 4217,
-          escrow: tip20ChannelEscrow,
+      const paymentScope = {
+        payee: storedDescriptor.payee,
+        token: storedDescriptor.token,
+      }
+      const variants = [
+        // The challenge no longer advertises `machineTokenEnabled`.
+        channelEntry({ channelId: machineChannelId, descriptor: machineDescriptor, paymentScope }),
+        // Opened against a deployment the current table no longer lists.
+        channelEntry({
+          channelId: Channel.computeId({
+            ...rotatedDescriptor,
+            chainId: 4217,
+            escrow: tip20ChannelEscrow,
+          }),
+          descriptor: rotatedDescriptor,
+          paymentScope,
         }),
-        descriptor: rotatedDescriptor,
-        paymentScope: {
-          payee: storedDescriptor.payee,
-          token: storedDescriptor.token,
-        },
-      })
-      const { store, delete: remove, map } = makeChannelStore([seeded])
-      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
-        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-        if (!authorization) return Promise.resolve(make402Response())
-        throw new Error('unexpected credential for a rotated machine channel')
-      })
-      const s = sessionManager({
-        account,
-        client,
-        fetch: mockFetch as typeof globalThis.fetch,
-        maxDeposit: '10',
-        channelStore: store,
-      })
+      ]
+      for (const seeded of variants) {
+        const { store, delete: remove, map } = makeChannelStore([seeded])
+        const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+          const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+          if (!authorization) return Promise.resolve(make402Response())
+          throw new Error('unexpected credential for a non-derivable machine channel')
+        })
+        const s = sessionManager({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          maxDeposit: '10',
+          channelStore: store,
+        })
 
-      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow()
-      expect(remove).not.toHaveBeenCalled()
-      expect(map.get(entryKey(seeded))).toMatchObject({ channelId: seeded.channelId })
+        await expect(s.fetch('https://api.example.com/data')).rejects.toThrow()
+        expect(remove).not.toHaveBeenCalled()
+        expect(map.get(entryKey(seeded))).toMatchObject({ channelId: seeded.channelId })
+      }
     })
 
     test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {

@@ -11,14 +11,12 @@ import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
-import * as MachineTokenSession from '../../internal/machine-token-session.js'
-import type { ChannelEntry } from '../client/ChannelOps.js'
+import { hasRewrittenScope, isMachineChannel, type ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import { hydrateSessionSnapshot, type SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
 import * as Channel from '../precompile/Channel.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
-import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import type { SessionReceipt } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
@@ -135,32 +133,6 @@ function isZeroAmountChargeChallenge(challenge: Challenge.Challenge) {
   } catch {
     return false
   }
-}
-
-/** Returns whether a stored entry funds a machine-token session channel. */
-function isMachineChannel(entry: Pick<ChannelEntry, 'chainId' | 'descriptor' | 'escrow'>) {
-  return (
-    entry.escrow.toLowerCase() === tip20ChannelEscrow.toLowerCase() &&
-    MachineTokenSession.matchDeployment({
-      chainId: entry.chainId,
-      descriptor: entry.descriptor,
-    }) !== undefined
-  )
-}
-
-/**
- * Returns whether a stored entry's logical payment scope differs from its
- * on-chain descriptor. Such entries cannot be re-derived from a challenge, so
- * their descriptor is the only copy — even when the deployment table no longer
- * recognizes the route (for example after a rotation).
- */
-function hasRewrittenScope(entry: Pick<ChannelEntry, 'descriptor' | 'paymentScope'>) {
-  const scope = entry.paymentScope
-  if (!scope) return false
-  return (
-    scope.payee.toLowerCase() !== entry.descriptor.payee.toLowerCase() ||
-    scope.token.toLowerCase() !== entry.descriptor.token.toLowerCase()
-  )
 }
 
 function requestInitWithSessionHint(
@@ -453,9 +425,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })) ?? defaultAccount
     const hydrated = await hydrateSessionSnapshot({ account, client, snapshot })
     const entry =
-      paymentScope &&
-      (paymentScope.payee.toLowerCase() !== hydrated.entry.descriptor.payee.toLowerCase() ||
-        paymentScope.token.toLowerCase() !== hydrated.entry.descriptor.token.toLowerCase())
+      paymentScope && hasRewrittenScope({ descriptor: hydrated.entry.descriptor, paymentScope })
         ? { ...hydrated.entry, paymentScope }
         : hydrated.entry
     assertVoucherWithinLocalLimit(entry.cumulativeAmount)

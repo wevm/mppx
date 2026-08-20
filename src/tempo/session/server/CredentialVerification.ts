@@ -124,27 +124,16 @@ async function resolveCredentialRoute(parameters: {
     isAddressEqual(descriptor.token, request.currency) &&
     isAddressEqual(descriptor.operator, expectedOperator)
 
-  const allowedFeeTokens = (paymentToken: Address): readonly Address[] => {
-    const feeToken = MachineTokenSession.resolveFeeToken({
-      chainId,
-      override: parameters.feeToken,
-      paymentToken,
-    })
-    return [feeToken]
-  }
-  if (direct) {
-    const [feeToken] = allowedFeeTokens(request.currency)
+  if (direct)
     return {
-      // Clients released before the fee-token advertisement pay sponsored fees
-      // in the payment currency; keep accepting it alongside an override.
-      allowedFeeTokens:
-        feeToken && !isAddressEqual(feeToken, request.currency)
-          ? [feeToken, request.currency]
-          : allowedFeeTokens(request.currency),
+      allowedFeeTokens: MachineTokenSession.allowedSponsoredFeeTokens({
+        chainId,
+        override: parameters.feeToken,
+        paymentToken: request.currency,
+      }),
       expectedOperator,
       payment: request,
     }
-  }
   if (payload.action !== 'close' && !MachineTokenSession.isEnabledChallenge(challenge))
     throw new VerificationFailedError({ reason: 'credential descriptor does not match challenge' })
 
@@ -161,7 +150,13 @@ async function resolveCredentialRoute(parameters: {
     })
 
   return {
-    allowedFeeTokens: allowedFeeTokens(route.token),
+    allowedFeeTokens: [
+      MachineTokenSession.resolveFeeToken({
+        chainId,
+        override: parameters.feeToken,
+        paymentToken: route.token,
+      }),
+    ],
     expectedOperator: route.operator,
     machineRouter: route.operator,
     payment: { ...request, currency: route.token, recipient: route.payee },
@@ -1188,7 +1183,12 @@ async function handleCloseCredential(
   let txHash: Hex | undefined
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   try {
-    const transactionOptions = resolveChannelTransactionOptions(channel, parameters, account)
+    const transactionOptions = resolveChannelTransactionOptions(
+      channel,
+      parameters,
+      account,
+      machineRouter,
+    )
     if (machineRouter) {
       if (!authorizationSignature || !refundSignature)
         throw new VerificationFailedError({

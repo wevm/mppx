@@ -86,6 +86,23 @@ export function resolveFeeToken(parameters: {
   return parameters.paymentToken
 }
 
+/**
+ * Resolves the fee tokens accepted for direct-rail sponsored transactions.
+ * Clients released before the fee-token advertisement always pay sponsored
+ * fees in the payment token, so it stays accepted alongside a configured
+ * override. Machine-rail routes post-date the advertisement and pin a single
+ * token via {@link resolveFeeToken}.
+ */
+export function allowedSponsoredFeeTokens(parameters: {
+  chainId: number | undefined
+  override?: Address | undefined
+  paymentToken: Address
+}): readonly Address[] {
+  const feeToken = resolveFeeToken(parameters)
+  if (isAddressEqual(feeToken, parameters.paymentToken)) return [feeToken]
+  return [feeToken, parameters.paymentToken]
+}
+
 /** Returns whether an account has enough of a TIP-20 token for an operation. */
 export async function hasSufficientBalance(
   client: Client,

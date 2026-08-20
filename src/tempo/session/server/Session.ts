@@ -356,7 +356,7 @@ export function session<const parameters extends session.Parameters>(
     )
       return false
     return !!(await MachineTokenSession.matchRoute(await getClient({ chainId: expected.chainId }), {
-      active: options?.activeRoute ?? true,
+      active: options?.action !== 'close',
       chainId: expected.chainId,
       descriptor: channel.descriptor,
       merchant: expected.recipient,

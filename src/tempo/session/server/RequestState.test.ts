@@ -402,8 +402,8 @@ describe('SessionSnapshotHints', () => {
       expect(resolved).toBeUndefined()
     })
 
-    test('advertises a close snapshot once the close voucher signature verifies', async () => {
-      const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+    test('advertises a close snapshot only when the close voucher signature verifies', async () => {
+      const verify = vi.spyOn(Voucher, 'verifyVoucher')
       try {
         // A machine-rail channel: stored payee/token differ from the challenge
         // scope, so the snapshot needs the alternate-rail matcher.
@@ -412,31 +412,38 @@ describe('SessionSnapshotHints', () => {
           token: '0x20c0000000000000000000000000000000000009' as Address,
         })
         const matchPaymentFields = vi.fn().mockResolvedValue(true)
-        const resolved = await resolveSessionPaymentRequest({
-          credential: {
-            challenge: {},
-            payload: {
-              action: 'close',
-              channelId,
-              cumulativeAmount: '500',
-              signature: `0x${'44'.repeat(64)}`,
-            },
-          } as Credential.Credential,
-          decimals: 0,
-          getClient: async () => ({ chain: { id: 4217 } }),
-          matchSnapshotPaymentFields: matchPaymentFields,
-          request: {
-            amount: '1',
-            chainId: 4217,
-            currency: descriptor.token,
+        const resolve = () =>
+          resolveSessionPaymentRequest({
+            credential: {
+              challenge: {},
+              payload: {
+                action: 'close',
+                channelId,
+                cumulativeAmount: '500',
+                descriptor,
+                signature: `0x${'44'.repeat(64)}`,
+              },
+            } as Credential.Credential,
             decimals: 0,
-            escrowContract,
-            recipient: descriptor.payee,
-            unitType: 'request',
-          },
-          store: store(machineChannel),
-        })
+            getClient: async () => ({ chain: { id: 4217 } }),
+            matchSnapshotPaymentFields: matchPaymentFields,
+            request: {
+              amount: '1',
+              chainId: 4217,
+              currency: descriptor.token,
+              decimals: 0,
+              escrowContract,
+              recipient: descriptor.payee,
+              unitType: 'request',
+            },
+            store: store(machineChannel),
+          })
 
+        verify.mockReturnValue(false)
+        expect((await resolve()).sessionSnapshot).toBeUndefined()
+
+        verify.mockReturnValue(true)
+        const resolved = await resolve()
         expect(verify).toHaveBeenCalledWith(
           escrowContract,
           4217,
@@ -448,42 +455,9 @@ describe('SessionSnapshotHints', () => {
         expect(matchPaymentFields).toHaveBeenCalledWith(
           expect.objectContaining({ channelId }),
           expect.objectContaining({ recipient: descriptor.payee }),
-          { activeRoute: false },
+          { action: 'close' },
         )
         expect(resolved.sessionSnapshot).toMatchObject({ channelId, spent: '300' })
-      } finally {
-        verify.mockRestore()
-      }
-    })
-
-    test('ignores close credential channel IDs when the voucher signature fails', async () => {
-      const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(false)
-      try {
-        const resolved = await resolveSessionPaymentRequest({
-          credential: {
-            challenge: {},
-            payload: {
-              action: 'close',
-              channelId,
-              cumulativeAmount: '500',
-              signature: `0x${'44'.repeat(64)}`,
-            },
-          } as Credential.Credential,
-          decimals: 0,
-          getClient: async () => ({ chain: { id: 4217 } }),
-          request: {
-            amount: '1',
-            chainId: 4217,
-            currency: descriptor.token,
-            decimals: 0,
-            escrowContract,
-            recipient: descriptor.payee,
-            unitType: 'request',
-          },
-          store: store(channel()),
-        })
-
-        expect(resolved.sessionSnapshot).toBeUndefined()
       } finally {
         verify.mockRestore()
       }
