@@ -1,5 +1,60 @@
 # mppx
 
+## 0.8.18
+
+### Patch Changes
+
+- 61f847e: Added first-party machine-token payments for Tempo charges across push, pull, relay, and fee-sponsored settlement.
+- 981389d: Changed Stripe PaymentIntent idempotency keys to use the SDK-independent `mpp_` prefix.
+- adcf3b5: Normalized Tempo transactions before broadcast so accepted recovery ID encodings matched the node's canonical transaction hash.
+- e59c031: Added support for composing native claim implementations with Redis and Upstash store adapters.
+- 349543a: Added CI interoperability coverage against the Coinbase x402 resource server and facilitator implementations.
+- 4915654: Bundled the CLI runtime and removed source files, source maps, and source export conditions from the published package.
+- 9774481: Fixed deserialization of challenges with mixed-case auth-param names.
+- e240845: Fixed explicit session stream charges being discarded by prepaid units.
+- bc3c626: `stripe.create()`: `defaultMethods()` now returns sync SPT-only when no `depositAddresses` is provided, and uses `Promise.allSettled` in the function resolver path to gracefully degrade when individual networks fail.
+- c004d2c: Fixed hosted fee-payer sponsorship for server-driven session settlement and close transactions.
+- dc27415: Added lightweight core server and Stripe SPT entrypoints that excluded unrelated payment rails.
+- 3fd4a16: Added implicit machine-token funding to Tempo sessions and moved Tempo charges and sessions to the unified machineUSD deployment. Clients use machineUSD when a verified route and sufficient balance are available and otherwise pay the challenged token. Configured fee-token overrides were bound into session challenges, and concurrent session requests rechecked top-up requirements after serialized opens.
+- a85d55a: Hardened machine-token session flows after #800: kept stored machine channels instead of evicting them on failed retries, advertised close snapshots for signature-verified close credentials, accepted sponsored fees in the payment currency alongside a configured `feeToken`, and restored balance-aware fee-token selection for direct-channel settlement.
+- 106ba18: Fixed challenge parsing for extension parameters named after `Object.prototype` properties.
+- a74b20b: Discovery: unknown fields next to `offers` in `x-payment-info` are ignored instead of failing validation (only the spec-defined flat fields conflict with `offers`).
+- b5f6bce: Removed obsolete MPP version metadata from Stripe charge PaymentIntents.
+- 3de6560: Required server-advertised Tempo session escrows to match the canonical address unless clients enable `allowCustomEscrow`.
+- 4c9ce16: Added client signing support for standard x402 exact EIP-3009 offers without requiring mppx route-binding extensions.
+- c326dc9: Fixed Tempo session fallback closes with stale receipts and rejected invalid close accounting.
+- 81ba763: Escape characters above Latin-1 in challenge auth-params so serialized challenges are always valid HTTP header values. Previously a charge `description` containing an em dash, smart quote, or emoji made `Response` construction throw (`Cannot convert argument to a ByteString`) in fetch-compliant runtimes when the challenge was written to the `WWW-Authenticate` header.
+- ae68a55: Fixed scoped EVM charges rejecting every spec-compliant x402 client, which made
+  each route served through `Proxy` unpayable over x402.
+
+  A route scope lands in `challenge.meta`, and the x402 path treated any route
+  metadata as a demand for mppx's own `extensions.mppx` binding plus an EIP-3009
+  nonce equal to an unexported `sha256(accepted | resource | extensions)`. That
+  derivation is not part of the x402 spec, so a client mppx did not write cannot
+  produce it: the charge re-challenged forever with `Credential is malformed.`
+  `Proxy` attaches a derived scope to every charge it serves, so this applied to
+  everything behind it whether or not an operator set `scope`.
+
+  Such a credential is now bound the way x402 itself binds — by comparing the
+  echoed `resource` and `accepted` — instead of being rejected. A credential that
+  does carry `extensions.mppx` is still verified in full, including the
+  route-bound nonce, so mppx's own client is unaffected. Body binding is unchanged:
+  `challenge.digest` is verified against the request body either way.
+
+  The trade is that route scope on the x402 rail is advisory for clients that don't
+  implement mppx's binding. `resource` and `accepted` sit outside the EIP-3009
+  signature, so two charges sharing a URL and a price are no longer distinguishable
+  by scope alone. Cross-URL reuse is still refused. Operators who need scope
+  enforced can restore the previous behaviour per method:
+
+  ```ts
+  evm({
+    currency: evm.assets.base.USDC,
+    recipient,
+    x402: { facilitator, routeBinding: 'required' },
+  })
+  ```
+
 ## 0.8.17
 
 ### Patch Changes
