@@ -63,6 +63,19 @@ function sponsoredFeeExposure(credential: string) {
   return transaction.gas * transaction.maxFeePerGas
 }
 
+function toRawRecoveryId(serializedTransaction: Hex.Hex) {
+  const transaction = TxEnvelopeTempo.deserialize(
+    serializedTransaction as TxEnvelopeTempo.Serialized,
+  )
+  if (transaction.signature?.type !== 'secp256k1')
+    throw new Error('expected a secp256k1 transaction signature')
+  const { yParity } = transaction.signature.signature
+  const canonicalRecoveryId = yParity === 0 ? '1b' : '1c'
+  if (!serializedTransaction.endsWith(canonicalRecoveryId))
+    throw new Error('expected an Electrum-encoded recovery ID')
+  return `${serializedTransaction.slice(0, -2)}0${yParity}` as Hex.Hex
+}
+
 function tokenTransferCall(parameters: viem_token.transfer.Args) {
   return Actions.token.transfer.call(client, parameters)
 }
@@ -1092,6 +1105,102 @@ describe('tempo', () => {
   })
 
   describe('intent: charge; type: transaction; via Mppx', () => {
+    test.each([
+      {
+        name: 'confirmed',
+        rpcMethod: 'eth_sendRawTransactionSync',
+        waitForConfirmation: true,
+      },
+      {
+        name: 'optimistic',
+        rpcMethod: 'eth_sendRawTransaction',
+        waitForConfirmation: false,
+      },
+    ] as const)(
+      'behavior: canonicalizes raw recovery IDs for $name broadcasts',
+      async ({ rpcMethod, waitForConfirmation }) => {
+        const broadcastTransactions: Hex.Hex[] = []
+        const interceptingClient = createClient({
+          account: accounts[0],
+          chain: client.chain,
+          transport: custom({
+            async request(request) {
+              if (request.method === rpcMethod)
+                broadcastTransactions.push(request.params[0] as Hex.Hex)
+              return client.transport.request(request)
+            },
+          }),
+        })
+        const canonicalServer = Mppx_server.create({
+          methods: [
+            tempo_server.charge({
+              account: accounts[0],
+              currency: asset,
+              getClient: () => interceptingClient,
+              waitForConfirmation,
+            }),
+          ],
+          realm,
+          secretKey,
+        })
+        const mppx = Mppx_client.create({
+          polyfill: false,
+          methods: [
+            tempo_client({
+              account: accounts[1],
+              getClient: () => client,
+            }),
+          ],
+        })
+        const httpServer = await Http.createServer(async (req, res) => {
+          const result = await Mppx_server.toNodeListener(
+            canonicalServer.charge({
+              amount: '1',
+              currency: asset,
+              recipient: accounts[0].address,
+            }),
+          )(req, res)
+          if (result.status === 402) return
+          res.end('OK')
+        })
+
+        try {
+          const challengeResponse = await fetch(httpServer.url)
+          const canonicalCredential = await mppx.createCredential(challengeResponse)
+          const credential = Credential.deserialize<{
+            signature: Hex.Hex
+            type: 'transaction'
+          }>(canonicalCredential)
+          const canonicalTransaction = credential.payload.signature
+          const submittedTransaction = toRawRecoveryId(canonicalTransaction)
+          const rawCredential = Credential.serialize({
+            ...credential,
+            payload: { ...credential.payload, signature: submittedTransaction },
+          })
+
+          expect(['00', '01']).toContain(submittedTransaction.slice(-2))
+          expect(keccak256(submittedTransaction)).not.toBe(keccak256(canonicalTransaction))
+
+          const response = await fetch(httpServer.url, {
+            headers: { Authorization: rawCredential },
+          })
+          expect(response.status).toBe(200)
+          expect(broadcastTransactions).toEqual([canonicalTransaction])
+
+          const receipt = Receipt.fromResponse(response)
+          expect(receipt.reference).toBe(keccak256(canonicalTransaction))
+
+          const replay = await fetch(httpServer.url, {
+            headers: { Authorization: canonicalCredential },
+          })
+          expect(replay.status).toBe(402)
+          expect(broadcastTransactions).toHaveLength(1)
+        } finally {
+          httpServer.close()
+        }
+      },
+    )
+
     test('behavior: accepts a pushed machine-token settlement', async () => {
       const hash = `0x${'12'.repeat(32)}` as Hex.Hex
       const memo = `0x${'ab'.repeat(32)}` as Hex.Hex

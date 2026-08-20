@@ -639,7 +639,11 @@ export function charge<const parameters extends charge.Parameters>(
               }
               return { serializedTransaction, sponsor: undefined }
             })()
-            const serializedTransaction_final = completedTransaction.serializedTransaction
+            // Nodes normalize accepted signature encodings before deriving transaction hashes.
+            // Broadcast the same canonical envelope so replay keys match the node reference.
+            const serializedTransaction_final = await Transaction.serialize(
+              Transaction.deserialize(completedTransaction.serializedTransaction),
+            )
             finalHash = keccak256(serializedTransaction_final)
 
             if (
