@@ -189,19 +189,33 @@ describe('FeePayerResolution', () => {
         candidateFeeTokens: [defaults.tokens.pathUsd],
         feeToken: defaults.tokens.pathUsd,
       })
+      const directOptions = resolveChannelTransactionOptions(
+        {
+          chainId,
+          token: defaults.tokens.usdc,
+        },
+        { feePayer: true },
+        defaultFeePayer,
+      )
+      expect(directOptions).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.usdc],
+        feePayer: true,
+      })
+      // Direct channels leave the fee token unset so balance-aware selection
+      // can pick a funded candidate.
+      expect(directOptions).not.toHaveProperty('feeToken')
       expect(
         resolveChannelTransactionOptions(
           {
             chainId,
             token: defaults.tokens.usdc,
           },
-          { feePayer: true },
+          { feeToken: defaults.tokens.pathUsd },
           defaultFeePayer,
         ),
       ).toMatchObject({
-        candidateFeeTokens: [defaults.tokens.usdc],
-        feePayer: true,
-        feeToken: defaults.tokens.usdc,
+        candidateFeeTokens: [defaults.tokens.pathUsd],
+        feeToken: defaults.tokens.pathUsd,
       })
     })
   })

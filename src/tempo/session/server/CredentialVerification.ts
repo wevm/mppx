@@ -95,7 +95,7 @@ export function validateChannelDescriptor(
 }
 
 type ResolvedCredentialRoute = {
-  allowedFeeTokens: readonly [Address]
+  allowedFeeTokens: readonly Address[]
   expectedOperator: Address
   machineRouter?: Address | undefined
   payment: ChallengePaymentFields
@@ -124,19 +124,27 @@ async function resolveCredentialRoute(parameters: {
     isAddressEqual(descriptor.token, request.currency) &&
     isAddressEqual(descriptor.operator, expectedOperator)
 
-  const allowedFeeTokens = (paymentToken: Address): readonly [Address] => [
-    MachineTokenSession.resolveFeeToken({
+  const allowedFeeTokens = (paymentToken: Address): readonly Address[] => {
+    const feeToken = MachineTokenSession.resolveFeeToken({
       chainId,
       override: parameters.feeToken,
       paymentToken,
-    }),
-  ]
-  if (direct)
+    })
+    return [feeToken]
+  }
+  if (direct) {
+    const [feeToken] = allowedFeeTokens(request.currency)
     return {
-      allowedFeeTokens: allowedFeeTokens(request.currency),
+      // Clients released before the fee-token advertisement pay sponsored fees
+      // in the payment currency; keep accepting it alongside an override.
+      allowedFeeTokens:
+        feeToken && !isAddressEqual(feeToken, request.currency)
+          ? [feeToken, request.currency]
+          : allowedFeeTokens(request.currency),
       expectedOperator,
       payment: request,
     }
+  }
   if (payload.action !== 'close' && !MachineTokenSession.isEnabledChallenge(challenge))
     throw new VerificationFailedError({ reason: 'credential descriptor does not match challenge' })
 

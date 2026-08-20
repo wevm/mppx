@@ -408,8 +408,9 @@ export function assertSettlementSender(parameters: SettlementSenderParameters) {
 }
 
 /**
- * Assembles transaction options for settle/close transactions. Direct
- * channels pay fees in their payment token; machine channels use PathUSD.
+ * Assembles transaction options for settle/close transactions. Machine
+ * channels pin PathUSD (or an explicit override); direct channels leave the
+ * fee token unset so balance-aware selection can pick a funded candidate.
  */
 export function resolveChannelTransactionOptions(
   channel: Pick<ChannelStore.StoredPrecompileChannel, 'chainId' | 'token'>,
@@ -422,11 +423,12 @@ export function resolveChannelTransactionOptions(
     override: options?.feeToken,
     paymentToken: channel.token,
   })
+  const pinned = options?.feeToken !== undefined || !isAddressEqual(feeToken, channel.token)
   return {
     account,
     ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
     ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-    feeToken,
+    ...(pinned ? { feeToken } : {}),
     candidateFeeTokens: options?.candidateFeeTokens ?? [feeToken],
   }
 }

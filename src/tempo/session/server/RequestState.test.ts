@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import type * as Credential from '../../../Credential.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import type * as ChannelStore from './ChannelStore.js'
 import {
   requireSessionCredentialAction,
@@ -399,6 +400,70 @@ describe('SessionSnapshotHints', () => {
       })
 
       expect(resolved).toBeUndefined()
+    })
+
+    test('trusts a close credential channel ID once its voucher signature verifies', async () => {
+      const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+      try {
+        const resolved = await resolveSessionChannelId({
+          credential: {
+            challenge: {},
+            payload: {
+              action: 'close',
+              channelId,
+              cumulativeAmount: '500',
+              signature: `0x${'44'.repeat(64)}`,
+            },
+          } as Credential.Credential,
+          request: {
+            amount: '1',
+            currency: descriptor.token,
+            decimals: 0,
+            recipient: descriptor.payee,
+            unitType: 'request',
+          },
+          store: store(channel()),
+        })
+
+        expect(resolved).toBe(channelId)
+        expect(verify).toHaveBeenCalledWith(
+          escrowContract,
+          4217,
+          { channelId, cumulativeAmount: 500n, signature: `0x${'44'.repeat(64)}` },
+          descriptor.authorizedSigner,
+        )
+      } finally {
+        verify.mockRestore()
+      }
+    })
+
+    test('ignores close credential channel IDs when the voucher signature fails', async () => {
+      const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(false)
+      try {
+        const resolved = await resolveSessionChannelId({
+          credential: {
+            challenge: {},
+            payload: {
+              action: 'close',
+              channelId,
+              cumulativeAmount: '500',
+              signature: `0x${'44'.repeat(64)}`,
+            },
+          } as Credential.Credential,
+          request: {
+            amount: '1',
+            currency: descriptor.token,
+            decimals: 0,
+            recipient: descriptor.payee,
+            unitType: 'request',
+          },
+          store: store(channel()),
+        })
+
+        expect(resolved).toBeUndefined()
+      } finally {
+        verify.mockRestore()
+      }
     })
 
     test('uses custom resolver when no explicit channel ID is present', async () => {

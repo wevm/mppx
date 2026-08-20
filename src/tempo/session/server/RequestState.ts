@@ -20,7 +20,12 @@ import {
   type RequestBodyProbe,
 } from '../../server/internal/request-body.js'
 import type * as PrecompileChain from '../precompile/Chain.js'
-import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
+import {
+  tip20ChannelEscrow,
+  uint96,
+  type SessionCredentialPayload,
+} from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
 import { requireSessionCredentialAction } from './CredentialVerification.js'
@@ -119,6 +124,34 @@ function normalizeResolvedSessionChannelId(value: string | null | undefined): He
   return ChannelStore.normalizeChannelId(value)
 }
 
+/** Returns a close credential's channel ID once its voucher signature verifies. */
+async function verifiedCloseCredentialChannelId(
+  credential: Credential.Credential | null | undefined,
+  store: ChannelStore.ChannelStore,
+): Promise<Hex | undefined> {
+  const payload = credential?.payload
+  if (!isObject(payload) || payload.action !== 'close') return undefined
+  const channelId = getCredentialChannelId(credential)
+  if (!channelId || typeof payload.signature !== 'string') return undefined
+  const channel = await store.getChannel(channelId)
+  if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
+  try {
+    const verified = Voucher.verifyVoucher(
+      channel.escrowContract,
+      channel.chainId,
+      {
+        channelId,
+        cumulativeAmount: uint96(BigInt(payload.cumulativeAmount as string)),
+        signature: payload.signature as Hex,
+      },
+      channel.authorizedSigner,
+    )
+    return verified ? channelId : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Resolves the channel ID used to build server-side session bootstrap hints. */
 export async function resolveSessionChannelId(parameters: {
   capturedRequest?: RequestBodyProbe | undefined
@@ -131,6 +164,12 @@ export async function resolveSessionChannelId(parameters: {
   const { capturedRequest, credential, request, resolveChannelId, source, store } = parameters
   const explicitChannelId = normalizeSessionChannelId(request.channelId)
   if (explicitChannelId) return explicitChannelId
+  // A close credential names the channel it settles; advertising that channel's
+  // snapshot on the retry challenge lets clients without a configured
+  // `resolveChannelId` learn the exact capture amount a machine-token close
+  // voucher must match. Only trusted once the voucher signature verifies.
+  const closeChannelId = await verifiedCloseCredentialChannelId(credential, store)
+  if (closeChannelId) return closeChannelId
   if (!resolveChannelId) return undefined
   return normalizeResolvedSessionChannelId(
     await resolveChannelId({

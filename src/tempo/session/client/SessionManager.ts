@@ -137,6 +137,17 @@ function isZeroAmountChargeChallenge(challenge: Challenge.Challenge) {
   }
 }
 
+/** Returns whether a stored entry funds a machine-token session channel. */
+function isMachineChannel(entry: Pick<ChannelEntry, 'chainId' | 'descriptor' | 'escrow'>) {
+  return (
+    entry.escrow.toLowerCase() === tip20ChannelEscrow.toLowerCase() &&
+    MachineTokenSession.matchDeployment({
+      chainId: entry.chainId,
+      descriptor: entry.descriptor,
+    }) !== undefined
+  )
+}
+
 function requestInitWithSessionHint(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -560,12 +571,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const snapshot = applySnapshot
       ? applyCloseSnapshot(target, challenge)
       : validateCloseSnapshot(target.channel, challenge)
-    const machineSession =
-      target.channel.escrow.toLowerCase() === tip20ChannelEscrow.toLowerCase() &&
-      MachineTokenSession.matchDeployment({
-        chainId: target.channel.chainId,
-        descriptor: target.channel.descriptor,
-      }) !== undefined
+    const machineSession = isMachineChannel(target.channel)
     const closeAmount = snapshot
       ? machineSession
         ? snapshot.spent > snapshot.settled
@@ -729,6 +735,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       async function retryWithoutResumed(): Promise<boolean> {
         const resumed = use.resumed
         if (!canRetryResumed || !resumed) return false
+        // A machine-token entry holds the only local copy of its channel
+        // descriptor; evicting it would strand the deposit, so fail loudly
+        // instead of retrying without it.
+        if (resumed.opened && isMachineChannel(resumed)) return false
         canRetryResumed = false
         await ignoreChannel(resumed)
         effectiveInit = requestInitWithSessionHint(input, init, undefined)

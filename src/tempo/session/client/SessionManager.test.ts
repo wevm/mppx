@@ -725,6 +725,38 @@ describe('Session', () => {
       expect(s.channelId).not.toBe(storedChannelId)
     })
 
+    test('keeps a stored machine channel instead of retrying without it', async () => {
+      const seeded = channelEntry({
+        channelId: machineChannelId,
+        descriptor: machineDescriptor,
+        paymentScope: {
+          payee: storedDescriptor.payee,
+          token: storedDescriptor.token,
+        },
+      })
+      const { store, delete: remove, map } = makeChannelStore([seeded])
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        throw new Error('unexpected credential for a machine channel the challenge disowned')
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: store,
+      })
+
+      // The challenge no longer advertises `machineTokenEnabled`; evicting the
+      // entry would discard the only copy of the channel descriptor.
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        /machine-token channel is not bound/i,
+      )
+      expect(remove).not.toHaveBeenCalled()
+      expect(map.get(entryKey(seeded))).toMatchObject({ channelId: machineChannelId })
+    })
+
     test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {
       const seeded = channelEntry({ cumulativeAmount: 10_000_000n, deposit: 10_000_000n })
       const { store, delete: remove, map } = makeChannelStore([seeded])
