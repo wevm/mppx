@@ -22,8 +22,8 @@ export type Credential<
 export class MissingAuthorizationHeaderError extends Error {
   override readonly name = 'MissingAuthorizationHeaderError'
 
-  constructor() {
-    super('Missing Authorization header.')
+  constructor(header: string = Constants.Headers.authorization) {
+    super(`Missing ${header} header.`)
   }
 }
 
@@ -44,7 +44,7 @@ export class InvalidCredentialEncodingError extends Error {
 }
 
 /**
- * Deserializes an Authorization header value to a credential.
+ * Deserializes a Payment credential header value to a credential.
  * Accepts the spec-compliant base64url `opaque` string shape and the legacy
  * object-shaped `opaque` form emitted by older mppx versions.
  *
@@ -151,7 +151,7 @@ export declare namespace from {
 }
 
 /**
- * Extracts the credential from a Request's Authorization header.
+ * Extracts the credential from a Request's configured credential header.
  *
  * @param request - The HTTP request.
  * @returns The deserialized credential.
@@ -163,16 +163,26 @@ export declare namespace from {
  * const credential = Credential.fromRequest(request)
  * ```
  */
-export function fromRequest<payload = unknown>(request: Request): Credential<payload> {
-  const header = request.headers.get(Constants.Headers.authorization)
-  if (!header) throw new MissingAuthorizationHeaderError()
+export function fromRequest<payload = unknown>(
+  request: Request,
+  options: fromRequest.Options = {},
+): Credential<payload> {
+  const header = request.headers.get(options.header ?? Constants.Headers.authorization)
+  if (!header) throw new MissingAuthorizationHeaderError(options.header)
   const payment = extractPaymentScheme(header)
   if (!payment) throw new MissingPaymentSchemeError()
   return deserialize<payload>(payment)
 }
 
+export declare namespace fromRequest {
+  type Options = {
+    /** HTTP field containing the Payment credential. @default 'Authorization' */
+    header?: string | undefined
+  }
+}
+
 /**
- * Serializes a credential to the Authorization header format.
+ * Serializes a credential to the Payment credential header format.
  * When present, `challenge.opaque` is emitted unchanged as the base64url string
  * required by the Payment auth credential format.
  *

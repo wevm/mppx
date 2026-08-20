@@ -208,6 +208,13 @@ describe('http', () => {
         name: 'Payment auth credential for Payment auth challenge',
       },
       {
+        challenge: { ...challenge, header: 'Payment-Authorization' },
+        credential: Credential.serialize(credential),
+        expectedHeader: 'Payment-Authorization',
+        expectedValue: Credential.serialize(credential),
+        name: 'Payment auth credential for alternate credential header',
+      },
+      {
         challenge,
         credential: 'custom-credential',
         expectedHeader: 'Authorization',

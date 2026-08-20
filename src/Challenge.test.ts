@@ -66,6 +66,22 @@ describe('from', () => {
     expect(challenge.expires).toBe('2025-01-06T12:00:00.000Z')
   })
 
+  test('behavior: preserves an alternate credential header', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      header: 'Payment-Authorization',
+    })
+
+    expect(Challenge.serialize(challenge)).toContain('header="Payment-Authorization"')
+    expect(Challenge.credentialHeader(Challenge.deserialize(Challenge.serialize(challenge)))).toBe(
+      'Payment-Authorization',
+    )
+  })
+
   test('error: rejects empty id', () => {
     expect(() =>
       Challenge.from({

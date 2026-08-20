@@ -26,6 +26,10 @@ export const Schema = z.object({
   digest: z.optional(z.string().check(z.regex(/^sha-256=/, 'Invalid digest format'))),
   /** Optional expiration timestamp (ISO 8601). */
   expires: z.optional(z.datetime()),
+  /** Optional HTTP field name to carry the payment credential. Defaults to Authorization. */
+  header: z.optional(
+    z.string().check(z.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name')),
+  ),
   /** Unique challenge identifier (HMAC-bound). */
   id: z.string().check(z.minLength(1)),
   /** Intent type (e.g., "charge", "session"). */
@@ -126,6 +130,7 @@ export function from<
     digest,
     meta,
     method: methodName,
+    header,
     intent,
     realm,
     request,
@@ -151,6 +156,7 @@ export function from<
     ...(description && { description }),
     ...(digest && { digest }),
     ...(expires && { expires }),
+    ...(header !== undefined && { header }),
     ...(meta !== undefined && { meta }),
     ...(opaque !== undefined && { opaque }),
   }) as from.ReturnType<parameters, methods>
@@ -177,6 +183,8 @@ export declare namespace from {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
+    /** Optional HTTP field name to carry the payment credential. Defaults to Authorization. */
+    header?: string | undefined
     /** Intent type (e.g., "charge", "session"). */
     intent: string
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
@@ -236,7 +244,7 @@ export function fromMethod<const method extends Method.Method>(
   parameters: fromMethod.Parameters<method>,
 ): fromMethod.ReturnType<method> {
   const { name: methodName, intent } = method
-  const { description, digest, expires, id, meta, realm, secretKey } = parameters
+  const { description, digest, expires, header, id, meta, realm, secretKey } = parameters
 
   const request = PaymentRequest.fromMethod(method, parameters.request)
 
@@ -249,6 +257,7 @@ export function fromMethod<const method extends Method.Method>(
     description,
     digest,
     expires,
+    header,
     meta,
   } as from.Parameters) as fromMethod.ReturnType<method>
 }
@@ -270,6 +279,8 @@ export declare namespace fromMethod {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
+    /** Optional HTTP field name to carry the payment credential. Defaults to Authorization. */
+    header?: string | undefined
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
     /** Server realm (e.g., hostname). */
@@ -308,6 +319,7 @@ export function serialize(challenge: Challenge): string {
     parts.push(authParam('description', challenge.description))
   if (challenge.digest !== undefined) parts.push(authParam('digest', challenge.digest))
   if (challenge.expires !== undefined) parts.push(authParam('expires', challenge.expires))
+  if (challenge.header !== undefined) parts.push(authParam('header', challenge.header))
   if (challenge.opaque !== undefined) parts.push(authParam('opaque', challenge.opaque))
   else if (challenge.meta !== undefined)
     parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
@@ -654,14 +666,14 @@ export function meta(challenge: Challenge): Record<string, string> | undefined {
  * of truth for what the challenge ID binds to — used by both `computeId()`
  * (challenge creation) and `verify()` (credential verification).
  *
- * Slots: realm | method | intent | request | expires | digest | opaque
+ * Legacy slots: realm | method | intent | request | expires | digest | opaque
  *
  * Because the HMAC covers ALL fields, the server does not need to separately
  * pin opaque, digest, or expires during verification — any change to those
  * fields produces a different HMAC and fails the ID comparison.
  */
 function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
-  return [
+  const values = [
     challenge.realm,
     challenge.method,
     challenge.intent,
@@ -669,7 +681,16 @@ function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
     challenge.expires ?? '',
     challenge.digest ?? '',
     challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : ''),
-  ].join('|')
+  ]
+  // Keep the legacy seven-slot binding for challenges that did not advertise a
+  // credential header. An advertised header adds a bound eighth slot.
+  if (challenge.header !== undefined) values.push(challenge.header)
+  return values.join('|')
+}
+
+/** Returns the HTTP field name a client must use for a payment credential. */
+export function credentialHeader(challenge: Challenge): string {
+  return challenge.header ?? Constants.Headers.authorization
 }
 
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */

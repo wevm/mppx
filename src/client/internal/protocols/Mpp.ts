@@ -3,7 +3,7 @@ import * as Constants from '../../../Constants.js'
 import type { Protocol } from './Protocol.js'
 import { paymentRequiredStatus, setCredentialHeader } from './Shared.js'
 
-/** MPP — the native HTTP scheme: a 402 carrying a `WWW-Authenticate` challenge, paid back in `Authorization`. */
+/** MPP — native HTTP Payment authentication. */
 export function mpp(): Protocol {
   return {
     getChallenges(response) {
@@ -14,8 +14,14 @@ export function mpp(): Protocol {
         return []
       return Challenge.fromResponseList(response)
     },
-    setCredential(request, credential) {
-      return setCredentialHeader(request, Constants.Headers.authorization, credential)
+    setCredential(request, credential, options) {
+      return setCredentialHeader(
+        request,
+        options?.challenge
+          ? Challenge.credentialHeader(options.challenge)
+          : Constants.Headers.authorization,
+        credential,
+      )
     },
   }
 }

@@ -49,7 +49,7 @@ export function init<
       document.getElementById(data.rootId)?.after(el)
     },
     root: document.getElementById(data.rootId)!,
-    submit: submitCredential,
+    submit: (credential) => submitCredential(credential, data.challenge.header),
     vars,
   }
 }

@@ -364,6 +364,18 @@ describe('fromRequest', () => {
     expect(credential.payload).toEqual({ signature: '0x1234' })
   })
 
+  test('behavior: extracts a credential from an alternate header', () => {
+    const request = new Request('https://api.example.com/resource', {
+      headers: {
+        'Payment-Authorization': Credential.serialize(Credential.from({ challenge, payload: {} })),
+      },
+    })
+
+    expect(Credential.fromRequest(request, { header: 'Payment-Authorization' }).challenge.id).toBe(
+      challenge.id,
+    )
+  })
+
   test('error: throws for missing Authorization header', () => {
     const request = new Request('https://api.example.com/resource')
     expect(() => Credential.fromRequest(request)).toThrow('Missing Authorization header.')

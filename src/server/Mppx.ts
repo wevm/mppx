@@ -502,10 +502,11 @@ export function create<
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
     attestation,
+    credentialHeader,
     realm = Env.get('realm'),
     selectOffers,
     secretKey = Env.get('secretKey'),
-    transport = Transport.http() as transport,
+    transport = Transport.http({ credentialHeader }) as transport,
   } = config
 
   if (!secretKey) {
@@ -544,6 +545,7 @@ export function create<
     const fn = createMethodFn({
       ...(verifyAttestation && { attest: verifyAttestation }),
       authorize: mi.authorize as never,
+      credentialHeader,
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -607,6 +609,7 @@ export function create<
   for (const mi of methods) {
     if (!challengeHandlers[mi.name]) challengeHandlers[mi.name] = {}
     challengeHandlers[mi.name]![mi.alias ?? mi.intent] = createChallengeFn({
+      credentialHeader,
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -748,6 +751,7 @@ export function create<
             credential: parsedCredential,
             defaults: mi.defaults,
             expires: credential.challenge.expires,
+            header: credential.challenge.header,
             meta: expectedMeta,
             method: mi,
             realm: expectedRealm,
@@ -956,6 +960,8 @@ export declare namespace create {
     attestation?: transport extends Transport.Http ? Attestation.VerifierMap | undefined : never
     /** Array of configured methods. @example [tempo()] */
     methods: methods
+    /** HTTP field used for Payment credentials and advertised in challenges. @default 'Authorization' */
+    credentialHeader?: transport extends Transport.Http ? string | undefined : never
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */
@@ -981,6 +987,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const {
     attest,
     authorize,
+    credentialHeader,
     defaults,
     events,
     method,
@@ -1129,6 +1136,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         defaults,
         description,
         expires,
+        header: credentialHeader,
         meta: effectiveMeta,
         method,
         realm,
@@ -1142,6 +1150,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           defaults: defaults ?? {},
           description,
           expires,
+          header: credentialHeader,
           meta: effectiveMeta,
           method,
           realm,
@@ -1525,13 +1534,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
  * but returns a Challenge object directly instead of a request handler.
  */
 function createChallengeFn(parameters: {
+  credentialHeader?: string | undefined
   defaults?: Record<string, unknown>
   method: Method.Method
   realm: string | undefined
   request?: Method.RequestFn<Method.Method>
   secretKey: string
 }): (options: Record<string, unknown>) => Promise<Challenge.Challenge> {
-  const { defaults, method, realm, secretKey } = parameters
+  const { credentialHeader, defaults, method, realm, secretKey } = parameters
 
   return async (options) => {
     const { description, meta, scope, ...rest } = options as {
@@ -1551,6 +1561,7 @@ function createChallengeFn(parameters: {
       defaults,
       description,
       expires,
+      header: credentialHeader,
       meta: effectiveMeta,
       method,
       realm,
@@ -1569,6 +1580,7 @@ declare namespace createMethodFn {
   > = {
     attest?: (request: globalThis.Request) => Promise<globalThis.Response | undefined>
     authorize?: Method.AuthorizeFn<method>
+    credentialHeader?: string | undefined
     defaults?: defaults
     method: method
     events: ServerEventDispatcher<readonly [method], transport>
@@ -1959,6 +1971,7 @@ async function resolveRouteChallenge(parameters: {
   defaults?: Record<string, unknown> | undefined
   description?: string | undefined
   expires?: string | undefined
+  header?: string | undefined
   meta?: Record<string, string> | undefined
   method: Method.Method
   realm?: string | undefined
@@ -1993,6 +2006,7 @@ async function resolveRouteChallenge(parameters: {
   const challenge = Challenge.fromMethod(parameters.method, {
     description: parameters.description,
     expires: parameters.expires,
+    header: parameters.header,
     meta: parameters.meta,
     realm: effectiveRealm,
     request: request as never,
@@ -2011,6 +2025,7 @@ function createFallbackChallenge(parameters: {
   defaults: Record<string, unknown>
   description?: string | undefined
   expires?: string | undefined
+  header?: string | undefined
   meta?: Record<string, string> | undefined
   method: Method.Method
   realm?: string | undefined
@@ -2020,6 +2035,7 @@ function createFallbackChallenge(parameters: {
   return Challenge.fromMethod(parameters.method, {
     description: parameters.description,
     expires: parameters.expires,
+    header: parameters.header,
     meta: parameters.meta,
     realm:
       parameters.realm ??
@@ -2475,8 +2491,9 @@ function composeHandlers(
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
-    const header = input.headers.get(Constants.Headers.authorization)
-    const paymentHeader = header ? Credential.extractPaymentScheme(header) : null
+    const paymentHeader = Array.from(input.headers.values())
+      .map((value) => Credential.extractPaymentScheme(value))
+      .find((value): value is string => value !== null)
 
     if (paymentHeader) {
       // Parse the credential to find method+intent for dispatch.

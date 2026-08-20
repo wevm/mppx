@@ -98,6 +98,18 @@ describe('http', () => {
 
       expect(transport.getCredential(request)).toBeNull()
     })
+
+    test('returns credential from the configured alternate header', () => {
+      const transport = Transport.http({ credentialHeader: 'Payment-Authorization' })
+      const request = new Request('https://example.com', {
+        headers: {
+          Authorization: 'Bearer ordinary-authentication',
+          'Payment-Authorization': Credential.serialize(credential),
+        },
+      })
+
+      expect(transport.getCredential(request)?.challenge.id).toBe(challenge.id)
+    })
   })
 
   describe('respondChallenge', () => {
