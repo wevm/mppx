@@ -210,9 +210,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     challengesReceived: number
     committed: RuntimeSnapshot | undefined
     created: Map<string, ChannelEntry>
+    dispatched: RuntimeSnapshot | undefined
     seenExisting: Set<string>
     previous: RuntimeSnapshot
     resumed: ChannelEntry | undefined
+    resumedSnapshot: RuntimeSnapshot | undefined
     trackCreates: boolean
   }
   let channelUse: ChannelUse | undefined
@@ -229,7 +231,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const entry = await getReusable(key)
       if (entry && channelUse) {
         channelUse.seenExisting.add(key)
-        if (!channelUse.committed && !channelUse.created.has(key)) channelUse.resumed ??= entry
+        if (!channelUse.committed && !channelUse.created.has(key) && !channelUse.resumed) {
+          channelUse.resumed = entry
+          channelUse.resumedSnapshot = captureRuntimeStateSnapshot({
+            channel: entry,
+            spent: runtime.spent,
+            state: runtime.state,
+          })
+        }
       }
       return entry
     },
@@ -350,8 +359,23 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
 
+  const resourceFetch: typeof globalThis.fetch = (input, init) => {
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+    const hasCredential =
+      new Headers(init?.headers).has(Constants.Headers.authorization) ||
+      (input instanceof Request && input.headers.has(Constants.Headers.authorization))
+    if (hasCredential && channelUse && !signal?.aborted) {
+      channelUse.dispatched = captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      })
+    }
+    return config.fetch(input, init)
+  }
+
   const wrappedFetch = Fetch.from({
-    fetch: config.fetch,
+    fetch: resourceFetch,
     methods: [method],
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
@@ -701,9 +725,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       challengesReceived: 0,
       committed: undefined,
       created: new Map(),
+      dispatched: undefined,
       previous,
       seenExisting: new Set(),
       resumed: undefined,
+      resumedSnapshot: undefined,
       trackCreates: false,
     }
     channelUse = use
@@ -737,8 +763,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           response = await wrappedFetch(input, effectiveInit)
         } catch (error) {
           if (use.created.size) await rollbackCreatedChannels()
-          else await restoreRuntime(use.committed ?? previous)
-          if (await retryWithoutResumed()) continue
+          else {
+            const dispatched = dispatchedVoucherSnapshot(use, previous)
+            await restoreRuntime(dispatched ?? use.committed ?? previous)
+            if (!dispatched && (await retryWithoutResumed())) continue
+          }
           throw error
         }
 
@@ -774,6 +803,26 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     } finally {
       channelUse = undefined
     }
+  }
+
+  /** Returns a voucher that may have reached the server without preserving unrelated optimism. */
+  function dispatchedVoucherSnapshot(
+    use: ChannelUse,
+    previous: RuntimeSnapshot,
+  ): RuntimeSnapshot | undefined {
+    const baseline = use.committed ?? previous
+    const comparison = baseline.channel ? baseline : use.resumedSnapshot
+    const dispatched = use.dispatched
+    if (
+      comparison?.channel &&
+      dispatched?.channel?.opened &&
+      dispatched.channel.entry.channelId.toLowerCase() ===
+        comparison.channel.entry.channelId.toLowerCase() &&
+      dispatched.channel.cumulativeAmount > comparison.channel.cumulativeAmount
+    ) {
+      return dispatched
+    }
+    return undefined
   }
 
   async function closeHttpSessionAndApply(
