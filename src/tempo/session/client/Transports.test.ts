@@ -310,7 +310,7 @@ describe('HttpManagement', () => {
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
     })
 
-    test('retryHttpPaymentRequired restores cumulative authorization when retry throws', async () => {
+    test('retryHttpPaymentRequired preserves cumulative authorization when dispatch throws', async () => {
       const entry = channel({ cumulativeAmount: 5n })
       const restoreCumulative = vi.fn()
 
@@ -328,6 +328,28 @@ describe('HttpManagement', () => {
           topUpIfNeeded: async () => {},
         }),
       ).rejects.toThrow('network failed')
+
+      expect(restoreCumulative).not.toHaveBeenCalled()
+    })
+
+    test('retryHttpPaymentRequired restores cumulative authorization before dispatch', async () => {
+      const entry = channel({ cumulativeAmount: 5n })
+      const restoreCumulative = vi.fn()
+
+      await expect(
+        retryHttpPaymentRequired({
+          createSessionCredential: async () => {
+            throw new Error('signing failed')
+          },
+          fetch: vi.fn(),
+          getChannel: () => entry,
+          input: 'https://example.test/resource',
+          response: response402(challenge(snapshot())),
+          restoreCumulative,
+          setChallenge() {},
+          topUpIfNeeded: async () => {},
+        }),
+      ).rejects.toThrow('signing failed')
 
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
     })

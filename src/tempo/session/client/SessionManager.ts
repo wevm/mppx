@@ -210,6 +210,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     challengesReceived: number
     committed: RuntimeSnapshot | undefined
     created: Map<string, ChannelEntry>
+    dispatched: RuntimeSnapshot | undefined
     seenExisting: Set<string>
     previous: RuntimeSnapshot
     resumed: ChannelEntry | undefined
@@ -350,8 +351,22 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
 
+  const resourceFetch: typeof globalThis.fetch = (input, init) => {
+    const hasCredential =
+      new Headers(init?.headers).has(Constants.Headers.authorization) ||
+      (input instanceof Request && input.headers.has(Constants.Headers.authorization))
+    if (hasCredential && channelUse) {
+      channelUse.dispatched = captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      })
+    }
+    return config.fetch(input, init)
+  }
+
   const wrappedFetch = Fetch.from({
-    fetch: config.fetch,
+    fetch: resourceFetch,
     methods: [method],
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
@@ -701,6 +716,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       challengesReceived: 0,
       committed: undefined,
       created: new Map(),
+      dispatched: undefined,
       previous,
       seenExisting: new Set(),
       resumed: undefined,
@@ -737,7 +753,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           response = await wrappedFetch(input, effectiveInit)
         } catch (error) {
           if (use.created.size) await rollbackCreatedChannels()
-          else await restoreRuntime(use.committed ?? previous)
+          else await restoreRuntime(dispatchedVoucherSnapshot(use, previous))
           if (await retryWithoutResumed()) continue
           throw error
         }
@@ -774,6 +790,22 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     } finally {
       channelUse = undefined
     }
+  }
+
+  /** Preserves a voucher that may have reached the server without preserving unrelated optimism. */
+  function dispatchedVoucherSnapshot(use: ChannelUse, previous: RuntimeSnapshot): RuntimeSnapshot {
+    const baseline = use.committed ?? previous
+    const dispatched = use.dispatched
+    if (
+      baseline.channel &&
+      dispatched?.channel?.opened &&
+      dispatched.channel.entry.channelId.toLowerCase() ===
+        baseline.channel.entry.channelId.toLowerCase() &&
+      dispatched.channel.cumulativeAmount > baseline.channel.cumulativeAmount
+    ) {
+      return dispatched
+    }
+    return baseline
   }
 
   async function closeHttpSessionAndApply(

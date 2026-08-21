@@ -698,6 +698,7 @@ export async function retryHttpPaymentRequired(
       : requiredCumulative
   const restore = () => parameters.restoreCumulative(snapshot.channelId, cumulativeBeforeVoucher)
   let retry: Response
+  let dispatched = false
   try {
     const credential = await parameters.createSessionCredential(challenge, {
       action: 'voucher',
@@ -705,12 +706,11 @@ export async function retryHttpPaymentRequired(
       descriptor: currentChannel.descriptor,
       cumulativeAmountRaw: cumulativeAmount.toString(),
     })
-    retry = await parameters.fetch(
-      parameters.input,
-      requestInitWithAuthorization(parameters.input, parameters.init, credential),
-    )
+    const retryInit = requestInitWithAuthorization(parameters.input, parameters.init, credential)
+    dispatched = true
+    retry = await parameters.fetch(parameters.input, retryInit)
   } catch (error) {
-    await restore()
+    if (!dispatched) await restore()
     throw error
   }
   if (!retry.ok && !retry.headers.get(Constants.Headers.paymentReceipt)) {
