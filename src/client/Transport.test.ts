@@ -1,4 +1,4 @@
-import { Challenge, Credential, Mcp } from 'mppx'
+import { Challenge, Constants, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
 import { Methods } from 'mppx/tempo'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
@@ -208,9 +208,9 @@ describe('http', () => {
         name: 'Payment auth credential for Payment auth challenge',
       },
       {
-        challenge: { ...challenge, header: 'Payment-Authorization' },
+        challenge: { ...challenge, header: Constants.Headers.paymentAuthorization },
         credential: Credential.serialize(credential),
-        expectedHeader: 'Payment-Authorization',
+        expectedHeader: Constants.Headers.paymentAuthorization,
         expectedValue: Credential.serialize(credential),
         name: 'Payment auth credential for alternate credential header',
       },

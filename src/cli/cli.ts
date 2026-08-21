@@ -598,7 +598,7 @@ const cli = Cli.create('mppx', {
       // Send credential and get response
       const credentialHeaders = {
         ...normalizeHeaders(init.headers),
-        Authorization: credential,
+        [Challenge.credentialHeader(challenge)]: credential,
       }
       plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 

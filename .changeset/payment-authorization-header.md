@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added support for configuring a dedicated HTTP header for Payment credentials.
+Added a `requiresAuth` server option that used `Payment-Authorization` for Payment credentials.

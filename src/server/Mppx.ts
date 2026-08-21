@@ -502,12 +502,13 @@ export function create<
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
     attestation,
-    credentialHeader,
+    requiresAuth,
     realm = Env.get('realm'),
     selectOffers,
     secretKey = Env.get('secretKey'),
-    transport = Transport.http({ credentialHeader }) as transport,
+    transport = Transport.http({ requiresAuth }) as transport,
   } = config
+  const credentialHeader = requiresAuth ? Constants.Headers.paymentAuthorization : undefined
 
   if (!secretKey) {
     throw new Error(
@@ -960,8 +961,8 @@ export declare namespace create {
     attestation?: transport extends Transport.Http ? Attestation.VerifierMap | undefined : never
     /** Array of configured methods. @example [tempo()] */
     methods: methods
-    /** HTTP field used for Payment credentials and advertised in challenges. @default 'Authorization' */
-    credentialHeader?: transport extends Transport.Http ? string | undefined : never
+    /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
+    requiresAuth?: transport extends Transport.Http ? boolean | undefined : never
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */

@@ -133,7 +133,9 @@ export function from<
  * - Attaches receipts via `Payment-Receipt` header
  */
 export function http(options: http.Options = {}): Http {
-  const credentialHeader = options.credentialHeader ?? Constants.Headers.authorization
+  const credentialHeader = options.requiresAuth
+    ? Constants.Headers.paymentAuthorization
+    : Constants.Headers.authorization
   return from<Request, Response>({
     name: 'http',
 
@@ -223,8 +225,8 @@ export function http(options: http.Options = {}): Http {
 
 export declare namespace http {
   type Options = {
-    /** HTTP field carrying Payment credentials. @default 'Authorization' */
-    credentialHeader?: string | undefined
+    /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
+    requiresAuth?: boolean | undefined
   }
 }
 
