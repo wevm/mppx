@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.19
+
+### Patch Changes
+
+- 0850f5d: Preserved configured fee tokens for hosted server-driven Tempo session settlement and close transactions.
+
 ## 0.8.18
 
 ### Patch Changes
