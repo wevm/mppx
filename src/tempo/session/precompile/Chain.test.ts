@@ -336,7 +336,7 @@ describe('precompile receipt wait', () => {
 })
 
 describe('precompile server transactions', () => {
-  test('marks server transactions for hosted sponsorship and preserves the machine close ABI', async () => {
+  test('marks server transactions for hosted sponsorship and preserves their fee token', async () => {
     const rpcMethods: string[] = []
     const preparedRequests: Record<string, unknown>[] = []
     const signedRequests: Record<string, unknown>[] = []
@@ -365,11 +365,13 @@ describe('precompile server transactions', () => {
       {
         account: sender,
         feePayer: true,
+        feeToken: sourceToken,
       },
     )
     await Chain.settleOnChain(client, descriptor, 1n, `0x${'11'.repeat(65)}`, tip20ChannelEscrow, {
       account: sender,
       feePayer: true,
+      feeToken: sourceToken,
     })
     await Chain.closeMachineSessionOnChain(
       client,
@@ -379,11 +381,21 @@ describe('precompile server transactions', () => {
       `0x${'22'.repeat(65)}`,
       `0x${'33'.repeat(65)}`,
       '0x7777777777777777777777777777777777777777',
-      { account: sender, feePayer: true },
+      { account: sender, feePayer: true, feeToken: sourceToken },
     )
 
     expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
+    expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([
+      sourceToken,
+      sourceToken,
+      sourceToken,
+    ])
     expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
+    expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([
+      sourceToken,
+      sourceToken,
+      sourceToken,
+    ])
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(3)
     expect(rpcMethods).not.toContain('eth_sendTransaction')
     expect(rpcMethods).not.toContain('eth_call')

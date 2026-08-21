@@ -1311,6 +1311,7 @@ async function sendPrecompileTransaction(
       account,
       data,
       feePayer: true,
+      feeToken: options.feeToken,
       to,
     })
   }
