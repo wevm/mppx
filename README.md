@@ -115,6 +115,9 @@ mppx account create
 # make request - automatic payment handling, curl-like api
 mppx example.com
 
+# pay the x402 offer on a server that advertises both protocols
+mppx example.com --protocol x402
+
 # open another session instead of reusing the preferred channel
 mppx example.com --session new
 
@@ -136,6 +139,10 @@ its configured custom escrow in the payment challenge, but the client rejects it
 `-M allowCustomEscrow=true` is supplied. This opt-in trusts the server-selected address; clients
 that do not support custom escrows should leave it unset. See the
 [session escrow trust documentation](./src/tempo/session/README.md#escrow-configuration-and-trust).
+
+`--protocol auto` is the default: MPP is answered when the server offers it, and x402 otherwise.
+Pass `mpp` or `x402` to answer one protocol only. An x402 payment is signed by the same EVM
+account as any other EVM charge, so `MPPX_PRIVATE_KEY` or a stored account covers both.
 
 You can also install globally to use the `mppx` CLI from anywhere:
 

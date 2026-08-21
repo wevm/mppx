@@ -10,10 +10,15 @@ import { tempo as tempoMainnet } from 'viem/tempo/chains'
 
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'
+import { mpp as mppProtocol } from '../client/internal/protocols/Mpp.js'
+import { x402 as x402Protocol } from '../client/internal/protocols/X402.js'
 import * as Mppx from '../client/Mppx.js'
+import * as Transport from '../client/Transport.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
+import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
+import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
@@ -166,6 +171,11 @@ function formatPayment(payment: unknown): string {
     .join(' ')
 }
 
+/** The token a challenge charges in. x402 names it `asset`, and always as an address. */
+function offeredCurrency(challenge: Challenge.Challenge): unknown {
+  return challenge.request.currency ?? challenge.request.asset
+}
+
 function filterChallengesByCurrency(
   challenges: readonly Challenge.Challenge[],
   currency: string | undefined,
@@ -173,9 +183,55 @@ function filterChallengesByCurrency(
   if (!currency) return [...challenges]
   const normalized = currency.toLowerCase()
   return challenges.filter((challenge) => {
-    const offered = challenge.request.currency
+    const offered = offeredCurrency(challenge)
     return typeof offered === 'string' && offered.toLowerCase() === normalized
   })
+}
+
+/**
+ * A transport that presents one already-selected challenge to the signer.
+ *
+ * `Mppx.createCredential` does not take a challenge — it re-reads them from a response through
+ * its transport and makes its own pick. This command has already picked, so the transport
+ * hands the chosen challenge over as-is instead of re-serializing it into a synthetic 402.
+ * Skipping that round-trip is what lets x402 challenges through: they are synthesized from
+ * `PAYMENT-REQUIRED`, and re-parsing would shed the brand that routes them to the x402 signer.
+ */
+function selectedChallengeTransport(
+  challenge: Challenge.Challenge,
+): Transport.Transport<RequestInit, Response> {
+  return Transport.from({
+    name: 'selected-challenge',
+    isPaymentRequired: (response) => response.status === 402,
+    getChallenges: () => [challenge],
+    setCredential: (request) => request,
+  })
+}
+
+/** Payment protocol the user asked for, `auto` to take whichever the server offers. */
+type ProtocolOption = 'auto' | 'mpp' | 'x402'
+
+/**
+ * Every payment challenge a 402 offers, in protocol preference order.
+ *
+ * MPP comes first so `auto` keeps answering what it answers today, and a malformed x402
+ * offer degrades to the MPP challenges alone rather than taking them down with it. Under an
+ * explicit `--protocol` the other protocol is never read, so an x402 decode error surfaces.
+ */
+async function collectChallenges(
+  response: Response,
+  protocol: ProtocolOption,
+): Promise<Challenge.Challenge[]> {
+  const mpp = () => mppProtocol().getChallenges(response)
+  const x402 = () => x402Protocol().getChallenges(response)
+  if (protocol === 'mpp') return mpp()
+  if (protocol === 'x402') return x402()
+  const mppChallenges = await mpp()
+  try {
+    return [...mppChallenges, ...(await x402())]
+  } catch {
+    return mppChallenges
+  }
 }
 
 async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
@@ -247,6 +303,7 @@ const cli = Cli.create('mppx', {
       .describe('Method-specific option (key=value, repeatable)'),
     network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
     payWith: z.string().optional().describe('Source token for Tempo auto-swap'),
+    protocol: z.enum(['auto', 'mpp', 'x402']).default('auto').describe('Payment protocol to use'),
     rpcUrl: z
       .string()
       .optional()
@@ -400,11 +457,20 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const offeredChallenges = Challenge.fromResponseList(challengeResponse)
+      const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol)
+      if (offeredChallenges.length === 0)
+        return c.error({
+          code: 'UNSUPPORTED_PROTOCOL',
+          message:
+            c.options.protocol === 'auto'
+              ? 'Server did not offer a payment challenge.'
+              : `Server did not offer an ${c.options.protocol} payment challenge.`,
+          exitCode: 2,
+        })
       const currencyChallenges = filterChallengesByCurrency(offeredChallenges, c.options.currency)
       if (c.options.currency && currencyChallenges.length === 0) {
         const offers = offeredChallenges
-          .map((challenge) => challenge.request.currency)
+          .map(offeredCurrency)
           .filter((currency): currency is string => typeof currency === 'string')
           .join(', ')
         return c.error({
@@ -434,10 +500,16 @@ const cli = Cli.create('mppx', {
       }
 
       const { challenge, plugin, method: configMethod } = selected
-      const selectedChallengeResponse = new Response(null, {
-        status: 402,
-        headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
-      })
+      const isX402Challenge = x402_ChallengeBrand.is(challenge)
+      // An x402 challenge cannot round-trip `WWW-Authenticate` — re-serializing sheds the brand
+      // that routes it to the x402 signer — so it keeps the original response, and
+      // `selectedChallengeTransport` below pins the signer to the selection instead.
+      const selectedChallengeResponse = isX402Challenge
+        ? challengeResponse
+        : new Response(null, {
+            status: 402,
+            headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
+          })
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
       let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
@@ -585,20 +657,31 @@ const cli = Cli.create('mppx', {
       if (pluginResult?.createCredential)
         credential = await pluginResult.createCredential(selectedChallengeResponse)
       else if (pluginResult) {
-        const mppx = Mppx.create({ methods: pluginResult.methods, polyfill: false })
+        const mppx = Mppx.create({
+          methods: pluginResult.methods,
+          polyfill: false,
+          transport: selectedChallengeTransport(challenge),
+        })
         credential = await mppx.createCredential(
           selectedChallengeResponse,
           pluginResult.credentialContext as undefined,
         )
       } else if (configMethod) {
-        const mppx = Mppx.create({ methods: [configMethod], polyfill: false })
+        const mppx = Mppx.create({
+          methods: [configMethod],
+          polyfill: false,
+          transport: selectedChallengeTransport(challenge),
+        })
         credential = await mppx.createCredential(selectedChallengeResponse)
       } else throw new Error('unreachable')
 
       // Send credential and get response
+      const credentialHeader = isX402Challenge
+        ? x402_Types.paymentSignatureHeader
+        : Constants.Headers.authorization
       const credentialHeaders = {
         ...normalizeHeaders(init.headers),
-        Authorization: credential,
+        [credentialHeader]: credential,
       }
       plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
