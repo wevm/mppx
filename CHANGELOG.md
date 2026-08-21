@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.20
+
+### Patch Changes
+
+- d343aae: Added `preparePayment` for inspecting a selected client payment before creating and attaching its credential.
+
 ## 0.8.19
 
 ### Patch Changes
