@@ -128,11 +128,14 @@ export function from<
 /**
  * HTTP transport for server-side payment handling.
  *
- * - Reads credentials from the `Authorization` header
+ * - Reads credentials from the configured payment credential header
  * - Issues challenges via `WWW-Authenticate` header with 402 status
  * - Attaches receipts via `Payment-Receipt` header
  */
-export function http(): Http {
+export function http(options: http.Options = {}): Http {
+  const credentialHeader = options.requiresAuth
+    ? Constants.Headers.paymentAuthorization
+    : Constants.Headers.authorization
   return from<Request, Response>({
     name: 'http',
 
@@ -146,7 +149,7 @@ export function http(): Http {
     },
 
     getCredential(request) {
-      const header = request.headers.get(Constants.Headers.authorization)
+      const header = request.headers.get(credentialHeader)
       if (!header) return null
       const payment = Credential.extractPaymentScheme(header)
       if (!payment) return null
@@ -218,6 +221,13 @@ export function http(): Http {
       })
     },
   })
+}
+
+export declare namespace http {
+  type Options = {
+    /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
+    requiresAuth?: boolean | undefined
+  }
 }
 
 function withPrivateCacheControl(value: string | null): string {

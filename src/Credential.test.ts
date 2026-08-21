@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Constants, Credential } from 'mppx'
 import { Base64 } from 'ox'
 import { describe, expect, test } from 'vp/test'
 
@@ -362,6 +362,21 @@ describe('fromRequest', () => {
 
     expect(credential.challenge.id).toBe('x7Tg2pLqR9mKvNwY3hBcZa')
     expect(credential.payload).toEqual({ signature: '0x1234' })
+  })
+
+  test('behavior: extracts a credential from an alternate header', () => {
+    const request = new Request('https://api.example.com/resource', {
+      headers: {
+        [Constants.Headers.paymentAuthorization]: Credential.serialize(
+          Credential.from({ challenge, payload: {} }),
+        ),
+      },
+    })
+
+    expect(
+      Credential.fromRequest(request, { header: Constants.Headers.paymentAuthorization }).challenge
+        .id,
+    ).toBe(challenge.id)
   })
 
   test('error: throws for missing Authorization header', () => {

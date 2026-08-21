@@ -425,15 +425,20 @@ type PaymentBinding = {
 }
 
 function getPaymentBinding(request: Request): PaymentBinding | null {
-  try {
-    const credential = Credential.fromRequest(request)
-    return {
-      intent: credential.challenge.intent,
-      method: credential.challenge.method,
+  for (const [, value] of request.headers) {
+    const payment = Credential.extractPaymentScheme(value)
+    if (!payment) continue
+    try {
+      const credential = Credential.deserialize(payment)
+      return {
+        intent: credential.challenge.intent,
+        method: credential.challenge.method,
+      }
+    } catch {
+      // A malformed payment header is handled by the selected route.
     }
-  } catch {
-    return null
   }
+  return null
 }
 
 function matchesPaymentBinding(endpoint: unknown, binding: PaymentBinding | null): boolean {

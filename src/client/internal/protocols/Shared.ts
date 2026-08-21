@@ -19,7 +19,12 @@ export function setCredentialHeader(
   credential: string,
 ): RequestInit {
   const headers = new Headers(request.headers)
-  for (const stale of credentialHeaders) headers.delete(stale)
+  for (const stale of credentialHeaders) {
+    // Never erase ordinary application credentials from Authorization.
+    if (stale === Constants.Headers.authorization && !headers.get(stale)?.startsWith('Payment '))
+      continue
+    headers.delete(stale)
+  }
   headers.set(header, credential)
   return { ...request, headers }
 }

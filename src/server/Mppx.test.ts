@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Credential, Errors, Method, Receipt, z } from 'mppx'
+import { Challenge, Constants, Credential, Errors, Method, Receipt, z } from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -32,6 +32,22 @@ describe('create', () => {
     expect(handler.realm).toBe(realm)
     expect(handler.transport.name).toBe('http')
     expect(typeof handler.charge).toBe('function')
+  })
+
+  test('uses Payment-Authorization when application authentication is required', async () => {
+    const handler = Mppx.create({ methods: [method], realm, requiresAuth: true, secretKey })
+
+    const result = await handler.charge({
+      amount: '1000',
+      currency: asset,
+      recipient: accounts[0].address,
+    })(new Request('https://example.com/resource', { headers: { Authorization: 'Bearer token' } }))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.headers.get(Constants.Headers.wwwAuthenticate)).toContain(
+      `header="${Constants.Headers.paymentAuthorization}"`,
+    )
   })
 
   test('behavior: with mcp transport', () => {

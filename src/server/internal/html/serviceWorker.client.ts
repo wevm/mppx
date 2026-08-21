@@ -1,6 +1,9 @@
 import { params } from './constants.js'
 
-export async function submitCredential(credential: string): Promise<void> {
+export async function submitCredential(
+  credential: string,
+  header = 'Authorization',
+): Promise<void> {
   const url = new URL(location.href)
   url.searchParams.set(params.serviceWorker, '')
 
@@ -22,7 +25,7 @@ export async function submitCredential(credential: string): Promise<void> {
   await new Promise<void>((resolve) => {
     const channel = new MessageChannel()
     channel.port1.onmessage = () => resolve()
-    serviceWorker.postMessage({ credential }, [channel.port2])
+    serviceWorker.postMessage({ credential, header }, [channel.port2])
   })
   location.reload()
 }

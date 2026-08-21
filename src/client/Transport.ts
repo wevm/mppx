@@ -124,7 +124,7 @@ export function http(): Transport<RequestInit, Response> {
       const protocol = options?.challenge ? protocolForChallenge.get(options.challenge) : undefined
       const fallback = protocols[0]
       if (!protocol && !fallback) throw new Error('No protocol to attach the credential.')
-      return (protocol ?? fallback)!.setCredential(request, credential)
+      return (protocol ?? fallback)!.setCredential(request, credential, options)
     },
   })
 }

@@ -1,4 +1,4 @@
-import { Challenge } from 'mppx'
+import { Challenge, Constants } from 'mppx'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vp/test'
 
@@ -64,6 +64,41 @@ describe('from', () => {
     })
 
     expect(challenge.expires).toBe('2025-01-06T12:00:00.000Z')
+  })
+
+  test('behavior: preserves an alternate credential header', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      header: Constants.Headers.paymentAuthorization,
+    })
+
+    expect(Challenge.serialize(challenge)).toContain(
+      `header="${Constants.Headers.paymentAuthorization}"`,
+    )
+    expect(Challenge.credentialHeader(Challenge.deserialize(Challenge.serialize(challenge)))).toBe(
+      Constants.Headers.paymentAuthorization,
+    )
+  })
+
+  test('behavior: omits the default credential header', () => {
+    const parameters = {
+      secretKey: 'test-secret-key-test-secret-key-32',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+    }
+    const challenge = Challenge.from({ ...parameters, header: Constants.Headers.authorization })
+    const implicitChallenge = Challenge.from(parameters)
+
+    expect(challenge.header).toBeUndefined()
+    expect(challenge.id).toBe(implicitChallenge.id)
+    expect(Challenge.serialize(challenge)).not.toContain('header=')
+    expect(Challenge.credentialHeader(challenge)).toBe(Constants.Headers.authorization)
   })
 
   test('error: rejects empty id', () => {

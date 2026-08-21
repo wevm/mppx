@@ -1,4 +1,4 @@
-import { Challenge, Credential, Mcp, Receipt } from 'mppx'
+import { Challenge, Constants, Credential, Mcp, Receipt } from 'mppx'
 import { Transport } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vp/test'
@@ -97,6 +97,18 @@ describe('http', () => {
       })
 
       expect(transport.getCredential(request)).toBeNull()
+    })
+
+    test('uses Payment-Authorization when application authentication is required', () => {
+      const transport = Transport.http({ requiresAuth: true })
+      const request = new Request('https://example.com', {
+        headers: {
+          Authorization: 'Bearer ordinary-authentication',
+          [Constants.Headers.paymentAuthorization]: Credential.serialize(credential),
+        },
+      })
+
+      expect(transport.getCredential(request)?.challenge.id).toBe(challenge.id)
     })
   })
 
