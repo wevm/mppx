@@ -938,6 +938,72 @@ describe('Session', () => {
       expect(recovered.cumulative).toBe(3_000_000n)
     })
 
+    test('preserves a first dispatched voucher when resuming a stored channel', async () => {
+      const { delete: remove, map, store } = makeChannelStore([channelEntry()])
+      let responseLost = false
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        const authorization = headers.get(Constants.Headers.authorization)
+        if (!authorization) {
+          expect(headers.get(Constants.Headers.paymentSession)).toBe(
+            responseLost ? storedChannelId : null,
+          )
+          return Promise.resolve(responseLost ? makeOkResponse('cached') : make402Response())
+        }
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action !== 'voucher') throw new Error(`unexpected ${payload.action} credential`)
+        expect(payload.cumulativeAmount).toBe('2000000')
+        responseLost = true
+        throw new Error('connection reset after resumed voucher dispatch')
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'connection reset after resumed voucher dispatch',
+      )
+
+      expect(remove).not.toHaveBeenCalled()
+      expect(s.cumulative).toBe(2_000_000n)
+      expect(map.get(entryKey(channelEntry()))?.cumulativeAmount).toBe(2_000_000n)
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(s.cumulative).toBe(2_000_000n)
+    })
+
+    test('restores a voucher when the request is already aborted before dispatch', async () => {
+      const { map, store } = makeChannelStore([channelEntry()])
+      const controller = new AbortController()
+      let abortNextProbe = false
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) {
+          if (abortNextProbe) controller.abort()
+          return Promise.resolve(make402Response())
+        }
+        if (init?.signal?.aborted) throw new Error('request aborted before dispatch')
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      abortNextProbe = true
+      await expect(
+        s.fetch('https://api.example.com/data', { signal: controller.signal }),
+      ).rejects.toThrow('request aborted before dispatch')
+
+      expect(s.cumulative).toBe(2_000_000n)
+      expect(map.get(entryKey(channelEntry()))?.cumulativeAmount).toBe(2_000_000n)
+    })
+
     test('does not bootstrap when disabled', async () => {
       const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
       const s = sessionManager({

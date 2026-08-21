@@ -707,7 +707,10 @@ export async function retryHttpPaymentRequired(
       cumulativeAmountRaw: cumulativeAmount.toString(),
     })
     const retryInit = requestInitWithAuthorization(parameters.input, parameters.init, credential)
-    dispatched = true
+    const signal =
+      retryInit.signal ??
+      (parameters.input instanceof Request ? parameters.input.signal : undefined)
+    dispatched = !signal?.aborted
     retry = await parameters.fetch(parameters.input, retryInit)
   } catch (error) {
     if (!dispatched) await restore()

@@ -354,6 +354,31 @@ describe('HttpManagement', () => {
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
     })
 
+    test('retryHttpPaymentRequired restores cumulative authorization when already aborted', async () => {
+      const controller = new AbortController()
+      controller.abort()
+      const entry = channel({ cumulativeAmount: 5n })
+      const restoreCumulative = vi.fn()
+
+      await expect(
+        retryHttpPaymentRequired({
+          createSessionCredential: async () => 'voucher-credential',
+          fetch: async () => {
+            throw new Error('request aborted before dispatch')
+          },
+          getChannel: () => entry,
+          init: { signal: controller.signal },
+          input: 'https://example.test/resource',
+          response: response402(challenge(snapshot())),
+          restoreCumulative,
+          setChallenge() {},
+          topUpIfNeeded: async () => {},
+        }),
+      ).rejects.toThrow('request aborted before dispatch')
+
+      expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
+    })
+
     test('closeHttpSession posts a close credential and parses the receipt', async () => {
       const entry = channel()
       const createSessionCredential = vi.fn(async (_challenge, context: SessionContext) => {
