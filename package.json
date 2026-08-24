@@ -51,7 +51,6 @@
     "eslint-plugin-compat": "^7.0.2",
     "express": "^5.2.1",
     "fast-check": "^4.9.0",
-    "fastify": "^5.12.1",
     "file-type": "catalog:",
     "frog": "^1.1.0",
     "hono": "4.13.1",
@@ -259,11 +258,6 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "default": "./dist/middlewares/elysia.js"
     },
-    "./fastify": {
-      "src": "./src/middlewares/fastify.ts",
-      "types": "./dist/middlewares/fastify.d.ts",
-      "default": "./dist/middlewares/fastify.js"
-    },
     "./validation": {
       "src": "./src/validation/index.ts",
       "types": "./dist/validation/index.d.ts",
@@ -279,7 +273,6 @@
     "@x402/next": ">=2.22.0",
     "elysia": ">=1",
     "express": ">=5",
-    "fastify": ">=5",
     "hono": ">=4.12.25",
     "next": ">=16.2.6",
     "viem": ">=2.54.0"
@@ -307,9 +300,6 @@
       "optional": true
     },
     "express": {
-      "optional": true
-    },
-    "fastify": {
       "optional": true
     },
     "hono": {

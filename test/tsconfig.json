@@ -25,7 +25,6 @@
       "mppx/express": ["../src/middlewares/express.ts"],
       "mppx/nextjs": ["../src/middlewares/nextjs.ts"],
       "mppx/elysia": ["../src/middlewares/elysia.ts"],
-      "mppx/fastify": ["../src/middlewares/fastify.ts"],
       "mppx/stripe": ["../src/stripe/index.ts"],
       "mppx/stripe/client": ["../src/stripe/client/index.ts"],
       "mppx/stripe/server": ["../src/stripe/server/index.ts"],

@@ -23,7 +23,6 @@ const alias = {
   'mppx/express': path.resolve(import.meta.dirname, 'src/middlewares/express'),
   'mppx/nextjs': path.resolve(import.meta.dirname, 'src/middlewares/nextjs'),
   'mppx/elysia': path.resolve(import.meta.dirname, 'src/middlewares/elysia'),
-  'mppx/fastify': path.resolve(import.meta.dirname, 'src/middlewares/fastify'),
   'mppx/stripe': path.resolve(import.meta.dirname, 'src/stripe'),
   'mppx/stripe/client': path.resolve(import.meta.dirname, 'src/stripe/client'),
   'mppx/stripe/server/spt': path.resolve(import.meta.dirname, 'src/stripe/server/spt.ts'),
