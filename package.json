@@ -32,7 +32,7 @@
     "node >= 18"
   ],
   "devDependencies": {
-    "@changesets/cli": "^2.31.1",
+    "@changesets/cli": "^3.0.0",
     "@hono/node-server": "2.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "^1.62.1",
@@ -51,12 +51,12 @@
     "file-type": "catalog:",
     "frog": "^1.1.0",
     "hono": "4.13.1",
-    "incur": "^0.4.26",
+    "incur": "^0.5.1",
     "isows": "^1.0.7",
     "playwright": "^1.62.1",
     "pkg-pr-new": "0.0.88",
     "prool": "^0.2.14",
-    "rolldown": "1.2.3",
+    "rolldown": "1.2.4",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^12.1.0",
     "tsx": "^4.23.12",
