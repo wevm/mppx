@@ -33,7 +33,7 @@
   ],
   "devDependencies": {
     "@changesets/cli": "^3.0.0",
-    "@hono/node-server": "2.1.0",
+    "@hono/node-server": "2.1.1",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "^1.62.1",
     "@types/express": "^5.0.6",
@@ -50,7 +50,7 @@
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
     "frog": "^1.1.0",
-    "hono": "4.13.1",
+    "hono": "4.13.2",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
     "playwright": "^1.62.1",
@@ -61,7 +61,7 @@
     "testcontainers": "^12.1.0",
     "tsx": "^4.23.12",
     "typescript": "catalog:",
-    "viem": "2.55.13",
+    "viem": "2.55.17",
     "vite": "^8.2.1",
     "vp": "npm:vite-plus@~0.1.24",
     "ws": "^8.21.3",
@@ -263,7 +263,7 @@
   },
   "dependencies": {
     "@stripe/stripe-js": "9.13.0",
-    "eventsource-parser": "3.1.1",
+    "eventsource-parser": "4.0.0",
     "ox": "catalog:",
     "structured-headers": "2.0.3",
     "zod": "^4.4.3"
