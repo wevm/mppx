@@ -3,6 +3,7 @@ import type { CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.j
 import type * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Transport from '../../server/Transport.js'
+import * as McpCredential from '../internal/Credential.js'
 
 /**
  * MCP SDK tool handler "extra" parameter.
@@ -63,9 +64,7 @@ export function mcpSdk(): McpSdk {
     },
 
     getCredential(extra) {
-      const credential = extra._meta?.[core_Mcp.credentialMetaKey]
-      if (!credential) return null
-      return credential
+      return McpCredential.parse(extra._meta?.[core_Mcp.credentialMetaKey])?.value ?? null
     },
 
     async respondChallenge({ challenge, error }) {

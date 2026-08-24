@@ -41,6 +41,9 @@ export const paymentRequiredHeader = 'PAYMENT-REQUIRED'
 /** HTTP header carrying a base64-encoded x402 payment payload. */
 export const paymentSignatureHeader = 'PAYMENT-SIGNATURE'
 
+/** Legacy HTTP header carrying an x402 v1 payment payload. */
+export const legacyPaymentSignatureHeader = 'X-PAYMENT'
+
 /** HTTP header carrying a base64-encoded x402 settlement response. */
 export const paymentResponseHeader = 'PAYMENT-RESPONSE'
 

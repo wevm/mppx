@@ -8,6 +8,7 @@ import type {
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
+import * as ExpressAdapter from './internal/express.js'
 import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
@@ -62,17 +63,12 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const request = new Request(`${req.protocol}://${req.hostname}${req.originalUrl}`, {
-      method: req.method,
-      headers: req.headers as Record<string, string>,
-    })
+    const request = ExpressAdapter.toRequest(req)
     const result = await intent(options)(request)
 
     if (result.status === 402) {
       const challenge = result.challenge as Response
-      res.status(challenge.status)
-      for (const [key, value] of challenge.headers) res.setHeader(key, value)
-      res.send(await challenge.text())
+      await ExpressAdapter.sendResponse(res, challenge)
       return
     }
 
@@ -87,7 +83,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
 
     if (managementResponse) {
       res.status(managementResponse.status)
-      for (const [key, value] of managementResponse.headers) res.setHeader(key, value)
+      ExpressAdapter.copyHeaders(res, managementResponse.headers)
       if (managementResponse.body === null) {
         res.end()
         return
@@ -99,7 +95,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))
-      for (const [key, value] of wrapped.headers) res.setHeader(key, value)
+      ExpressAdapter.copyHeaders(res, wrapped.headers)
       return originalJson(body)
     }
 

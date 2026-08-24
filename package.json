@@ -43,18 +43,23 @@
     "@x402/core": "2.22.0",
     "@x402/evm": "2.22.0",
     "@x402/express": "2.22.0",
+    "@x402/hono": "2.22.0",
+    "@x402/mcp": "2.22.0",
+    "@x402/next": "2.22.0",
     "browserslist": "^4.28.8",
     "elysia": "^1.4.29",
     "eslint-plugin-compat": "^7.0.2",
     "express": "^5.2.1",
     "fast-check": "^4.9.0",
+    "fastify": "^5.12.1",
     "file-type": "catalog:",
     "frog": "^1.1.0",
     "hono": "4.13.1",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
-    "playwright": "^1.62.1",
+    "next": "16.3.2",
     "pkg-pr-new": "0.0.88",
+    "playwright": "^1.62.1",
     "prool": "^0.2.14",
     "rolldown": "1.2.4",
     "tempo.ts": "^0.14.2",
@@ -194,6 +199,26 @@
       "types": "./dist/x402/index.d.ts",
       "default": "./dist/x402/index.js"
     },
+    "./x402/express": {
+      "src": "./src/x402/middlewares/express.ts",
+      "types": "./dist/x402/middlewares/express.d.ts",
+      "default": "./dist/x402/middlewares/express.js"
+    },
+    "./x402/hono": {
+      "src": "./src/x402/middlewares/hono.ts",
+      "types": "./dist/x402/middlewares/hono.d.ts",
+      "default": "./dist/x402/middlewares/hono.js"
+    },
+    "./x402/next": {
+      "src": "./src/x402/middlewares/next.ts",
+      "types": "./dist/x402/middlewares/next.d.ts",
+      "default": "./dist/x402/middlewares/next.js"
+    },
+    "./x402/mcp": {
+      "src": "./src/x402/mcp.ts",
+      "types": "./dist/x402/mcp.d.ts",
+      "default": "./dist/x402/mcp.js"
+    },
     "./tempo": {
       "src": "./src/tempo/index.ts",
       "types": "./dist/tempo/index.d.ts",
@@ -234,6 +259,11 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "default": "./dist/middlewares/elysia.js"
     },
+    "./fastify": {
+      "src": "./src/middlewares/fastify.ts",
+      "types": "./dist/middlewares/fastify.d.ts",
+      "default": "./dist/middlewares/fastify.js"
+    },
     "./validation": {
       "src": "./src/validation/index.ts",
       "types": "./dist/validation/index.d.ts",
@@ -242,13 +272,35 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
+    "@x402/core": ">=2.22.0",
+    "@x402/express": ">=2.22.0",
+    "@x402/hono": ">=2.22.0",
+    "@x402/mcp": ">=2.22.0",
+    "@x402/next": ">=2.22.0",
     "elysia": ">=1",
     "express": ">=5",
+    "fastify": ">=5",
     "hono": ">=4.12.25",
+    "next": ">=16.2.6",
     "viem": ">=2.54.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@x402/core": {
+      "optional": true
+    },
+    "@x402/express": {
+      "optional": true
+    },
+    "@x402/hono": {
+      "optional": true
+    },
+    "@x402/mcp": {
+      "optional": true
+    },
+    "@x402/next": {
       "optional": true
     },
     "elysia": {
@@ -257,7 +309,13 @@
     "express": {
       "optional": true
     },
+    "fastify": {
+      "optional": true
+    },
     "hono": {
+      "optional": true
+    },
+    "next": {
       "optional": true
     }
   },

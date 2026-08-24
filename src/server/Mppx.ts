@@ -20,12 +20,10 @@ import * as z from '../zod.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as Scope from './internal/scope.js'
+import * as SecretKey from './internal/SecretKey.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
-
-const minimumSecretKeyBytes = 32
-const secretKeyGenerationCommand = 'openssl rand -base64 32'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
@@ -513,7 +511,7 @@ export function create<
       'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
     )
   }
-  assertSecretKey(secretKey)
+  SecretKey.assert(secretKey)
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
@@ -936,15 +934,6 @@ export function create<
     verifyCredential: verifyCredentialFn,
     ...handlers,
   } as never
-}
-
-function assertSecretKey(secretKey: string) {
-  const byteLength = new TextEncoder().encode(secretKey).byteLength
-  if (byteLength >= minimumSecretKeyBytes) return
-
-  throw new Error(
-    `Secret key must be at least ${minimumSecretKeyBytes} bytes. Generate one with \`${secretKeyGenerationCommand}\` and set MPP_SECRET_KEY or pass it to Mppx.create().`,
-  )
 }
 
 export declare namespace create {

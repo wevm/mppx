@@ -5,6 +5,7 @@ import { playwright } from 'vp/test/browser-playwright'
 
 // Shared aliases used by both projects
 const alias = {
+  'next/server': path.resolve(import.meta.dirname, 'node_modules/next/server.js'),
   'mppx/attestation/tap': path.resolve(import.meta.dirname, 'src/tap'),
   'mppx/attestation/web-bot-auth': path.resolve(import.meta.dirname, 'src/web-bot-auth'),
   'mppx/attestation': path.resolve(import.meta.dirname, 'src/attestation'),
@@ -22,11 +23,17 @@ const alias = {
   'mppx/express': path.resolve(import.meta.dirname, 'src/middlewares/express'),
   'mppx/nextjs': path.resolve(import.meta.dirname, 'src/middlewares/nextjs'),
   'mppx/elysia': path.resolve(import.meta.dirname, 'src/middlewares/elysia'),
+  'mppx/fastify': path.resolve(import.meta.dirname, 'src/middlewares/fastify'),
   'mppx/stripe': path.resolve(import.meta.dirname, 'src/stripe'),
   'mppx/stripe/client': path.resolve(import.meta.dirname, 'src/stripe/client'),
   'mppx/stripe/server/spt': path.resolve(import.meta.dirname, 'src/stripe/server/spt.ts'),
   'mppx/stripe/server': path.resolve(import.meta.dirname, 'src/stripe/server'),
   'mppx/validation': path.resolve(import.meta.dirname, 'src/validation'),
+  'mppx/x402/express': path.resolve(import.meta.dirname, 'src/x402/middlewares/express'),
+  'mppx/x402/hono': path.resolve(import.meta.dirname, 'src/x402/middlewares/hono'),
+  'mppx/x402/mcp': path.resolve(import.meta.dirname, 'src/x402/mcp.ts'),
+  'mppx/x402/next': path.resolve(import.meta.dirname, 'src/x402/middlewares/next'),
+  'mppx/x402': path.resolve(import.meta.dirname, 'src/x402'),
   mppx: path.resolve(import.meta.dirname, 'src'),
   '~test': path.resolve(import.meta.dirname, 'test'),
 }
@@ -62,6 +69,9 @@ export default defineConfig({
           ],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
+          },
+          server: {
+            deps: { inline: ['@x402/next'] },
           },
           ...sharedTempoRpcTestOptions,
           globals: true,

@@ -64,6 +64,17 @@ describe('mcpSdk', () => {
       const result = transport.getCredential(extra)
       expect(result).toBeNull()
     })
+
+    test('returns null when credential metadata is malformed', () => {
+      const transport = mcpSdk()
+      const extra = {
+        _meta: {
+          [Mcp.credentialMetaKey]: { challenge: {}, payload: {} },
+        },
+      } as Extra
+
+      expect(transport.getCredential(extra)).toBeNull()
+    })
   })
 
   describe('respondChallenge', () => {

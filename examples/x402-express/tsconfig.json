@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "noEmit": true,
+    "paths": {
+      "mppx/client": ["../../src/client/index.ts"],
+      "mppx/x402": ["../../src/x402/index.ts"],
+      "mppx/x402/express": ["../../src/x402/middlewares/express.ts"]
+    }
+  },
+  "include": ["src/**/*"]
+}
