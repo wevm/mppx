@@ -10,7 +10,7 @@ import type {
 import * as Negotiator from '../../integrations/x402/Negotiator.js'
 import * as ExpressAdapter_ from '../../middlewares/internal/express.js'
 
-/** Express-specific configuration for {@link withMpp}. */
+/** Express-specific configuration for {@link mpp}. */
 export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
 
 /**
@@ -22,14 +22,14 @@ export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
  *
  * @example
  * ```ts
- * import { withMpp } from 'mppx/x402/express'
+ * import { mpp } from 'mppx/x402/express'
  *
- * app.use(withMpp(routes, resourceServer, {
+ * app.use(mpp(routes, resourceServer, {
  *   secretKey: process.env.MPP_SECRET_KEY!,
  * }))
  * ```
  */
-export function withMpp(
+export function mpp(
   routes: RoutesConfig,
   server: x402ResourceServer,
   config: Config,

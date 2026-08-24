@@ -3,7 +3,7 @@ import { ExactEvmScheme } from '@x402/evm/exact/server'
 import express from 'express'
 import { Receipt } from 'mppx'
 import { evm, Fetch } from 'mppx/client'
-import { withMpp } from 'mppx/x402/express'
+import { mpp } from 'mppx/x402/express'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -57,7 +57,7 @@ async function createServer(options: { skipHandler?: boolean } = {}) {
   } as const
 
   const app = express()
-  app.use(withMpp(routes, resourceServer, { secretKey }))
+  app.use(mpp(routes, resourceServer, { secretKey }))
   app.get('/api/data', (_request, response) => {
     handlerCalls++
     response.json({ data: 'premium content' })

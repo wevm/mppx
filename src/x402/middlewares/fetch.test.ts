@@ -3,8 +3,8 @@ import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { Hono } from 'hono'
 import { Challenge } from 'mppx'
 import { evm, Fetch } from 'mppx/client'
-import { withMpp as withHonoMpp } from 'mppx/x402/hono'
-import { mppProxy, withMpp as withNextMpp } from 'mppx/x402/next'
+import { mpp as honoMpp } from 'mppx/x402/hono'
+import { mpp as nextMpp, mppProxy } from 'mppx/x402/next'
 import { NextRequest } from 'next/server.js'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
@@ -58,14 +58,14 @@ function createFetch(framework: 'hono' | 'next'): typeof globalThis.fetch {
   if (framework === 'hono') {
     const app = new Hono()
     app.use(
-      withHonoMpp({ 'GET /api/data': route }, server, {
+      honoMpp({ 'GET /api/data': route }, server, {
         secretKey: 'test-secret-key-test-secret-key-32',
       }),
     )
     app.get('/api/data', (context) => context.json({ framework }))
     return (input, init) => Promise.resolve(app.fetch(new Request(input, init)))
   }
-  const handler = withNextMpp(() => Response.json({ framework }), route, server, {
+  const handler = nextMpp(() => Response.json({ framework }), route, server, {
     secretKey: 'test-secret-key-test-secret-key-32',
   })
   return (input, init) => Promise.resolve(handler(new NextRequest(new Request(input, init))))

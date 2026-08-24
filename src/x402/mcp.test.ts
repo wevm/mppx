@@ -2,7 +2,7 @@ import { FacilitatorResponseError, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { evm } from 'mppx/client'
 import { McpClient } from 'mppx/mcp/client'
-import { withMpp } from 'mppx/x402/mcp'
+import { mpp } from 'mppx/x402/mcp'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
@@ -42,7 +42,7 @@ async function createHarness() {
     price: '$0.01',
     scheme: 'exact',
   })
-  const paid = withMpp(server, {
+  const paid = mpp(server, {
     accepts,
     resource: { description: 'Premium search', url: 'mcp://tool/search' },
     secretKey: 'test-secret-key-test-secret-key-32',
@@ -60,7 +60,7 @@ describe('x402 MCP compatibility', () => {
       const { accepts, server } = await createHarness()
 
       expect(() =>
-        withMpp(server, {
+        mpp(server, {
           accepts,
           resource: { url: resource },
           secretKey: 'test-secret-key-test-secret-key-32',
@@ -119,7 +119,7 @@ describe('x402 MCP compatibility', () => {
       },
     }
     const server = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme())
-    const paid = withMpp(server, {
+    const paid = mpp(server, {
       accepts: [
         {
           amount: '10000',

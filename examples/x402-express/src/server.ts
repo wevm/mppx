@@ -2,7 +2,7 @@ import { HTTPFacilitatorClient, type RoutesConfig } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { x402ResourceServer } from '@x402/express'
 import express from 'express'
-import { withMpp } from 'mppx/x402/express'
+import { mpp } from 'mppx/x402/express'
 
 const network = 'eip155:84532' as const
 const port = Number(process.env.PORT ?? 3000)
@@ -33,7 +33,7 @@ const routes = {
 const app = express()
 
 app.use(
-  withMpp(routes, resourceServer, {
+  mpp(routes, resourceServer, {
     secretKey,
   }),
 )

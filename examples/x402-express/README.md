@@ -9,7 +9,7 @@ The integration is the middleware import plus one secret:
  import { ExactEvmScheme } from '@x402/evm/exact/server'
 -import { paymentMiddleware, x402ResourceServer } from '@x402/express'
 +import { x402ResourceServer } from '@x402/express'
-+import { withMpp } from 'mppx/x402/express'
++import { mpp } from 'mppx/x402/express'
 
  const resourceServer = new x402ResourceServer(facilitator).register(
    'eip155:84532',
@@ -18,7 +18,7 @@ The integration is the middleware import plus one secret:
 
  app.use(
 -  paymentMiddleware(routes, resourceServer),
-+  withMpp(routes, resourceServer, {
++  mpp(routes, resourceServer, {
 +    secretKey: process.env.MPP_SECRET_KEY!,
 +  }),
  )

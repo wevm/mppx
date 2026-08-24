@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from 'hono'
 
 import * as Negotiator from '../../integrations/x402/Negotiator.js'
 
-/** Hono-specific configuration for {@link withMpp}. */
+/** Hono-specific configuration for {@link mpp}. */
 export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
 
 /**
@@ -13,7 +13,7 @@ export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
  * The official adapter retains ownership of Hono response handling, cancellation,
  * extensions, and post-handler x402 settlement.
  */
-export function withMpp(
+export function mpp(
   routes: RoutesConfig,
   server: x402ResourceServer,
   config: Config,

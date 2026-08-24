@@ -15,7 +15,7 @@ export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
  * The official adapter retains ownership of route execution, cancellation,
  * extensions, and post-handler x402 settlement.
  */
-export function withMpp(
+export function mpp(
   handler: RouteHandler,
   route: RouteConfig,
   server: x402ResourceServer,
