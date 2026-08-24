@@ -34,9 +34,9 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
-import * as HostedFeePayer from '../internal/hosted-fee-payer.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as RemoteFeePayer from '../internal/remote-fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
@@ -112,13 +112,13 @@ export function charge<const parameters extends charge.Parameters>(
       })
     : undefined
 
-  const { recipient, feePayer, hostedFeePayer } = Account.resolve(parameters)
-  if (configuredFeeToken && hostedFeePayer)
+  const { recipient, feePayer, remoteFeePayer } = Account.resolve(parameters)
+  if (configuredFeeToken && remoteFeePayer)
     throw new Error('`feeToken` can only be configured for a local fee payer.')
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
-    hostedFeePayer,
+    remoteFeePayer,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
@@ -308,7 +308,7 @@ export function charge<const parameters extends charge.Parameters>(
     const isFeePayerTx =
       methodDetails?.feePayer === true &&
       requestAllowsFeePayer &&
-      !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || hostedFeePayer)
+      !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || remoteFeePayer)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
     const machineTokenRoute = machineTokenEnabled
       ? MachineTokenCharge.matchRoute({
@@ -473,11 +473,11 @@ export function charge<const parameters extends charge.Parameters>(
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
         const account =
-          typeof request.feePayer === 'object' && !HostedFeePayer.is(request.feePayer)
+          typeof request.feePayer === 'object' && !RemoteFeePayer.is(request.feePayer)
             ? request.feePayer
             : feePayer
-        const requested = account ?? feePayer ?? hostedFeePayer
-        if (credential) return account ?? (hostedFeePayer ? true : undefined)
+        const requested = account ?? feePayer ?? remoteFeePayer
+        if (credential) return account ?? (remoteFeePayer ? true : undefined)
         if (requested) return true
         return undefined
       })()
@@ -522,7 +522,7 @@ export function charge<const parameters extends charge.Parameters>(
       const validated = await validateCredential(credential, request, context)
       const feePayerAccount =
         methodDetails?.feePayer === true && requestAllowsFeePayer
-          ? typeof request.feePayer === 'object' && !HostedFeePayer.is(request.feePayer)
+          ? typeof request.feePayer === 'object' && !RemoteFeePayer.is(request.feePayer)
             ? request.feePayer
             : feePayer
           : undefined
@@ -574,12 +574,12 @@ export function charge<const parameters extends charge.Parameters>(
 
           try {
             const broadcastClient =
-              hostedFeePayer && isFeePayerTx
+              remoteFeePayer && isFeePayerTx
                 ? createClient({
                     chain: client.chain!,
-                    transport: http(hostedFeePayer.url, {
+                    transport: http(remoteFeePayer.url, {
                       fetchOptions: {
-                        headers: HostedFeePayer.resolveHeaders(hostedFeePayer),
+                        headers: RemoteFeePayer.resolveHeaders(remoteFeePayer),
                       },
                     }),
                   })
@@ -626,7 +626,7 @@ export function charge<const parameters extends charge.Parameters>(
                   sponsor: completed.feePayer,
                 }
               }
-              if (hostedFeePayer && isFeePayerTx) {
+              if (remoteFeePayer && isFeePayerTx) {
                 const completed = await FeePayer.preflightSponsorship({
                   transaction,
                   simulate: (request) => viem_call(client, request as never),
@@ -636,7 +636,7 @@ export function charge<const parameters extends charge.Parameters>(
                       challengeExpires: expires,
                       chainId: chainId ?? client.chain!.id,
                       details: { amount, currency, recipient },
-                      hostedFeePayer,
+                      remoteFeePayer,
                       policy: transactionFeePayerPolicy,
                       transaction,
                     })

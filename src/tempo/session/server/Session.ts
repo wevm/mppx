@@ -335,13 +335,13 @@ export function session<const parameters extends session.Parameters>(
 
   const store = ChannelStore.fromStore(rawStore)
   const lastOnChainVerified = new Map<Hex, number>()
-  const { account, feePayer, hostedFeePayer, recipient } = Account.resolve(parameters)
+  const { account, feePayer, remoteFeePayer, recipient } = Account.resolve(parameters)
   const configuredFeePayer =
-    feePayer ?? (hostedFeePayer || parameters.feePayer === true ? true : undefined)
+    feePayer ?? (remoteFeePayer || parameters.feePayer === true ? true : undefined)
   const settlementFeePayer = configuredFeePayer
   const getClient = Client.getResolver({
     chain: tempo_chain,
-    hostedFeePayer,
+    remoteFeePayer,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })

@@ -8,7 +8,7 @@ import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
 import * as defaults from './defaults.js'
-import * as HostedFeePayer from './hosted-fee-payer.js'
+import * as RemoteFeePayer from './remote-fee-payer.js'
 import * as Selectors from './selectors.js'
 
 /** Returns true if the serialized transaction has a Tempo envelope prefix. */
@@ -185,7 +185,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
   challengeExpires?: string | undefined
   chainId: number
   details: Record<string, string>
-  hostedFeePayer: HostedFeePayer.Config
+  remoteFeePayer: RemoteFeePayer.Config
   policy?: Partial<Policy> | undefined
   transaction: SponsoredTransaction
 }) {
@@ -194,7 +194,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
     challengeExpires,
     chainId,
     details,
-    hostedFeePayer,
+    remoteFeePayer,
     policy,
     transaction,
   } = parameters
@@ -205,7 +205,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
     policy,
     transaction,
   })
-  const response = await fetch(hostedFeePayer.url, {
+  const response = await fetch(remoteFeePayer.url, {
     body: JSON.stringify(
       {
         id: 1,
@@ -216,7 +216,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
       (_key, value) => (typeof value === 'bigint' ? toHex(value) : value),
     ),
     headers: {
-      ...HostedFeePayer.resolveHeaders(hostedFeePayer),
+      ...RemoteFeePayer.resolveHeaders(remoteFeePayer),
       'content-type': 'application/json',
     },
     method: 'POST',

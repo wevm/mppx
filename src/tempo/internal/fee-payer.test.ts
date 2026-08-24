@@ -504,7 +504,7 @@ describe('fillHostedFeePayerTransaction', () => {
   const hostedContext = {
     chainId: defaults.chainId.mainnet,
     details,
-    hostedFeePayer: { url: 'https://sponsor.example/tp_key' },
+    remoteFeePayer: { url: 'https://sponsor.example/tp_key' },
   } as const
 
   test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
@@ -577,7 +577,7 @@ describe('fillHostedFeePayerTransaction', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const hostedFeePayer = {
+    const remoteFeePayer = {
       url: 'https://sponsor.example/tp_key',
       headers: {
         Authorization: 'Bearer test',
@@ -588,7 +588,7 @@ describe('fillHostedFeePayerTransaction', () => {
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
       chainId: hostedContext.chainId,
       details: hostedContext.details,
-      hostedFeePayer,
+      remoteFeePayer,
       transaction: hostedTransaction as any,
     })
 
@@ -601,7 +601,7 @@ describe('fillHostedFeePayerTransaction', () => {
     const requestHeaders = new Headers(calls[0]!.init!.headers)
     expect(requestHeaders.get('authorization')).toBe('Bearer test')
     expect(requestHeaders.get('content-type')).toBe('application/json')
-    expect(hostedFeePayer.headers).toEqual({
+    expect(remoteFeePayer.headers).toEqual({
       Authorization: 'Bearer test',
       'Content-Type': 'text/plain',
     })

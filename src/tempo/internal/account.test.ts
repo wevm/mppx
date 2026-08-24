@@ -11,23 +11,23 @@ const feePayer = privateKeyToAccount(
 )
 
 describe('resolve', () => {
-  test('normalizes hosted fee-payer string shorthand', () => {
+  test('normalizes remote fee-payer string shorthand', () => {
     expect(Account.resolve({ feePayer: 'https://sponsor.example' })).toMatchObject({
       feePayer: undefined,
-      hostedFeePayer: { url: 'https://sponsor.example' },
+      remoteFeePayer: { url: 'https://sponsor.example' },
     })
   })
 
-  test('preserves hosted fee-payer headers without classifying them as an account', () => {
-    const hostedFeePayer = {
+  test('preserves remote fee-payer headers without classifying them as an account', () => {
+    const remoteFeePayer = {
       url: 'https://sponsor.example',
       headers: { Authorization: 'Bearer test' },
     } as const
 
-    const resolved = Account.resolve({ feePayer: hostedFeePayer })
+    const resolved = Account.resolve({ feePayer: remoteFeePayer })
 
     expect(resolved.feePayer).toBeUndefined()
-    expect(resolved.hostedFeePayer).toBe(hostedFeePayer)
+    expect(resolved.remoteFeePayer).toBe(remoteFeePayer)
   })
 
   test('preserves local account and account-sponsored modes', () => {

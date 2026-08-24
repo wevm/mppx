@@ -83,7 +83,7 @@ describe('getResolver', () => {
     )
   })
 
-  test('behavior: wraps custom client transports with a hosted fee payer', async () => {
+  test('behavior: wraps custom client transports with a remote fee payer', async () => {
     const defaultRequests: string[] = []
     const headers = { Authorization: 'Bearer test' }
     const client = createClient({
@@ -107,7 +107,7 @@ describe('getResolver', () => {
 
     const getClient = Client.getResolver({
       chain: tempoLocalnet,
-      hostedFeePayer: { url: 'https://sponsor.example', headers },
+      remoteFeePayer: { url: 'https://sponsor.example', headers },
       getClient: () => client,
       rpcUrl: { [tempoLocalnet.id]: 'https://rpc.example.com' },
     })
@@ -127,7 +127,7 @@ describe('getResolver', () => {
     expect(defaultRequests).toEqual([])
   })
 
-  test('behavior: sends hosted headers only to the hosted fee-payer URL', async () => {
+  test('behavior: sends remote fee-payer headers only to its URL', async () => {
     const calls: { headers: Headers; url: string }[] = []
     vi.stubGlobal(
       'fetch',
@@ -144,7 +144,7 @@ describe('getResolver', () => {
     )
 
     const getClient = Client.getResolver({
-      hostedFeePayer: {
+      remoteFeePayer: {
         url: 'https://sponsor.example',
         headers: { Authorization: 'Bearer test' },
       },

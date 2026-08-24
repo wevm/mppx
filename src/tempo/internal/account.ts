@@ -1,7 +1,7 @@
 import type { Account, Address } from 'viem'
 import type { Account as TempoAccount } from 'viem/tempo'
 
-import * as HostedFeePayer from './hosted-fee-payer.js'
+import * as RemoteFeePayer from './remote-fee-payer.js'
 
 /** Returns whether an account is a Tempo access-key account. */
 export function isAccessKeyAccount(
@@ -21,10 +21,10 @@ export function getAccountSignerAddress(account: Account): Address {
  * Accepts either `account` or `recipient` as the parameter name. When the value
  * is an `Account`, its address is extracted. If `feePayer` is `true`, the
  * account also acts as the fee payer. Alternatively, a separate `Account`
- * can be provided as the fee payer, or hosted fee-payer configuration (used
+ * can be provided as the fee payer, or remote fee-payer configuration (used
  * with `withFeePayer` transport wrapping).
  *
- * @returns Resolved account, local fee payer, hosted fee payer, and recipient.
+ * @returns Resolved account, local fee payer, remote fee payer, and recipient.
  */
 export function resolve(parameters: resolve.Parameters) {
   const feePayerInput = parameters.feePayer
@@ -37,13 +37,13 @@ export function resolve(parameters: resolve.Parameters) {
     if (typeof parameters.account === 'object') return parameters.account.address
     return parameters.account
   })()
-  const hostedFeePayer = HostedFeePayer.from(feePayerInput)
+  const remoteFeePayer = RemoteFeePayer.from(feePayerInput)
   const feePayer = ((): Account | undefined => {
     if (typeof parameters.account === 'object' && feePayerInput === true) return parameters.account
-    if (typeof feePayerInput === 'object' && !HostedFeePayer.is(feePayerInput)) return feePayerInput
+    if (typeof feePayerInput === 'object' && !RemoteFeePayer.is(feePayerInput)) return feePayerInput
     return undefined
   })()
-  return { account, feePayer, hostedFeePayer, recipient: recipient as Address | undefined }
+  return { account, feePayer, remoteFeePayer, recipient: recipient as Address | undefined }
 }
 
 export declare namespace resolve {
@@ -51,7 +51,10 @@ export declare namespace resolve {
     recipient?: Address | undefined
     /** Account or address that performs payment operations / receives payment. */
     account?: Account | Address | undefined
-    /** When `true`, the account also sponsors fees. An `Account` or hosted fee-payer configuration can also be provided. */
-    feePayer?: Account | HostedFeePayer.Config | string | true | undefined
+    /**
+     * When `true`, the account also sponsors fees. An `Account` or remote fee-payer
+     * configuration can also be provided. A string is shorthand for its URL.
+     */
+    feePayer?: Account | RemoteFeePayer.Config | string | true | undefined
   }
 }

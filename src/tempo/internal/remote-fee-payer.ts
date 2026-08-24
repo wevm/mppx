@@ -1,17 +1,17 @@
-/** Configuration for a hosted Tempo fee-payer service. */
+/** Configuration for a remote Tempo fee-payer service. */
 export type Config = Readonly<{
   headers?: Readonly<Record<string, string>> | undefined
   url: string
 }>
 
-/** Returns whether a value is hosted fee-payer configuration. */
+/** Returns whether a value is remote fee-payer configuration. */
 export function is(value: unknown): value is Config {
   return (
     typeof value === 'object' && value !== null && 'url' in value && typeof value.url === 'string'
   )
 }
 
-/** Normalizes hosted fee-payer string and object inputs. */
+/** Normalizes remote fee-payer string and object inputs. */
 export function from(value: unknown): Config | undefined {
   if (typeof value === 'string') return { url: value }
   if (is(value)) return value

@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added HTTP headers to hosted Tempo fee-payer configuration.
+Added HTTP headers to remote Tempo fee-payer configuration.
