@@ -25,7 +25,10 @@ test('tempo.session() accepts getClient, feePayer, store without casts', () => {
   const session = mp.tempo.session({
     recipient: addr,
     getClient: () => ({}) as Client,
-    feePayer: 'https://api.tempo.xyz/rpc/sponsor?key=test',
+    feePayer: {
+      url: 'https://api.tempo.xyz/rpc/sponsor',
+      headers: { Authorization: 'Bearer test' },
+    },
     store: {} as AtomicStore,
     sse: true,
     settlementSchedule: { amount: '0.01' },

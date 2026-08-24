@@ -335,12 +335,13 @@ export function session<const parameters extends session.Parameters>(
 
   const store = ChannelStore.fromStore(rawStore)
   const lastOnChainVerified = new Map<Hex, number>()
-  const { account, feePayer, feePayerUrl, recipient } = Account.resolve(parameters)
-  const configuredFeePayer = feePayer ?? feePayerUrl
-  const settlementFeePayer = feePayer ?? (feePayerUrl ? true : undefined)
+  const { account, feePayer, hostedFeePayer, recipient } = Account.resolve(parameters)
+  const configuredFeePayer =
+    feePayer ?? (hostedFeePayer || parameters.feePayer === true ? true : undefined)
+  const settlementFeePayer = configuredFeePayer
   const getClient = Client.getResolver({
     chain: tempo_chain,
-    feePayerUrl,
+    hostedFeePayer,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
@@ -561,7 +562,7 @@ export function session<const parameters extends session.Parameters>(
         matchSnapshotPaymentFields,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
-        parameterFeePayer: parameters.feePayer,
+        parameterFeePayer: configuredFeePayer,
         request,
         resolveChannelId: parameters.resolveChannelId,
         store,

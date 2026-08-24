@@ -504,6 +504,7 @@ describe('fillHostedFeePayerTransaction', () => {
   const hostedContext = {
     chainId: defaults.chainId.mainnet,
     details,
+    hostedFeePayer: { url: 'https://sponsor.example/tp_key' },
   } as const
 
   test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
@@ -576,11 +577,19 @@ describe('fillHostedFeePayerTransaction', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
+    const hostedFeePayer = {
+      url: 'https://sponsor.example/tp_key',
+      headers: {
+        Authorization: 'Bearer test',
+        'Content-Type': 'text/plain',
+      },
+    } as const
     const result = await fillHostedFeePayerTransaction({
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
-      ...hostedContext,
+      chainId: hostedContext.chainId,
+      details: hostedContext.details,
+      hostedFeePayer,
       transaction: hostedTransaction as any,
-      url: 'https://sponsor.example/tp_key',
     })
 
     expect(result.feeToken).toBe(defaults.tokens.pathUsd)
@@ -589,6 +598,13 @@ describe('fillHostedFeePayerTransaction', () => {
 
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(calls[0]!.input).toBe('https://sponsor.example/tp_key')
+    const requestHeaders = new Headers(calls[0]!.init!.headers)
+    expect(requestHeaders.get('authorization')).toBe('Bearer test')
+    expect(requestHeaders.get('content-type')).toBe('application/json')
+    expect(hostedFeePayer.headers).toEqual({
+      Authorization: 'Bearer test',
+      'Content-Type': 'text/plain',
+    })
     const body = JSON.parse(calls[0]!.init!.body as string)
     expect(body).toMatchObject({
       jsonrpc: '2.0',
@@ -633,7 +649,6 @@ describe('fillHostedFeePayerTransaction', () => {
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         transaction: hostedTransaction as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('did not return a feeToken')
   })
@@ -656,7 +671,6 @@ describe('fillHostedFeePayerTransaction', () => {
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         transaction: hostedTransaction as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('feeToken is not allowed')
   })
@@ -677,7 +691,6 @@ describe('fillHostedFeePayerTransaction', () => {
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         transaction: hostedTransaction as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('Invalid or revoked API key')
   })
@@ -692,7 +705,6 @@ describe('fillHostedFeePayerTransaction', () => {
         ...hostedContext,
         policy: { maxGas: hostedTransaction.gas - 1n },
         transaction: hostedTransaction as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('gas exceeds sponsor policy')
     expect(fetchMock).not.toHaveBeenCalled()
@@ -710,7 +722,6 @@ describe('fillHostedFeePayerTransaction', () => {
           ...hostedTransaction,
           accessList: [{ address: bogus, storageKeys: [] }],
         } as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('accessList is not allowed')
     expect(fetchMock).not.toHaveBeenCalled()
@@ -733,7 +744,6 @@ describe('fillHostedFeePayerTransaction', () => {
             },
           ],
         } as any,
-        url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('calldata is not canonical')
     expect(fetchMock).not.toHaveBeenCalled()

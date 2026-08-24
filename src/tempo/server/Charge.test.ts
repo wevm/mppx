@@ -2648,8 +2648,10 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: fee payer URL (withFeePayer transport)', async () => {
+    test('behavior: hosted fee-payer configuration (withFeePayer transport)', async () => {
       const feePayerRequests: any[] = []
+      const feePayerAuthorizations: (string | undefined)[] = []
+      const feePayerHeaders = { Authorization: 'Bearer test' }
       const sequence: string[] = []
       let rejectFinalSimulation = false
       let simulations = 0
@@ -2673,6 +2675,7 @@ describe('tempo', () => {
         for await (const chunk of req) requestBody += chunk
         const request = JSON.parse(requestBody)
         feePayerRequests.push(request)
+        feePayerAuthorizations.push(req.headers.authorization)
 
         if (request.method === 'eth_sendRawTransactionSync') {
           sequence.push('relay-broadcast')
@@ -2699,7 +2702,7 @@ describe('tempo', () => {
       const serverWithFeePayer = Mppx_server.create({
         methods: [
           tempo_server.charge({
-            feePayer: feePayerServer.url,
+            feePayer: { url: feePayerServer.url, headers: feePayerHeaders },
             getClient: () => interceptingClient,
             currency: asset,
           }),
@@ -2730,12 +2733,22 @@ describe('tempo', () => {
         res.end('OK')
       })
 
+      const challengeResponse = await fetch(httpServer.url)
+      const challenge = Challenge.fromResponse(challengeResponse, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.methodDetails?.feePayer).toBe(true)
+      expect(JSON.stringify(challenge)).not.toContain(feePayerServer.url)
+      expect(JSON.stringify(challenge)).not.toContain('Bearer test')
+
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
       expect(feePayerRequests.map(({ method }) => method)).toEqual([
         'eth_fillTransaction',
         'eth_sendRawTransactionSync',
       ])
+      expect(feePayerAuthorizations).toEqual(['Bearer test', 'Bearer test'])
+      expect(feePayerHeaders).toEqual({ Authorization: 'Bearer test' })
       expect(sequence).toEqual(['simulate', 'complete', 'simulate', 'relay-broadcast'])
 
       const receipt = Receipt.fromResponse(response)

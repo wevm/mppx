@@ -3,6 +3,7 @@ import { withFeePayer } from 'viem/tempo'
 import { tempo as tempoMainnetChain, tempoModerato } from 'viem/tempo/chains'
 
 import type { MaybePromise } from '../internal/types.js'
+import * as HostedFeePayer from '../tempo/internal/hosted-fee-payer.js'
 
 const knownTempoChains: Record<number, Chain> = {
   [tempoMainnetChain.id]: tempoMainnetChain,
@@ -13,32 +14,35 @@ export function getResolver(
   parameters: getResolver.Parameters & {
     /** Default chain to use if not provided. */
     chain?: Chain | undefined
-    /** Fee payer relay URL. When set, the transport is wrapped with `withFeePayer`. */
-    feePayerUrl?: string | undefined
+    /** Hosted fee-payer configuration. When set, the transport is wrapped with `withFeePayer`. */
+    hostedFeePayer?: HostedFeePayer.Config | undefined
     /** RPC URLs keyed by chain ID. */
     rpcUrl?: ({ [chainId: number]: string } & object) | undefined
   },
 ): (parameters: { chainId?: number | undefined }) => MaybePromise<Client> {
-  const { chain, feePayerUrl, getClient, rpcUrl } = parameters
+  const { chain, getClient, hostedFeePayer, rpcUrl } = parameters
 
   if (getClient) {
     // When a default chain with serializers is provided (e.g. Tempo chain config),
     // ensure user-provided clients inherit those serializers. Without this, clients
     // created without the Tempo chain config will use the default viem serializer,
     // causing errors like "maxFeePerGas is not a valid Legacy Transaction attribute".
-    if (!chain?.serializers && !feePayerUrl) return getClient
+    if (!chain?.serializers && !hostedFeePayer) return getClient
     return async (params) => {
       const client = await getClient(params)
       let resolvedClient = client
 
       // Wrap the client's transport with `withFeePayer` when a fee payer URL is provided.
-      if (feePayerUrl && client.transport.key !== 'feePayer') {
+      if (hostedFeePayer && client.transport.key !== 'feePayer') {
         const request = client.request.bind(client)
         // The supplied client already owns retries. Keep the relay middleware retry-free so
         // failures are not retried once per nested transport layer.
         const feePayerTransport = withFeePayer(
           custom({ request: (args) => request(args as never) }, { retryCount: 0 }),
-          http(feePayerUrl, { retryCount: client.transport.retryCount }),
+          http(hostedFeePayer.url, {
+            fetchOptions: { headers: HostedFeePayer.resolveHeaders(hostedFeePayer) },
+            retryCount: client.transport.retryCount,
+          }),
         )({
           account: client.account,
           chain: client.chain,
@@ -77,7 +81,14 @@ export function getResolver(
     const resolvedChainId = chainId || Number(Object.keys(rpcUrl)[0])!
     const url = rpcUrl[resolvedChainId as keyof typeof rpcUrl]
     if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${resolvedChainId}).`)
-    const transport = feePayerUrl ? withFeePayer(http(url), http(feePayerUrl)) : http(url)
+    const transport = hostedFeePayer
+      ? withFeePayer(
+          http(url),
+          http(hostedFeePayer.url, {
+            fetchOptions: { headers: HostedFeePayer.resolveHeaders(hostedFeePayer) },
+          }),
+        )
+      : http(url)
     return createClient({
       chain: (knownTempoChains[resolvedChainId] ?? { ...chain, id: resolvedChainId }) as never,
       transport,

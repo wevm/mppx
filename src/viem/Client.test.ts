@@ -85,6 +85,7 @@ describe('getResolver', () => {
 
   test('behavior: wraps custom client transports with a hosted fee payer', async () => {
     const defaultRequests: string[] = []
+    const headers = { Authorization: 'Bearer test' }
     const client = createClient({
       chain: tempoLocalnet,
       transport: custom({
@@ -106,7 +107,7 @@ describe('getResolver', () => {
 
     const getClient = Client.getResolver({
       chain: tempoLocalnet,
-      feePayerUrl: 'https://sponsor.example',
+      hostedFeePayer: { url: 'https://sponsor.example', headers },
       getClient: () => client,
       rpcUrl: { [tempoLocalnet.id]: 'https://rpc.example.com' },
     })
@@ -119,7 +120,49 @@ describe('getResolver', () => {
     expect(result).toEqual({ source: 'relay' })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://sponsor.example/')
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('authorization')).toBe(
+      'Bearer test',
+    )
+    expect(headers).toEqual({ Authorization: 'Bearer test' })
     expect(defaultRequests).toEqual([])
+  })
+
+  test('behavior: sends hosted headers only to the hosted fee-payer URL', async () => {
+    const calls: { headers: Headers; url: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        calls.push({ headers: new Headers(init?.headers), url })
+        const request = JSON.parse(String(init?.body)) as { id: number; jsonrpc: string }
+        return Response.json({
+          id: request.id,
+          jsonrpc: request.jsonrpc,
+          result: url.startsWith('https://sponsor.example') ? {} : '0x2a',
+        })
+      }),
+    )
+
+    const getClient = Client.getResolver({
+      hostedFeePayer: {
+        url: 'https://sponsor.example',
+        headers: { Authorization: 'Bearer test' },
+      },
+      rpcUrl,
+    })
+    const resolved = await getClient({ chainId: 42 })
+
+    await resolved.request({ method: 'eth_chainId' })
+    await resolved.request({
+      method: 'eth_fillTransaction',
+      params: [{ feePayer: true }],
+    } as never)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.url).toBe('https://rpc.example.com/')
+    expect(calls[0]?.headers.get('authorization')).toBeNull()
+    expect(calls[1]?.url).toBe('https://sponsor.example/')
+    expect(calls[1]?.headers.get('authorization')).toBe('Bearer test')
   })
 })
 
