@@ -17,12 +17,25 @@ export function toRequest(request: ParsedRequest): Request {
   const body =
     request.method === 'GET' || request.method === 'HEAD' || request.body === undefined
       ? undefined
-      : typeof request.body === 'string'
-        ? request.body
-        : JSON.stringify(request.body)
+      : toBody(request.body)
   return new Request(request.url, {
     ...(body === undefined ? {} : { body }),
     headers,
     method: request.method,
   })
+}
+
+/** Preserves Fetch-compatible bodies and serializes parsed JSON values. */
+function toBody(body: unknown): BodyInit {
+  if (
+    typeof body === 'string' ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body) ||
+    body instanceof Blob ||
+    body instanceof FormData ||
+    body instanceof URLSearchParams ||
+    body instanceof ReadableStream
+  )
+    return body as BodyInit
+  return JSON.stringify(body)
 }

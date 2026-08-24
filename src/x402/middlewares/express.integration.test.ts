@@ -20,7 +20,12 @@ const account = privateKeyToAccount(
 )
 
 /** Starts a real Express HTTP server using the same x402 route table for both protocols. */
-async function createServer(options: { skipHandler?: boolean } = {}) {
+async function createServer(
+  options: {
+    skipHandler?: boolean
+    skipHandlerResponse?: { body: unknown; contentType: string }
+  } = {},
+) {
   const calls: string[] = []
   let handlerCalls = 0
   const facilitator = {
@@ -45,7 +50,7 @@ async function createServer(options: { skipHandler?: boolean } = {}) {
   const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme())
   if (options.skipHandler)
     resourceServer.onAfterVerify(async () => ({
-      response: { body: { acknowledged: true } },
+      response: options.skipHandlerResponse ?? { body: { acknowledged: true } },
       skipHandler: true,
     }))
   const routes = {
@@ -157,6 +162,24 @@ describe('x402 Express compatibility', () => {
       expect(response.headers.get('Payment-Receipt')).toBeTruthy()
       expect(getHandlerCalls()).toBe(0)
       expect(calls).toEqual(['verify', 'settle'])
+    } finally {
+      server.close()
+    }
+  })
+
+  test('preserves non-JSON x402 skipHandler bodies for MPP credentials', async () => {
+    const { server } = await createServer({
+      skipHandler: true,
+      skipHandlerResponse: { body: 'accepted', contentType: 'text/plain' },
+    })
+    try {
+      const mppFetch = Fetch.from({ methods: [method] })
+
+      const response = await mppFetch(`${server.url}/api/data`)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Content-Type')).toBe('text/plain')
+      expect(await response.text()).toBe('accepted')
     } finally {
       server.close()
     }

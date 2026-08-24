@@ -4,7 +4,10 @@ import { type NextRequest, NextResponse } from 'next/server.js'
 
 import * as Negotiator from '../../integrations/x402/Negotiator.js'
 
-type RouteHandler = (request: NextRequest) => Promise<Response> | Response
+type RouteHandler<arguments_ extends unknown[] = []> = (
+  request: NextRequest,
+  ...arguments_: arguments_
+) => Promise<Response> | Response
 
 /** Next.js-specific configuration for MPP compatibility wrappers. */
 export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
@@ -15,12 +18,12 @@ export type Config = Omit<Negotiator.Config, 'routes' | 'server'>
  * The official adapter retains ownership of route execution, cancellation,
  * extensions, and post-handler x402 settlement.
  */
-export function mpp(
-  handler: RouteHandler,
+export function mpp<arguments_ extends unknown[]>(
+  handler: RouteHandler<arguments_>,
   route: RouteConfig,
   server: x402ResourceServer,
   config: Config,
-): RouteHandler {
+): RouteHandler<arguments_> {
   return createHandler(handler, { '*': route }, server, config)
 }
 
@@ -43,28 +46,34 @@ export function mppProxy(
   }
 }
 
-function createHandler(
-  handler: RouteHandler,
+function createHandler<arguments_ extends unknown[]>(
+  handler: RouteHandler<arguments_>,
   routes: RoutesConfig,
   server: x402ResourceServer,
   config: Config,
-): RouteHandler {
+): RouteHandler<arguments_> {
   const mpp = Negotiator.create({ ...config, routes, server })
+  const argumentsByRequest = new WeakMap<NextRequest, arguments_>()
   const x402 = withX402FromHTTPServer(
-    handler as never,
+    ((request: NextRequest) => handler(request, ...argumentsByRequest.get(request)!)) as never,
     mpp.httpServer,
     config.paywallConfig,
     undefined,
     false,
   ) as RouteHandler
 
-  return async (request) => {
+  return async (request, ...arguments_) => {
     const result = await mpp.negotiate(request, createContext(request))
-    if (result.status === 'unprotected') return handler(request)
+    if (result.status === 'unprotected') return handler(request, ...arguments_)
     if (result.status === 'handled') return result.response
-    if (result.status === 'paid') return result.withReceipt(await handler(request))
+    if (result.status === 'paid') return result.withReceipt(await handler(request, ...arguments_))
 
-    return x402(request)
+    argumentsByRequest.set(request, arguments_)
+    try {
+      return await x402(request)
+    } finally {
+      argumentsByRequest.delete(request)
+    }
   }
 }
 

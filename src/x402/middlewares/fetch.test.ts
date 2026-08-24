@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server.js'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
+import * as PaymentRequest from '../../PaymentRequest.js'
 import * as ChallengeBrand from '../internal/ChallengeBrand.js'
 import * as Types from '../Types.js'
 
@@ -78,7 +79,13 @@ describe.each(['hono', 'next'] as const)('x402 %s compatibility', (framework) =>
     expect(unpaid.status).toBe(402)
     expect(unpaid.headers.get('WWW-Authenticate')).toContain('Payment')
     expect(unpaid.headers.get(Types.paymentRequiredHeader)).toBeTruthy()
-    const challenge = Challenge.fromResponseList(unpaid)[0]!
+    const challenges = Challenge.fromResponseList(unpaid)
+    expect(
+      challenges
+        .filter((challenge) => !ChallengeBrand.is(challenge))
+        .map((challenge) => challenge.method),
+    ).toEqual(['tempo', 'evm'])
+    const challenge = challenges[0]!
     const timeout = new Date(challenge.expires!).getTime() - Date.now()
     expect(timeout).toBeGreaterThan(14_000)
     expect(timeout).toBeLessThanOrEqual(15_000)
@@ -107,6 +114,70 @@ describe.each(['hono', 'next'] as const)('x402 %s compatibility', (framework) =>
     const x402Response = await x402Fetch('https://example.com/api/data')
     expect(x402Response.status).toBe(200)
     expect(x402Response.headers.get(Types.paymentResponseHeader)).toBeTruthy()
+  })
+})
+
+describe('MPP compatibility challenges', () => {
+  test('binds Tempo and source-chain credentials to the x402 resource', async () => {
+    const app = new Hono()
+    app.use(
+      honoMpp({ 'GET /a': route, 'GET /b': route }, createResourceServer(), {
+        secretKey: 'test-secret-key-test-secret-key-32',
+      }),
+    )
+    app.get('/a', (context) => context.json({ route: 'a' }))
+    app.get('/b', (context) => context.json({ route: 'b' }))
+
+    const challengeScopes = async (path: string) => {
+      const response = await app.fetch(new Request(`https://example.com${path}`))
+      return Challenge.fromResponseList(response)
+        .filter((challenge) => !ChallengeBrand.is(challenge))
+        .map((challenge) => ({ method: challenge.method, opaque: challenge.opaque }))
+    }
+
+    const scopeA = PaymentRequest.serialize({ _mppx_scope: 'https://example.com/a' })
+    const scopeB = PaymentRequest.serialize({ _mppx_scope: 'https://example.com/b' })
+    await expect(challengeScopes('/a')).resolves.toEqual([
+      { method: 'tempo', opaque: scopeA },
+      { method: 'evm', opaque: scopeA },
+    ])
+    await expect(challengeScopes('/b')).resolves.toEqual([
+      { method: 'tempo', opaque: scopeB },
+      { method: 'evm', opaque: scopeB },
+    ])
+  })
+
+  test('forwards Next.js route context through MPP and x402 payments', async () => {
+    const handler = nextMpp(
+      async (_request, context: { params: Promise<{ slug: string }> }) =>
+        Response.json(await context.params),
+      route,
+      createResourceServer(),
+      { secretKey: 'test-secret-key-test-secret-key-32' },
+    )
+    const rawFetch: typeof globalThis.fetch = (input, init) =>
+      Promise.resolve(
+        handler(new NextRequest(new Request(input, init)), {
+          params: Promise.resolve({ slug: 'premium' }),
+        }),
+      )
+
+    for (const preferMpp of [true, false]) {
+      const fetch = Fetch.from({
+        fetch: rawFetch,
+        methods: [method],
+        orderChallenges: (candidates) =>
+          [...candidates].sort((a, b) =>
+            preferMpp
+              ? Number(ChallengeBrand.is(a.challenge)) - Number(ChallengeBrand.is(b.challenge))
+              : Number(ChallengeBrand.is(b.challenge)) - Number(ChallengeBrand.is(a.challenge)),
+          ),
+      })
+
+      const response = await fetch('https://example.com/api/data')
+
+      expect(await response.json()).toEqual({ slug: 'premium' })
+    }
   })
 })
 

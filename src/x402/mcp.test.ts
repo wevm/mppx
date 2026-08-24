@@ -74,7 +74,10 @@ describe('x402 MCP compatibility', () => {
     await expect(tool({ query: 'mpp' }, {})).rejects.toMatchObject({
       code: -32042,
       data: {
-        challenges: [expect.objectContaining({ intent: 'charge', method: 'evm' })],
+        challenges: [
+          expect.objectContaining({ intent: 'charge', method: 'tempo' }),
+          expect.objectContaining({ intent: 'charge', method: 'evm' }),
+        ],
         httpStatus: 402,
         x402: expect.objectContaining({ accepts: expect.any(Array) }),
       },

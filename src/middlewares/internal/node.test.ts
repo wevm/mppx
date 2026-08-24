@@ -27,4 +27,18 @@ describe('toRequest', () => {
 
     expect(request.body).toBeNull()
   })
+
+  test.each([
+    ['Buffer', Buffer.from([0, 1, 2, 255])],
+    ['typed array', new Uint8Array([0, 1, 2, 255])],
+  ])('preserves %s bodies as bytes', async (_name, body) => {
+    const request = toRequest({
+      body,
+      headers: { 'content-type': 'application/octet-stream' },
+      method: 'POST',
+      url: 'https://example.com/api/upload',
+    })
+
+    expect(new Uint8Array(await request.arrayBuffer())).toEqual(new Uint8Array([0, 1, 2, 255]))
+  })
 })

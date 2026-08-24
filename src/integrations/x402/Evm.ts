@@ -12,6 +12,7 @@ import { eip3009 } from '../../evm/Types.js'
 import type * as EvmTypes from '../../evm/Types.js'
 import * as Expires from '../../Expires.js'
 import * as Mppx from '../../server/Mppx.js'
+import { tempo } from '../../tempo/server/Methods.js'
 import * as Types from '../../x402/Types.js'
 
 /** Configuration shared by the x402 compatibility integrations. */
@@ -37,7 +38,7 @@ export function createHandler(parameters: {
   if (chainId === undefined) return undefined
   let skipHandlerResponse: Response | undefined
   const decimals = parameters.config.server.getAssetDecimalsForRequirements(requirement)
-  const method = evm.charge({
+  const evmMethod = evm.charge({
     authorization: {
       name: requirement.extra.name as string,
       version: requirement.extra.version as string,
@@ -59,17 +60,19 @@ export function createHandler(parameters: {
     },
   })
   const payment = Mppx.create({
-    methods: [method],
+    methods: [tempo.charge({ recipient: normalizeAddress(requirement.payTo) }), evmMethod],
     ...(parameters.config.realm ? { realm: parameters.config.realm } : {}),
     secretKey: parameters.config.secretKey,
   })
-  const handler = payment.evm.charge({
+  const options = {
     amount: formatUnits(BigInt(requirement.amount), decimals),
     ...(parameters.paymentRequired.resource.description
       ? { description: parameters.paymentRequired.resource.description }
       : {}),
     expires: Expires.seconds(requirement.maxTimeoutSeconds),
-  })
+    scope: parameters.paymentRequired.resource.url,
+  }
+  const handler = payment.compose([payment.tempo.charge, options], [payment.evm.charge, options])
   return async (request: Request) => ({
     payment: await handler(request),
     skipHandlerResponse,
@@ -171,7 +174,9 @@ function toPaymentPayload(parameters: {
 function responseFromSkipHandler(directive: SkipHandlerDirective): Response {
   const contentType = directive.contentType ?? 'application/json'
   const value = directive.body ?? {}
-  const body = contentType.includes('text/html') ? String(value) : JSON.stringify(value)
+  const body = contentType.toLowerCase().includes('json')
+    ? JSON.stringify(value)
+    : (value as BodyInit)
   return new Response(body, {
     headers: {
       'Cache-Control': 'private, no-store',
