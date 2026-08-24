@@ -3,6 +3,11 @@ import type { Account as TempoAccount } from 'viem/tempo'
 
 import * as RemoteFeePayer from './remote-fee-payer.js'
 
+/** Returns whether a value is a viem account. */
+export function is(value: unknown): value is Account {
+  return typeof value === 'object' && value !== null && 'address' in value
+}
+
 /** Returns whether an account is a Tempo access-key account. */
 export function isAccessKeyAccount(
   account: Account,
@@ -27,22 +32,15 @@ export function getAccountSignerAddress(account: Account): Address {
  * @returns Resolved account, local fee payer, remote fee payer, and recipient.
  */
 export function resolve(parameters: resolve.Parameters) {
-  const feePayerInput = parameters.feePayer
-  const account = (() => {
-    if (typeof parameters.account === 'object') return parameters.account
-    return undefined
-  })()
-  const recipient = (() => {
-    if (parameters.recipient) return parameters.recipient
-    if (typeof parameters.account === 'object') return parameters.account.address
-    return parameters.account
-  })()
-  const remoteFeePayer = RemoteFeePayer.from(feePayerInput)
-  const feePayer = ((): Account | undefined => {
-    if (typeof parameters.account === 'object' && feePayerInput === true) return parameters.account
-    if (typeof feePayerInput === 'object' && !RemoteFeePayer.is(feePayerInput)) return feePayerInput
-    return undefined
-  })()
+  const account = is(parameters.account) ? parameters.account : undefined
+  const recipient = parameters.recipient ?? account?.address ?? parameters.account
+  const remoteFeePayer = RemoteFeePayer.from(parameters.feePayer)
+  const feePayer =
+    parameters.feePayer === true
+      ? account
+      : is(parameters.feePayer)
+        ? parameters.feePayer
+        : undefined
   return { account, feePayer, remoteFeePayer, recipient: recipient as Address | undefined }
 }
 

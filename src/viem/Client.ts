@@ -10,6 +10,17 @@ const knownTempoChains: Record<number, Chain> = {
   [tempoModerato.id]: tempoModerato,
 }
 
+/** Creates an HTTP transport for a configured remote fee-payer service. */
+export function remoteFeePayerTransport(
+  config: RemoteFeePayer.Config,
+  options: { retryCount?: number | undefined } = {},
+) {
+  return http(config.url, {
+    fetchOptions: { headers: RemoteFeePayer.resolveHeaders(config) },
+    ...options,
+  })
+}
+
 export function getResolver(
   parameters: getResolver.Parameters & {
     /** Default chain to use if not provided. */
@@ -39,8 +50,7 @@ export function getResolver(
         // failures are not retried once per nested transport layer.
         const feePayerTransport = withFeePayer(
           custom({ request: (args) => request(args as never) }, { retryCount: 0 }),
-          http(remoteFeePayer.url, {
-            fetchOptions: { headers: RemoteFeePayer.resolveHeaders(remoteFeePayer) },
+          remoteFeePayerTransport(remoteFeePayer, {
             retryCount: client.transport.retryCount,
           }),
         )({
@@ -82,12 +92,7 @@ export function getResolver(
     const url = rpcUrl[resolvedChainId as keyof typeof rpcUrl]
     if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${resolvedChainId}).`)
     const transport = remoteFeePayer
-      ? withFeePayer(
-          http(url),
-          http(remoteFeePayer.url, {
-            fetchOptions: { headers: RemoteFeePayer.resolveHeaders(remoteFeePayer) },
-          }),
-        )
+      ? withFeePayer(http(url), remoteFeePayerTransport(remoteFeePayer))
       : http(url)
     return createClient({
       chain: (knownTempoChains[resolvedChainId] ?? { ...chain, id: resolvedChainId }) as never,

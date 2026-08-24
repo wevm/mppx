@@ -586,8 +586,7 @@ describe('fillHostedFeePayerTransaction', () => {
     } as const
     const result = await fillHostedFeePayerTransaction({
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
-      chainId: hostedContext.chainId,
-      details: hostedContext.details,
+      ...hostedContext,
       remoteFeePayer,
       transaction: hostedTransaction as any,
     })

@@ -338,7 +338,6 @@ export function session<const parameters extends session.Parameters>(
   const { account, feePayer, remoteFeePayer, recipient } = Account.resolve(parameters)
   const configuredFeePayer =
     feePayer ?? (remoteFeePayer || parameters.feePayer === true ? true : undefined)
-  const settlementFeePayer = configuredFeePayer
   const getClient = Client.getResolver({
     chain: tempo_chain,
     remoteFeePayer,
@@ -370,7 +369,7 @@ export function session<const parameters extends session.Parameters>(
       account,
       channel,
       client: await getClient({ chainId: channel.chainId }),
-      ...(settlementFeePayer ? { feePayer: settlementFeePayer } : {}),
+      ...(configuredFeePayer ? { feePayer: configuredFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: parameters.feeToken,
       onSessionSettlement,

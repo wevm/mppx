@@ -3,7 +3,6 @@ import {
   createClient,
   decodeFunctionData,
   formatUnits,
-  http,
   keccak256,
   parseEventLogs,
   type TransactionReceipt,
@@ -36,7 +35,6 @@ import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
-import * as RemoteFeePayer from '../internal/remote-fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
@@ -308,7 +306,7 @@ export function charge<const parameters extends charge.Parameters>(
     const isFeePayerTx =
       methodDetails?.feePayer === true &&
       requestAllowsFeePayer &&
-      !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || remoteFeePayer)
+      !!(Account.is(request.feePayer) ? request.feePayer : feePayer || remoteFeePayer)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
     const machineTokenRoute = machineTokenEnabled
       ? MachineTokenCharge.matchRoute({
@@ -472,14 +470,9 @@ export function charge<const parameters extends charge.Parameters>(
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
-        const account =
-          typeof request.feePayer === 'object' && !RemoteFeePayer.is(request.feePayer)
-            ? request.feePayer
-            : feePayer
-        const requested = account ?? feePayer ?? remoteFeePayer
+        const account = Account.is(request.feePayer) ? request.feePayer : feePayer
         if (credential) return account ?? (remoteFeePayer ? true : undefined)
-        if (requested) return true
-        return undefined
+        return account || remoteFeePayer ? true : undefined
       })()
 
       return {
@@ -522,7 +515,7 @@ export function charge<const parameters extends charge.Parameters>(
       const validated = await validateCredential(credential, request, context)
       const feePayerAccount =
         methodDetails?.feePayer === true && requestAllowsFeePayer
-          ? typeof request.feePayer === 'object' && !RemoteFeePayer.is(request.feePayer)
+          ? Account.is(request.feePayer)
             ? request.feePayer
             : feePayer
           : undefined
@@ -577,11 +570,7 @@ export function charge<const parameters extends charge.Parameters>(
               remoteFeePayer && isFeePayerTx
                 ? createClient({
                     chain: client.chain!,
-                    transport: http(remoteFeePayer.url, {
-                      fetchOptions: {
-                        headers: RemoteFeePayer.resolveHeaders(remoteFeePayer),
-                      },
-                    }),
+                    transport: Client.remoteFeePayerTransport(remoteFeePayer),
                   })
                 : client
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
