@@ -18,6 +18,7 @@ import {
   isTempoSessionChallenge,
   type TempoSessionChallenge,
 } from '../../tempo/session/client/Transports.js'
+import * as Channel from '../../tempo/session/precompile/Channel.js'
 import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import * as z from '../../zod.js'
 
@@ -751,6 +752,13 @@ function assertChallengeMatchesChannel(
   channel: ChannelEntry,
   file?: string | undefined,
 ): void {
+  const expectedChannelId = Channel.computeId({
+    ...channel.descriptor,
+    chainId: channel.chainId,
+    escrow: channel.escrow,
+  })
+  if (expectedChannelId.toLowerCase() !== channel.channelId.toLowerCase())
+    throw stateError(file, 'Session channel ID does not match its descriptor.')
   const payee = normalizeAddress(challenge.request.recipient, 'challenge recipient', file)
   const token = normalizeAddress(challenge.request.currency, 'challenge currency', file)
   if (payee !== channel.descriptor.payee.toLowerCase())

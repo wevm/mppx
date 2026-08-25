@@ -11,6 +11,7 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 import type * as Challenge from '../../Challenge.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../../tempo/session/client/ChannelStore.js'
+import * as Channel from '../../tempo/session/precompile/Channel.js'
 import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import sessions from './commands.js'
 import {
@@ -29,8 +30,17 @@ const payee = '0x2222222222222222222222222222222222222222' as Address
 const token = '0x3333333333333333333333333333333333333333' as Address
 const escrow = '0x4444444444444444444444444444444444444444' as Address
 const operator = '0x0000000000000000000000000000000000000000' as Address
-const channelId = `0x${'aa'.repeat(32)}` as Hex
-const mainnetChannelId = `0x${'bb'.repeat(32)}` as Hex
+const descriptor = {
+  payer,
+  payee,
+  operator,
+  token,
+  salt: `0x${'55'.repeat(32)}` as Hex,
+  authorizedSigner: payer,
+  expiringNonceHash: `0x${'66'.repeat(32)}` as Hex,
+}
+const channelId = Channel.computeId({ ...descriptor, escrow, chainId: 42431 })
+const mainnetChannelId = Channel.computeId({ ...descriptor, escrow, chainId: 4217 })
 
 let temporaryDirectory: string
 let stateRoot: string
@@ -47,21 +57,18 @@ afterEach(async () => {
 })
 
 function channel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
+  const nextDescriptor = overrides.descriptor ?? descriptor
+  const nextEscrow = overrides.escrow ?? escrow
+  const nextChainId = overrides.chainId ?? 42431
   return {
-    channelId,
+    channelId:
+      overrides.channelId ??
+      Channel.computeId({ ...nextDescriptor, escrow: nextEscrow, chainId: nextChainId }),
     cumulativeAmount: 10n,
     deposit: 100n,
-    descriptor: {
-      payer,
-      payee,
-      operator,
-      token,
-      salt: `0x${'55'.repeat(32)}`,
-      authorizedSigner: payer,
-      expiringNonceHash: `0x${'66'.repeat(32)}`,
-    },
-    escrow,
-    chainId: 42431,
+    descriptor: nextDescriptor,
+    escrow: nextEscrow,
+    chainId: nextChainId,
     opened: true,
     ...overrides,
   }
@@ -268,6 +275,20 @@ describe('createSessionRegistry', () => {
       }),
     ).rejects.toBeInstanceOf(SessionStateError)
     expect(await fs.readFile(file, 'utf8')).toBe('{invalid json')
+  })
+
+  test('rejects a channel ID that does not match its descriptor', async () => {
+    const registry = createSessionRegistry(registryOptions())
+
+    await expect(
+      registry.upsert({
+        status: 'open',
+        channel: channel({ channelId: `0x${'ff'.repeat(32)}` }),
+        account: { address: payer },
+        endpoint: 'https://api.example.test/query',
+        challenge: challenge(),
+      }),
+    ).rejects.toThrow('Session channel ID does not match its descriptor.')
   })
 
   test('rejects live and remote locks, then reclaims a dead same-host lock', async () => {
@@ -481,8 +502,16 @@ describe('toChannelStore', () => {
     expect(await store.get(entryKey(channel()))).toEqual(channel())
     await store.delete(entryKey(channel()))
 
-    const replacementId = `0x${'bb'.repeat(32)}` as Hex
-    await store.set(channel({ channelId: replacementId }))
+    const replacementDescriptor = {
+      ...descriptor,
+      salt: `0x${'77'.repeat(32)}` as Hex,
+    }
+    const replacementId = Channel.computeId({
+      ...replacementDescriptor,
+      escrow,
+      chainId: 42431,
+    })
+    await store.set(channel({ channelId: replacementId, descriptor: replacementDescriptor }))
 
     expect(await registry.get(channelId)).toMatchObject({ status: 'stale', spent: 2n, units: 3 })
     expect(await registry.get(replacementId)).toMatchObject({

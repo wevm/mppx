@@ -280,6 +280,7 @@ async function createOpenPayload(
     account?: typeof payer | undefined
     operator?: Address | undefined
     authorizedSigner?: Address | undefined
+    feeToken?: Address | undefined
   } = {},
 ): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
   const account = parameters.account ?? payer
@@ -298,7 +299,7 @@ async function createOpenPayload(
   const transaction = (await Transaction.serialize({
     chainId,
     calls: [{ to: escrow, data }],
-    feeToken: token,
+    feeToken: parameters.feeToken ?? token,
     nonce: 0,
   })) as Hex
   const expiringNonceHash = Channel.computeExpiringNonceHash(
@@ -360,10 +361,10 @@ function sponsorTransaction(
   }) as Hex
 }
 
-async function createSponsoredOpenPayload(): Promise<
-  Extract<SessionCredentialPayload, { action: 'open' }>
-> {
-  const payload = await createOpenPayload()
+async function createSponsoredOpenPayload(
+  feeToken?: Address | undefined,
+): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
+  const payload = await createOpenPayload({ feeToken })
   const transaction = sponsorTransaction(payload.transaction)
   const signed = Transaction.deserialize(transaction as Transaction.TransactionSerializedTempo)
   const expiringNonceHash = Channel.computeExpiringNonceHash(
@@ -910,6 +911,46 @@ describe('precompile server session unit guardrails', () => {
       deposit: 1_000n,
       highestVoucherAmount: 100n,
     })
+  })
+
+  test('advertises and accepts a configured fee token for sponsored credentials', async () => {
+    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+    const { method, rpcCalls } = createServer({ feePayer: payer, feeToken })
+    const payload = await createSponsoredOpenPayload(feeToken)
+    const request = Methods.session.schema.request.parse(
+      await method.request!({
+        credential: null,
+        request: {
+          amount: '100',
+          currency: token,
+          decimals: 0,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never),
+    )
+
+    await method.validate!({
+      credential: {
+        challenge: { ...makeChallenge(payload.channelId), request },
+        payload,
+      },
+      request: request as unknown as VerifyRequest,
+    })
+
+    expect(request.methodDetails.feeToken).toBe(feeToken)
+
+    // Older direct clients use the payment currency as the sponsored fee token.
+    const legacyPayload = await createSponsoredOpenPayload(token)
+    await method.validate!({
+      credential: {
+        challenge: { ...makeChallenge(legacyPayload.channelId), request },
+        payload: legacyPayload,
+      },
+      request: request as unknown as VerifyRequest,
+    })
+
+    expect(rpcCalls).toEqual([])
   })
 
   test('rejects sponsored credentials that exceed the fee-payer policy during validation', async () => {

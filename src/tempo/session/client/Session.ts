@@ -23,7 +23,7 @@ import {
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { createChannelStore, type ChannelStore } from './ChannelStore.js'
+import { createChannelStore, entryKey, type ChannelStore } from './ChannelStore.js'
 import {
   canSignDescriptor,
   executeCredentialPlan,
@@ -193,9 +193,14 @@ export function session(parameters: session.Parameters = {}) {
       const attempt = MethodResponse.getAttempt(parameters)
       let release = () => {}
       try {
+        const automatic = !hasSessionAction(context) && context?.descriptor === undefined
+        if (automatic) {
+          release = await lockChannel(store, resolved.key)
+          if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
+        }
         let entry = await store.get(resolved.key)
         let plan = await resolveCredentialPlan(resolved, context, entry)
-        if (attempt && plan.type === 'open') {
+        if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
           const nextEntry = await store.get(resolved.key)
           if (nextEntry?.channelId !== entry?.channelId) {
@@ -304,7 +309,13 @@ export function session(parameters: session.Parameters = {}) {
       })
     const nextDeposit = knownDeposit + additionalDeposit
     if (nextDeposit === channel.deposit) return
-    const updated = { ...channel, deposit: nextDeposit }
+    const current = await store.get(entryKey(channel))
+    const latest =
+      current?.channelId.toLowerCase() === channel.channelId.toLowerCase() ? current : channel
+    const updated = {
+      ...latest,
+      deposit: latest.deposit > nextDeposit ? latest.deposit : nextDeposit,
+    }
     await store.set(updated)
     sink.notifyUpdate(updated)
   }

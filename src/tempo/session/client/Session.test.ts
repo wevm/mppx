@@ -193,6 +193,14 @@ function transactionCalls(payload: Types.SessionCredentialPayload) {
   return transaction.calls as readonly { to?: Address; data?: `0x${string}` }[]
 }
 
+function transactionFeeToken(transaction: `0x${string}`) {
+  return (
+    Transaction.deserialize(
+      transaction as Transaction.TransactionSerializedTempo,
+    ) as Transaction.TransactionSerializableTempo
+  ).feeToken
+}
+
 describe('precompile client session', () => {
   test('handles only TIP-1034 session challenges', () => {
     const method = session({ account, getClient: () => client })
@@ -220,6 +228,36 @@ describe('precompile client session', () => {
         }),
       }),
     ).toBe(false)
+  })
+
+  test('uses an advertised fee-token override for direct opens', async () => {
+    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+    const payload = deserialize(
+      await session({ account, decimals: 0, getClient: () => client }).createCredential({
+        challenge: makeSessionChallenge({
+          methodDetails: { chainId, escrowContract: tip20ChannelEscrow, feeToken },
+        }),
+        context: {},
+      }),
+    )
+    if (payload.action !== 'open') throw new Error('expected open payload')
+
+    expect(transactionFeeToken(payload.transaction)).toBe(feeToken.toLowerCase())
+  })
+
+  test('uses an advertised fee-token override for direct top-ups', async () => {
+    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+    const payload = deserialize(
+      await session({ account, decimals: 0, getClient: () => client }).createCredential({
+        challenge: makeSessionChallenge({
+          methodDetails: { chainId, escrowContract: tip20ChannelEscrow, feeToken },
+        }),
+        context: { action: 'topUp', additionalDepositRaw: '100', descriptor },
+      }),
+    )
+    if (payload.action !== 'topUp') throw new Error('expected top-up payload')
+
+    expect(transactionFeeToken(payload.transaction)).toBe(feeToken.toLowerCase())
   })
 
   test('drives paid SSE responses with a supplied credential', async () => {
@@ -504,13 +542,22 @@ describe('precompile client session', () => {
 
   test('serializes concurrent opens against the committed channel', async () => {
     const challenge = makeSessionChallenge()
-    const channelStore = createChannelStore()
+    const backingStore = createChannelStore()
     const actions: Types.SessionCredentialPayload['action'][] = []
     const vouchers: bigint[] = []
     const firstGate = Promise.withResolvers<void>()
     const firstRequest = Promise.withResolvers<void>()
     const waitersReady = Promise.withResolvers<void>()
-    let credentialPlans = 0
+    let missingReads = 0
+    const channelStore = {
+      delete: (key: string) => backingStore.delete(key),
+      async get(key: string) {
+        const entry = await backingStore.get(key)
+        if (!entry && ++missingReads === 4) waitersReady.resolve()
+        return entry
+      },
+      set: (entry: Parameters<typeof backingStore.set>[0]) => backingStore.set(entry),
+    }
     const fetch = Fetch.from({
       fetch: async (input, init) => {
         const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
@@ -526,14 +573,7 @@ describe('precompile client session', () => {
         }
         return new Response('rejected', { status: 500 })
       },
-      methods: [
-        makeSessionMethod(channelStore, {
-          resolveAccount() {
-            if (++credentialPlans === 3) waitersReady.resolve()
-            return account
-          },
-        }),
-      ],
+      methods: [makeSessionMethod(channelStore)],
     })
 
     const first = fetch('https://example.com/first')
@@ -549,6 +589,44 @@ describe('precompile client session', () => {
     expect(actions).toEqual(['open', 'topUp', 'voucher', 'topUp', 'voucher'])
     expect(vouchers).toEqual([200n, 300n])
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
+  })
+
+  test('serializes concurrent vouchers for an already-open channel', async () => {
+    const channelStore = createChannelStore()
+    await makeSessionMethod(channelStore).createCredential({
+      challenge: makeChallenge(),
+      context: {},
+    })
+
+    const firstPlan = Promise.withResolvers<void>()
+    const releaseFirstPlan = Promise.withResolvers<void>()
+    let plans = 0
+    const method = makeSessionMethod(channelStore, {
+      async resolveAccount() {
+        plans++
+        if (plans === 1) {
+          firstPlan.resolve()
+          await releaseFirstPlan.promise
+        }
+        return account
+      },
+    })
+
+    const first = method.createCredential({ challenge: makeChallenge(), context: {} })
+    await firstPlan.promise
+    const second = method.createCredential({ challenge: makeChallenge(), context: {} })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(plans).toBe(1)
+    releaseFirstPlan.resolve()
+
+    const credentials = await Promise.all([first, second])
+    expect(
+      credentials.map((credential) => {
+        const payload = deserialize(credential)
+        if (payload.action !== 'voucher') throw new Error('expected voucher payload')
+        return payload.cumulativeAmount
+      }),
+    ).toEqual(['200', '300'])
   })
 
   test('replaces a stored channel owned by another account', async () => {
@@ -634,6 +712,43 @@ describe('precompile client session', () => {
       }),
     ).resolves.toBeUndefined()
     expect(updatedDeposit).toBe(200n)
+  })
+
+  test('preserves newer channel state after an automatic top-up', async () => {
+    const channelStore = createChannelStore()
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const channel = {
+      chainId,
+      channelId,
+      cumulativeAmount: 100n,
+      deposit: 100n,
+      descriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    } as const
+    await channelStore.set(channel)
+    const method = session({
+      account,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+      topUpAmount: '100',
+    })
+
+    await MethodChallenge.handle(method, {
+      challenge: makeSessionChallenge(),
+      context: {},
+      fetch: async () => {
+        await channelStore.set({ ...channel, cumulativeAmount: 150n })
+        return new Response(null, { status: 204 })
+      },
+      input: 'https://example.com/resource',
+    })
+
+    expect(await channelStore.get(defaultChannelKey)).toMatchObject({
+      cumulativeAmount: 150n,
+      deposit: 200n,
+    })
   })
 
   test('opens for the current amount without client deposit configuration', async () => {

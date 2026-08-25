@@ -3,6 +3,7 @@ import type { Address } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
+  sendTransactionSync,
   signTypedData,
   signTransaction,
 } from 'viem/actions'
@@ -185,11 +186,24 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       if (mode === 'push') {
-        const { receipts } = await sendCallsSync(client, {
-          account,
-          calls: calls as never,
-          experimental_fallback: true,
-        })
+        const { receipts } =
+          account.type === 'local'
+            ? {
+                receipts: [
+                  await sendTransactionSync(client, {
+                    account,
+                    calls,
+                    nonceKey: 'expiring',
+                    validBefore,
+                  } as never),
+                ],
+              }
+            : await sendCallsSync(client, {
+                account,
+                calls: calls as never,
+                experimental_fallback: calls.length === 1,
+                forceAtomic: calls.length > 1,
+              })
         const hash = receipts?.[0]?.transactionHash
         if (!hash) throw new Error('No transaction receipt returned.')
         return Credential.serialize({

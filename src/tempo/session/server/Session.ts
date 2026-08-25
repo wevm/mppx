@@ -400,6 +400,7 @@ export function session<const parameters extends session.Parameters>(
       expectedOperator: context.methodDetails.operator,
       feePayer: context.feePayer,
       feePayerPolicy: parameters.feePayerPolicy,
+      feeToken: context.methodDetails.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       payload,
@@ -443,7 +444,7 @@ export function session<const parameters extends session.Parameters>(
       expectedOperator: context.methodDetails.operator,
       feePayer: context.feePayer,
       feePayerPolicy: parameters.feePayerPolicy,
-      feeToken: parameters.feeToken,
+      feeToken: context.methodDetails.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       onSessionSettlement,
@@ -537,6 +538,7 @@ export function session<const parameters extends session.Parameters>(
       })
       return {
         ...resolvedRequest,
+        feeToken: parameters.feeToken,
         sessionProtocol: Constants.SessionProtocols.v2,
       }
     },
@@ -634,7 +636,7 @@ export namespace session {
     /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
     settlementSchedule?: SettlementSchedule | undefined
 
-    /** Optional fee token used for server-driven close transactions. */
+    /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
   } & Account.resolve.Parameters &
     Client.getResolver.Parameters &

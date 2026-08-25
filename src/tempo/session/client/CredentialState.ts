@@ -204,6 +204,8 @@ export type ClientSessionMethodDetails = {
   escrow?: Address | undefined
   /** Whether the challenge allows fee-sponsored open/top-up transactions. */
   feePayer?: boolean | undefined
+  /** Fee token selected by the server for open/top-up transactions. */
+  feeToken?: Address | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
@@ -275,6 +277,7 @@ export type ChallengeContext = {
   client: Client
   escrow: Address
   feePayer?: boolean | undefined
+  feeToken?: Address | undefined
   key: string
   operator?: Address | undefined
   payee: Address
@@ -397,6 +400,7 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrowContract: readOptionalAddress(methodDetails.escrowContract),
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
+    feeToken: readOptionalAddress(methodDetails.feeToken),
     operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
@@ -440,6 +444,7 @@ export async function resolveChallengeContext(
     client,
     escrow,
     feePayer: methodDetails.feePayer,
+    feeToken: methodDetails.feeToken,
     key: channelKey({ payee, token, escrow, chainId }),
     operator: methodDetails.operator,
     payee,
@@ -715,6 +720,7 @@ async function open(
     deposit,
     escrow: resolved.escrow,
     feePayer: resolved.feePayer,
+    feeToken: resolved.feeToken,
     initialAmount: resolved.amount,
     operator: resolved.operator,
     payee: resolved.payee,
@@ -916,6 +922,7 @@ async function manualTopUp(
       client: resolved.client,
       tokenOut: resolved.token,
     }),
+    resolved.feeToken,
   )
 }
 

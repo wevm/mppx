@@ -239,6 +239,7 @@ export async function createOpenPayload(
     deposit: bigint
     escrow?: Address | undefined
     feePayer?: boolean | undefined
+    feeToken?: Address | undefined
     initialAmount: bigint
     operator?: Address | undefined
     payee: Address
@@ -263,7 +264,7 @@ export async function createOpenPayload(
     account,
     calls: [...(parameters.prefixCalls ?? []), { to: escrow, data: openData }],
     feePayer: parameters.feePayer,
-    feeToken: parameters.token,
+    feeToken: parameters.feeToken ?? parameters.token,
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
   const signed = Transaction.deserialize(transaction as Transaction.TransactionSerializedTempo)
@@ -322,6 +323,7 @@ export async function createTopUpPayload(
   feePayer?: boolean | undefined,
   escrow: Address = tip20ChannelEscrow,
   prefixCalls: readonly TempoChannelCall[] = [],
+  feeToken: Address = descriptor.token,
 ): Promise<TopUpCredentialPayload> {
   const channelId = Channel.computeId({
     ...descriptor,
@@ -343,7 +345,7 @@ export async function createTopUpPayload(
       },
     ],
     feePayer,
-    feeToken: descriptor.token,
+    feeToken,
     validAfter: randomValidAfter(),
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)

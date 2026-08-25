@@ -242,6 +242,8 @@ export type SessionMethodDetails = {
   escrowContract: Address
   /** Whether this challenge allows fee-sponsored management transactions. */
   feePayer?: boolean | undefined
+  /** Fee token clients must use for open/top-up transactions. */
+  feeToken?: Address | undefined
   /** Minimum raw-unit increase required for voucher credentials. */
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
@@ -328,6 +330,8 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     typeof value.escrowContract === 'string' &&
     isAddress(value.escrowContract, { strict: false }) &&
     (value.feePayer === undefined || typeof value.feePayer === 'boolean') &&
+    (value.feeToken === undefined ||
+      (typeof value.feeToken === 'string' && isAddress(value.feeToken, { strict: false }))) &&
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&

@@ -98,6 +98,12 @@ export function validateChannelDescriptor(
   }
 }
 
+/** Accepts the advertised fee token while preserving pre-advertisement direct clients. */
+function allowedSponsoredFeeTokens(currency: Address, feeToken?: Address | undefined) {
+  if (!feeToken || isAddressEqual(feeToken, currency)) return [currency]
+  return [feeToken, currency]
+}
+
 /** Validates on-chain channel state before accepting or charging a credential. */
 export function validateChannelState(state: Chain.ChannelState, amount?: bigint): void {
   if (state.deposit === 0n) {
@@ -338,7 +344,7 @@ export type BroadcastCredentialPayloadParameters = {
   feePayer?: viem_Account | true | undefined
   /** Optional policy for fee-sponsored close/open/top-up transactions. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
-  /** Optional fee token override for close transactions. */
+  /** Optional fee token override for sponsored management and settlement transactions. */
   feeToken?: Address | undefined
   /** Last successful on-chain refresh timestamp per channel ID. */
   lastOnChainVerified: Map<Hex, number>
@@ -397,6 +403,7 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'expectedOperator'
   | 'feePayer'
   | 'feePayerPolicy'
+  | 'feeToken'
   | 'lastOnChainVerified'
   | 'minVoucherDelta'
   | 'payload'
@@ -461,6 +468,7 @@ async function validateOpenCredential(
     expectedOperator,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
     challengeExpires: challenge.expires,
     chainId,
     escrowContract: escrow,
@@ -526,6 +534,7 @@ async function validateTopUpCredential(
   })
   const transaction = Chain.validateTopUpCredentialTransaction({
     additionalDeposit,
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
     challengeExpires: challenge.expires,
     chainId,
     descriptor: channel.descriptor,
@@ -750,6 +759,7 @@ async function handleOpenCredential(
   )
 
   const result = await Chain.broadcastOpenTransaction({
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
     challengeExpires: challenge.expires,
     chainId,
     client,
@@ -839,6 +849,7 @@ async function handleTopUpCredential(
   })
   const result = await Chain.broadcastTopUpTransaction({
     additionalDeposit,
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
     challengeExpires: challenge.expires,
     chainId,
     client,

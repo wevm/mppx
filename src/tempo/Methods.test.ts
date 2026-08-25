@@ -249,6 +249,20 @@ describe('session', () => {
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
 
+  test('schema: advertises a session fee token in method details', () => {
+    const feeToken = '0x0000000000000000000000000000000000000005'
+    const request = Methods.session.schema.request.parse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      feeToken,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      unitType: 'token',
+    })
+
+    expect(request.methodDetails?.feeToken).toBe(feeToken)
+  })
+
   test('schema: preserves precompile session snapshots in method details', () => {
     const sessionSnapshot = {
       acceptedCumulative: '2',
