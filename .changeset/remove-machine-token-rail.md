@@ -2,4 +2,4 @@
 'mppx': minor
 ---
 
-Removed the first-party machine-token fallback rail while preserving direct Tempo TIP-20 charge and session behavior.
+Removed machineUSD charge and session flows and made `machineTokenEnabled: true` a TypeScript compile error for servers.
