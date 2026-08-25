@@ -24,7 +24,7 @@ jobs:
     if: github.repository == 'wevm/mppx'
     needs: verify
     outputs:
-      hasChangesets: ${{ steps.changesets.outputs.hasChangesets }}
+      hasChangesets: ${{ steps.changesets.outputs.has-changesets }}
     permissions:
       contents: write
       id-token: write
@@ -48,12 +48,10 @@ jobs:
         id: changesets
         uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         with:
-          title: 'chore: version packages'
-          commit: 'chore: version packages'
-          publish: pnpm run changeset:publish
-          version: pnpm run changeset:version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          pr-title: 'chore: version packages'
+          commit-message: 'chore: version packages'
+          publish-script: pnpm run changeset:publish
+          version-script: pnpm run changeset:version
 
   snapshot:
     name: Snapshot
