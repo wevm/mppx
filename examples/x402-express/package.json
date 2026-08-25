@@ -18,6 +18,6 @@
     "mppx": "latest",
     "tsx": "4.23.12",
     "typescript": "catalog:",
-    "viem": "2.55.13"
+    "viem": "2.55.18"
   }
 }

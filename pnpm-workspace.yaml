@@ -10,8 +10,8 @@ minimumReleaseAge: 1440
 trustPolicy: no-downgrade
 
 catalog:
-  file-type: '22.0.1'
-  ox: '0.14.33'
+  file-type: '22.0.2'
+  ox: '1.6.3'
   typescript: '~7.0.2'
 
 overrides:
