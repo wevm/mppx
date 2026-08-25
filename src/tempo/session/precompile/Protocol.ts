@@ -81,8 +81,6 @@ export type OpenCredentialPayload = {
   transaction: Hex
   /** Voucher signature for `cumulativeAmount`. */
   signature: Hex
-  /** Machine-token-only router-domain guard for `cumulativeAmount`. */
-  authorizationSignature?: Hex | undefined
   /** Descriptor needed to recover and verify the channel. */
   descriptor: ChannelDescriptor
   /** Initial cumulative spend authorized by the opening voucher, as raw units. */
@@ -120,8 +118,6 @@ export type VoucherCredentialPayload = {
   cumulativeAmount: RawAmountString
   /** Voucher signature for `cumulativeAmount`. */
   signature: Hex
-  /** Machine-token-only router-domain guard for `cumulativeAmount`. */
-  authorizationSignature?: Hex | undefined
 }
 
 /**
@@ -137,13 +133,6 @@ export type CloseCredentialPayload = {
   cumulativeAmount: RawAmountString
   /** Voucher signature for `cumulativeAmount`. */
   signature: Hex
-  /** Machine-token-only router-domain guard for `cumulativeAmount`. */
-  authorizationSignature?: Hex | undefined
-  /**
-   * Machine-token-only signature for the full on-chain deposit. It lets the trusted router
-   * return policy-restricted principal without increasing the merchant's authorized capture.
-   */
-  refundSignature?: Hex | undefined
 }
 
 /**
@@ -175,8 +164,6 @@ export interface SessionVoucher {
  */
 export interface SessionSignedVoucher extends SessionVoucher {
   signature: Hex
-  /** Router-domain guard retained for scheduled machine-token settlement. */
-  authorizationSignature?: Hex | undefined
 }
 
 /**

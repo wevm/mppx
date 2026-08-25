@@ -42,10 +42,8 @@ function mockRelay(handler: RelayHandler): typeof globalThis.fetch {
 function methods(fetch: typeof globalThis.fetch, url = apiBaseUrl) {
   return tempo({
     currency: '0x123',
-    machineTokenEnabled: true,
     recipient: '0x456',
     relay: { apiBaseUrl: url, apiKey: 'tempo_api_key', fetch },
-    testnet: true,
   })
 }
 
@@ -82,7 +80,6 @@ async function createPaymentServer(
   })
 
   return {
-    challenge,
     pay: () =>
       globalThis.fetch(server.url, {
         headers: { Authorization: Credential.serialize(paymentCredential) },
@@ -493,10 +490,9 @@ describe('relay HTTP flow', () => {
         ? Response.json({ success: true })
         : successReceipt()
     })
-    const { challenge, pay, server } = await createPaymentServer(fetch)
+    const { pay, server } = await createPaymentServer(fetch)
 
     try {
-      expect(challenge.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       const response = await pay()
       expect(response.status).toBe(200)
       expect(response.headers.get('Payment-Receipt')).toBeTruthy()
@@ -514,10 +510,9 @@ describe('relay HTTP flow', () => {
         ? Response.json({ success: true })
         : successReceipt()
     })
-    const { challenge, pay, server } = await createPaymentServer(fetch, pushedPayload)
+    const { pay, server } = await createPaymentServer(fetch, pushedPayload)
 
     try {
-      expect(challenge.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       const response = await pay()
 
       expect(response.status).toBe(200)

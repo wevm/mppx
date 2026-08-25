@@ -5,7 +5,7 @@
  * and one-shot settlement. Each incoming request carries a session credential
  * with a cumulative voucher that the server validates and records.
  */
-import { isAddress, isAddressEqual, type Address, type Hex } from 'viem'
+import { isAddress, type Address, type Hex } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
 import * as Challenge from '../../../Challenge.js'
@@ -21,7 +21,6 @@ import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
 import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
-import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
@@ -37,7 +36,6 @@ import { requireSessionCredentialPayload } from './CredentialVerification.js'
 import {
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
-  type MatchSessionSnapshotPaymentFields,
   resolveSessionChannelId,
   resolveSessionSnapshot,
   resolveSessionPaymentRequest,
@@ -73,7 +71,6 @@ type SessionDefaultValues = {
   amount: session.Parameters['amount']
   currency: session.Parameters['currency']
   decimals: number
-  machineTokenEnabled: boolean | undefined
   operator: session.Parameters['operator']
   recipient: Address | undefined
   suggestedDeposit: session.Parameters['suggestedDeposit']
@@ -108,7 +105,6 @@ type BootstrapPreflightParameters = {
     chainId?: number | undefined
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
-  matchSnapshotPaymentFields?: MatchSessionSnapshotPaymentFields | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
@@ -301,9 +297,6 @@ async function handleBootstrapPreflight(
       ),
       recipient: readBootstrapAddress(request.recipient, 'recipient'),
     },
-    matchPaymentFields: parameters.paymentRequest.machineTokenEnabled
-      ? parameters.matchSnapshotPaymentFields
-      : undefined,
     store: parameters.store,
   })
   const headers = new Headers({ 'Cache-Control': 'no-store' })
@@ -324,7 +317,6 @@ export function session<const parameters extends session.Parameters>(
     channelStateTtl = 5_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
-    machineTokenEnabled,
     operator,
     store: rawStore = Store.memory(),
     suggestedDeposit,
@@ -344,25 +336,6 @@ export function session<const parameters extends session.Parameters>(
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-  const matchSnapshotPaymentFields: MatchSessionSnapshotPaymentFields = async (
-    channel,
-    expected,
-    options,
-  ) => {
-    if (
-      channel.chainId !== expected.chainId ||
-      !isAddressEqual(channel.escrowContract, expected.escrowContract) ||
-      !isAddressEqual(expected.escrowContract, tip20ChannelEscrow)
-    )
-      return false
-    return !!(await MachineTokenSession.matchRoute(await getClient({ chainId: expected.chainId }), {
-      active: options?.action !== 'close',
-      chainId: expected.chainId,
-      descriptor: channel.descriptor,
-      merchant: expected.recipient,
-      targetToken: expected.currency,
-    }))
-  }
   const settleScheduled: SettleChargedSessionChannel = async (channel) => {
     if (!isSettlementDue(channel, settlementSchedule)) return undefined
     return maybeSettleScheduled({
@@ -427,7 +400,6 @@ export function session<const parameters extends session.Parameters>(
       expectedOperator: context.methodDetails.operator,
       feePayer: context.feePayer,
       feePayerPolicy: parameters.feePayerPolicy,
-      feeToken: context.methodDetails.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       payload,
@@ -471,7 +443,7 @@ export function session<const parameters extends session.Parameters>(
       expectedOperator: context.methodDetails.operator,
       feePayer: context.feePayer,
       feePayerPolicy: parameters.feePayerPolicy,
-      feeToken: context.methodDetails.feeToken,
+      feeToken: parameters.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       onSessionSettlement,
@@ -516,7 +488,6 @@ export function session<const parameters extends session.Parameters>(
       amount,
       currency,
       decimals,
-      machineTokenEnabled,
       operator,
       recipient,
       suggestedDeposit,
@@ -539,7 +510,6 @@ export function session<const parameters extends session.Parameters>(
             defaultRecipient: recipient,
             expires,
             getClient,
-            matchSnapshotPaymentFields,
             parameterChainId: parameters.chainId,
             parameterEscrowContract: parameters.escrowContract,
             paymentRequest: options,
@@ -558,7 +528,6 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
-        matchSnapshotPaymentFields,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
         parameterFeePayer: configuredFeePayer,
@@ -566,19 +535,8 @@ export function session<const parameters extends session.Parameters>(
         resolveChannelId: parameters.resolveChannelId,
         store,
       })
-      // Only advertise the capability when this logical session can use a
-      // configured unified router on the canonical escrow.
-      const { machineTokenEnabled: requestedMachineTokenEnabled, ...requestWithoutMachineToken } =
-        resolvedRequest
-      const machineSessionSupported =
-        MachineTokenSession.isSupported(resolvedRequest.chainId) &&
-        isAddressEqual(resolvedRequest.escrowContract, tip20ChannelEscrow)
       return {
-        ...requestWithoutMachineToken,
-        feeToken: parameters.feeToken,
-        ...(requestedMachineTokenEnabled && machineSessionSupported
-          ? { machineTokenEnabled: true }
-          : {}),
+        ...resolvedRequest,
         sessionProtocol: Constants.SessionProtocols.v2,
       }
     },
@@ -676,10 +634,8 @@ export namespace session {
     /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
     settlementSchedule?: SettlementSchedule | undefined
 
-    /** Optional fee token for management and server-driven settle/close transactions. */
+    /** Optional fee token used for server-driven close transactions. */
     feeToken?: Address | undefined
-    /** Enables first-party machine-token funding when the configured deployment is available. */
-    machineTokenEnabled?: boolean | undefined
   } & Account.resolve.Parameters &
     Client.getResolver.Parameters &
     Defaults &

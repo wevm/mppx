@@ -9,11 +9,9 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 }))
 
 import type * as Challenge from '../../Challenge.js'
-import * as defaults from '../../tempo/internal/defaults.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../../tempo/session/client/ChannelStore.js'
-import * as Channel from '../../tempo/session/precompile/Channel.js'
-import { tip20ChannelEscrow, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import sessions from './commands.js'
 import {
   createSessionRegistry,
@@ -31,24 +29,8 @@ const payee = '0x2222222222222222222222222222222222222222' as Address
 const token = '0x3333333333333333333333333333333333333333' as Address
 const escrow = '0x4444444444444444444444444444444444444444' as Address
 const operator = '0x0000000000000000000000000000000000000000' as Address
-const machinePayee = '0x7777777777777777777777777777777777777777' as Address
-const descriptor = {
-  payer,
-  payee,
-  operator,
-  token,
-  salt: `0x${'55'.repeat(32)}` as Hex,
-  authorizedSigner: payer,
-  expiringNonceHash: `0x${'66'.repeat(32)}` as Hex,
-}
-const channelId = Channel.computeId({ ...descriptor, escrow, chainId: 42431 })
-const mainnetChannelId = Channel.computeId({ ...descriptor, escrow, chainId: 4217 })
-const machineDescriptor = {
-  ...descriptor,
-  operator: defaults.machineToken[42431].swap,
-  payee: machinePayee,
-  token: defaults.machineToken[42431].token,
-}
+const channelId = `0x${'aa'.repeat(32)}` as Hex
+const mainnetChannelId = `0x${'bb'.repeat(32)}` as Hex
 
 let temporaryDirectory: string
 let stateRoot: string
@@ -65,18 +47,21 @@ afterEach(async () => {
 })
 
 function channel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
-  const nextDescriptor = overrides.descriptor ?? descriptor
-  const nextEscrow = overrides.escrow ?? escrow
-  const nextChainId = overrides.chainId ?? 42431
   return {
-    channelId:
-      overrides.channelId ??
-      Channel.computeId({ ...nextDescriptor, escrow: nextEscrow, chainId: nextChainId }),
+    channelId,
     cumulativeAmount: 10n,
     deposit: 100n,
-    descriptor: nextDescriptor,
-    escrow: nextEscrow,
-    chainId: nextChainId,
+    descriptor: {
+      payer,
+      payee,
+      operator,
+      token,
+      salt: `0x${'55'.repeat(32)}`,
+      authorizedSigner: payer,
+      expiringNonceHash: `0x${'66'.repeat(32)}`,
+    },
+    escrow,
+    chainId: 42431,
     opened: true,
     ...overrides,
   }
@@ -95,28 +80,6 @@ function challenge(id = 'challenge-1', chainId = 42431): Challenge.Challenge {
       methodDetails: { chainId, escrowContract: escrow },
     },
   }
-}
-
-function machineChallenge(): Challenge.Challenge {
-  return {
-    ...challenge('machine-challenge'),
-    request: {
-      ...challenge('machine-challenge').request,
-      methodDetails: {
-        chainId: 42431,
-        escrowContract: tip20ChannelEscrow,
-        machineTokenEnabled: true,
-      },
-    },
-  }
-}
-
-function machineChannel(): ChannelEntry {
-  return channel({
-    descriptor: machineDescriptor,
-    escrow: tip20ChannelEscrow,
-    paymentScope: { payee, token },
-  })
 }
 
 function receipt(overrides: Partial<SessionReceipt> = {}): SessionReceipt {
@@ -424,35 +387,6 @@ describe('createSessionRegistry', () => {
 })
 
 describe('toChannelStore', () => {
-  test('persists and reuses a machine channel under its logical challenge scope', async () => {
-    const registry = createSessionRegistry(registryOptions())
-    const logicalScope = scope({ escrow: tip20ChannelEscrow })
-    const machine = machineChannel()
-    const context = (): SessionPersistenceContext => ({
-      status: 'open',
-      account: { address: payer },
-      endpoint: 'https://api.example.test/query',
-      challenge: machineChallenge(),
-    })
-    const opened = toChannelStore(registry, {
-      scope: logicalScope,
-      selection: 'new',
-      context,
-    })
-    await opened.set(machine)
-
-    expect(await registry.getPreferred(logicalScope)).toBe(machine.channelId)
-    const automatic = toChannelStore(registry, {
-      scope: logicalScope,
-      selection: 'auto',
-      context,
-    })
-    expect(await automatic.get(entryKey(machine))).toEqual(machine)
-
-    await registry.remove(machine.channelId)
-    expect(await registry.getPreferred(logicalScope)).toBeUndefined()
-  })
-
   test('uses preferred open sessions and never reuses opening sessions', async () => {
     const registry = createSessionRegistry(registryOptions())
     let status: SessionPersistenceContext['status'] = 'opening'
@@ -547,16 +481,8 @@ describe('toChannelStore', () => {
     expect(await store.get(entryKey(channel()))).toEqual(channel())
     await store.delete(entryKey(channel()))
 
-    const replacementDescriptor = {
-      ...descriptor,
-      salt: `0x${'77'.repeat(32)}` as Hex,
-    }
-    const replacementId = Channel.computeId({
-      ...replacementDescriptor,
-      escrow,
-      chainId: 42431,
-    })
-    await store.set(channel({ channelId: replacementId, descriptor: replacementDescriptor }))
+    const replacementId = `0x${'bb'.repeat(32)}` as Hex
+    await store.set(channel({ channelId: replacementId }))
 
     expect(await registry.get(channelId)).toMatchObject({ status: 'stale', spent: 2n, units: 3 })
     expect(await registry.get(replacementId)).toMatchObject({

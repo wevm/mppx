@@ -3,7 +3,6 @@ import type { Address } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
-  sendTransactionSync,
   signTypedData,
   signTransaction,
 } from 'viem/actions'
@@ -19,7 +18,6 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
@@ -143,7 +141,6 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
       const account =
         (await parameters.resolveAccount?.({
@@ -151,7 +148,7 @@ export function charge(parameters: charge.Parameters = {}) {
           chainId,
           operation: {
             kind: 'executeCalls',
-            ...(autoSwap || machineTokenEnabled ? {} : { calls: transferCalls }),
+            ...(autoSwap ? {} : { calls: transferCalls }),
           },
         })) ?? defaultAccount
 
@@ -168,27 +165,17 @@ export function charge(parameters: charge.Parameters = {}) {
         return supportedModes[0]!
       })()
 
-      const machineTokenRoute = machineTokenEnabled
-        ? await MachineTokenCharge.findRoute(client, {
+      const swapCalls = autoSwap
+        ? await AutoSwap.findCalls(client, {
             account: account.address,
-            chainId,
-            currency,
-            transfers,
+            amountOut: BigInt(amount),
+            tokenOut: currency,
+            tokenIn: autoSwap.tokenIn,
+            slippage: autoSwap.slippage,
           })
         : undefined
 
-      const swapCalls =
-        !machineTokenRoute && autoSwap
-          ? await AutoSwap.findCalls(client, {
-              account: account.address,
-              amountOut: BigInt(amount),
-              tokenOut: currency,
-              tokenIn: autoSwap.tokenIn,
-              slippage: autoSwap.slippage,
-            })
-          : undefined
-
-      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
+      const calls = [...(swapCalls ?? []), ...transferCalls]
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + 25
@@ -198,24 +185,11 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       if (mode === 'push') {
-        const { receipts } =
-          account.type === 'local'
-            ? {
-                receipts: [
-                  await sendTransactionSync(client, {
-                    account,
-                    calls,
-                    nonceKey: 'expiring',
-                    validBefore,
-                  } as never),
-                ],
-              }
-            : await sendCallsSync(client, {
-                account,
-                calls: calls as never,
-                experimental_fallback: calls.length === 1,
-                forceAtomic: calls.length > 1,
-              })
+        const { receipts } = await sendCallsSync(client, {
+          account,
+          calls: calls as never,
+          experimental_fallback: true,
+        })
         const hash = receipts?.[0]?.transactionHash
         if (!hash) throw new Error('No transaction receipt returned.')
         return Credential.serialize({

@@ -1,10 +1,9 @@
-import { zeroAddress, type Address, type Hex } from 'viem'
+import type { Address, Hex } from 'viem'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Store from '../../../Store.js'
-import * as defaults from '../../internal/defaults.js'
-import * as MachineTokenSession from '../../internal/machine-token-session.js'
+import { chainId as chainIds } from '../../internal/defaults.js'
 import * as Channel from '../precompile/Channel.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
@@ -14,9 +13,7 @@ import {
   requireSessionCredentialAction,
   requireSessionCredentialPayload,
   requireSessionCredentialPayloadHeader,
-  type ValidateCredentialPayloadParameters,
   validateChannelDescriptor,
-  validateCredentialPayload,
 } from './CredentialVerification.js'
 
 describe('SessionCredentialGuards', () => {
@@ -87,30 +84,6 @@ describe('SessionCredentialGuards', () => {
         channelId,
         cumulativeAmount: '1',
         descriptor,
-        signature,
-      })
-    })
-
-    test('preserves the optional machine-token refund authorization on close', () => {
-      const authorizationSignature = `0x${'ab'.repeat(65)}` as Hex
-      const refundSignature = `0x${'cd'.repeat(65)}` as Hex
-      expect(
-        requireSessionCredentialPayload({
-          action: 'close',
-          authorizationSignature,
-          channelId,
-          cumulativeAmount: '1',
-          descriptor,
-          refundSignature,
-          signature,
-        }),
-      ).toEqual({
-        action: 'close',
-        authorizationSignature,
-        channelId,
-        cumulativeAmount: '1',
-        descriptor,
-        refundSignature,
         signature,
       })
     })
@@ -219,7 +192,7 @@ describe('SessionCredentialGuards', () => {
 
   describe('broadcastCredentialPayload', () => {
     const escrow = '0x4D50500000000000000000000000000000000000' as Address
-    const testChainId = defaults.chainId.testnet
+    const testChainId = chainIds.testnet
     const computedChannelId = Channel.computeId({ ...descriptor, chainId: testChainId, escrow })
     const challenge = Challenge.from({
       id: 'credential-source-test',
@@ -263,94 +236,6 @@ describe('SessionCredentialGuards', () => {
         units: 0,
       }))
     }
-
-    test('binds machine descriptors to a configured route and explicit signer', async () => {
-      const deployment = defaults.machineToken[testChainId]
-      const merchant = '0x0000000000000000000000000000000000000005' as Address
-      const routePayee = '0x0000000000000000000000000000000000000006' as Address
-      const machineDescriptor = {
-        ...descriptor,
-        operator: deployment.swap,
-        payee: routePayee,
-        token: deployment.token,
-      }
-      const machineChallenge = Challenge.from({
-        ...challenge,
-        request: {
-          ...challenge.request,
-          currency: defaults.tokens.usdc,
-          recipient: merchant,
-          methodDetails: {
-            chainId: testChainId,
-            escrowContract: escrow,
-            machineTokenEnabled: true,
-          },
-        },
-      })
-      vi.spyOn(MachineTokenSession, 'matchRoute').mockImplementation(
-        async (_client, { descriptor: candidate }) =>
-          candidate.payee === routePayee
-            ? { operator: deployment.swap, payee: routePayee, token: deployment.token }
-            : undefined,
-      )
-      const parameters = (
-        candidate: Channel.ChannelDescriptor,
-      ): ValidateCredentialPayloadParameters => ({
-        challenge: machineChallenge,
-        channelStateTtl: 5_000,
-        chainId: testChainId,
-        client: {} as never,
-        escrow,
-        lastOnChainVerified: new Map(),
-        minVoucherDelta: 0n,
-        payload: {
-          action: 'voucher',
-          channelId: Channel.computeId({ ...candidate, chainId: testChainId, escrow }),
-          cumulativeAmount: '1',
-          descriptor: candidate,
-          signature,
-        },
-        store: channelStore(),
-      })
-
-      await expect(validateCredentialPayload(parameters(machineDescriptor))).rejects.toThrow(
-        'requires a router authorization',
-      )
-      await expect(broadcastCredentialPayload(parameters(machineDescriptor))).rejects.toThrow(
-        'requires a router authorization',
-      )
-      await expect(
-        validateCredentialPayload(parameters({ ...machineDescriptor, payee: descriptor.payee })),
-      ).rejects.toThrow('not bound to the challenged merchant and currency')
-      await expect(
-        validateCredentialPayload(
-          parameters({ ...machineDescriptor, authorizedSigner: zeroAddress }),
-        ),
-      ).rejects.toThrow('explicit authorizedSigner')
-
-      vi.spyOn(MachineTokenSession, 'verifyAuthorization').mockReturnValue(true)
-      const close = {
-        ...parameters(machineDescriptor),
-        challenge: Challenge.from({
-          ...machineChallenge,
-          request: {
-            ...machineChallenge.request,
-            methodDetails: { chainId: testChainId, escrowContract: escrow },
-          },
-        }),
-        payload: {
-          action: 'close' as const,
-          authorizationSignature: signature,
-          channelId: Channel.computeId({ ...machineDescriptor, chainId: testChainId, escrow }),
-          cumulativeAmount: '1',
-          descriptor: machineDescriptor,
-          refundSignature: signature,
-          signature,
-        },
-      }
-      await expect(validateCredentialPayload(close)).rejects.toThrow('channel not found')
-      await expect(broadcastCredentialPayload(close)).rejects.toThrow('channel not found')
-    })
 
     test.each([
       { label: 'payer', sourceAddress: descriptor.payer },

@@ -17,7 +17,6 @@ import {
   VerificationFailedError,
 } from '../../../Errors.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
-import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import * as Chain from '../precompile/Chain.js'
 import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
@@ -30,19 +29,24 @@ import {
 } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
-import { getChallengePaymentFields, type ChallengePaymentFields } from './RequestState.js'
-import {
-  assertSettlementSender,
-  getClientAccount,
-  resolveChannelTransactionOptions,
-  type OnSessionSettlement,
-} from './Settlement.js'
+import { getChallengePaymentFields } from './RequestState.js'
+import { assertSettlementSender, getClientAccount, type OnSessionSettlement } from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
 export function authorizedSigner(descriptor: Channel.ChannelDescriptor): Address {
   return isAddressEqual(descriptor.authorizedSigner, zeroAddress)
     ? descriptor.payer
     : descriptor.authorizedSigner
+}
+
+/** Asserts that a credential payload includes a TIP-1034 descriptor. */
+export function assertDescriptor(payload: {
+  descriptor?: Channel.ChannelDescriptor | undefined
+}): asserts payload is { descriptor: Channel.ChannelDescriptor } {
+  if (!payload.descriptor)
+    throw new VerificationFailedError({
+      reason: 'descriptor required for TIP-1034 session action',
+    })
 }
 
 /** Asserts that two TIP-1034 descriptors identify the same channel. */
@@ -91,75 +95,6 @@ export function validateChannelDescriptor(
     throw new VerificationFailedError({
       reason: 'channel descriptor operator does not match server operator',
     })
-  }
-}
-
-type ResolvedCredentialRoute = {
-  allowedFeeTokens: readonly Address[]
-  expectedOperator: Address
-  machineRouter?: Address | undefined
-  payment: ChallengePaymentFields
-}
-
-async function resolveCredentialRoute(parameters: {
-  challenge: Challenge.Challenge
-  chainId: number
-  client: Chain.TransactionClient
-  escrow: Address
-  expectedOperator?: Address | undefined
-  feeToken?: Address | undefined
-  payload: SessionCredentialPayload
-}): Promise<ResolvedCredentialRoute> {
-  const { challenge, chainId, client, escrow, payload } = parameters
-  const { descriptor } = payload
-  const channelId = ChannelStore.normalizeChannelId(payload.channelId)
-  if (
-    Channel.computeId({ ...descriptor, chainId, escrow }).toLowerCase() !== channelId.toLowerCase()
-  )
-    throw new VerificationFailedError({ reason: 'channel descriptor does not match channelId' })
-  const request = getChallengePaymentFields(challenge)
-  const expectedOperator = parameters.expectedOperator ?? zeroAddress
-  const direct =
-    isAddressEqual(descriptor.payee, request.recipient) &&
-    isAddressEqual(descriptor.token, request.currency) &&
-    isAddressEqual(descriptor.operator, expectedOperator)
-
-  if (direct)
-    return {
-      allowedFeeTokens: MachineTokenSession.allowedSponsoredFeeTokens({
-        chainId,
-        override: parameters.feeToken,
-        paymentToken: request.currency,
-      }),
-      expectedOperator,
-      payment: request,
-    }
-  if (payload.action !== 'close' && !MachineTokenSession.isEnabledChallenge(challenge))
-    throw new VerificationFailedError({ reason: 'credential descriptor does not match challenge' })
-
-  const route = await MachineTokenSession.matchRoute(client, {
-    active: payload.action !== 'close',
-    chainId,
-    descriptor,
-    merchant: request.recipient,
-    targetToken: request.currency,
-  })
-  if (!route)
-    throw new VerificationFailedError({
-      reason: 'machine-token channel is not bound to the challenged merchant and currency',
-    })
-
-  return {
-    allowedFeeTokens: [
-      MachineTokenSession.resolveFeeToken({
-        chainId,
-        override: parameters.feeToken,
-        paymentToken: route.token,
-      }),
-    ],
-    expectedOperator: route.operator,
-    machineRouter: route.operator,
-    payment: { ...request, currency: route.token, recipient: route.payee },
   }
 }
 
@@ -269,10 +204,6 @@ function readHex(value: unknown, field: string): Hex {
   throw new VerificationFailedError({ reason: `invalid session credential ${field}` })
 }
 
-function readOptionalHex(value: unknown, field: string): Hex | undefined {
-  return value === undefined ? undefined : readHex(value, field)
-}
-
 function readRawAmount(value: unknown, field: string): string {
   if (typeof value === 'string' && /^[0-9]+$/.test(value)) return value
   throw new VerificationFailedError({ reason: `invalid session credential ${field}` })
@@ -344,10 +275,6 @@ export function requireSessionCredentialPayload(payload: unknown): SessionCreden
         channelId: header.channelId,
         transaction: readHex(candidate.transaction, 'transaction'),
         signature: readHex(candidate.signature, 'signature'),
-        authorizationSignature: readOptionalHex(
-          candidate.authorizationSignature,
-          'authorizationSignature',
-        ),
         descriptor: readDescriptor(candidate.descriptor),
         cumulativeAmount: readRawAmount(candidate.cumulativeAmount, 'cumulativeAmount'),
         ...(candidate.authorizedSigner === undefined
@@ -372,10 +299,6 @@ export function requireSessionCredentialPayload(payload: unknown): SessionCreden
         descriptor: readDescriptor(candidate.descriptor),
         cumulativeAmount: readRawAmount(candidate.cumulativeAmount, 'cumulativeAmount'),
         signature: readHex(candidate.signature, 'signature'),
-        authorizationSignature: readOptionalHex(
-          candidate.authorizationSignature,
-          'authorizationSignature',
-        ),
       }
     case 'close':
       return {
@@ -384,11 +307,6 @@ export function requireSessionCredentialPayload(payload: unknown): SessionCreden
         descriptor: readDescriptor(candidate.descriptor),
         cumulativeAmount: readRawAmount(candidate.cumulativeAmount, 'cumulativeAmount'),
         signature: readHex(candidate.signature, 'signature'),
-        authorizationSignature: readOptionalHex(
-          candidate.authorizationSignature,
-          'authorizationSignature',
-        ),
-        refundSignature: readOptionalHex(candidate.refundSignature, 'refundSignature'),
       }
   }
 }
@@ -420,7 +338,7 @@ export type BroadcastCredentialPayloadParameters = {
   feePayer?: viem_Account | true | undefined
   /** Optional policy for fee-sponsored close/open/top-up transactions. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
-  /** Optional fee token override for sponsored management and settlement transactions. */
+  /** Optional fee token override for close transactions. */
   feeToken?: Address | undefined
   /** Last successful on-chain refresh timestamp per channel ID. */
   lastOnChainVerified: Map<Hex, number>
@@ -439,11 +357,10 @@ export type VerifyCredentialPayloadParameters = BroadcastCredentialPayloadParame
 
 /** Narrows shared credential broadcast inputs to one payload action. */
 export type BroadcastCredentialActionParameters<action extends SessionCredentialPayload['action']> =
-  Omit<BroadcastCredentialPayloadParameters, 'payload'> &
-    ResolvedCredentialRoute & {
-      /** Credential payload for the selected action. */
-      payload: Extract<SessionCredentialPayload, { action: action }>
-    }
+  Omit<BroadcastCredentialPayloadParameters, 'payload'> & {
+    /** Credential payload for the selected action. */
+    payload: Extract<SessionCredentialPayload, { action: action }>
+  }
 
 /** @deprecated Use {@link BroadcastCredentialActionParameters}. */
 export type VerifyCredentialActionParameters<action extends SessionCredentialPayload['action']> =
@@ -480,7 +397,6 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'expectedOperator'
   | 'feePayer'
   | 'feePayerPolicy'
-  | 'feeToken'
   | 'lastOnChainVerified'
   | 'minVoucherDelta'
   | 'payload'
@@ -501,30 +417,32 @@ export async function validateCredentialPayload(
   parameters: ValidateCredentialPayloadParameters,
 ): Promise<CredentialPayloadValidation> {
   const { payload } = parameters
-  const context = await resolveCredentialContext(parameters)
   switch (payload.action) {
     case 'open':
-      await validateOpenCredential(context, payload)
+      await validateOpenCredential(parameters, payload)
       break
     case 'topUp':
-      await validateTopUpCredential(context, payload)
+      await validateTopUpCredential(parameters, payload)
       break
     case 'voucher':
-      await validateVoucherCredential(context, payload)
+      await validateVoucherCredential(parameters, payload)
       break
     case 'close':
-      await validateCloseCredential(context, payload)
+      await validateCloseCredential(parameters, payload)
       break
   }
   return { action: payload.action, channelId: ChannelStore.normalizeChannelId(payload.channelId) }
 }
 
 async function validateOpenCredential(
-  parameters: ValidateCredentialPayloadParameters & ResolvedCredentialRoute,
+  parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'open' }>,
 ) {
-  const { challenge, chainId, client, escrow, expectedOperator, payment: request } = parameters
+  const { challenge, chainId, client, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
+  assertDescriptor(payload)
   if (
     payload.authorizedSigner !== undefined &&
     !isAddressEqual(payload.authorizedSigner, payload.descriptor.authorizedSigner)
@@ -543,7 +461,6 @@ async function validateOpenCredential(
     expectedOperator,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
-    allowedFeeTokens: parameters.allowedFeeTokens,
     challengeExpires: challenge.expires,
     chainId,
     escrowContract: escrow,
@@ -581,19 +498,14 @@ async function validateOpenCredential(
 }
 
 async function validateTopUpCredential(
-  parameters: ValidateCredentialPayloadParameters & ResolvedCredentialRoute,
+  parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'topUp' }>,
 ) {
-  const {
-    challenge,
-    chainId,
-    client,
-    escrow,
-    expectedOperator,
-    payment: request,
-    store,
-  } = parameters
+  const { challenge, chainId, client, escrow, store } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const additionalDeposit = uint96(BigInt(payload.additionalDeposit))
+  assertDescriptor(payload)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   validateChannelDescriptor(
     payload.descriptor,
@@ -614,7 +526,6 @@ async function validateTopUpCredential(
   })
   const transaction = Chain.validateTopUpCredentialTransaction({
     additionalDeposit,
-    allowedFeeTokens: parameters.allowedFeeTokens,
     challengeExpires: challenge.expires,
     chainId,
     descriptor: channel.descriptor,
@@ -634,10 +545,11 @@ async function validateTopUpCredential(
 }
 
 async function validateVoucherCredential(
-  parameters: ValidateCredentialPayloadParameters & ResolvedCredentialRoute,
+  parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'voucher' }>,
 ) {
   const {
+    challenge,
     chainId,
     client,
     credentialSource,
@@ -646,16 +558,16 @@ async function validateVoucherCredential(
     store,
     channelStateTtl,
     lastOnChainVerified,
-    payment: request,
   } = parameters
-  const { expectedOperator } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   const voucher = Voucher.parseVoucherFromPayload(
     channelId,
     payload.cumulativeAmount,
     payload.signature,
-    payload.authorizationSignature,
   )
+  assertDescriptor(payload)
   validateChannelDescriptor(
     payload.descriptor,
     channelId,
@@ -711,87 +623,23 @@ async function resolveVoucherChannelState(parameters: {
   }
 }
 
-function verifyMachineSessionAuthorization(parameters: {
-  chainId: number
-  payload: SessionCredentialPayload
-  router: Address | undefined
-}): void {
-  const { chainId, payload, router } = parameters
-  if (payload.action === 'topUp') return undefined
-  if (!router) return undefined
-  // The escrow resolves a zero authorizedSigner to the payer, but the router
-  // domain is bound to an explicit signer; reject the delegation up front
-  // instead of failing signature verification against the zero address.
-  if (isAddressEqual(payload.descriptor.authorizedSigner, zeroAddress))
-    throw new VerificationFailedError({
-      reason: 'machine-token sessions require an explicit authorizedSigner',
-    })
-  if (!payload.authorizationSignature)
-    throw new VerificationFailedError({
-      reason: 'machine-token voucher requires a router authorization',
-    })
-  const valid = MachineTokenSession.verifyAuthorization({
-    authorization: {
-      channelId: ChannelStore.normalizeChannelId(payload.channelId),
-      cumulativeAmount: uint96(BigInt(payload.cumulativeAmount)),
-    },
-    chainId,
-    expectedSigner: payload.descriptor.authorizedSigner,
-    router,
-    signature: payload.authorizationSignature,
-  })
-  if (!valid)
-    throw new InvalidSignatureError({ reason: 'invalid machine-token router authorization' })
-}
-
-async function resolveCredentialContext<
-  const parameters extends
-    | BroadcastCredentialPayloadParameters
-    | ValidateCredentialPayloadParameters,
->(parameters: parameters): Promise<parameters & ResolvedCredentialRoute> {
-  const route = await resolveCredentialRoute(parameters)
-  verifyMachineSessionAuthorization({
-    chainId: parameters.chainId,
-    payload: parameters.payload,
-    router: route.machineRouter,
-  })
-  return { ...parameters, ...route }
-}
-
-function assertMachineCloseAmount(
-  machineRouter: Address | undefined,
-  cumulativeAmount: bigint,
-  captureAmount: bigint,
-) {
-  if (machineRouter && cumulativeAmount !== captureAmount)
-    throw new VerificationFailedError({
-      reason: `machine-token close voucher amount must equal ${captureAmount} (capture amount)`,
-    })
-}
-
-async function inspectCloseCredential(
-  parameters: ValidateCredentialPayloadParameters & ResolvedCredentialRoute,
+async function validateCloseCredential(
+  parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'close' }>,
 ) {
-  const {
-    account: accountOverride,
-    chainId,
-    client,
-    escrow,
-    expectedOperator,
-    machineRouter,
-    payment,
-    store,
-  } = parameters
+  const { challenge, chainId, client, escrow, store } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
+  assertDescriptor(payload)
   validateChannelDescriptor(
     payload.descriptor,
     channelId,
     chainId,
     escrow,
-    payment.recipient,
-    payment.currency,
+    request.recipient,
+    request.currency,
     expectedOperator,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
@@ -815,70 +663,31 @@ async function inspectCloseCredential(
     throw new VerificationFailedError({
       reason: `close voucher amount must be >= ${state.settled} (on-chain settled)`,
     })
-  if (
-    !(await Voucher.verifyVoucher(
-      escrow,
-      chainId,
-      { channelId, cumulativeAmount, signature: payload.signature },
-      channel.authorizedSigner,
-    ))
+  const valid = await Voucher.verifyVoucher(
+    escrow,
+    chainId,
+    { channelId, cumulativeAmount, signature: payload.signature },
+    channel.authorizedSigner,
   )
-    throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
-
-  const refundSignature = machineRouter ? payload.refundSignature : undefined
-  if (machineRouter) {
-    if (!refundSignature)
-      throw new VerificationFailedError({
-        reason: 'machine-token close requires a refund authorization',
-      })
-    if (
-      !(await Voucher.verifyVoucher(
-        escrow,
-        chainId,
-        { channelId, cumulativeAmount: uint96(state.deposit), signature: refundSignature },
-        payload.descriptor.authorizedSigner,
-      ))
-    )
-      throw new InvalidSignatureError({ reason: 'invalid machine-token refund authorization' })
-  }
-
+  if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   const captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
-  assertMachineCloseAmount(machineRouter, cumulativeAmount, captureAmount)
-  const account = accountOverride ?? getClientAccount(client)
-  if (!machineRouter || !account)
-    assertSettlementSender({
-      operation: 'close',
-      channelId,
-      operator: channel.operator,
-      payee: channel.payee,
-      sender: account?.address,
-    })
-  return {
-    account,
-    authorizationSignature: machineRouter ? payload.authorizationSignature : undefined,
-    captureAmount,
-    channel,
+  const account = parameters.account ?? getClientAccount(client)
+  assertSettlementSender({
+    operation: 'close',
     channelId,
-    cumulativeAmount,
-    refundSignature,
-    state,
-  }
-}
-
-async function validateCloseCredential(
-  parameters: ValidateCredentialPayloadParameters & ResolvedCredentialRoute,
-  payload: Extract<SessionCredentialPayload, { action: 'close' }>,
-) {
-  await inspectCloseCredential(parameters, payload)
+    operator: channel.operator,
+    payee: channel.payee,
+    sender: account?.address,
+  })
 }
 
 /** Broadcasts a validated session credential payload and applies its state transition. */
 export async function broadcastCredentialPayload(
   context: BroadcastCredentialPayloadParameters,
 ): Promise<SessionReceipt> {
-  const receipt = await broadcastCredentialAction(await resolveCredentialContext(context))
+  const receipt = await broadcastCredentialAction(context)
   if (refreshOnChainVerificationCache[context.payload.action])
     context.lastOnChainVerified.set(receipt.channelId, Date.now())
   return receipt
@@ -892,7 +701,7 @@ export async function verifyCredentialPayload(
 }
 
 function broadcastCredentialAction(
-  context: BroadcastCredentialPayloadParameters & ResolvedCredentialRoute,
+  context: BroadcastCredentialPayloadParameters,
 ): Promise<SessionReceipt> {
   const { payload } = context
   switch (payload.action) {
@@ -908,7 +717,7 @@ function broadcastCredentialAction(
 }
 
 function actionContext<action extends SessionCredentialPayload['action']>(
-  context: BroadcastCredentialPayloadParameters & ResolvedCredentialRoute,
+  context: BroadcastCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: action }>,
 ): BroadcastCredentialActionParameters<action> {
   return { ...context, payload }
@@ -917,17 +726,11 @@ function actionContext<action extends SessionCredentialPayload['action']>(
 async function handleOpenCredential(
   parameters: OpenCredentialActionParameters,
 ): Promise<SessionReceipt> {
-  const {
-    store,
-    client,
-    challenge,
-    payload,
-    chainId,
-    escrow,
-    expectedOperator,
-    payment: request,
-  } = parameters
+  const { store, client, challenge, payload, chainId, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
+  assertDescriptor(payload)
   if (
     payload.authorizedSigner !== undefined &&
     !isAddressEqual(payload.authorizedSigner, payload.descriptor.authorizedSigner)
@@ -947,7 +750,6 @@ async function handleOpenCredential(
   )
 
   const result = await Chain.broadcastOpenTransaction({
-    allowedFeeTokens: parameters.allowedFeeTokens,
     challengeExpires: challenge.expires,
     chainId,
     client,
@@ -995,7 +797,6 @@ async function handleOpenCredential(
       expiringNonceHash: result.expiringNonceHash,
       cumulativeAmount,
       signature: payload.signature,
-      authorizationSignature: payload.authorizationSignature,
       state,
     }),
   )
@@ -1013,17 +814,11 @@ async function handleOpenCredential(
 async function handleTopUpCredential(
   parameters: TopUpCredentialActionParameters,
 ): Promise<SessionReceipt> {
-  const {
-    store,
-    client,
-    challenge,
-    payload,
-    chainId,
-    escrow,
-    expectedOperator,
-    payment: request,
-  } = parameters
+  const { store, client, challenge, payload, chainId, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const additionalDeposit = uint96(BigInt(payload.additionalDeposit))
+  assertDescriptor(payload)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   validateChannelDescriptor(
     payload.descriptor,
@@ -1044,7 +839,6 @@ async function handleTopUpCredential(
   })
   const result = await Chain.broadcastTopUpTransaction({
     additionalDeposit,
-    allowedFeeTokens: parameters.allowedFeeTokens,
     challengeExpires: challenge.expires,
     chainId,
     client,
@@ -1086,16 +880,16 @@ async function handleVoucherCredential(
     minVoucherDelta,
     channelStateTtl,
     lastOnChainVerified,
-    payment: request,
   } = parameters
-  const { expectedOperator } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   const voucher = Voucher.parseVoucherFromPayload(
     channelId,
     payload.cumulativeAmount,
     payload.signature,
-    payload.authorizationSignature,
   )
+  assertDescriptor(payload)
   validateChannelDescriptor(
     payload.descriptor,
     channelId,
@@ -1150,18 +944,52 @@ async function handleVoucherCredential(
 async function handleCloseCredential(
   parameters: CloseCredentialActionParameters,
 ): Promise<SessionReceipt> {
-  const { store, client, challenge, payload, escrow, machineRouter } = parameters
-  const inspected = await inspectCloseCredential(parameters, payload)
-  const {
-    account,
-    authorizationSignature,
-    channel,
+  const { store, client, challenge, payload, chainId, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
+  const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
+  const channelId = ChannelStore.normalizeChannelId(payload.channelId)
+  assertDescriptor(payload)
+  validateChannelDescriptor(
+    payload.descriptor,
     channelId,
-    cumulativeAmount,
-    refundSignature,
-    state,
-  } = inspected
-  let { captureAmount } = inspected
+    chainId,
+    escrow,
+    request.recipient,
+    request.currency,
+    expectedOperator,
+  )
+  const channel = await ChannelStore.loadPrecompileChannel({
+    descriptor: payload.descriptor,
+    channelId,
+    chainId,
+    escrow,
+    store,
+  })
+  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
+  const state = await Chain.getChannelState(client, channelId, escrow)
+  if (state.closeRequestedAt !== 0)
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (state.deposit === 0n && (cumulativeAmount !== 0n || channel.spent !== 0n))
+    throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
+  if (cumulativeAmount < channel.spent)
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be >= ${channel.spent} (spent)`,
+    })
+  if (cumulativeAmount < state.settled)
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be >= ${state.settled} (on-chain settled)`,
+    })
+  const valid = await Voucher.verifyVoucher(
+    escrow,
+    chainId,
+    { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
+    channel.authorizedSigner,
+  )
+  if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
+  if (captureAmount > state.deposit)
+    throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
   const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
   const previousCloseRequestedAt = channel.closeRequestedAt
   let pendingCloseMarked = false
@@ -1174,47 +1002,39 @@ async function handleCloseCredential(
       onChainSettled: state.settled,
     })
     if (next.state) {
-      assertMachineCloseAmount(machineRouter, cumulativeAmount, next.captureAmount)
       captureAmount = next.captureAmount
       pendingCloseMarked = true
     }
     return next.state
   })
+  const account = parameters.account ?? getClientAccount(client)
   let txHash: Hex | undefined
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   try {
-    const transactionOptions = resolveChannelTransactionOptions(
-      channel,
-      parameters,
-      account,
-      machineRouter,
+    assertSettlementSender({
+      operation: 'close',
+      channelId,
+      operator: channel.operator,
+      payee: channel.payee,
+      sender: account?.address,
+    })
+    txHash = await Chain.closeOnChain(
+      client,
+      channel.descriptor,
+      cumulativeAmount,
+      captureAmount,
+      payload.signature,
+      escrow,
+      account
+        ? {
+            account,
+            ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+            ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+            ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+            candidateFeeTokens: [channel.token],
+          }
+        : undefined,
     )
-    if (machineRouter) {
-      if (!authorizationSignature || !refundSignature)
-        throw new VerificationFailedError({
-          reason: 'machine-token close requires router and refund authorizations',
-        })
-      txHash = await Chain.closeMachineSessionOnChain(
-        client,
-        channel.descriptor,
-        cumulativeAmount,
-        payload.signature,
-        authorizationSignature,
-        refundSignature,
-        machineRouter,
-        transactionOptions,
-      )
-    } else {
-      txHash = await Chain.closeOnChain(
-        client,
-        channel.descriptor,
-        cumulativeAmount,
-        captureAmount,
-        payload.signature,
-        escrow,
-        transactionOptions,
-      )
-    }
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
     if (pendingCloseMarked) {
@@ -1230,18 +1050,10 @@ async function handleCloseCredential(
     Chain.getChannelEvent(receipt, 'ChannelClosed', channelId),
   )
   const { refundedToPayer, settledToPayee } = closed
-  if (machineRouter) {
-    if (settledToPayee !== state.deposit || refundedToPayer !== 0n)
-      throw new VerificationFailedError({
-        reason: 'machine-token ChannelClosed amounts are invalid',
-      })
-  } else if (settledToPayee > captureAmount || settledToPayee + refundedToPayer > state.deposit) {
+  if (settledToPayee > captureAmount || settledToPayee + refundedToPayer > state.deposit)
     throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
-  }
-  const logicalSettled = machineRouter ? captureAmount : settledToPayee
   const updated = await store.updateChannel(channelId, (current) =>
     ChannelStore.finalizeClosedChannelState({
-      authorizationSignature,
       captureAmount,
       channelId,
       cumulativeAmount,
@@ -1256,8 +1068,8 @@ async function handleCloseCredential(
           txHash,
           channelId,
           trigger: 'close' as const,
-          amount: logicalSettled,
-          delta: logicalSettled - state.settled,
+          amount: settledToPayee,
+          delta: settledToPayee - state.settled,
         }),
       )
     } catch {

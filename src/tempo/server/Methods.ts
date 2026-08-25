@@ -36,20 +36,16 @@ function createSessionMethod<const parameters extends tempo.Parameters>(
 /**
  * Creates the common Tempo `charge` and `session` methods from shared parameters.
  *
- * `machineTokenEnabled` lets compatible clients fund either method with the
- * first-party machine token while the merchant continues to request its payout
- * currency and recipient normally.
+ * When configured, `relay` applies to the `charge` method. Session vouchers
+ * remain local state transitions and session relay delegation will be added
+ * with its action-specific lifecycle support.
  *
  * @example
  * ```ts
  * import { Mppx, tempo } from 'mppx/server'
  *
  * const mppx = Mppx.create({
- *   methods: tempo({
- *     currency: '0x...',
- *     machineTokenEnabled: true,
- *     recipient: '0x...',
- *   }),
+ *   methods: [tempo.common({ currency: '0x...', recipient: '0x...' })],
  * })
  * ```
  */

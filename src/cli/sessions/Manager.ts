@@ -44,20 +44,18 @@ function assertCloseChallengeScope(challenge: TempoSessionChallenge, channel: Ch
   const chainId = (challenge.request.methodDetails as { chainId?: unknown } | undefined)?.chainId
   if (chainId !== undefined && chainId !== channel.chainId)
     throw new Error('Close challenge changed the session chain.')
-  if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
-    throw new Error('Close challenge changed the session escrow.')
-  const payee = channel.paymentScope?.payee ?? channel.descriptor.payee
-  const token = channel.paymentScope?.token ?? channel.descriptor.token
   if (
     typeof challenge.request.recipient !== 'string' ||
-    challenge.request.recipient.toLowerCase() !== payee.toLowerCase()
+    challenge.request.recipient.toLowerCase() !== channel.descriptor.payee.toLowerCase()
   )
     throw new Error('Close challenge changed the session payee.')
   if (
     typeof challenge.request.currency !== 'string' ||
-    challenge.request.currency.toLowerCase() !== token.toLowerCase()
+    challenge.request.currency.toLowerCase() !== channel.descriptor.token.toLowerCase()
   )
     throw new Error('Close challenge changed the session token.')
+  if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
+    throw new Error('Close challenge changed the session escrow.')
   const snapshot = getSessionSnapshot(challenge)
   if (snapshot && snapshot.channelId.toLowerCase() !== channel.channelId.toLowerCase())
     throw new Error('Close challenge changed the session channel.')

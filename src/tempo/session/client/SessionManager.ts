@@ -11,7 +11,7 @@ import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
-import { hasRewrittenScope, isMachineChannel, type ChannelEntry } from '../client/ChannelOps.js'
+import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import { hydrateSessionSnapshot, type SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
@@ -405,10 +405,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   /** Persists a server snapshot into the channel store and returns the entry. */
-  async function storeSnapshotHeader(
-    response: Response,
-    paymentScope?: { payee: Address; token: Address } | undefined,
-  ): Promise<ChannelEntry | undefined> {
+  async function storeSnapshotHeader(response: Response): Promise<ChannelEntry | undefined> {
     const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
     if (!header) return undefined
     const snapshot = deserializeSessionSnapshot(header)
@@ -423,15 +420,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           kind: 'authorizePaymentChannel',
         },
       })) ?? defaultAccount
-    const hydrated = await hydrateSessionSnapshot({ account, client, snapshot })
-    const entry =
-      paymentScope && hasRewrittenScope({ descriptor: hydrated.entry.descriptor, paymentScope })
-        ? { ...hydrated.entry, paymentScope }
-        : hydrated.entry
+    const { entry, spent } = await hydrateSessionSnapshot({ account, client, snapshot })
     assertVoucherWithinLocalLimit(entry.cumulativeAmount)
     await Promise.resolve(store.set(entry)).catch(() => undefined)
     runtime.channel = entry
-    runtime.spent = hydrated.spent
+    runtime.spent = spent
     return entry
   }
 
@@ -472,11 +465,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           [Constants.Headers.authorization]: credential,
         },
       })
-      if (response.ok)
-        return await storeSnapshotHeader(response, {
-          payee: challenge.request.recipient as Address,
-          token: challenge.request.currency as Address,
-        })
+      if (response.ok) return await storeSnapshotHeader(response)
       return undefined
     } catch {
       return undefined
@@ -522,9 +511,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
 
     const acceptedCumulative = BigInt(snapshot.acceptedCumulative)
-    const settled = BigInt(snapshot.settled)
     const snapshotSpent = BigInt(snapshot.spent)
-    if (acceptedCumulative < 0n || settled < 0n || snapshotSpent < 0n) {
+    if (acceptedCumulative < 0n || snapshotSpent < 0n) {
       throw new Error('close snapshot amounts must not be negative')
     }
     if (snapshotSpent > acceptedCumulative) {
@@ -533,7 +521,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (acceptedCumulative > channel.cumulativeAmount) {
       throw new Error('close snapshot accepted cumulative exceeds local voucher state')
     }
-    return { acceptedCumulative, settled, spent: snapshotSpent }
+    return { acceptedCumulative, spent: snapshotSpent }
   }
 
   function applyCloseSnapshot(target: CloseTarget, challenge: TempoSessionChallenge) {
@@ -556,14 +544,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const snapshot = applySnapshot
       ? applyCloseSnapshot(target, challenge)
       : validateCloseSnapshot(target.channel, challenge)
-    const machineSession = isMachineChannel(target.channel)
-    const closeAmount = snapshot
-      ? machineSession
-        ? snapshot.spent > snapshot.settled
-          ? snapshot.spent
-          : snapshot.settled
-        : snapshot.acceptedCumulative
-      : getFallbackCloseAmount(challenge, target.channelId)
+    const closeAmount =
+      snapshot?.acceptedCumulative ?? getFallbackCloseAmount(challenge, target.channelId)
     if (closeAmount > target.channel.cumulativeAmount) {
       throw new Error('fallback close amount exceeds local voucher state')
     }
@@ -708,11 +690,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
     channelUse = use
 
+    // Cold starts resume from `channelStore` after the 402 reveals the scope.
+    const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
+
     try {
       await bootstrapSession(input, init)
       use.trackCreates = true
 
-      const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
       let effectiveInit = requestInitWithSessionHint(input, init, liveHint)
       // Stored channels may be stale, so retry once after evicting the resumed entry.
       let canRetryResumed = !previous.channel?.opened
@@ -720,11 +704,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       async function retryWithoutResumed(): Promise<boolean> {
         const resumed = use.resumed
         if (!canRetryResumed || !resumed) return false
-        // A machine-token entry holds the only local copy of its channel
-        // descriptor; evicting it would strand the deposit, so fail loudly
-        // instead of retrying without it.
-        if (resumed.opened && (isMachineChannel(resumed) || hasRewrittenScope(resumed)))
-          return false
         canRetryResumed = false
         await ignoreChannel(resumed)
         effectiveInit = requestInitWithSessionHint(input, init, undefined)

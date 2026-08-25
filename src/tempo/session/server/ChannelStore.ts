@@ -73,8 +73,6 @@ export type HighestVoucherParameters = {
   cumulativeAmount: bigint
   /** Candidate voucher signature. */
   signature: Hex
-  /** Optional router-domain authorization retained for machine-token settlement. */
-  authorizationSignature?: Hex | undefined
 }
 
 /** Highest accepted voucher amount plus signed voucher payload. */
@@ -117,8 +115,6 @@ export type OpenChannelStateParameters = {
   cumulativeAmount: bigint
   /** Voucher signature for `cumulativeAmount`. */
   signature: Hex
-  /** Optional router-domain authorization for the initial machine-token voucher. */
-  authorizationSignature?: Hex | undefined
   /** Latest on-chain channel state read after open. */
   state: Chain.ChannelState
 }
@@ -165,8 +161,6 @@ export type PendingCloseUpdate = {
 
 /** Inputs for finalizing local state after a successful close transaction. */
 export type FinalizeClosedChannelParameters = {
-  /** Router authorization paired with the close voucher on machine channels. */
-  authorizationSignature?: Hex | undefined
   /** Amount captured to payee during close. */
   captureAmount: bigint
   /** Normalized channel ID. */
@@ -352,7 +346,7 @@ export function mergeActiveOnChainState(
 
 /** Keeps the existing higher voucher, otherwise stores the supplied candidate voucher. */
 export function resolveHighestVoucher(parameters: HighestVoucherParameters): HighestVoucher {
-  const { authorizationSignature, channelId, current, cumulativeAmount, signature } = parameters
+  const { channelId, current, cumulativeAmount, signature } = parameters
   if (current?.highestVoucherAmount && current.highestVoucherAmount > cumulativeAmount) {
     return {
       highestVoucherAmount: current.highestVoucherAmount,
@@ -362,12 +356,7 @@ export function resolveHighestVoucher(parameters: HighestVoucherParameters): Hig
 
   return {
     highestVoucherAmount: cumulativeAmount,
-    highestVoucher: {
-      channelId,
-      cumulativeAmount,
-      signature,
-      ...(authorizationSignature ? { authorizationSignature } : {}),
-    },
+    highestVoucher: { channelId, cumulativeAmount, signature },
   }
 }
 
@@ -397,9 +386,8 @@ export function openChannelState(parameters: OpenChannelStateParameters): State 
   const { authorizedSigner, chainId, channelId, current, descriptor, escrow, expiringNonceHash } =
     parameters
   const { state } = parameters
-  const { authorizationSignature, cumulativeAmount, signature } = parameters
+  const { cumulativeAmount, signature } = parameters
   const highestVoucher = resolveHighestVoucher({
-    authorizationSignature,
     channelId,
     current,
     cumulativeAmount,
@@ -510,11 +498,9 @@ export function markPendingClose(parameters: MarkPendingCloseParameters): Pendin
 export function finalizeClosedChannelState(
   parameters: FinalizeClosedChannelParameters,
 ): State | null {
-  const { authorizationSignature, captureAmount, channelId, cumulativeAmount, current, signature } =
-    parameters
+  const { captureAmount, channelId, cumulativeAmount, current, signature } = parameters
   if (!current) return current
   const highestVoucher = resolveHighestVoucher({
-    authorizationSignature,
     channelId,
     current,
     cumulativeAmount,

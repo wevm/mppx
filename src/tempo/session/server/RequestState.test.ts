@@ -1,10 +1,9 @@
 import type { Address, Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test, vi } from 'vp/test'
+import { describe, expect, test } from 'vp/test'
 
 import type * as Credential from '../../../Credential.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
-import * as Voucher from '../precompile/Voucher.js'
 import type * as ChannelStore from './ChannelStore.js'
 import {
   requireSessionCredentialAction,
@@ -402,67 +401,6 @@ describe('SessionSnapshotHints', () => {
       expect(resolved).toBeUndefined()
     })
 
-    test('advertises a close snapshot only when the close voucher signature verifies', async () => {
-      const verify = vi.spyOn(Voucher, 'verifyVoucher')
-      try {
-        // A machine-rail channel: stored payee/token differ from the challenge
-        // scope, so the snapshot needs the alternate-rail matcher.
-        const machineChannel = channel({
-          payee: `0x${'99'.repeat(20)}` as Address,
-          token: '0x20c0000000000000000000000000000000000009' as Address,
-        })
-        const matchPaymentFields = vi.fn().mockResolvedValue(true)
-        const resolve = () =>
-          resolveSessionPaymentRequest({
-            credential: {
-              challenge: {},
-              payload: {
-                action: 'close',
-                channelId,
-                cumulativeAmount: '500',
-                descriptor,
-                signature: `0x${'44'.repeat(64)}`,
-              },
-            } as Credential.Credential,
-            decimals: 0,
-            getClient: async () => ({ chain: { id: 4217 } }),
-            matchSnapshotPaymentFields: matchPaymentFields,
-            request: {
-              amount: '1',
-              chainId: 4217,
-              currency: descriptor.token,
-              decimals: 0,
-              escrowContract,
-              recipient: descriptor.payee,
-              unitType: 'request',
-            },
-            store: store(machineChannel),
-          })
-
-        verify.mockReturnValue(false)
-        expect((await resolve()).sessionSnapshot).toBeUndefined()
-
-        verify.mockReturnValue(true)
-        const resolved = await resolve()
-        expect(verify).toHaveBeenCalledWith(
-          escrowContract,
-          4217,
-          { channelId, cumulativeAmount: 500n, signature: `0x${'44'.repeat(64)}` },
-          descriptor.authorizedSigner,
-        )
-        // Close credentials accept retired routes, so the recovery snapshot is
-        // matched without requiring an active route or `machineTokenEnabled`.
-        expect(matchPaymentFields).toHaveBeenCalledWith(
-          expect.objectContaining({ channelId }),
-          expect.objectContaining({ recipient: descriptor.payee }),
-          { action: 'close' },
-        )
-        expect(resolved.sessionSnapshot).toMatchObject({ channelId, spent: '300' })
-      } finally {
-        verify.mockRestore()
-      }
-    })
-
     test('uses custom resolver when no explicit channel ID is present', async () => {
       const resolved = await resolveSessionChannelId({
         capturedRequest: {
@@ -604,40 +542,6 @@ describe('SessionSnapshotHints', () => {
           item.name,
         ).resolves.toBeUndefined()
       }
-    })
-
-    test('uses alternate descriptor matchers only as optional reuse hints', async () => {
-      const logicalRecipient = '0x0000000000000000000000000000000000000005' as Address
-      const logicalCurrency = '0x0000000000000000000000000000000000000006' as Address
-      const matchPaymentFields = vi.fn(() => true)
-      const parameters = {
-        amount: 50n,
-        channelId,
-        expected: {
-          chainId: 4217,
-          currency: logicalCurrency,
-          escrowContract,
-          recipient: logicalRecipient,
-        },
-        store: store(channel()),
-      }
-
-      await expect(resolveSessionSnapshot({ ...parameters, matchPaymentFields })).resolves.toEqual(
-        expect.objectContaining({ descriptor }),
-      )
-      expect(matchPaymentFields).toHaveBeenCalledWith(
-        expect.objectContaining({ descriptor }),
-        expect.objectContaining({ currency: logicalCurrency, recipient: logicalRecipient }),
-      )
-
-      await expect(
-        resolveSessionSnapshot({
-          ...parameters,
-          matchPaymentFields: async () => {
-            throw new Error('rpc unavailable')
-          },
-        }),
-      ).resolves.toBeUndefined()
     })
 
     test('omits hints for missing, non-precompile, closing, or finalized channels', async () => {

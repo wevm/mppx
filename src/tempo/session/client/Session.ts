@@ -1,7 +1,6 @@
-import { isAddressEqual, type Account as ViemAccount, type Address, parseUnits } from 'viem'
+import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
-import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -15,32 +14,28 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
-import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import * as Methods from '../../Methods.js'
-import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import {
   deserializeSessionReceipt,
   isEventStream,
   readSessionChallengeAmount,
   requireSessionCredentialContext,
-  tip20ChannelEscrow,
 } from '../precompile/Protocol.js'
-import { createVoucherPayload, serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { createChannelStore, entryKey, type ChannelStore } from './ChannelStore.js'
+import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
+import { createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
   canSignDescriptor,
   executeCredentialPlan,
   hasSessionAction,
   planCredential,
-  requireContextAmount,
   resolveChallengeContext,
   resolveRecoverContext,
   sessionContextSchema,
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { assertWithinMaxDeposit, resolveAutomaticTopUp, resolveOpeningDeposit } from './Runtime.js'
+import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
   handleSseNeedVoucher,
@@ -114,53 +109,6 @@ function acknowledgesOpen(
   )
 }
 
-function applyMachineTokenRoute(
-  resolved: ChallengeContext,
-  route: MachineTokenSession.Route,
-): ChallengeContext {
-  const snapshotDescriptor = resolved.snapshot?.descriptor
-  const snapshotMatches =
-    snapshotDescriptor &&
-    isAddressEqual(snapshotDescriptor.payee, route.payee) &&
-    isAddressEqual(snapshotDescriptor.operator, route.operator) &&
-    isAddressEqual(snapshotDescriptor.token, route.token)
-  return {
-    ...resolved,
-    operator: route.operator,
-    payee: route.payee,
-    paymentScope: { payee: resolved.payee, token: resolved.token },
-    snapshot: snapshotMatches ? resolved.snapshot : undefined,
-    token: route.token,
-  }
-}
-
-async function resolveMachineContext(
-  resolved: ChallengeContext,
-  context: CredentialContext | undefined,
-): Promise<ChallengeContext | undefined> {
-  const descriptor = context?.descriptor ?? resolved.snapshot?.descriptor
-  if (!descriptor) return undefined
-  if (!MachineTokenSession.matchDeployment({ chainId: resolved.chainId, descriptor }))
-    return undefined
-  const closing = context?.action === 'close'
-  if (
-    (!closing && !MachineTokenSession.isEnabledChallenge(resolved.challenge)) ||
-    !isAddressEqual(resolved.escrow, tip20ChannelEscrow)
-  )
-    return undefined
-
-  const route = await MachineTokenSession.matchRoute(resolved.client, {
-    active: !closing,
-    chainId: resolved.chainId,
-    descriptor,
-    merchant: resolved.payee,
-    targetToken: resolved.token,
-  })
-  if (!route)
-    throw new Error('Machine-token channel is not bound to this merchant session challenge.')
-  return applyMachineTokenRoute(resolved, route)
-}
-
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
  *
@@ -193,13 +141,7 @@ export function session(parameters: session.Parameters = {}) {
   const topUpAmount =
     topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined
   const store = channelStore ?? createChannelStore()
-
-  const commitEntry = async (entry: ChannelEntry | undefined) => {
-    if (!entry) return
-    if (entry.opened) await store.set(entry)
-    else await store.delete(entryKey(entry))
-    onChannelUpdate?.(entry)
-  }
+  const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
   const resolveCredentialAccount = async (
     resolved: ChallengeContext,
@@ -223,174 +165,77 @@ export function session(parameters: session.Parameters = {}) {
     )
   }
 
-  const resolveContext = (challenge: Challenge.Challenge) =>
-    resolveChallengeContext({
-      allowCustomEscrow,
-      challenge,
-      escrowOverride,
-      getClient,
-    })
-
-  /** Selects one rail for this channel lifecycle before any credential is signed. */
-  const resolveRail = async (direct: ChallengeContext, context: CredentialContext | undefined) => {
-    let account: ViemAccount | undefined
-    const descriptor = context?.descriptor ?? direct.snapshot?.descriptor
-    if (descriptor || hasSessionAction(context)) {
-      const machine = descriptor ? await resolveMachineContext(direct, context) : undefined
-      const resolved = machine ?? direct
-      return {
-        account,
-        entry: await store.get(resolved.key),
-        machine: machine !== undefined,
-        resolved,
-      }
-    }
-
-    const directEntry = await store.get(direct.key)
-    if (directEntry?.opened) {
-      if (
-        !MachineTokenSession.matchDeployment({
-          chainId: direct.chainId,
-          descriptor: directEntry.descriptor,
-        })
-      )
-        return { account, entry: directEntry, machine: false, resolved: direct }
-      const machine = await resolveMachineContext(direct, { descriptor: directEntry.descriptor })
-      if (!machine)
-        throw new Error('Machine-token channel is not bound to this merchant session challenge.')
-      return { account, entry: directEntry, machine: true, resolved: machine }
-    }
-    if (
-      !MachineTokenSession.isEnabledChallenge(direct.challenge) ||
-      !isAddressEqual(direct.escrow, tip20ChannelEscrow)
-    )
-      return { account, entry: undefined, machine: false, resolved: direct }
-
-    const route = await MachineTokenSession.resolveRoute(direct.client, {
-      chainId: direct.chainId,
-      merchant: direct.payee,
-      targetToken: direct.token,
-    }).catch(() => undefined)
-    if (!route) return { account, entry: undefined, machine: false, resolved: direct }
-
-    const machine = applyMachineTokenRoute(direct, route)
-    account = await resolveCredentialAccount(machine, context, undefined)
-    const openingDeposit = resolveOpeningDeposit({
-      contextDepositRaw: context?.depositRaw,
+  const resolveCredentialPlan = async (
+    resolved: ChallengeContext,
+    context: CredentialContext | undefined,
+    entry: ChannelEntry | undefined,
+  ) =>
+    planCredential({
+      account: await resolveCredentialAccount(resolved, context, entry),
+      entry,
+      context,
+      decimals,
       maxDeposit,
-      requestAmount: direct.amount,
-      suggestedDepositRaw: direct.suggestedDepositRaw,
+      resolved,
     })
-    const funded = await MachineTokenSession.hasSufficientBalance(machine.client, {
-      account: account.address,
-      amount: openingDeposit,
-      token: machine.token,
-    })
-    return funded
-      ? { account, entry: undefined, machine: true, resolved: machine }
-      : { account, entry: undefined, machine: false, resolved: direct }
-  }
 
   const method = Method.toClient(Methods.session, {
     canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
     context: sessionContextSchema,
     async createCredential(parameters) {
       const { challenge, context } = parameters
+      const resolved = await resolveChallengeContext({
+        allowCustomEscrow,
+        challenge,
+        escrowOverride,
+        getClient,
+      })
       const attempt = MethodResponse.getAttempt(parameters)
       let release = () => {}
       try {
-        const direct = await resolveContext(challenge)
-        if (!hasSessionAction(context) && context?.descriptor === undefined) {
-          release = await lockChannel(store, direct.key)
-          if (attempt && (await store.get(direct.key))?.opened) await attempt.prepare()
-        }
-        const { account, entry, machine, resolved } = await resolveRail(direct, context)
-        const credentialAccount =
-          account ?? (await resolveCredentialAccount(resolved, context, entry))
-        const plan = planCredential({
-          account: credentialAccount,
-          entry,
-          context,
-          decimals,
-          maxDeposit,
-          resolved,
-        })
-        if (machine && plan.type === 'manual' && plan.context.action === 'topUp') {
-          const additionalDeposit = requireContextAmount(
-            plan.context,
-            plan.decimals,
-            'additionalDeposit',
-            'topUp',
-          )
-          if (
-            !(await MachineTokenSession.hasSufficientBalance(plan.resolved.client, {
-              account: plan.account.address,
-              amount: additionalDeposit,
-              token: plan.resolved.token,
-            }))
-          )
-            throw new Error('Insufficient machine-token balance for session top-up.')
-        }
-        const feeToken = MachineTokenSession.resolveFeeToken({
-          chainId: resolved.chainId,
-          override: resolved.feeToken,
-          paymentToken: resolved.token,
-        })
-        const result = await executeCredentialPlan(
-          plan,
-          AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
-          feeToken,
-        )
-        let { payload } = result
-        if (machine && payload.action !== 'topUp') {
-          if (payload.action === 'close') {
-            const state = await Chain.getChannelState(
-              plan.resolved.client,
-              payload.channelId,
-              plan.resolved.escrow,
-            )
-            if (state.deposit === 0n)
-              throw new Error('Cannot authorize a machine-token refund for an empty channel.')
-            // The refund authorization covers the full on-chain deposit, while
-            // the close voucher remains the exact amount the merchant captures.
-            const depositSignature =
-              BigInt(payload.cumulativeAmount) === state.deposit
-                ? payload.signature
-                : (
-                    await createVoucherPayload(
-                      plan.resolved.client,
-                      plan.account,
-                      payload.descriptor,
-                      state.deposit,
-                      plan.resolved.chainId,
-                      plan.resolved.escrow,
-                    )
-                  ).signature
-            payload = { ...payload, refundSignature: depositSignature }
+        let entry = await store.get(resolved.key)
+        let plan = await resolveCredentialPlan(resolved, context, entry)
+        if (attempt && plan.type === 'open') {
+          release = await lockChannel(store, resolved.key)
+          const nextEntry = await store.get(resolved.key)
+          if (nextEntry?.channelId !== entry?.channelId) {
+            entry = nextEntry
+            if (entry?.opened) {
+              await attempt.prepare()
+              entry = await store.get(resolved.key)
+            }
+            plan = await resolveCredentialPlan(resolved, context, entry)
           }
-          const authorizationSignature = await MachineTokenSession.signAuthorization(
-            plan.resolved.client,
-            plan.account,
-            {
-              authorization: {
-                channelId: payload.channelId,
-                cumulativeAmount: BigInt(payload.cumulativeAmount),
-              },
-              chainId: plan.resolved.chainId,
-              router: plan.resolved.operator!,
-            },
-          )
-          payload = { ...payload, authorizationSignature }
         }
-        if (!(attempt && plan.type === 'open')) await commitEntry(result.entry)
+        let pendingOpen: ChannelEntry | undefined
+        // Defer opens only when low-level Fetch owns the response lifecycle.
+        // SessionManager unregisters this hook and keeps its existing transaction boundary.
+        const credentialSink =
+          attempt && plan.type === 'open'
+            ? {
+                store: {
+                  get: (key: string) => store.get(key),
+                  async set(next: ChannelEntry) {
+                    pendingOpen = next
+                  },
+                  delete: (key: string) => store.delete(key),
+                },
+                notifyUpdate() {},
+              }
+            : sink
+        const payload = await executeCredentialPlan(
+          plan,
+          credentialSink,
+          AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
+        )
         const credential = await serializeCredential(
           challenge,
           payload,
           resolved.chainId,
           plan.account,
         )
-        if (attempt && plan.type === 'open' && result.entry) {
-          const opened = result.entry
+        if (attempt && pendingOpen) {
+          const opened = pendingOpen
           attempt.settle = async (outcome) => {
             const accepted =
               outcome.status === 'accepted' || acknowledgesOpen(outcome, challenge, opened)
@@ -402,7 +247,8 @@ export function session(parameters: session.Parameters = {}) {
                   !current?.opened ||
                   current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
                 ) {
-                  await commitEntry(opened)
+                  await store.set(opened)
+                  sink.notifyUpdate(opened)
                 }
               }
               return true
@@ -458,26 +304,22 @@ export function session(parameters: session.Parameters = {}) {
       })
     const nextDeposit = knownDeposit + additionalDeposit
     if (nextDeposit === channel.deposit) return
-    const current = await store.get(entryKey(channel))
-    const latest =
-      current?.channelId.toLowerCase() === channel.channelId.toLowerCase() ? current : channel
-    const updated = {
-      ...latest,
-      deposit: latest.deposit > nextDeposit ? latest.deposit : nextDeposit,
-    }
+    const updated = { ...channel, deposit: nextDeposit }
     await store.set(updated)
-    onChannelUpdate?.(updated)
+    sink.notifyUpdate(updated)
   }
 
   MethodChallenge.register(method, async ({ challenge, context, fetch, input }) => {
     if (!isTip1034SessionChallenge(challenge)) return
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
-    const direct = await resolveContext(challenge)
-    const { entry: channel, resolved } = await resolveRail(direct, sessionContext).catch(() => ({
-      entry: undefined,
-      resolved: direct,
-    }))
+    const resolved = await resolveChallengeContext({
+      allowCustomEscrow,
+      challenge,
+      escrowOverride,
+      getClient,
+    })
+    const channel = await store.get(resolved.key)
     if (!channel?.opened) return
     const snapshot =
       resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()
@@ -505,10 +347,10 @@ export function session(parameters: session.Parameters = {}) {
     method,
     async ({ challenge, credential, fetch, headers, input, refetch, response, signal }) => {
       if (!isTip1034SessionChallenge(challenge)) return response
-      const credentialContext = requireSessionCredentialContext(
-        Credential.deserialize(credential).payload,
-      )
       if (!isEventStream(response)) {
+        const credentialContext = requireSessionCredentialContext(
+          Credential.deserialize(credential).payload,
+        )
         if (
           credentialContext.action === 'open' &&
           headers.get('accept')?.toLowerCase().includes('text/event-stream')
@@ -517,10 +359,15 @@ export function session(parameters: session.Parameters = {}) {
         return response
       }
 
-      const resolvedContext = await resolveContext(challenge)
-        .then(async (direct) => (await resolveMachineContext(direct, credentialContext)) ?? direct)
-        .catch(() => undefined)
-      const channel = resolvedContext ? await store.get(resolvedContext.key) : undefined
+      const channelKey = (
+        await resolveChallengeContext({
+          allowCustomEscrow,
+          challenge,
+          escrowOverride,
+          getClient,
+        })
+      ).key
+      let channel = await store.get(channelKey)
       const driver = {
         assertVoucherWithinLocalLimit: (cumulativeAmount) =>
           assertWithinMaxDeposit(cumulativeAmount, maxDeposit),

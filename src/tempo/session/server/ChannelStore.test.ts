@@ -414,9 +414,7 @@ describe('ChannelStore state updates', () => {
   })
 
   test('finalizeClosedChannelState closes channel and records newer close voucher', () => {
-    const authorizationSignature = `0x${'aa'.repeat(65)}` as Hex
     const next = ChannelStore.finalizeClosedChannelState({
-      authorizationSignature,
       captureAmount: 60n,
       channelId: stateUpdateChannelId,
       cumulativeAmount: 70n,
@@ -431,10 +429,7 @@ describe('ChannelStore state updates', () => {
       settledOnChain: 60n,
       highestVoucherAmount: 70n,
     })
-    expect(next?.highestVoucher).toEqual({
-      ...stateUpdateVoucher(70n),
-      authorizationSignature,
-    })
+    expect(next?.highestVoucher).toEqual(stateUpdateVoucher(70n))
   })
 })
 

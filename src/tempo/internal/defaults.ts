@@ -20,18 +20,6 @@ export const currency = {
   [chainId.testnet]: tokens.pathUsd,
 } as const satisfies Record<ChainId, string>
 
-/** Unified first-party machine-token deployments used by charges and sessions. */
-export const machineToken = {
-  [chainId.mainnet]: {
-    swap: '0xd588ED9Ae08643A450157Adaf61c3C0C1BBd0dbb',
-    token: '0x20c0000000000000000000006637932dE5413804',
-  },
-  [chainId.testnet]: {
-    swap: '0xd588ED9Ae08643A450157Adaf61c3C0C1BBd0dbb',
-    token: '0x20c0000000000000000000006637932dE5413804',
-  },
-} as const satisfies Partial<Record<ChainId, { swap: `0x${string}`; token: `0x${string}` }>>
-
 /**
  * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).
  *

@@ -1,11 +1,5 @@
 import type { Account, Address, Client, Hex } from 'viem'
-import {
-  decodeFunctionData,
-  encodeFunctionData,
-  isAddressEqual,
-  parseAbi,
-  parseEventLogs,
-} from 'viem'
+import { decodeFunctionData, encodeFunctionData, isAddressEqual, parseEventLogs } from 'viem'
 import {
   call,
   prepareTransactionRequest,
@@ -26,11 +20,6 @@ import * as ChannelUtils from './Channel.js'
 import type { ChannelDescriptor } from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
 import { tip20ChannelEscrow } from './Protocol.js'
-
-const machineSessionAbi = parseAbi([
-  'function settleSession((address payer,address payee,address operator,address token,bytes32 salt,address authorizedSigner,bytes32 expiringNonceHash) descriptor,uint96 cumulativeAmount,bytes signature,bytes authorizationSignature)',
-  'function closeSession((address payer,address payee,address operator,address token,bytes32 salt,address authorizedSigner,bytes32 expiringNonceHash) descriptor,uint96 cumulativeAmount,bytes signature,bytes authorizationSignature,bytes refundSignature)',
-])
 
 /** Minimal on-chain state read back after precompile transaction receipts. */
 export type ReceiptValidationChannelState = {
@@ -650,48 +639,6 @@ export async function settleOnChain(
   )
 }
 
-function encodeMachineSessionCall(
-  descriptor: ChannelDescriptor,
-  cumulativeAmount: bigint,
-  signature: Hex,
-  authorizationSignature: Hex,
-  refundSignature?: Hex | undefined,
-): Hex {
-  assertUint96(cumulativeAmount)
-  const args = [
-    descriptorTuple(descriptor),
-    cumulativeAmount,
-    signature,
-    authorizationSignature,
-  ] as const
-  return refundSignature === undefined
-    ? encodeFunctionData({ abi: machineSessionAbi, functionName: 'settleSession', args })
-    : encodeFunctionData({
-        abi: machineSessionAbi,
-        functionName: 'closeSession',
-        args: [...args, refundSignature],
-      })
-}
-
-/** Submit a settle transaction through the first-party machine-token session router. */
-export async function settleMachineSessionOnChain(
-  client: Client,
-  descriptor: ChannelDescriptor,
-  cumulativeAmount: bigint,
-  signature: Hex,
-  authorizationSignature: Hex,
-  router: Address,
-  options?: ChannelTransactionOptions,
-): Promise<Hex> {
-  return sendPrecompileTransaction(
-    client,
-    router,
-    encodeMachineSessionCall(descriptor, cumulativeAmount, signature, authorizationSignature),
-    'settle machine-token session',
-    options,
-  )
-}
-
 /**
  * Submit a top-up transaction on-chain.
  */
@@ -771,32 +718,6 @@ export async function closeOnChain(
     escrow,
     encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
     'close',
-    options,
-  )
-}
-
-/** Submit a cooperative close through the first-party machine-token session router. */
-export async function closeMachineSessionOnChain(
-  client: Client,
-  descriptor: ChannelDescriptor,
-  cumulativeAmount: bigint,
-  signature: Hex,
-  authorizationSignature: Hex,
-  refundSignature: Hex,
-  router: Address,
-  options?: ChannelTransactionOptions,
-): Promise<Hex> {
-  return sendPrecompileTransaction(
-    client,
-    router,
-    encodeMachineSessionCall(
-      descriptor,
-      cumulativeAmount,
-      signature,
-      authorizationSignature,
-      refundSignature,
-    ),
-    'close machine-token session',
     options,
   )
 }
@@ -970,8 +891,6 @@ export type BroadcastOpenTransactionResult = {
 
 /** Inputs for broadcasting and verifying a client-signed TIP-1034 open transaction. */
 export type BroadcastOpenTransactionParameters = {
-  /** Fee tokens allowed when the server completes a sponsored transaction. Defaults to the channel currency. */
-  allowedFeeTokens?: readonly Address[] | undefined
   /** Hook invoked after calldata validation but before broadcasting. */
   beforeBroadcast?:
     | ((result: Omit<BroadcastOpenTransactionResult, 'txHash' | 'state'>) => Promise<void> | void)
@@ -1057,7 +976,7 @@ export function validateOpenCredentialTransaction(
   })
   if (parameters.feePayer) assertSenderSigned(transaction)
   validateCredentialSponsorship({
-    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
+    allowedFeeTokens: [parameters.expectedCurrency],
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     details: {
@@ -1098,7 +1017,7 @@ export async function broadcastOpenTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
-    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
+    allowedFeeTokens: [parameters.expectedCurrency],
     details: {
       channelId: parameters.expectedChannelId,
       currency: parameters.expectedCurrency,
@@ -1151,8 +1070,6 @@ export type BroadcastTopUpTransactionResult = {
 export type BroadcastTopUpTransactionParameters = {
   /** Additional deposit amount expected in the top-up calldata. */
   additionalDeposit: bigint
-  /** Fee tokens allowed when the server completes a sponsored transaction. Defaults to the channel currency. */
-  allowedFeeTokens?: readonly Address[] | undefined
   /** Challenge expiration propagated into fee-payer policy checks. */
   challengeExpires?: string | undefined
   /** Chain ID used for fee-payer transaction signing. */
@@ -1212,7 +1129,7 @@ export function validateTopUpCredentialTransaction(
   })
   if (parameters.feePayer) assertSenderSigned(transaction)
   validateCredentialSponsorship({
-    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
+    allowedFeeTokens: [parameters.expectedCurrency],
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     details: {
@@ -1236,7 +1153,7 @@ export async function broadcastTopUpTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
-    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
+    allowedFeeTokens: [parameters.expectedCurrency],
     details: {
       additionalDeposit: parameters.additionalDeposit.toString(),
       channelId: parameters.expectedChannelId,

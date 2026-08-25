@@ -12,7 +12,7 @@ import {
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Abis, Addresses, Chain as TempoChain, Transaction } from 'viem/tempo'
+import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { VerificationFailedError } from '../../../Errors.js'
@@ -57,7 +57,7 @@ function createMockClient(
 ) {
   return createClient({
     account: feePayer,
-    chain: TempoChain.testnet,
+    chain: { id: chainId } as never,
     transport: custom({
       async request(args) {
         parameters.rpcMethods?.push(args.method)
@@ -168,14 +168,13 @@ async function createSerializedTransaction(parameters: {
     data?: `0x${string}` | undefined
     value?: bigint | undefined
   }[]
-  feeToken?: Address | false | undefined
   gas?: bigint | undefined
   signed?: boolean | undefined
 }) {
   return (await Transaction.serialize({
     chainId,
     calls: parameters.calls,
-    ...(parameters.feeToken === false ? {} : { feeToken: parameters.feeToken ?? descriptor.token }),
+    feeToken: descriptor.token,
     nonce: 0,
     ...(parameters.gas !== undefined ? { gas: parameters.gas } : {}),
     ...(parameters.signed
@@ -223,7 +222,6 @@ function autoSwapCalls(amountOut: bigint = deposit) {
 async function createOpenTransaction(
   parameters: {
     authorizedSigner?: `0x${string}` | undefined
-    feeToken?: Address | false | undefined
     gas?: bigint | undefined
     operator?: `0x${string}` | undefined
     payee?: `0x${string}` | undefined
@@ -253,7 +251,6 @@ async function createOpenTransaction(
   })
   return createSerializedTransaction({
     calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
-    feeToken: parameters.feeToken,
     gas: parameters.gas,
     signed: parameters.signed,
   })
@@ -373,33 +370,13 @@ describe('precompile server transactions', () => {
       feePayer: true,
       feeToken: sourceToken,
     })
-    await Chain.closeMachineSessionOnChain(
-      client,
-      descriptor,
-      1n,
-      `0x${'11'.repeat(65)}`,
-      `0x${'22'.repeat(65)}`,
-      `0x${'33'.repeat(65)}`,
-      '0x7777777777777777777777777777777777777777',
-      { account: sender, feePayer: true, feeToken: sourceToken },
-    )
-
-    expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
-    expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([
-      sourceToken,
-      sourceToken,
-      sourceToken,
-    ])
-    expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
-    expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([
-      sourceToken,
-      sourceToken,
-      sourceToken,
-    ])
-    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(3)
+    expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
+    expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
+    expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
+    expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
+    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
     expect(rpcMethods).not.toContain('eth_sendTransaction')
     expect(rpcMethods).not.toContain('eth_call')
-    expect((preparedRequests[2]!.data as Hex).slice(0, 10)).toBe('0x6563b635')
   })
 
   test('does not add a fee-payer signature when the sender and fee payer are the same account', async () => {
@@ -850,12 +827,7 @@ describe('precompile broadcastOpenTransaction', () => {
 
   test('fee-payer simulates open before raw broadcast', async () => {
     const rpcMethods: string[] = []
-    let broadcast: Hex | undefined
-    const serializedTransaction = await createOpenTransaction({
-      feeToken: false,
-      gas: 100_000n,
-      signed: true,
-    })
+    const serializedTransaction = await createOpenTransaction({ gas: 100_000n, signed: true })
     const transaction = Transaction.deserialize(
       serializedTransaction as Transaction.TransactionSerializedTempo,
     )
@@ -873,13 +845,9 @@ describe('precompile broadcastOpenTransaction', () => {
     const state = { settled: 0n, deposit, closeRequestedAt: 0 }
 
     await Chain.broadcastOpenTransaction({
-      allowedFeeTokens: [sourceToken],
       chainId,
       client: createMockClient({
         channel: { descriptor: expectedDescriptor, state },
-        onRequest(method, params) {
-          if (method === 'eth_sendRawTransactionSync') broadcast = (params as readonly [Hex])[0]
-        },
         receipt: receipt([openedLog({ channelId, expiringNonceHash })]),
         rpcMethods,
       }),
@@ -891,7 +859,7 @@ describe('precompile broadcastOpenTransaction', () => {
       expectedOperator: descriptor.operator,
       expectedPayee: descriptor.payee,
       expectedPayer: payer,
-      feePayer,
+      feePayer: mockFeePayer,
       serializedTransaction,
     })
 
@@ -903,9 +871,6 @@ describe('precompile broadcastOpenTransaction', () => {
     expect(
       rpcMethods.slice(0, broadcastIndex).filter((method) => method === 'eth_call'),
     ).toHaveLength(2)
-    expect(
-      Transaction.deserialize(broadcast as Transaction.TransactionSerializedTempo).feeToken,
-    ).toBe(sourceToken)
   })
 
   test('hosted fee-payer relays a sender-signed open without local co-signing', async () => {

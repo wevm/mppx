@@ -6,11 +6,8 @@ import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   createClient,
   custom,
-  encodeAbiParameters,
-  encodeEventTopics,
   encodeFunctionData,
   keccak256,
-  maxUint256,
   parseSignature,
   parseUnits,
 } from 'viem'
@@ -31,7 +28,6 @@ import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/v
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
-import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 
 const realm = 'api.example.com'
@@ -78,88 +74,6 @@ function toRawRecoveryId(serializedTransaction: Hex.Hex) {
 
 function tokenTransferCall(parameters: viem_token.transfer.Args) {
   return Actions.token.transfer.call(client, parameters)
-}
-
-async function fillHostedFeePayer(transaction: any, chainId: number) {
-  const quantity = (value: unknown) =>
-    value === undefined ? undefined : BigInt(value as string | number | bigint | boolean)
-  const envelope = TxEnvelopeTempo.from({
-    accessList: transaction.accessList,
-    calls: transaction.calls.map(({ value, ...call }: any) => ({
-      ...call,
-      ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
-    })),
-    chainId,
-    feeToken: defaults.tokens.pathUsd,
-    from: transaction.from,
-    ...(quantity(transaction.gas) !== undefined ? { gas: quantity(transaction.gas) } : {}),
-    ...(quantity(transaction.maxFeePerGas) !== undefined
-      ? { maxFeePerGas: quantity(transaction.maxFeePerGas) }
-      : {}),
-    ...(quantity(transaction.maxPriorityFeePerGas) !== undefined
-      ? { maxPriorityFeePerGas: quantity(transaction.maxPriorityFeePerGas) }
-      : {}),
-    ...(quantity(transaction.nonce) !== undefined ? { nonce: quantity(transaction.nonce) } : {}),
-    ...(quantity(transaction.nonceKey) !== undefined
-      ? { nonceKey: quantity(transaction.nonceKey) }
-      : {}),
-    type: 'tempo',
-    ...(transaction.validAfter ? { validAfter: Number(BigInt(transaction.validAfter)) } : {}),
-    ...(transaction.validBefore ? { validBefore: Number(BigInt(transaction.validBefore)) } : {}),
-  })
-  const hash = TxEnvelopeTempo.getFeePayerSignPayload(envelope, { sender: transaction.from })
-  const { r, s, yParity } = parseSignature(await accounts[0].sign!({ hash }))
-  return {
-    feePayerSignature: { r, s, yParity },
-    feeToken: defaults.tokens.pathUsd,
-  }
-}
-
-function machineTokenReceipt(parameters: {
-  amount: bigint
-  from: Hex.Hex
-  hash: Hex.Hex
-  memo: Hex.Hex
-  recipient: Hex.Hex
-}) {
-  const settlementSender = defaults.machineToken[defaults.chainId.testnet].swap
-  const blockHash = `0x${'ef'.repeat(32)}` as const
-  return {
-    blockHash,
-    blockNumber: '0x1',
-    contractAddress: null,
-    cumulativeGasUsed: '0x1',
-    effectiveGasPrice: '0x1',
-    from: parameters.from,
-    gasUsed: '0x1',
-    logs: [
-      {
-        address: asset,
-        blockHash,
-        blockNumber: '0x1',
-        data: encodeAbiParameters([{ type: 'uint256' }], [parameters.amount]),
-        logIndex: '0x0',
-        removed: false,
-        topics: encodeEventTopics({
-          abi: Abis.tip20,
-          args: {
-            from: settlementSender,
-            memo: parameters.memo,
-            to: parameters.recipient,
-          },
-          eventName: 'TransferWithMemo',
-        }),
-        transactionHash: parameters.hash,
-        transactionIndex: '0x0',
-      },
-    ],
-    logsBloom: `0x${'00'.repeat(256)}`,
-    status: '0x1',
-    to: settlementSender,
-    transactionHash: parameters.hash,
-    transactionIndex: '0x0',
-    type: '0x76',
-  }
 }
 
 type ProofAccessKeyContext = {
@@ -1200,180 +1114,6 @@ describe('tempo', () => {
         }
       },
     )
-
-    test('behavior: accepts a pushed machine-token settlement', async () => {
-      const hash = `0x${'12'.repeat(32)}` as Hex.Hex
-      const memo = `0x${'ab'.repeat(32)}` as Hex.Hex
-      let challenge: Challenge.Challenge | undefined
-      const machineTokenClient = createClient({
-        chain: { ...chain, id: defaults.chainId.testnet },
-        transport: custom({
-          async request({ method }) {
-            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
-            if (method === 'eth_getTransactionReceipt' && challenge)
-              return machineTokenReceipt({
-                amount: BigInt(String(challenge.request.amount)),
-                from: accounts[1].address,
-                hash,
-                memo,
-                recipient: accounts[0].address,
-              })
-            throw new Error(`Unexpected machine-token test RPC method: ${method}`)
-          },
-        }),
-      })
-      const [method] = tempo_server({
-        machineTokenEnabled: true,
-        account: accounts[0],
-        currency: asset,
-        getClient: () => machineTokenClient,
-        memo,
-        supportedModes: ['push'],
-        testnet: true,
-      })
-      const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
-      const relayServer = Mppx_server.create({
-        methods: [tempo_server.charge({ getClient: () => machineTokenClient })],
-        realm,
-        secretKey,
-      })
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      expect(
-        (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
-      ).toBe(true)
-      const credential = Credential.from({
-        challenge,
-        payload: { hash, type: 'hash' as const },
-        source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
-      })
-      const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
-      expect(receipt.reference).toBe(hash)
-
-      httpServer.close()
-    })
-
-    test('behavior: broadcasts a hosted fee-sponsored machine-token settlement', async () => {
-      const memo = `0x${'ab'.repeat(32)}` as Hex.Hex
-      let challenge: Challenge.Challenge | undefined
-      const feePayerMethods: string[] = []
-      const feePayerServer = await Http.createServer(async (req, res) => {
-        let body = ''
-        for await (const chunk of req) body += chunk
-        const request = JSON.parse(body)
-        feePayerMethods.push(request.method)
-        const result = await (async () => {
-          if (request.method === 'eth_fillTransaction')
-            return {
-              tx: await fillHostedFeePayer(request.params[0], defaults.chainId.testnet),
-            }
-          if (request.method === 'eth_sendRawTransactionSync' && challenge) {
-            const hash = keccak256(request.params[0] as Hex.Hex)
-            return machineTokenReceipt({
-              amount: BigInt(String(challenge.request.amount)),
-              from: accounts[1].address,
-              hash,
-              memo,
-              recipient: accounts[0].address,
-            })
-          }
-          throw new Error(`Unexpected hosted fee-payer method: ${request.method}`)
-        })()
-        res.setHeader('content-type', 'application/json')
-        res.end(JSON.stringify({ id: request.id, jsonrpc: '2.0', result }))
-      })
-      const machineTokenClient = createClient({
-        account: accounts[1],
-        chain: { ...chain, id: defaults.chainId.testnet },
-        transport: custom({
-          async request({ method }) {
-            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
-            if (method === 'eth_call') return '0x'
-            throw new Error(`Unexpected machine-token test RPC method: ${method}`)
-          },
-        }),
-      })
-      const method = tempo_server.charge({
-        machineTokenEnabled: true,
-        account: accounts[0],
-        currency: asset,
-        feePayer: feePayerServer.url,
-        getClient: () => machineTokenClient,
-        memo,
-        supportedModes: ['pull'],
-        testnet: true,
-      })
-      const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
-      const relayServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            feePayer: feePayerServer.url,
-            getClient: () => machineTokenClient,
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      challenge = Challenge.fromResponse(response, { methods: [tempo_client.charge()] })
-      expect(challenge.request.methodDetails).toMatchObject({
-        feePayer: true,
-        machineTokenEnabled: true,
-        supportedModes: ['pull'],
-      })
-      const calls = MachineTokenCharge.getRoute({
-        chainId: defaults.chainId.testnet,
-        currency: asset,
-        transfers: [
-          {
-            amount: BigInt(String(challenge.request.amount)),
-            memo,
-            recipient: accounts[0].address,
-          },
-        ],
-      })!.calls
-      const signature = await signTransaction(machineTokenClient, {
-        account: accounts[1],
-        calls,
-        feePayer: true,
-        gas: 100_000n,
-        maxFeePerGas: 1_000_000_000n,
-        maxPriorityFeePerGas: 1_000_000_000n,
-        nonce: 0,
-        nonceKey: maxUint256,
-        validBefore: Math.floor(Date.now() / 1_000) + 25,
-      } as never)
-      const credential = Credential.from({
-        challenge,
-        payload: { signature, type: 'transaction' as const },
-        source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
-      })
-      const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
-
-      expect(receipt.status).toBe('success')
-      expect(feePayerMethods).toEqual(['eth_fillTransaction', 'eth_sendRawTransactionSync'])
-
-      httpServer.close()
-      feePayerServer.close()
-    })
 
     test('behavior: rejects pull then push replay of the same transaction hash', async () => {
       const dedupServer = Mppx_server.create({
@@ -2687,13 +2427,53 @@ describe('tempo', () => {
 
         sequence.push('complete')
 
+        const transaction = request.params[0]
+        const quantity = (value: unknown) =>
+          value === undefined ? undefined : BigInt(value as string | number | bigint | boolean)
+        const envelope = TxEnvelopeTempo.from({
+          accessList: transaction.accessList,
+          calls: transaction.calls.map(({ value, ...call }: any) => ({
+            ...call,
+            ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
+          })),
+          chainId: chain.id,
+          feeToken: defaults.tokens.pathUsd,
+          from: transaction.from,
+          ...(quantity(transaction.gas) !== undefined ? { gas: quantity(transaction.gas) } : {}),
+          ...(quantity(transaction.maxFeePerGas) !== undefined
+            ? { maxFeePerGas: quantity(transaction.maxFeePerGas) }
+            : {}),
+          ...(quantity(transaction.maxPriorityFeePerGas) !== undefined
+            ? { maxPriorityFeePerGas: quantity(transaction.maxPriorityFeePerGas) }
+            : {}),
+          ...(quantity(transaction.nonce) !== undefined
+            ? { nonce: quantity(transaction.nonce) }
+            : {}),
+          ...(quantity(transaction.nonceKey) !== undefined
+            ? { nonceKey: quantity(transaction.nonceKey) }
+            : {}),
+          type: 'tempo',
+          ...(transaction.validAfter ? { validAfter: Number(BigInt(transaction.validAfter)) } : {}),
+          ...(transaction.validBefore
+            ? { validBefore: Number(BigInt(transaction.validBefore)) }
+            : {}),
+        })
+        const hash = TxEnvelopeTempo.getFeePayerSignPayload(envelope, {
+          sender: transaction.from,
+        })
+        const { r, s, yParity } = parseSignature(await accounts[0].sign!({ hash }))
+        const feePayerSignature = { r, s, yParity }
+
         res.setHeader('content-type', 'application/json')
         res.end(
           JSON.stringify({
             id: request.id,
             jsonrpc: '2.0',
             result: {
-              tx: await fillHostedFeePayer(request.params[0], chain.id),
+              tx: {
+                feePayerSignature,
+                feeToken: defaults.tokens.pathUsd,
+              },
             },
           }),
         )
