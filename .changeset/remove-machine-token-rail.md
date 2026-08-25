@@ -2,4 +2,4 @@
 'mppx': minor
 ---
 
-Removed machineUSD charge and session flows and made `machineTokenEnabled: true` a TypeScript compile error for servers.
+Removed machineUSD charge and session flows, requiring servers that advertise machineUSD to remove that configuration before upgrading.
