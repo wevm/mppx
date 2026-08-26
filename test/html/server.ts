@@ -29,7 +29,9 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
 
   const createTokenUrl = '/stripe/create-spt'
   const feePayerPolicy = {
-    maxFeePerGas: 200_000_000_000n,
+    // Moderato fee estimates can spike above 600 gwei. Keep this live-network
+    // test focused on the HTML payment flow while maxTotalFee bounds exposure.
+    maxFeePerGas: 1_000_000_000_000n,
     maxPriorityFeePerGas: 200_000_000_000n,
     maxTotalFee: 500_000_000_000_000_000n,
   }
