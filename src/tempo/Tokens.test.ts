@@ -3,8 +3,8 @@ import { describe, expect, test } from 'vp/test'
 import { mach } from './Tokens.js'
 
 describe('mach', () => {
-  test('defines the Moderato MACH currency', () => {
-    expect(mach(42431)).toEqual({
+  test.each([4217, 42431] as const)('defines the MACH currency on chain %s', (chainId) => {
+    expect(mach(chainId)).toEqual({
       address: '0x20c000000000000000000000f37de3740ADec032',
       currency: 'USD',
       decimals: 6,
