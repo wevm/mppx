@@ -212,22 +212,22 @@ export function session(parameters: session.Parameters = {}) {
             plan = await resolveCredentialPlan(resolved, context, entry)
           }
         }
-        let pendingOpen: ChannelEntry | undefined
-        // Defer opens only when low-level Fetch owns the response lifecycle.
-        // SessionManager unregisters this hook and keeps its existing transaction boundary.
-        const credentialSink =
-          attempt && plan.type === 'open'
-            ? {
-                store: {
-                  get: (key: string) => store.get(key),
-                  async set(next: ChannelEntry) {
-                    pendingOpen = next
-                  },
-                  delete: (key: string) => store.delete(key),
+        let pendingEntry: ChannelEntry | undefined
+        const deferEntry =
+          attempt &&
+          (plan.type === 'voucher' || (plan.type === 'open' && MethodResponse.hasHandler(method)))
+        const credentialSink = deferEntry
+          ? {
+              store: {
+                get: (key: string) => store.get(key),
+                async set(next: ChannelEntry) {
+                  pendingEntry = next
                 },
-                notifyUpdate() {},
-              }
-            : sink
+                delete: (key: string) => store.delete(key),
+              },
+              notifyUpdate() {},
+            }
+          : sink
         const payload = await executeCredentialPlan(
           plan,
           credentialSink,
@@ -239,21 +239,27 @@ export function session(parameters: session.Parameters = {}) {
           resolved.chainId,
           plan.account,
         )
-        if (attempt && pendingOpen) {
-          const opened = pendingOpen
+        if (attempt && pendingEntry) {
+          const staged = pendingEntry
+          const voucher = plan.type === 'voucher'
           attempt.settle = async (outcome) => {
             const accepted =
-              outcome.status === 'accepted' || acknowledgesOpen(outcome, challenge, opened)
+              outcome.status === 'accepted' ||
+              (voucher
+                ? outcome.status === 'unknown'
+                : acknowledgesOpen(outcome, challenge, staged))
             if (!accepted && outcome.status === 'pending') return false
             try {
               if (accepted) {
                 const current = await store.get(resolved.key)
-                if (
-                  !current?.opened ||
-                  current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
-                ) {
-                  await store.set(opened)
-                  sink.notifyUpdate(opened)
+                const sameChannel =
+                  current?.channelId.toLowerCase() === staged.channelId.toLowerCase()
+                const shouldStore = voucher
+                  ? !current || (sameChannel && current.cumulativeAmount < staged.cumulativeAmount)
+                  : !current?.opened || !sameChannel
+                if (shouldStore) {
+                  await store.set(staged)
+                  sink.notifyUpdate(staged)
                 }
               }
               return true

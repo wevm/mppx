@@ -794,6 +794,58 @@ describe('Session', () => {
       expect(s.state.status).toBe('active')
     })
 
+    test('preserves a dispatched voucher when the response is lost', async () => {
+      const { map, store } = makeChannelStore([channelEntry()])
+      let paidRequests = 0
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        paidRequests += 1
+        if (paidRequests === 1) return Promise.resolve(makeOkResponse())
+        throw new Error('connection reset after request dispatch')
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'connection reset after request dispatch',
+      )
+
+      expect(s.cumulative).toBe(3_000_000n)
+      expect(map.get(entryKey(channelEntry()))?.cumulativeAmount).toBe(3_000_000n)
+    })
+
+    test('preserves a first dispatched voucher when resuming a stored channel', async () => {
+      const { delete: remove, map, store } = makeChannelStore([channelEntry()])
+      let responseLost = false
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return Promise.resolve(responseLost ? makeOkResponse() : make402Response())
+        responseLost = true
+        throw new Error('connection reset after resumed voucher dispatch')
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'connection reset after resumed voucher dispatch',
+      )
+
+      expect(remove).not.toHaveBeenCalled()
+      expect(map.get(entryKey(channelEntry()))?.cumulativeAmount).toBe(2_000_000n)
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+    })
+
     test('does not bootstrap when disabled', async () => {
       const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
       const s = sessionManager({

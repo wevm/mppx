@@ -586,8 +586,8 @@ describe('precompile client session', () => {
     expect((await first).status).toBe(200)
     expect((await second).status).toBe(500)
     expect((await third).status).toBe(500)
-    expect(actions).toEqual(['open', 'topUp', 'voucher', 'topUp', 'voucher'])
-    expect(vouchers).toEqual([200n, 300n])
+    expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
+    expect(vouchers).toEqual([200n, 200n])
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
   })
 
