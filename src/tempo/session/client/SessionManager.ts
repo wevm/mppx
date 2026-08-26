@@ -690,13 +690,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
     channelUse = use
 
-    // Cold starts resume from `channelStore` after the 402 reveals the scope.
-    const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
-
     try {
       await bootstrapSession(input, init)
       use.trackCreates = true
 
+      const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
       let effectiveInit = requestInitWithSessionHint(input, init, liveHint)
       // Stored channels may be stale, so retry once after evicting the resumed entry.
       let canRetryResumed = !previous.channel?.opened

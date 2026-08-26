@@ -462,8 +462,8 @@ describe('Session', () => {
             }),
           )
         }
-        // The seeded snapshot is not sent as a first-request hint; the content
-        // request gets a 402 and resumes from the entry index with a voucher.
+        // A server-confirmed bootstrap snapshot is sent as a live hint on the
+        // content request and remains available through the local entry index.
         const authorization = headers.get(Constants.Headers.authorization)
         const payload = authorization
           ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
@@ -497,7 +497,7 @@ describe('Session', () => {
         operation: { authority: account.address, kind: 'authorizePaymentChannel' },
       })
       const contentCall = mockFetch.mock.calls.find((call) => call[1]?.method !== 'HEAD')
-      expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBeNull()
+      expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBe(storedChannelId)
     })
 
     test('does not cache a server snapshot for a channel that is closed on-chain', async () => {
