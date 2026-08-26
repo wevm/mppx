@@ -1,11 +1,12 @@
 import { Challenge, Credential } from 'mppx'
-import { createClient, http } from 'viem'
+import { type Address, createClient, http, isAddressEqual } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
-import { Account, Secp256k1 } from 'viem/tempo'
+import { Account, Addresses, Secp256k1 } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Methods from '../Methods.js'
+import { mach } from '../Tokens.js'
 import { charge } from './Charge.js'
 
 const account = privateKeyToAccount(
@@ -33,6 +34,27 @@ function createChallenge(
     realm: 'api.example.com',
     request,
   }) as Challenge.Challenge<ChargeRequest, 'charge', 'tempo'>
+}
+
+function mockMachFeeSelection() {
+  const getBalance = vi.fn(async (_client: unknown, parameters: { token: Address }) => ({
+    amount: isAddressEqual(parameters.token, Addresses.pathUsd) ? 1n : 0n,
+  }))
+  const getUserToken = vi.fn(async () => ({ address: mach(42431).address }))
+
+  vi.doMock('viem/tempo', async (importOriginal) => {
+    const original = await importOriginal<typeof import('viem/tempo')>()
+    return {
+      ...original,
+      Actions: {
+        ...original.Actions,
+        fee: { ...original.Actions.fee, getUserToken },
+        token: { ...original.Actions.token, getBalance },
+      },
+    }
+  })
+
+  return { getBalance, getUserToken }
 }
 
 describe('tempo.charge client', () => {
@@ -100,9 +122,16 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('viem/tempo', () => ({
-      Actions: { token: { transfer: { call: transferCall } } },
-    }))
+    vi.doMock('viem/tempo', async (importOriginal) => {
+      const original = await importOriginal<typeof import('viem/tempo')>()
+      return {
+        ...original,
+        Actions: {
+          ...original.Actions,
+          token: { ...original.Actions.token, transfer: { call: transferCall } },
+        },
+      }
+    })
 
     try {
       const { charge: chargeWithMockedTempo } = await import('./Charge.js')
@@ -133,6 +162,118 @@ describe('tempo.charge client', () => {
       expect(prepareTransactionRequest).toHaveBeenCalledOnce()
       expect(signTransaction).toHaveBeenCalledOnce()
       expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  })
+
+  test('uses a stablecoin fee token for unsponsored MACH pull charges', async () => {
+    vi.resetModules()
+    mockMachFeeSelection()
+    const chainId = 42431
+    const prepareTransactionRequest = vi.fn(async (_client: unknown, parameters: object) => ({
+      ...parameters,
+      gas: 100n,
+    }))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      sendTransactionSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+      })
+
+      await method.createCredential({
+        challenge: createChallenge({
+          amount: '1',
+          chainId,
+          currency: mach(chainId).address,
+          supportedModes: ['pull'],
+        }),
+        context: {},
+      })
+
+      expect(prepareTransactionRequest).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feeToken: Addresses.pathUsd }),
+      )
+      expect(signTransaction).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feeToken: Addresses.pathUsd }),
+      )
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  })
+
+  test('uses a stablecoin fee token for local and JSON-RPC MACH push charges', async () => {
+    vi.resetModules()
+    mockMachFeeSelection()
+    const chainId = 42431
+    const hash = `0x${'ab'.repeat(32)}`
+    const sendCallsSync = vi.fn(async () => ({ receipts: [{ transactionHash: hash }] }))
+    const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest: vi.fn(),
+      sendCallsSync,
+      sendTransactionSync,
+      signTransaction: vi.fn(),
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const localClient = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const rpcClient = createClient({
+        account: account.address,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const challenge = createChallenge({
+        amount: '1',
+        chainId,
+        currency: mach(chainId).address,
+        supportedModes: ['push'],
+      })
+
+      await chargeWithMockedActions({
+        account,
+        getClient: () => localClient,
+      }).createCredential({ challenge, context: {} })
+      await chargeWithMockedActions({
+        account: account.address,
+        getClient: () => rpcClient,
+      }).createCredential({ challenge, context: {} })
+
+      expect(sendTransactionSync).toHaveBeenCalledWith(
+        localClient,
+        expect.objectContaining({ feeToken: Addresses.pathUsd }),
+      )
+      expect(sendCallsSync).toHaveBeenCalledWith(
+        rpcClient,
+        expect.objectContaining({ capabilities: { feeToken: Addresses.pathUsd } }),
+      )
     } finally {
       vi.doUnmock('viem/actions')
       vi.doUnmock('viem/tempo')
@@ -418,9 +559,10 @@ describe('tempo.charge client', () => {
 
   test('normalizes sponsored pull transactions before signing', async () => {
     vi.resetModules()
+    mockMachFeeSelection()
     const prepared = {
       feePayerSignature: { r: '0x1', s: '0x2', yParity: 0 },
-      feeToken: currency,
+      feeToken: Addresses.pathUsd,
       gas: 100n,
     }
     const prepareTransactionRequest = vi.fn(async () => prepared)
@@ -451,6 +593,7 @@ describe('tempo.charge client', () => {
         challenge: createChallenge({
           amount: '1',
           chainId,
+          currency: mach(chainId).address,
           feePayer: true,
           supportedModes: ['pull'],
         }),
@@ -459,7 +602,9 @@ describe('tempo.charge client', () => {
 
       expect(prepareTransactionRequest).toHaveBeenCalledWith(
         client,
-        expect.not.objectContaining({ feePayer: true }),
+        expect.objectContaining({
+          feeToken: Addresses.pathUsd,
+        }),
       )
       expect(signTransaction).toHaveBeenCalledWith(
         client,
@@ -473,6 +618,7 @@ describe('tempo.charge client', () => {
       expect(signed).not.toHaveProperty('feeToken')
     } finally {
       vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
       vi.resetModules()
     }
   })

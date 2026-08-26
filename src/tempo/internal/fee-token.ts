@@ -36,6 +36,14 @@ function getChainFeeToken(client: Client): Address | undefined {
   return chainId ? defaults.currency[chainId as keyof typeof defaults.currency] : undefined
 }
 
+/** Returns the stablecoins mppx supports for Tempo transaction fees. */
+export function defaultFeeTokens(chainId: number | undefined): Address[] {
+  const tokens: Address[] = []
+  pushUnique(tokens, defaults.tokens.pathUsd)
+  pushUnique(tokens, defaults.currency[chainId as keyof typeof defaults.currency])
+  return tokens
+}
+
 /**
  * Resolves a funded fee token from account, chain, and caller-supplied preferences.
  *

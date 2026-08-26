@@ -8,6 +8,7 @@ import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
 import * as defaults from './defaults.js'
+import { defaultFeeTokens } from './fee-token.js'
 import * as Selectors from './selectors.js'
 
 /** Returns true if the serialized transaction has a Tempo envelope prefix. */
@@ -100,19 +101,9 @@ const supportedTransactionKeys = new Set<string>([
   ...rewrittenTransactionKeys,
 ])
 
-function pushAllowedFeeToken(tokens: TempoAddress.Address[], token: string | undefined) {
-  if (!token) return
-  const normalized = token as TempoAddress.Address
-  if (tokens.some((existing) => TempoAddress_internal.isEqual(existing, normalized))) return
-  tokens.push(normalized)
-}
-
 /** Returns fee tokens that mppx allows sponsored transactions to charge. */
 export function defaultAllowedFeeTokens(chainId: number | undefined) {
-  const tokens: TempoAddress.Address[] = []
-  pushAllowedFeeToken(tokens, defaults.tokens.pathUsd)
-  pushAllowedFeeToken(tokens, defaults.currency[chainId as keyof typeof defaults.currency])
-  return tokens
+  return defaultFeeTokens(chainId)
 }
 
 /** Rejects a sponsored fee token outside the server's allowlist. */

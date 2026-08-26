@@ -7,6 +7,7 @@ import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as Mppx from '../../server/Mppx.js'
+import { mach } from '../Tokens.js'
 import { tempo } from './Methods.js'
 
 const apiBaseUrl = 'https://relay.example'
@@ -102,6 +103,38 @@ afterEach(() => {
 })
 
 describe('relay boundary', () => {
+  test('forwards MACH credentials unchanged', async () => {
+    const calls: Array<{ init: RequestInit; url: URL }> = []
+    const fetch = mockRelay((url, init) => {
+      calls.push({ init, url })
+      return url.pathname.endsWith('/validate')
+        ? Response.json({ success: true })
+        : successReceipt()
+    })
+    const [method] = methods(fetch)
+    const machCredential = {
+      ...credential,
+      challenge: {
+        ...credential.challenge,
+        request: {
+          ...credential.challenge.request,
+          currency: mach(42431).address,
+        },
+      },
+    }
+
+    await method.verify({
+      credential: machCredential,
+      request: machCredential.challenge.request,
+    } as never)
+
+    expect(calls).toHaveLength(2)
+    expect(calls.map(({ init }) => JSON.parse(init.body as string))).toEqual([
+      machCredential,
+      machCredential,
+    ])
+  })
+
   test('sends the complete credential to the configured validation endpoint', async () => {
     const fetch = mockRelay(() => Response.json({ success: true }))
     const [method, session] = methods(fetch)

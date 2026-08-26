@@ -27,6 +27,8 @@ import type { SettlementSchedule as SessionSettlementSchedule } from './session/
 import type { SessionController } from './session/server/Sse.js'
 
 test('tempo session public barrels expose manager and schedule interfaces', () => {
+  expectTypeOf(Tempo.mach).toBeFunction()
+  expectTypeOf(Tempo.mach(42431).address).toMatchTypeOf<`0x${string}`>()
   expectTypeOf(Tempo.Session).toBeObject()
   expectTypeOf(Tempo.Session.Client).toBeObject()
   expectTypeOf(Tempo.Session.Precompile).toBeObject()
