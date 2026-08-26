@@ -1,0 +1,16 @@
+{
+  "name": "prepared-payment",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -p tsconfig.json",
+    "dev": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "@types/node": "26.2.0",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "mppx": "latest",
+    "tsx": "4.23.12",
+    "typescript": "catalog:"
+  }
+}

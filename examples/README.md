@@ -14,6 +14,7 @@ Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 | [stripe](./stripe/)                           | Stripe SPT charge with automatic client              |
 | [subscription](./subscription/)               | Daily news subscription using Tempo access keys      |
 | [web-bot-auth](./web-bot-auth/)               | Web Bot Auth with automatic MPP payment retry        |
+| [prepared-payment](./prepared-payment/)       | Qualify a request and OpenAPI 3.1 contract           |
 | [x402-mpp](./x402-mpp/)                       | Server route supporting x402 and mpp payments        |
 
 ## Running Examples
