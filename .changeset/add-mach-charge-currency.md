@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added MACH as a Tempo charge currency with stablecoin gas payment support.
+Added MACH as a charge currency with stablecoin gas fallback and preserved session recovery.
