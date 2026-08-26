@@ -1,6 +1,5 @@
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
-  createClient,
   decodeFunctionData,
   formatUnits,
   keccak256,
@@ -532,13 +531,6 @@ export function charge<const parameters extends charge.Parameters>(
           let reservation: SponsorBudget.Handle | undefined
 
           try {
-            const broadcastClient =
-              remoteFeePayer && isFeePayerTx
-                ? createClient({
-                    chain: client.chain!,
-                    transport: Client.remoteFeePayerTransport(remoteFeePayer),
-                  })
-                : client
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
             if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
             const selectableFeeTokens = allowedFeeTokens as readonly `0x${string}`[]
@@ -591,8 +583,8 @@ export function charge<const parameters extends charge.Parameters>(
                       challengeExpires: expires,
                       chainId: chainId ?? client.chain!.id,
                       details: { amount, currency, recipient },
-                      remoteFeePayer,
                       policy: transactionFeePayerPolicy,
+                      request: (args) => client.request(args as never),
                       transaction,
                     })
                     return { ...hosted, transaction }
@@ -674,7 +666,7 @@ export function charge<const parameters extends charge.Parameters>(
 
             broadcastAttempted = true
             if (waitForConfirmation) {
-              const receipt = await sendRawTransactionSync(broadcastClient, {
+              const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
@@ -698,7 +690,7 @@ export function charge<const parameters extends charge.Parameters>(
             // Optimistic path: broadcast without waiting for confirmation
             // (simulation above already ran). The returned receipt assumes
             // success — callers opt in via waitForConfirmation: false.
-            const reference = await sendRawTransaction(broadcastClient, {
+            const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
             if (reference.toLowerCase() !== finalHash.toLowerCase())

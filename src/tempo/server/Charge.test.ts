@@ -2523,13 +2523,10 @@ describe('tempo', () => {
 
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
-      expect(feePayerRequests.map(({ method }) => method)).toEqual([
-        'eth_fillTransaction',
-        'eth_sendRawTransactionSync',
-      ])
-      expect(feePayerAuthorizations).toEqual(['Bearer test', 'Bearer test'])
+      expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
+      expect(feePayerAuthorizations).toEqual(['Bearer test'])
       expect(feePayerHeaders).toEqual({ Authorization: 'Bearer test' })
-      expect(sequence).toEqual(['simulate', 'complete', 'simulate', 'relay-broadcast'])
+      expect(sequence).toEqual(['simulate', 'complete', 'simulate', 'broadcast'])
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
@@ -2545,7 +2542,7 @@ describe('tempo', () => {
       const rejected = await mppx.fetch(httpServer.url)
 
       expect(rejected.status).not.toBe(200)
-      expect(feePayerRequests).toHaveLength(3)
+      expect(feePayerRequests).toHaveLength(2)
       expect(sequence.slice(0, 2)).toEqual(['simulate', 'complete'])
       expect(sequence).not.toContain('relay-broadcast')
 

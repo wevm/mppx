@@ -504,7 +504,6 @@ describe('fillHostedFeePayerTransaction', () => {
   const hostedContext = {
     chainId: defaults.chainId.mainnet,
     details,
-    remoteFeePayer: { url: 'https://sponsor.example/tp_key' },
   } as const
 
   test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
@@ -517,10 +516,8 @@ describe('fillHostedFeePayerTransaction', () => {
     )
     let realFeePayerSignature: ReturnType<typeof Secp256k1.sign> | undefined
 
-    const calls: { init?: RequestInit | undefined; input: RequestInfo | URL }[] = []
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ init, input })
-      const rpc = JSON.parse(init!.body as string).params[0]
+    const request = vi.fn(async (args: any) => {
+      const rpc = args.params[0]
       const quantity = (value: unknown) =>
         value === undefined ? undefined : BigInt(value as string)
       realFeePayerSignature = Secp256k1.sign({
@@ -556,38 +553,19 @@ describe('fillHostedFeePayerTransaction', () => {
         ),
         privateKey: sponsorPrivateKey,
       })
-      return new Response(
-        JSON.stringify(
-          {
-            result: {
-              tx: {
-                feePayerSignature: realFeePayerSignature,
-                feeToken: defaults.tokens.pathUsd,
-                gas: '0x1',
-                maxFeePerGas: '0x2',
-              },
-            },
-          },
-          (key, value) => {
-            if (key === 'yParity') return toHex(value)
-            return typeof value === 'bigint' ? toHex(value) : value
-          },
-        ),
-      )
+      return {
+        tx: {
+          feePayerSignature: realFeePayerSignature,
+          feeToken: defaults.tokens.pathUsd,
+          gas: '0x1',
+          maxFeePerGas: '0x2',
+        },
+      }
     })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const remoteFeePayer = {
-      url: 'https://sponsor.example/tp_key',
-      headers: {
-        Authorization: 'Bearer test',
-        'Content-Type': 'text/plain',
-      },
-    } as const
     const result = await fillHostedFeePayerTransaction({
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
       ...hostedContext,
-      remoteFeePayer,
+      request,
       transaction: hostedTransaction as any,
     })
 
@@ -595,18 +573,9 @@ describe('fillHostedFeePayerTransaction', () => {
     expect(result.feePayer.toLowerCase()).toBe(sponsorAddress.toLowerCase())
     const serialized = result.serializedTransaction
 
-    expect(fetchMock).toHaveBeenCalledOnce()
-    expect(calls[0]!.input).toBe('https://sponsor.example/tp_key')
-    const requestHeaders = new Headers(calls[0]!.init!.headers)
-    expect(requestHeaders.get('authorization')).toBe('Bearer test')
-    expect(requestHeaders.get('content-type')).toBe('application/json')
-    expect(remoteFeePayer.headers).toEqual({
-      Authorization: 'Bearer test',
-      'Content-Type': 'text/plain',
-    })
-    const body = JSON.parse(calls[0]!.init!.body as string)
+    expect(request).toHaveBeenCalledOnce()
+    const body = request.mock.calls[0]![0]
     expect(body).toMatchObject({
-      jsonrpc: '2.0',
       method: 'eth_fillTransaction',
     })
     expect(body.params[0]).toMatchObject({
@@ -638,102 +607,82 @@ describe('fillHostedFeePayerTransaction', () => {
   })
 
   test('error: requires hosted fee payer to return a feeToken', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ result: { tx: { feePayerSignature } } }))),
-    )
-
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
+        request: vi.fn(async () => ({ tx: { feePayerSignature } })),
         transaction: hostedTransaction as any,
       }),
     ).rejects.toThrow('did not return a feeToken')
   })
 
   test('error: rejects hosted feeToken outside the allowlist', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              result: { tx: { feePayerSignature, feeToken: swapTokenIn } },
-            }),
-          ),
-      ),
-    )
-
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
+        request: vi.fn(async () => ({
+          tx: { feePayerSignature, feeToken: swapTokenIn },
+        })),
         transaction: hostedTransaction as any,
       }),
     ).rejects.toThrow('feeToken is not allowed')
   })
 
   test('error: surfaces hosted fee payer errors', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ error: { message: 'Invalid or revoked API key' } }), {
-            status: 401,
-          }),
-      ),
-    )
-
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
+        request: vi.fn(async () => {
+          throw new Error('Invalid or revoked API key')
+        }),
         transaction: hostedTransaction as any,
       }),
     ).rejects.toThrow('Invalid or revoked API key')
   })
 
   test('error: enforces sponsor policy before requesting hosted fill', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    const request = vi.fn()
 
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         policy: { maxGas: hostedTransaction.gas - 1n },
+        request,
         transaction: hostedTransaction as any,
       }),
     ).rejects.toThrow('gas exceeds sponsor policy')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
   })
 
   test('error: rejects non-empty access lists before requesting hosted fill', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    const request = vi.fn()
 
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
+        request,
         transaction: {
           ...hostedTransaction,
           accessList: [{ address: bogus, storageKeys: [] }],
         } as any,
       }),
     ).rejects.toThrow('accessList is not allowed')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
   })
 
   test('error: rejects padded calldata before requesting hosted fill', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    const request = vi.fn()
 
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
+        request,
         transaction: {
           ...hostedTransaction,
           calls: [
@@ -745,7 +694,7 @@ describe('fillHostedFeePayerTransaction', () => {
         } as any,
       }),
     ).rejects.toThrow('calldata is not canonical')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
   })
 })
 

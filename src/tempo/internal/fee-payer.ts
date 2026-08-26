@@ -8,7 +8,6 @@ import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
 import * as defaults from './defaults.js'
-import * as RemoteFeePayer from './remote-fee-payer.js'
 import * as Selectors from './selectors.js'
 
 /** Returns true if the serialized transaction has a Tempo envelope prefix. */
@@ -45,13 +44,10 @@ export type Policy = {
 // Tempo transaction fields.
 type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>
 
-type HostedFeePayerFillResponse = {
-  error?: { message?: string | undefined } | undefined
-  result?: {
-    tx?: {
-      feePayerSignature?: unknown
-      feeToken?: unknown
-    }
+type HostedFeePayerFillResult = {
+  tx?: {
+    feePayerSignature?: unknown
+    feeToken?: unknown
   }
 }
 
@@ -172,8 +168,8 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
 }
 
 /**
- * Co-signs a sender-signed partial sponsorship envelope using a hosted
- * fee-payer endpoint without letting the endpoint mutate sender-committed
+ * Co-signs a sender-signed partial sponsorship envelope through a hosted
+ * fee-payer transport without letting the endpoint mutate sender-committed
  * transaction fields.
  *
  * @returns The serialized co-signed transaction plus the sponsor's recovered
@@ -185,19 +181,15 @@ export async function fillHostedFeePayerTransaction(parameters: {
   challengeExpires?: string | undefined
   chainId: number
   details: Record<string, string>
-  remoteFeePayer: RemoteFeePayer.Config
   policy?: Partial<Policy> | undefined
+  request: (args: {
+    method: 'eth_fillTransaction'
+    params: readonly [ReturnType<typeof hostedFeePayerRequest>]
+  }) => Promise<unknown>
   transaction: SponsoredTransaction
 }) {
-  const {
-    allowedFeeTokens,
-    challengeExpires,
-    chainId,
-    details,
-    remoteFeePayer,
-    policy,
-    transaction,
-  } = parameters
+  const { allowedFeeTokens, challengeExpires, chainId, details, policy, request, transaction } =
+    parameters
   assertTransactionPolicy({
     challengeExpires,
     chainId,
@@ -205,31 +197,13 @@ export async function fillHostedFeePayerTransaction(parameters: {
     policy,
     transaction,
   })
-  const response = await fetch(remoteFeePayer.url, {
-    body: JSON.stringify(
-      {
-        id: 1,
-        jsonrpc: '2.0',
-        method: 'eth_fillTransaction',
-        params: [hostedFeePayerRequest(transaction)],
-      },
-      (_key, value) => (typeof value === 'bigint' ? toHex(value) : value),
-    ),
-    headers: {
-      ...RemoteFeePayer.resolveHeaders(remoteFeePayer),
-      'content-type': 'application/json',
-    },
-    method: 'POST',
-  })
-  const payload = (await response.json().catch(async () => ({
-    error: { message: await response.text() },
-  }))) as HostedFeePayerFillResponse
-  const filled = payload.result?.tx
-  if (!response.ok || payload.error || !filled?.feePayerSignature)
-    throw new FeePayerValidationError(
-      payload.error?.message ?? 'hosted fee payer failed to sponsor transaction',
-      {},
-    )
+  const result = (await request({
+    method: 'eth_fillTransaction',
+    params: [hostedFeePayerRequest(transaction)],
+  })) as HostedFeePayerFillResult
+  const filled = result?.tx
+  if (!filled?.feePayerSignature)
+    throw new FeePayerValidationError('hosted fee payer failed to sponsor transaction', {})
   if (typeof filled.feeToken !== 'string')
     throw new FeePayerValidationError('hosted fee payer did not return a feeToken', {})
 
