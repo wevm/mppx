@@ -1,5 +1,21 @@
 # mppx
 
+## 0.9.0
+
+### Minor Changes
+
+- c23eaf0: Removed machineUSD charge and session flows, requiring servers that advertise machineUSD to remove that configuration before upgrading.
+
+### Patch Changes
+
+- 9582c40: Routed hosted Tempo fee-payer fills through the configured `withFeePayer` transport and broadcast completed transactions through the default RPC transport.
+- d343aae: Added `preparePayment` for inspecting a selected client payment before creating and attaching its credential.
+- 7ce3160: Added the V8 coverage provider required by the configured test coverage command.
+- 5e10359: Fixed concurrent HTML builds sharing a temporary directory.
+- 4e4810a: Added a `requiresAuth` server option that used `Payment-Authorization` for Payment credentials.
+- 1a36a5e: Added HTTP headers to remote Tempo fee-payer configuration.
+- 07c59cf: Added dual MPP/x402 wrappers for Express, Hono, Next.js, and MCP, backed by official x402 adapters and native MPP protocol handling. Exposed Tempo and source-chain MPP payments for compatible EVM requirements; x402 Fastify and Axios compatibility adapters were deferred.
+
 ## 0.8.19
 
 ### Patch Changes
