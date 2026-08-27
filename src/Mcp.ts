@@ -1,6 +1,6 @@
 import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
-import type * as Errors from './Errors.js'
+import * as Errors from './Errors.js'
 import type { OneOf } from './internal/types.js'
 import type * as core_Receipt from './Receipt.js'
 
@@ -9,6 +9,26 @@ export const paymentRequiredCode = -32042
 
 /** MCP JSON-RPC error code for payment verification failed. */
 export const paymentVerificationFailedCode = -32043
+
+/** JSON-RPC error code for invalid parameters. */
+export const invalidParamsCode = -32602
+
+/** JSON-RPC error code for internal errors. */
+export const internalErrorCode = -32603
+
+/**
+ * Maps a payment error to its MCP JSON-RPC error code.
+ */
+export function errorCode(error?: Errors.PaymentError): number {
+  if (!error || error instanceof Errors.PaymentRequiredError) return paymentRequiredCode
+  if (
+    error instanceof Errors.MalformedCredentialError ||
+    error instanceof Errors.InvalidPayloadError
+  )
+    return invalidParamsCode
+  if (error instanceof Errors.InternalPaymentError) return internalErrorCode
+  return paymentVerificationFailedCode
+}
 
 /** MCP metadata key for credentials. */
 export const credentialMetaKey = 'org.paymentauth/credential'

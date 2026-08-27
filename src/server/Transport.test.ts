@@ -4,6 +4,13 @@ import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
+import {
+  InternalPaymentError,
+  InvalidPayloadError,
+  MalformedCredentialError,
+  PaymentRequiredError,
+  VerificationFailedError,
+} from '../Errors.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -512,6 +519,21 @@ describe('mcp', () => {
 
       expect(transport.getCredential(mcpRequest)).toBeNull()
     })
+
+    test('throws when credential metadata is malformed', () => {
+      const transport = Transport.mcp()
+      const request = {
+        ...mcpRequest,
+        params: {
+          ...mcpRequest.params,
+          _meta: { [Mcp.credentialMetaKey]: { challenge: {}, payload: {} } },
+        },
+      } as Mcp.JsonRpcRequest
+
+      expect(() => transport.getCredential(request)).toThrow(
+        Credential.InvalidCredentialEncodingError,
+      )
+    })
   })
 
   describe('respondChallenge', () => {
@@ -545,6 +567,44 @@ describe('mcp', () => {
           "jsonrpc": "2.0",
         }
       `)
+    })
+
+    test.each([
+      {
+        code: Mcp.paymentRequiredCode,
+        error: new PaymentRequiredError(),
+        name: 'payment required',
+      },
+      {
+        code: Mcp.paymentVerificationFailedCode,
+        error: new VerificationFailedError(),
+        name: 'verification failed',
+      },
+      {
+        code: Mcp.invalidParamsCode,
+        error: new MalformedCredentialError(),
+        name: 'malformed credential',
+      },
+      {
+        code: Mcp.invalidParamsCode,
+        error: new InvalidPayloadError(),
+        name: 'invalid payload',
+      },
+      {
+        code: Mcp.internalErrorCode,
+        error: new InternalPaymentError(),
+        name: 'internal payment error',
+      },
+    ])('uses $code for $name', async ({ code, error }) => {
+      const response = await Transport.mcp().respondChallenge({
+        challenge,
+        error,
+        input: mcpRequest,
+      })
+      if (!response.error) throw new Error()
+
+      expect(response.error.code).toBe(code)
+      expect(response.error.data?.httpStatus).toBe(error.status)
     })
   })
 

@@ -87,7 +87,11 @@ export function paymentRequiredData(
 ): PaymentRequiredData | undefined {
   if (!message) return undefined
   if ('error' in message) {
-    if (message.error?.code !== Mcp.paymentRequiredCode) return undefined
+    if (
+      message.error?.code !== Mcp.paymentRequiredCode &&
+      message.error?.code !== Mcp.paymentVerificationFailedCode
+    )
+      return undefined
     return paymentRequiredDataFromValue(message.error.data)
   }
   return paymentRequiredDataFromValue(message.result?._meta?.[Mcp.paymentRequiredMetaKey])

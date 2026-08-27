@@ -4,6 +4,7 @@ import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import type { Distribute, MaybePromise, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
+import * as McpCredential from '../mcp/internal/Credential.js'
 import type * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
@@ -264,9 +265,11 @@ export function mcp() {
 
     getCredential(request) {
       const meta = request.params?._meta
-      const credential = meta?.[core_Mcp.credentialMetaKey]
-      if (!credential) return null
-      return credential
+      const value = meta?.[core_Mcp.credentialMetaKey]
+      if (value === undefined) return null
+      const parsed = McpCredential.parse(value)
+      if (!parsed) throw new Credential.InvalidCredentialEncodingError()
+      return parsed.value
     },
 
     respondChallenge({ challenge, input, error }) {
@@ -274,7 +277,7 @@ export function mcp() {
         jsonrpc: '2.0',
         id: input.id,
         error: {
-          code: mcpErrorCode(error),
+          code: core_Mcp.errorCode(error),
           message: error?.message ?? 'Payment Required',
           data: {
             httpStatus: error?.status ?? 402,
@@ -305,14 +308,6 @@ export function mcp() {
       }
     },
   })
-}
-
-/** @internal */
-function mcpErrorCode(error?: Errors.PaymentError): number {
-  if (!error) return core_Mcp.paymentRequiredCode
-  if (error instanceof Errors.MalformedCredentialError) return -32602
-  if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
-  return core_Mcp.paymentVerificationFailedCode
 }
 
 export function safeUrl(url: string | URL | undefined): URL {

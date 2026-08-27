@@ -151,7 +151,9 @@ export function isPaymentRequiredError(
 ): error is McpError & { data: PaymentRequiredData } {
   if (typeof error !== 'object' || error === null) return false
   if (!('code' in error) || !('message' in error)) return false
-  if ((error as { code: unknown }).code !== core_Mcp.paymentRequiredCode) return false
+  const code = (error as { code: unknown }).code
+  if (code !== core_Mcp.paymentRequiredCode && code !== core_Mcp.paymentVerificationFailedCode)
+    return false
   return isPaymentRequiredData((error as { data?: unknown }).data)
 }
 

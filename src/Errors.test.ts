@@ -7,6 +7,7 @@ import {
   ChannelNotFoundError,
   DeltaTooSmallError,
   InsufficientBalanceError,
+  InternalPaymentError,
   InvalidChallengeError,
   InvalidPayloadError,
   InvalidSignatureError,
@@ -146,6 +147,19 @@ describe('VerificationFailedError', () => {
     const error = new VerificationFailedError({ details: {} })
 
     expect(error.toProblemDetails()).not.toHaveProperty('details')
+  })
+})
+
+describe('InternalPaymentError', () => {
+  test('default', () => {
+    expect(errorSnapshot(new InternalPaymentError())).toMatchInlineSnapshot(`
+      {
+        "message": "An internal payment error occurred.",
+        "name": "InternalPaymentError",
+        "status": 500,
+        "type": "https://paymentauth.org/problems/internal-payment-error",
+      }
+    `)
   })
 })
 

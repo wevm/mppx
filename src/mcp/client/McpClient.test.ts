@@ -433,17 +433,21 @@ describe('McpClient.wrap (in-place)', () => {
 })
 
 describe('isPaymentRequiredError', () => {
-  test('returns true for McpError with payment code and challenges', () => {
-    const error = new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
-      httpStatus: 402,
-      challenges: [{ id: 'test', method: 'tempo', intent: 'charge', realm: 'test', request: {} }],
-    })
-    expect(McpClient.isPaymentRequiredError(error)).toBe(true)
-  })
+  test.each([core_Mcp.paymentRequiredCode, core_Mcp.paymentVerificationFailedCode])(
+    'returns true for MCP payment error code %s with challenges',
+    (code) => {
+      const error = new McpError(code, 'Payment Required', {
+        httpStatus: 402,
+        challenges: [{ id: 'test', method: 'tempo', intent: 'charge', realm: 'test', request: {} }],
+      })
+      expect(McpClient.isPaymentRequiredError(error)).toBe(true)
+    },
+  )
 
   test('returns false for McpError with wrong code', () => {
     const error = new McpError(-32600, 'Invalid Request', {
-      challenges: [{ id: 'test', method: 'tempo' }],
+      httpStatus: 402,
+      challenges: [{ id: 'test', method: 'tempo', intent: 'charge', realm: 'test', request: {} }],
     })
     expect(McpClient.isPaymentRequiredError(error)).toBe(false)
   })

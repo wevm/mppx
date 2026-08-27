@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Constants, Credential, Errors, Method, Receipt, z } from 'mppx'
+import { Challenge, Constants, Credential, Errors, Mcp, Method, Receipt, z } from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -220,7 +220,7 @@ describe('request handler', () => {
     `)
   })
 
-  test('returns sanitized malformed credential error for unexpected transport failures', async () => {
+  test('returns sanitized internal error for unexpected transport failures', async () => {
     const baseTransport = Transport.http()
     const transport = Transport.from({
       ...baseTransport,
@@ -243,9 +243,10 @@ describe('request handler', () => {
 
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
+    expect(result.challenge.status).toBe(500)
 
     const body = (await result.challenge.json()) as { detail: string }
-    expect(body.detail).toBe('Credential is malformed.')
+    expect(body.detail).toBe('An internal payment error occurred.')
     expect(body.detail).not.toContain('secret-key')
     expect(body.detail).not.toContain('rpc.example.com')
   })
@@ -813,7 +814,7 @@ describe('request handler', () => {
     expect(body.detail).not.toContain('invalidField')
   })
 
-  test('returns sanitized verification error for unexpected verifier failures', async () => {
+  test('returns sanitized internal error for unexpected verifier failures', async () => {
     const leakingMethod = Method.toServer(
       Method.from({
         name: 'mock',
@@ -853,17 +854,19 @@ describe('request handler', () => {
       payload: { token: 'valid' },
     })
 
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const result = await handle(
       new Request('https://example.com/resource', {
         headers: { Authorization: Credential.serialize(credential) },
       }),
-    )
+    ).finally(() => consoleError.mockRestore())
 
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
+    expect(result.challenge.status).toBe(500)
 
     const body = (await result.challenge.json()) as { detail: string }
-    expect(body.detail).toBe('Payment verification failed.')
+    expect(body.detail).toBe('An internal payment error occurred.')
     expect(body.detail).not.toContain('infura')
     expect(body.detail).not.toContain('secret-key')
   })
@@ -5427,6 +5430,58 @@ describe('challenge', () => {
     expires: new Date(Date.now() + 60_000).toISOString(),
     recipient: '0x0000000000000000000000000000000000000002',
   }
+
+  test('maps unexpected MCP verification failures to internal errors', async () => {
+    const internalMethod = Method.toServer(mockCharge, {
+      async verify() {
+        throw new Error('processor unavailable')
+      },
+    })
+    const mppx = Mppx.create({
+      methods: [internalMethod],
+      realm,
+      secretKey,
+      transport: Transport.mcp(),
+    })
+    const input: Mcp.JsonRpcRequest = {
+      id: 1,
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {},
+    }
+    const first = await mppx.alpha.charge(challengeOpts)(input)
+    expect(first.status).toBe(402)
+    if (first.status !== 402 || !('error' in first.challenge) || !first.challenge.error)
+      throw new Error()
+    const challenge = first.challenge.error.data?.challenges[0]
+    if (!challenge) throw new Error()
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const result = await mppx.alpha.charge(challengeOpts)({
+        ...input,
+        params: {
+          _meta: {
+            [Mcp.credentialMetaKey]: Credential.from({
+              challenge,
+              payload: { token: 'valid' },
+            }),
+          },
+        },
+      })
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402 || !('error' in result.challenge) || !result.challenge.error)
+        throw new Error()
+      const error = result.challenge.error
+      expect(error.code).toBe(Mcp.internalErrorCode)
+      expect(error.data?.httpStatus).toBe(500)
+      expect(error.data?.problem?.detail).toBe('An internal payment error occurred.')
+      expect(error.data?.problem?.detail).not.toContain('processor unavailable')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
 
   test('mppx.challenge.alpha.charge returns a valid Challenge object', async () => {
     const mppx = Mppx.create({

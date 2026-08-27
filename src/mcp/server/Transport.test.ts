@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'vp/test'
 
 import type { Challenge } from '../../Challenge.js'
-import type { Credential } from '../../Credential.js'
-import { VerificationFailedError } from '../../Errors.js'
+import { type Credential, InvalidCredentialEncodingError } from '../../Credential.js'
+import {
+  InternalPaymentError,
+  InvalidPayloadError,
+  MalformedCredentialError,
+  PaymentRequiredError,
+  VerificationFailedError,
+} from '../../Errors.js'
 import * as Mcp from '../../Mcp.js'
 import { type Extra, mcpSdk } from './Transport.js'
 
@@ -65,7 +71,7 @@ describe('mcpSdk', () => {
       expect(result).toBeNull()
     })
 
-    test('returns null when credential metadata is malformed', () => {
+    test('throws when credential metadata is malformed', () => {
       const transport = mcpSdk()
       const extra = {
         _meta: {
@@ -73,7 +79,7 @@ describe('mcpSdk', () => {
         },
       } as Extra
 
-      expect(transport.getCredential(extra)).toBeNull()
+      expect(() => transport.getCredential(extra)).toThrow(InvalidCredentialEncodingError)
     })
   })
 
@@ -87,7 +93,7 @@ describe('mcpSdk', () => {
 
       expect(result).toBeInstanceOf(Error)
       const err = result as any
-      expect(err.code).toBe(Mcp.paymentRequiredCode)
+      expect(err.code).toBe(Mcp.paymentVerificationFailedCode)
       expect(err.message).toContain('Payment Required')
       expect(err.data?.httpStatus).toBe(402)
       expect(err.data?.challenges).toEqual([challenge])
@@ -108,6 +114,43 @@ describe('mcpSdk', () => {
       expect(err.data?.problem).toBeDefined()
       expect(err.data?.problem?.type).toBe(error.type)
       expect(err.data?.problem?.challengeId).toBe(challenge.id)
+    })
+
+    test.each([
+      {
+        code: Mcp.paymentRequiredCode,
+        error: new PaymentRequiredError(),
+        name: 'payment required',
+      },
+      {
+        code: Mcp.paymentVerificationFailedCode,
+        error: new VerificationFailedError(),
+        name: 'verification failed',
+      },
+      {
+        code: Mcp.invalidParamsCode,
+        error: new MalformedCredentialError(),
+        name: 'malformed credential',
+      },
+      {
+        code: Mcp.invalidParamsCode,
+        error: new InvalidPayloadError(),
+        name: 'invalid payload',
+      },
+      {
+        code: Mcp.internalErrorCode,
+        error: new InternalPaymentError(),
+        name: 'internal payment error',
+      },
+    ])('uses $code for $name', async ({ code, error }) => {
+      const result = await mcpSdk().respondChallenge({
+        challenge,
+        error,
+        input: {} as Extra,
+      })
+
+      expect(result.code).toBe(code)
+      expect((result.data as { httpStatus?: number } | undefined)?.httpStatus).toBe(error.status)
     })
 
     test('uses default message when no error provided', async () => {

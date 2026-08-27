@@ -1,6 +1,6 @@
 import type { CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.js'
 
-import type * as Credential from '../../Credential.js'
+import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Transport from '../../server/Transport.js'
 import * as McpCredential from '../internal/Credential.js'
@@ -25,7 +25,7 @@ export type McpSdk = Transport.Transport<Extra, McpError, CallToolResult>
  * MCP SDK transport for server-side payment handling with `@modelcontextprotocol/sdk`.
  *
  * - Reads credentials from `_meta["org.paymentauth/credential"]`
- * - Issues challenges as `McpError` with code `-32042` and challenge in `error.data`
+ * - Maps payment errors to their specification-defined JSON-RPC codes
  * - Attaches receipts via `_meta["org.paymentauth/receipt"]` on tool results
  *
  * @example
@@ -64,7 +64,11 @@ export function mcpSdk(): McpSdk {
     },
 
     getCredential(extra) {
-      return McpCredential.parse(extra._meta?.[core_Mcp.credentialMetaKey])?.value ?? null
+      const value = extra._meta?.[core_Mcp.credentialMetaKey]
+      if (value === undefined) return null
+      const parsed = McpCredential.parse(value)
+      if (!parsed) throw new Credential.InvalidCredentialEncodingError()
+      return parsed.value
     },
 
     async respondChallenge({ challenge, error }) {
@@ -80,8 +84,8 @@ export function mcpSdk(): McpSdk {
           throw err
         }
       }
-      return new McpErrorClass(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
-        httpStatus: 402,
+      return new McpErrorClass(core_Mcp.errorCode(error), error?.message ?? 'Payment Required', {
+        httpStatus: error?.status ?? 402,
         challenges: [challenge],
         ...(error && { problem: error.toProblemDetails(challenge.id) }),
       })

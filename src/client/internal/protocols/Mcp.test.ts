@@ -55,6 +55,15 @@ describe('mcp HTTP protocol', () => {
     expect(await getChallengeIds(jsonResponse(paymentRequired))).toEqual([challenge.id])
   })
 
+  test('extracts retry challenges from payment verification errors', async () => {
+    const response = jsonResponse({
+      ...paymentRequired,
+      error: { ...paymentRequired.error, code: Mcp.paymentVerificationFailedCode },
+    })
+
+    expect(await getChallengeIds(response)).toEqual([challenge.id])
+  })
+
   test('extracts all valid payment challenges', async () => {
     const alternate = { ...challenge, id: 'alternate' }
     const response = jsonResponse({

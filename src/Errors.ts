@@ -144,6 +144,20 @@ export declare namespace VerificationFailedError {
 }
 
 /**
+ * Payment processing failed because of an unexpected internal error.
+ */
+export class InternalPaymentError extends PaymentError {
+  override readonly name = 'InternalPaymentError'
+  readonly title = 'Internal Payment Error'
+  override readonly status = 500
+  readonly type = 'https://paymentauth.org/problems/internal-payment-error'
+
+  constructor() {
+    super('An internal payment error occurred.')
+  }
+}
+
+/**
  * Payment requires additional action (e.g., 3DS authentication).
  */
 export class PaymentActionRequiredError extends PaymentError {

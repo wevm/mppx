@@ -850,7 +850,7 @@ export function create<
       const broadcast = mi.broadcast ?? mi.verify
       receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
-      const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+      const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
       await emitStandalonePaymentFailed({
         challenge: prepared.credential.challenge,
         credential: parsedCredential,
@@ -1187,7 +1187,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // Credential was provided but malformed
       if (credentialError) {
         const reason = getSafeCredentialReason(credentialError)
-        const error = new Errors.MalformedCredentialError(reason ? { reason } : {})
+        const error = reason
+          ? new Errors.MalformedCredentialError({ reason })
+          : new Errors.InternalPaymentError()
         await emitPaymentFailed({
           challenge,
           credential: null,
@@ -1275,8 +1277,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           } catch (e) {
             if (!(e instanceof Errors.PaymentError))
               console.error('mppx: internal authorization error', e)
-            const error =
-              e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+            const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
             await emitPaymentFailed({
               challenge,
               credential: null,
@@ -1459,7 +1460,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       } catch (e) {
         if (!(e instanceof Errors.PaymentError))
           console.error('mppx: internal verification error', e)
-        const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+        const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
         await emitPaymentFailed({
           challenge,
           credential: parsedCredential,
