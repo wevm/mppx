@@ -1187,9 +1187,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // Credential was provided but malformed
       if (credentialError) {
         const reason = getSafeCredentialReason(credentialError)
-        const error = reason
-          ? new Errors.MalformedCredentialError({ reason })
-          : new Errors.InternalPaymentError()
+        const error =
+          credentialError instanceof Errors.PaymentError
+            ? credentialError
+            : reason
+              ? new Errors.MalformedCredentialError({ reason })
+              : new Errors.InternalPaymentError()
         await emitPaymentFailed({
           challenge,
           credential: null,

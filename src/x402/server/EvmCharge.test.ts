@@ -194,7 +194,9 @@ describe('x402 evm charge route binding', () => {
 
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
-    expect(readError(result.challenge)).toBe('Credential is malformed.')
+    expect(readError(result.challenge)).toBe(
+      'Payment verification failed: x402 payment payload resource does not match route resource.',
+    )
     expect(reached).toEqual([])
   })
 

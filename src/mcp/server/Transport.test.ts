@@ -93,7 +93,7 @@ describe('mcpSdk', () => {
 
       expect(result).toBeInstanceOf(Error)
       const err = result as any
-      expect(err.code).toBe(Mcp.paymentVerificationFailedCode)
+      expect(err.code).toBe(Mcp.paymentRequiredCode)
       expect(err.message).toContain('Payment Required')
       expect(err.data?.httpStatus).toBe(402)
       expect(err.data?.challenges).toEqual([challenge])
@@ -109,7 +109,7 @@ describe('mcpSdk', () => {
       })
 
       const err = result as any
-      expect(err.code).toBe(Mcp.paymentRequiredCode)
+      expect(err.code).toBe(Mcp.paymentVerificationFailedCode)
       expect(err.message).toContain('verification failed')
       expect(err.data?.problem).toBeDefined()
       expect(err.data?.problem?.type).toBe(error.type)
