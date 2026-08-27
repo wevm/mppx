@@ -2085,6 +2085,48 @@ describe('server events', () => {
     expect(requestInputMutationBlocked).toBe(true)
     expect(Receipt.fromResponse(response).reference).toBe('tx-original')
   })
+
+  test('does not alias non-cloneable payment success request inputs', async () => {
+    const signer = {
+      address: 'original',
+      sign: async () => 'signature',
+    }
+    const requestInput = { ...options(), signer }
+    const serverMethod = Method.toServer(eventCharge, {
+      request() {
+        return requestInput
+      },
+      async verify() {
+        return receipt('tx-non-cloneable')
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+    handler.onPaymentSuccess((context) => {
+      ;(context.requestInput as unknown as { signer: { address: string } }).signer.address =
+        'mutated'
+    })
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+
+    expect(paid.status).toBe(200)
+    expect(Object.isFrozen(requestInput)).toBe(false)
+    expect(signer.address).toBe('original')
+  })
 })
 
 describe('compose', () => {

@@ -462,9 +462,20 @@ function createPaymentSuccessHandler(
   }
 }
 
+/**
+ * Extends a rail's server-only input with Stripe PaymentIntent options while
+ * keeping its canonical request unchanged. The schema strips the options
+ * before challenge serialization, and delegated lifecycle hooks receive the
+ * underlying rail request without Stripe-only fields. The wrapper retains the
+ * options only in `requestInput` for payment-success recording.
+ */
 function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
   const baseSchema = method.schema.request
   const baseRequest = method.request
+  const baseRespond = method.respond
+  const baseBroadcast = method.broadcast
+  const baseValidate = method.validate
+  const baseVerify = method.verify
 
   return {
     ...method,
@@ -490,5 +501,28 @@ function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
       const resolved = baseRequest ? await baseRequest({ ...context, request }) : request
       return { ...resolved, paymentIntentOptions }
     },
+    ...(baseRespond && {
+      respond: (context: Method.RespondContext<Method.AnyServer>) =>
+        baseRespond(withoutPaymentIntentOptions(context)),
+    }),
+    ...(baseBroadcast && {
+      broadcast: (context: Method.VerifyContext<Method.AnyServer>) =>
+        baseBroadcast(withoutPaymentIntentOptions(context)),
+    }),
+    ...(baseValidate && {
+      validate: (context: Method.ValidateContext<Method.AnyServer>) =>
+        baseValidate(withoutPaymentIntentOptions(context)),
+    }),
+    ...(baseVerify && {
+      verify: (context: Method.VerifyContext<Method.AnyServer>) =>
+        baseVerify(withoutPaymentIntentOptions(context)),
+    }),
   }
+}
+
+function withoutPaymentIntentOptions<context extends { request: Record<string, unknown> }>(
+  context: context,
+): context {
+  const { paymentIntentOptions: _, ...request } = context.request
+  return { ...context, request }
 }

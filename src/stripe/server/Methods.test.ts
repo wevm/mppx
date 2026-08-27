@@ -193,6 +193,78 @@ describe('stripe.create() canOffer minimum amount', () => {
 })
 
 describe('stripe.create() custom hook composition', () => {
+  test('keeps PaymentIntent options out of custom rail lifecycle hooks', async () => {
+    const client = createMockStripeClient()
+    const parseStrictRequest = (request: Record<string, unknown>) => {
+      if ('paymentIntentOptions' in request) throw new Error('unknown PaymentIntent options')
+      return request
+    }
+    const validate = vi.fn(async ({ request }: { request: Record<string, unknown> }) => {
+      parseStrictRequest(request)
+      return {} as never
+    })
+    const broadcast = vi.fn(async ({ request }: { request: Record<string, unknown> }) => {
+      parseStrictRequest(request)
+      return {
+        method: 'solana',
+        reference: '0xsolhash',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    })
+    const verify = vi.fn(async ({ request }: { request: Record<string, unknown> }) => {
+      parseStrictRequest(request)
+      return {
+        method: 'solana',
+        reference: '0xsolhash',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    })
+    const respond = vi.fn(({ request }: { request: Record<string, unknown> }) => {
+      parseStrictRequest(request)
+    })
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: { tempo: '0xtempoaddr', solana: 'SOLaddr' },
+    })
+    const methods = mp.defaultMethods().additional({
+      solana: (_address) =>
+        ({
+          name: 'solana',
+          intent: 'charge',
+          schema: {
+            credential: { payload: { parse: (x: unknown) => x } },
+            request: { parse: (x: unknown) => x },
+          },
+          broadcast,
+          respond,
+          validate,
+          verify,
+        }) as AnyServer,
+    })
+    const method = findMethod(methods, 'solana', 'charge')
+    const request = await method.request!({
+      request: {
+        amount: '10000',
+        paymentIntentOptions: { metadata: { request_id: 'req_123' } },
+      },
+    })
+
+    expect(request).toHaveProperty('paymentIntentOptions')
+    const context = { credential: {} as never, request }
+    await method.validate!(context)
+    const receipt = await method.broadcast!(context)
+    await method.verify(context)
+    await method.respond!({ credential: {} as never, receipt, request } as never)
+    expect(validate).toHaveBeenCalledOnce()
+    expect(broadcast).toHaveBeenCalledOnce()
+    expect(verify).toHaveBeenCalledOnce()
+    expect(respond).toHaveBeenCalledOnce()
+  })
+
   test('composes user hook with PI recorder for custom rails', async () => {
     const client = createMockStripeClient()
     const userHookCalls: unknown[] = []
