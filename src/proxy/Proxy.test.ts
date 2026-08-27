@@ -1032,7 +1032,10 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
     const replay = await fetch(`${proxyServer.url}/api/v1/scrape`, {
       headers: { Authorization: authorization },
     })
-    expect(replay.status).toBe(402)
+    expect(replay.status).toBe(500)
+    expect(await replay.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/internal-payment-error',
+    })
     expect(replay.headers.get('Payment-Receipt')).toBeNull()
   })
 })

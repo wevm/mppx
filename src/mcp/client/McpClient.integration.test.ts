@@ -218,7 +218,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
         expect(mismatch.content).toEqual([
           {
             type: 'text',
-            text: expect.stringContaining('challenge does not match route'),
+            text: expect.stringContaining('credential amount does not match'),
           },
         ])
 
