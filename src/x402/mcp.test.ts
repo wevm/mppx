@@ -13,7 +13,7 @@ const account = privateKeyToAccount(
   '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
 )
 
-async function createHarness() {
+async function createHarness(options: { paymentIsValid?: boolean } = {}) {
   const calls: string[] = []
   const facilitator = {
     async getSupported() {
@@ -31,7 +31,9 @@ async function createHarness() {
     },
     async verify() {
       calls.push('verify')
-      return { isValid: true, payer: account.address }
+      return options.paymentIsValid === false
+        ? { invalidReason: 'invalid payment', isValid: false, payer: account.address }
+        : { isValid: true, payer: account.address }
     },
   }
   const server = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme())
@@ -107,6 +109,29 @@ describe('x402 MCP compatibility', () => {
     expect(result.content).toEqual([{ text: 'result:mpp', type: 'text' }])
     expect(result.receipt?.reference).toBe(transaction)
     expect(calls).toEqual(['verify', 'settle'])
+  })
+
+  test('reports a rejected MPP credential as payment verification failed', async () => {
+    const { tool } = await createHarness({ paymentIsValid: false })
+    const sdkClient = {
+      callTool: (parameters: {
+        arguments?: Record<string, unknown>
+        _meta?: Record<string, unknown>
+      }) => tool((parameters.arguments ?? {}) as { query: string }, { _meta: parameters._meta }),
+    }
+    const client = McpClient.wrap(sdkClient as any, {
+      methods: [
+        evm.charge({
+          account,
+          authorization: { name: 'USDC', version: '2' },
+          maxAtomicAmount: '1000000',
+        }),
+      ],
+    })
+
+    await expect(
+      client.callTool({ arguments: { query: 'mpp' }, name: 'search' }),
+    ).rejects.toMatchObject({ code: -32043 })
   })
 
   test('returns facilitator failures as valid MCP tool errors', async () => {

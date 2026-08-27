@@ -2307,6 +2307,23 @@ describe('precompile server session unit guardrails', () => {
       expect(challenge.request.amount).toBe('0')
     })
 
+    test('malformed bootstrap payload returns an invalid-payload challenge', async () => {
+      const route = createBootstrapRoute({ rawStore: Store.memory() })
+      const challenge = Challenge.fromResponse(await bootstrapResponse(route))
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { type: 'transaction' },
+      } as never)
+
+      const response = await bootstrapResponse(route, authorization)
+
+      expect(response.status).toBe(402)
+      expect(await response.json()).toMatchObject({
+        status: 402,
+        type: 'https://paymentauth.org/problems/invalid-payload',
+      })
+    })
+
     test('valid proof resolves channel by source and returns snapshot headers', async () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)

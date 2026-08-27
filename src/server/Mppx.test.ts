@@ -5306,8 +5306,8 @@ describe('realm auto-detection', () => {
       recipient: '0x0000000000000000000000000000000000000002',
     })
 
-    // Simulate a non-HTTP input with no .url — should warn and use fallback
-    const result = await handle({} as any)
+    // Simulate a request-shaped input with no .url — should use fallback
+    const result = await handle({ body: null, headers: new Headers(), method: 'GET' } as any)
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
     const challenge = Challenge.fromResponse(result.challenge)

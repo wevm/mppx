@@ -11,6 +11,7 @@ import {
 } from '@x402/mcp'
 
 import * as Challenge from '../Challenge.js'
+import * as Errors from '../Errors.js'
 import * as Negotiator from '../integrations/x402/Negotiator.js'
 import * as Mcp from '../Mcp.js'
 import * as McpCredential from '../mcp/internal/Credential.js'
@@ -86,7 +87,11 @@ export function mpp(
       if (result.status === 'unprotected') return x402Handler(arguments_, rawExtra)
       if (result.status === 'x402') return x402Handler(arguments_, rawExtra)
       if (result.status === 'handled') {
-        if (result.response.status === 402) throw createCombinedChallenge(result.response)
+        if (result.response.status === 402)
+          throw createCombinedChallenge(
+            result.response,
+            credential ? new Errors.VerificationFailedError() : undefined,
+          )
         return attachReceipt(
           await responseToToolResult(result.response.clone()),
           result.response,
@@ -160,11 +165,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function createCombinedChallenge(response: Response): McpError {
+function createCombinedChallenge(response: Response, error?: Errors.PaymentError): McpError {
   const challenges = Challenge.fromResponseList(response)
   const encoded = response.headers.get(paymentRequiredHeader)
   const x402 = encoded ? decodePaymentRequiredHeader(encoded) : undefined
-  return new McpError(Mcp.paymentRequiredCode, 'Payment Required', {
+  return new McpError(Mcp.errorCode(error), error?.title ?? 'Payment Required', {
     challenges,
     httpStatus: 402,
     ...(x402 ? { x402 } : {}),

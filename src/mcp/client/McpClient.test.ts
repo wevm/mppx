@@ -307,6 +307,79 @@ describe('McpClient.wrap (in-place)', () => {
     expect(createCredential).toHaveBeenCalledOnce()
   })
 
+  test('behavior: retries a verification challenge from a credential-bearing call', async () => {
+    const challenge = createChallenge()
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const rawCallTool = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentVerificationFailedCode, 'Verification Failed', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockResolvedValueOnce({
+        _meta: { [core_Mcp.receiptMetaKey]: createReceipt(challenge) },
+        content: [{ type: 'text', text: 'Premium tool executed' }],
+      })
+    const wrapped = McpClient.wrap(
+      { callTool: rawCallTool as Client['callTool'] },
+      { methods: [Method.toClient(Methods.charge, { createCredential })] },
+    )
+
+    const result = await wrapped.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Premium tool executed' }])
+    expect(result.receipt?.status).toBe('success')
+    expect(rawCallTool).toHaveBeenCalledTimes(3)
+    expect(createCredential).toHaveBeenCalledTimes(2)
+  })
+
+  test('behavior: limits repeated payment verification attempts', async () => {
+    const challenge = createChallenge()
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const verificationError = new McpError(
+      core_Mcp.paymentVerificationFailedCode,
+      'Verification Failed',
+      { httpStatus: 402, challenges: [challenge] },
+    )
+    const rawCallTool = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockRejectedValue(verificationError)
+    const wrapped = McpClient.wrap(
+      { callTool: rawCallTool as Client['callTool'] },
+      { methods: [Method.toClient(Methods.charge, { createCredential })] },
+    )
+
+    await expect(wrapped.callTool({ name: 'premium_tool', arguments: {} })).rejects.toBe(
+      verificationError,
+    )
+    expect(rawCallTool).toHaveBeenCalledTimes(4)
+    expect(createCredential).toHaveBeenCalledTimes(3)
+  })
+
   test('behavior: preserves the MCP SDK callTool argument shape', async () => {
     const rawCallTool = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: 'Free tool executed' }],

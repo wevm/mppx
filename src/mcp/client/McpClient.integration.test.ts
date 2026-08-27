@@ -208,19 +208,19 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
         const openReceipt = opened.receipt as SessionReceipt | undefined
         expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
 
-        const mismatch = await getPaymentRequiredError(
+        const mismatch = await callToolWithCredential(
           harness.sdkClient,
           'session_tool_double',
           openCredential,
         )
 
-        expect(mismatch.data.problem?.type).toBe(
-          'https://paymentauth.org/problems/invalid-challenge',
-        )
-        expect(mismatch.data.challenges).toHaveLength(1)
-        expect(mismatch.data.challenges[0]?.method).toBe('tempo')
-        expect(mismatch.data.challenges[0]?.intent).toBe('session')
-        expect(mismatch.data.challenges[0]?.request.amount).toBe(doubleSessionAmountRaw.toString())
+        expect(mismatch.isError).toBe(true)
+        expect(mismatch.content).toEqual([
+          {
+            type: 'text',
+            text: expect.stringContaining('challenge does not match route'),
+          },
+        ])
 
         const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
         expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw)
@@ -414,13 +414,6 @@ type WrappedClient = {
 
 type SessionMethod = ReturnType<typeof tempo_session_client>
 type SessionChallenge = Parameters<SessionMethod['createCredential']>[0]['challenge']
-type PaymentRequiredMcpError = Error & {
-  data: {
-    challenges: SessionChallenge[]
-    problem?: { type?: string | undefined } | undefined
-  }
-}
-
 type Scenario = {
   name: string
   run: (harness: Harness) => Promise<void>
@@ -599,21 +592,6 @@ async function callToolWithCredential(
     ...result,
     receipt: result._meta?.[core_Mcp.receiptMetaKey] as McpClient.CallToolResult['receipt'],
   }
-}
-
-async function getPaymentRequiredError(
-  client: Client,
-  toolName: string,
-  serializedCredential: string,
-): Promise<PaymentRequiredMcpError> {
-  try {
-    await callToolWithCredential(client, toolName, serializedCredential)
-  } catch (error) {
-    if (!McpClient.isPaymentRequiredError(error)) throw error
-    return error as unknown as PaymentRequiredMcpError
-  }
-
-  throw new Error(`Expected ${toolName} to return a payment-required error`)
 }
 
 async function getTokenBalance(account: Address): Promise<bigint> {
