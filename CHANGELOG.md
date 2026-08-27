@@ -1,5 +1,13 @@
 # mppx
 
+## 0.9.1
+
+### Patch Changes
+
+- a33ff0a: Added MACH as a charge currency with stablecoin gas fallback and preserved session recovery.
+- c74d2ce: Added request-scoped PaymentIntent metadata to Stripe machine payment charge handlers, and exposed pre-transform request input to payment-success callbacks.
+- 2735c65: Fixed MCP payment errors to use the specification-defined JSON-RPC codes and retry verification challenges.
+
 ## 0.9.0
 
 ### Minor Changes
