@@ -71,10 +71,11 @@ describe('stripe.create() defaultMethods', () => {
     await tempoMethod.onPaymentSuccess!({
       receipt: { reference: '0xtx123' },
       request: { amount: '500000' },
+      requestInput: { paymentIntentOptions: { metadata: { request_id: 'req_123' } } },
     })
 
     expect(client.paymentIntents.create).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: { agent_id: 'test-agent' } }),
+      expect.objectContaining({ metadata: { agent_id: 'test-agent', request_id: 'req_123' } }),
       expect.anything(),
     )
   })

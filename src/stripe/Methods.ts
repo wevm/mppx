@@ -2,6 +2,7 @@ import { parseUnits } from 'viem'
 
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import * as PaymentIntent from './internal/payment-intent.js'
 
 /**
  * Stripe charge intent for one-time payments via Shared Payment Tokens (SPTs).
@@ -27,18 +28,29 @@ export const charge = Method.from({
         externalId: z.optional(z.string()),
         metadata: z.optional(z.record(z.string(), z.string())),
         networkId: z.string(),
+        paymentIntentOptions: z.optional(PaymentIntent.Schema),
         paymentMethodTypes: z.array(z.string()).check(z.minLength(1)),
         recipient: z.optional(z.string()),
       }),
-      z.transform(({ amount, decimals, metadata, networkId, paymentMethodTypes, ...rest }) => ({
-        ...rest,
-        amount: parseUnits(amount, decimals).toString(),
-        methodDetails: {
+      z.transform(
+        ({
+          amount,
+          decimals,
+          metadata,
           networkId,
+          paymentIntentOptions: _,
           paymentMethodTypes,
-          ...(metadata !== undefined && { metadata }),
-        },
-      })),
+          ...rest
+        }) => ({
+          ...rest,
+          amount: parseUnits(amount, decimals).toString(),
+          methodDetails: {
+            networkId,
+            paymentMethodTypes,
+            ...(metadata !== undefined && { metadata }),
+          },
+        }),
+      ),
     ),
   },
 })

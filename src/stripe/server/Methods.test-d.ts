@@ -11,8 +11,24 @@ test('async defaultMethods() produces types compose can use', async () => {
   const mppx = Mppx.create({ methods, secretKey: 'test' })
 
   const result = await mppx.compose(
-    ['tempo/charge', { amount: '0.01', description: 'test' }],
-    ['stripe/charge', { amount: '0.50', currency: 'usd', decimals: 2, description: 'test' }],
+    [
+      'tempo/charge',
+      {
+        amount: '0.01',
+        description: 'test',
+        paymentIntentOptions: { metadata: { key: 'value' } },
+      },
+    ],
+    [
+      'stripe/charge',
+      {
+        amount: '0.50',
+        currency: 'usd',
+        decimals: 2,
+        description: 'test',
+        paymentIntentOptions: { metadata: { key: 'value' } },
+      },
+    ],
   )(new Request('http://localhost'))
 
   expectTypeOf(result.status).toEqualTypeOf<200 | 402>()

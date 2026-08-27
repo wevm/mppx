@@ -24,8 +24,10 @@ describe('charge', () => {
       networkId: 'profile_123',
       paymentMethodTypes: ['card'],
       metadata: { example: 'metadata' },
+      paymentIntentOptions: { metadata: { order: '123' } },
     })
     expect(result.success).toBe(true)
+    if (result.success) expect(result.data).not.toHaveProperty('paymentIntentOptions')
   })
 
   test('schema: rejects invalid request', () => {

@@ -188,7 +188,12 @@ describe('stripe.charge with client', () => {
 
     httpServer = await Http.createServer(async (req, res) => {
       const result = await Mppx.toNodeListener(
-        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+        server.charge({
+          amount: '1',
+          currency: 'usd',
+          decimals: 2,
+          paymentIntentOptions: { metadata: { plan: 'enterprise', request_id: 'req_123' } },
+        }),
       )(req, res)
       if (result.status === 402) return
       res.end('OK')
@@ -196,6 +201,7 @@ describe('stripe.charge with client', () => {
 
     const response = await fetch(httpServer.url)
     const challenge = Challenge.fromResponse(response)
+    expect(challenge.request).not.toHaveProperty('paymentIntentOptions')
     const credential = Credential.from({
       challenge,
       payload: { spt: 'spt_test_token' },
@@ -206,7 +212,7 @@ describe('stripe.charge with client', () => {
     })
 
     const [params] = create.mock.calls[0]!
-    expect(params.metadata).toMatchObject({ plan: 'pro' })
+    expect(params.metadata).toMatchObject({ plan: 'enterprise', request_id: 'req_123' })
     expect(params.metadata).not.toHaveProperty('mpp_is_mpp')
     expect(params.metadata).not.toHaveProperty('mpp_version')
   })

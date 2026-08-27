@@ -1537,7 +1537,7 @@ describe('server events', () => {
     })
     handler.onPaymentSuccess((context) => {
       events.push(
-        `success:${context.receipt.reference}:${context.input}:${context.capturedRequest?.url.pathname}`,
+        `success:${context.receipt.reference}:${context.input}:${context.capturedRequest?.url.pathname}:${context.requestInput?.amount}`,
       )
     })
 
@@ -1554,7 +1554,41 @@ describe('server events', () => {
     )
 
     expect(result.reference).toBe('tx-standalone')
-    expect(events).toEqual(['success:tx-standalone:undefined:/standalone'])
+    expect(events).toEqual(['success:tx-standalone:undefined:/standalone:1000'])
+  })
+
+  test('omits request input from standalone verification without route options', async () => {
+    const successContexts: object[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      onPaymentSuccess(context) {
+        successContexts.push(context)
+      },
+      async verify() {
+        return receipt('tx-standalone')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      successContexts.push(context)
+    })
+
+    const first = await handler.charge(options())(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    await handler.verifyCredential(
+      Credential.from({
+        challenge: Challenge.fromResponse(first.challenge),
+        payload: { token: 'valid' },
+      }),
+    )
+
+    expect(successContexts).toHaveLength(2)
+    for (const context of successContexts) expect(context).not.toHaveProperty('requestInput')
   })
 
   test('per-method onPaymentSuccess hook fires on successful payment', async () => {
@@ -1932,9 +1966,10 @@ describe('server events', () => {
             amount: z.string(),
             currency: z.string(),
             decimals: z.number(),
+            inputOnly: z.optional(z.string()),
             recipient: z.string(),
           }),
-          z.transform(({ amount, currency, decimals, recipient }) => ({
+          z.transform(({ amount, currency, decimals, inputOnly: _, recipient }) => ({
             amount: String(Number(amount) * 10 ** decimals),
             currency,
             recipient,
@@ -1960,17 +1995,20 @@ describe('server events', () => {
       seen.eventAdmin = context.credential?.payload.admin
       seen.eventEnvelopeAmount = context.envelope?.request.amount
       seen.eventRequestAmount = context.request.amount
+      seen.eventRequestInput = context.requestInput?.inputOnly
     })
     const handle = handler.charge({
       amount: '25',
       currency: '0x0000000000000000000000000000000000000001',
       decimals: 2,
       expires: new Date(Date.now() + 60_000).toISOString(),
+      inputOnly: 'server-only',
       recipient: '0x0000000000000000000000000000000000000002',
     })
     const first = await handle(new Request('https://example.com/resource'))
     expect(first.status).toBe(402)
     if (first.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(first.challenge).request).not.toHaveProperty('inputOnly')
 
     const paid = await handle(
       new Request('https://example.com/resource', {
@@ -1990,6 +2028,7 @@ describe('server events', () => {
       eventAdmin: false,
       eventEnvelopeAmount: '2500',
       eventRequestAmount: '2500',
+      eventRequestInput: 'server-only',
       verifyAdmin: false,
       verifyEnvelopeAmount: '2500',
       verifyRequestAmount: '25',
@@ -1998,6 +2037,7 @@ describe('server events', () => {
 
   test('snapshots payment success payloads before listeners run', async () => {
     let mutationBlocked = false
+    let requestInputMutationBlocked = false
     const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt('tx-original')
@@ -2013,6 +2053,11 @@ describe('server events', () => {
         ;(context.receipt as { reference: string }).reference = 'tx-mutated'
       } catch {
         mutationBlocked = true
+      }
+      try {
+        ;(context.requestInput as { amount: string }).amount = 'mutated'
+      } catch {
+        requestInputMutationBlocked = true
       }
     })
     const handle = handler.charge(options())
@@ -2037,6 +2082,7 @@ describe('server events', () => {
 
     const response = paid.withReceipt(Response.json({ ok: true }))
     expect(mutationBlocked).toBe(true)
+    expect(requestInputMutationBlocked).toBe(true)
     expect(Receipt.fromResponse(response).reference).toBe('tx-original')
   })
 })
