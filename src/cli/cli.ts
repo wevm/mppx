@@ -17,6 +17,7 @@ import * as Transport from '../client/Transport.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
+import * as x402_Header from '../x402/Header.js'
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
@@ -201,18 +202,37 @@ type ProtocolOption = 'auto' | 'mpp' | 'x402'
 async function collectChallenges(
   response: Response,
   protocol: ProtocolOption,
+  options: { ignoreX402ResponseUrl?: boolean | undefined } = {},
 ): Promise<Challenge.Challenge[]> {
   const mpp = () => mppProtocol().getChallenges(response)
-  const x402 = () => x402Protocol().getChallenges(response)
+  const x402 = () =>
+    x402Protocol().getChallenges(
+      options.ignoreX402ResponseUrl
+        ? new Response(null, { headers: response.headers, status: response.status })
+        : response,
+    )
   if (protocol === 'mpp') return mpp()
   if (protocol === 'x402') return x402()
 
-  const mppChallenges = await mpp()
+  let mppChallenges: Challenge.Challenge[] = []
+  let mppError: unknown
   try {
-    return [...mppChallenges, ...(await x402())]
-  } catch {
-    return mppChallenges
+    mppChallenges = await mpp()
+  } catch (error) {
+    mppError = error
   }
+
+  let x402Challenges: Challenge.Challenge[] = []
+  let x402Error: unknown
+  try {
+    x402Challenges = await x402()
+  } catch (error) {
+    x402Error = error
+  }
+  if (mppChallenges.length || x402Challenges.length) return [...mppChallenges, ...x402Challenges]
+  if (mppError) throw mppError
+  if (x402Error) throw x402Error
+  return []
 }
 
 /**
@@ -230,6 +250,48 @@ function selectedChallengeTransport(
     getChallenges: () => [challenge],
     setCredential: (request) => request,
   })
+}
+
+/** Returns a selected challenge as a one-off response for credential overrides. */
+function toSelectedChallengeResponse(challenge: Challenge.Challenge, response: Response): Response {
+  if (!x402_ChallengeBrand.is(challenge))
+    return new Response(null, {
+      status: 402,
+      headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
+    })
+
+  const request = challenge.request as x402_Types.ExactRequest
+  if (!request.resource) return response
+  return new Response(null, {
+    status: 402,
+    headers: {
+      [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+        accepts: [x402_Types.toPaymentRequirements(request)],
+        ...(request.extensions && { extensions: request.extensions }),
+        resource: request.resource,
+        x402Version: 2,
+      }),
+    },
+  })
+}
+
+/** Resolves the actual fetch target and required Host header for a local subdomain. */
+function resolveFetchTarget(url: string): { host?: string | undefined; url: string } {
+  const { host, hostname } = new URL(url)
+  if (!hostname.endsWith('.localhost') || hostname === 'localhost') return { url }
+  return { host, url: url.replace(hostname, '127.0.0.1') }
+}
+
+/** Replaces a target-specific Host header without forwarding it to another origin. */
+function setTargetHost(headers: Record<string, string>, host?: string | undefined): void {
+  for (const key of Object.keys(headers)) if (key.toLowerCase() === 'host') delete headers[key]
+  if (host) headers.Host = host
+}
+
+/** Returns the resource URL that an x402 credential is bound to. */
+function x402ResourceUrl(challenge: Challenge.Challenge): string | undefined {
+  const resource = (challenge.request as { resource?: { url?: unknown } }).resource
+  return typeof resource?.url === 'string' ? resource.url : undefined
 }
 
 async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
@@ -406,12 +468,9 @@ const cli = Cli.create('mppx', {
     // Node.js doesn't resolve *.localhost subdomains to loopback (unlike
     // browsers per RFC 6761). Rewrite the URL to 127.0.0.1 and set the
     // Host header so reverse proxies can route correctly.
-    const isSubLocalhost = hostname.endsWith('.localhost') && hostname !== 'localhost'
-    const fetchUrl = isSubLocalhost ? url.replace(hostname, '127.0.0.1') : url
-    if (isSubLocalhost) {
-      const { host } = new URL(url)
-      headers.Host = host
-    }
+    const initialTarget = resolveFetchTarget(url)
+    const fetchUrl = initialTarget.url
+    if (initialTarget.host) headers.Host = initialTarget.host
 
     try {
       const methodOpts = parseMethodOpts(c.options.methodOpt)
@@ -455,7 +514,14 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol)
+      const challengeResponseUrl = challengeResponse.url
+        ? new URL(challengeResponse.url)
+        : undefined
+      const ignoreX402ResponseUrl =
+        initialTarget.host !== undefined && challengeResponseUrl?.hostname === '127.0.0.1'
+      const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol, {
+        ignoreX402ResponseUrl,
+      })
       if (offeredChallenges.length === 0)
         return c.error({
           code: 'UNSUPPORTED_PROTOCOL',
@@ -499,12 +565,7 @@ const cli = Cli.create('mppx', {
 
       const { challenge, plugin, method: configMethod } = selected
       const isX402Challenge = x402_ChallengeBrand.is(challenge)
-      const selectedChallengeResponse = isX402Challenge
-        ? challengeResponse
-        : new Response(null, {
-            status: 402,
-            headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
-          })
+      const selectedChallengeResponse = toSelectedChallengeResponse(challenge, challengeResponse)
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
       let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
@@ -678,11 +739,20 @@ const cli = Cli.create('mppx', {
         ...normalizeHeaders(init.headers),
         [credentialHeader]: credential,
       }
+      const credentialTarget = isX402Challenge
+        ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
+        : initialTarget
+      if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
       plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
-      const credentialFetchInit = { ...init, headers: credentialHeaders }
-      if (c.options.verbose >= 2) printRequestHeaders(url, credentialFetchInit, info)
-      const credentialResponse = await targetFetch(fetchUrl, credentialFetchInit)
+      const credentialFetchInit = {
+        ...init,
+        ...(isX402Challenge && { redirect: 'manual' as const }),
+        headers: credentialHeaders,
+      }
+      if (c.options.verbose >= 2)
+        printRequestHeaders(credentialTarget.url, credentialFetchInit, info)
+      const credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
 
       if (c.options.fail && credentialResponse.status >= 400)
         return c.error({

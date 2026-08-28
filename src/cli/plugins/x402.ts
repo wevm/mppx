@@ -19,7 +19,7 @@ const knownAssets: readonly (readonly [string, Assets.KnownAsset])[] = [
 export function x402() {
   return createPlugin({
     method: 'evm',
-    supports: (challenge) => x402_ChallengeBrand.is(challenge),
+    supports: isSupportedChallenge,
 
     async setup({ challenge, options }) {
       const request = challenge.request as {
@@ -53,6 +53,22 @@ export function x402() {
       }
     },
   })
+}
+
+/** Returns whether the CLI can create an x402 credential for this challenge. */
+function isSupportedChallenge(challenge: { request: Record<string, unknown> }): boolean {
+  if (!x402_ChallengeBrand.is(challenge)) return false
+  const request = challenge.request
+  const transfer = request.extra as Record<string, unknown> | undefined
+  const transferMethod = transfer?.assetTransferMethod
+  return (
+    request.scheme === 'exact' &&
+    typeof request.asset === 'string' &&
+    typeof request.network === 'string' &&
+    typeof transfer?.name === 'string' &&
+    typeof transfer?.version === 'string' &&
+    (transferMethod === undefined || transferMethod === 'eip3009')
+  )
 }
 
 function resolveEvmChain(chainId: number): Chain | undefined {

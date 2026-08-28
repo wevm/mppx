@@ -50,23 +50,31 @@ describe('protocol selection', () => {
   const usdc = x402_Assets.baseSepolia.USDC
   const payTo = '0x1234567890AbcdEF1234567890aBcdef12345678'
 
-  /** Creates a valid x402 offer bound to the URL handled by the test server. */
-  function paymentRequired(req: {
-    headers: { host?: string | undefined }
-    url?: string | undefined
-  }) {
+  function paymentAccept(
+    options: Partial<x402_Types.PaymentRequirements> = {},
+  ): x402_Types.PaymentRequirements {
+    return {
+      amount: '5000',
+      asset: usdc.address,
+      extra: { name: usdc.transfer.name, version: usdc.transfer.version },
+      maxTimeoutSeconds: 60,
+      network: usdc.network,
+      payTo,
+      scheme: 'exact',
+      ...options,
+    }
+  }
+
+  /** Creates valid x402 offers bound to the URL handled by the test server. */
+  function paymentRequired(
+    req: {
+      headers: { host?: string | undefined }
+      url?: string | undefined
+    },
+    accepts: x402_Types.PaymentRequirements[] = [paymentAccept()],
+  ) {
     return x402_Header.encodePaymentRequired({
-      accepts: [
-        {
-          amount: '5000',
-          asset: usdc.address,
-          extra: { name: usdc.transfer.name, version: usdc.transfer.version },
-          maxTimeoutSeconds: 60,
-          network: usdc.network,
-          payTo,
-          scheme: 'exact',
-        },
-      ],
+      accepts,
       resource: { mimeType: 'application/json', url: `http://${req.headers.host}${req.url}` },
       x402Version: 2,
     })
@@ -152,6 +160,106 @@ describe('protocol selection', () => {
     } finally {
       httpServer.close()
     }
+  })
+
+  test('skips an unsupported x402 offer before signing a supported one', async () => {
+    let paymentSignature: string | undefined
+    const httpServer = await Http.createServer((req, res) => {
+      paymentSignature = req.headers['payment-signature'] as string | undefined
+      if (!paymentSignature) {
+        res.writeHead(402, {
+          [x402_Types.paymentRequiredHeader]: paymentRequired(req, [
+            paymentAccept({ amount: '1', extra: { assetTransferMethod: 'permit2' } }),
+            paymentAccept(),
+          ]),
+        })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+
+    expect(x402_Header.decodePaymentSignature(paymentSignature!).accepted.amount).toBe('5000')
+  })
+
+  test('pays x402 alongside an unrelated WWW-Authenticate scheme', async () => {
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers['payment-signature']) {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: 'Bearer realm="api"',
+          [x402_Types.paymentRequiredHeader]: paymentRequired(req),
+        })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('pays a sub-localhost x402 resource using its advertised URL', async () => {
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers['payment-signature']) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+    const url = httpServer.url.replace('localhost', 'app.localhost')
+
+    try {
+      const { output } = await serve([url, '-s'], { env: { MPPX_PRIVATE_KEY: testPrivateKey } })
+      expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('retries an x402 credential directly with the challenge resource', async () => {
+    let credentialLeakedToRedirect = false
+    const paymentServer = await Http.createServer((req, res) => {
+      if (!req.headers['payment-signature']) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+    const redirectServer = await Http.createServer((req, res) => {
+      credentialLeakedToRedirect ||= req.headers['payment-signature'] !== undefined
+      res.writeHead(302, { Location: `${paymentServer.url}/paid` })
+      res.end()
+    })
+
+    try {
+      const { output } = await serve([redirectServer.url, '--location', '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid')
+    } finally {
+      redirectServer.close()
+      paymentServer.close()
+    }
+
+    expect(credentialLeakedToRedirect).toBe(false)
   })
 
   test('--protocol mpp ignores a co-offered x402 challenge', async () => {
