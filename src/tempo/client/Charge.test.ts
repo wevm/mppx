@@ -82,7 +82,7 @@ describe('tempo.charge client', () => {
             currency: Addresses.pathUsd,
           }),
         }),
-      ).resolves.toBe(1)
+      ).resolves.toBe(2)
       await expect(
         method.getChallengePriority?.({
           challenge: createChallenge({
@@ -94,6 +94,112 @@ describe('tempo.charge client', () => {
       ).resolves.toBe(-1)
       expect(getBalance).toHaveBeenCalledTimes(2)
       expect(getBalance.mock.calls.every(([, parameters]) => parameters.decimals === 0)).toBe(true)
+    } finally {
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  })
+
+  test('prioritizes an auto-swappable stablecoin over unfunded MACH', async () => {
+    vi.resetModules()
+    const chainId = 42431
+    const usdc = '0x20C000000000000000000000b9537d11c60E8b50'
+    const findCalls = vi.fn(
+      async (
+        _client: unknown,
+        _parameters: { account: Address; amountOut: bigint; tokenOut: Address },
+      ) => [{ to: Addresses.stablecoinDex }],
+    )
+    const getBalance = vi.fn(async () => ({ amount: 0n }))
+    vi.doMock('viem/tempo', async (importOriginal) => {
+      const original = await importOriginal<typeof import('viem/tempo')>()
+      return {
+        ...original,
+        Actions: {
+          ...original.Actions,
+          token: { ...original.Actions.token, getBalance },
+        },
+      }
+    })
+    vi.doMock('../internal/auto-swap.js', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../internal/auto-swap.js')>()
+      return { ...original, findCalls }
+    })
+
+    try {
+      const { charge: chargeWithMockedBalance } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedBalance({ account, autoSwap: true, getClient: () => client })
+
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({ amount: '1', chainId, currency: mach(chainId).address }),
+        }),
+      ).resolves.toBe(-1)
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({ amount: '1', chainId, currency: usdc }),
+        }),
+      ).resolves.toBe(1)
+      expect(findCalls).toHaveBeenCalledOnce()
+      expect(findCalls.mock.calls[0]?.[1]).toMatchObject({
+        account: account.address,
+        amountOut: 1_000_000n,
+        tokenOut: usdc,
+      })
+    } finally {
+      vi.doUnmock('viem/tempo')
+      vi.doUnmock('../internal/auto-swap.js')
+      vi.resetModules()
+    }
+  })
+
+  test('does not prioritize unsponsored MACH without a funded fee token', async () => {
+    vi.resetModules()
+    const chainId = 42431
+    const getBalance = vi.fn(async (_client: unknown, parameters: { token: Address }) => ({
+      amount: isAddressEqual(parameters.token, mach(chainId).address) ? 1_000_000n : 0n,
+    }))
+    vi.doMock('viem/tempo', async (importOriginal) => {
+      const original = await importOriginal<typeof import('viem/tempo')>()
+      return {
+        ...original,
+        Actions: {
+          ...original.Actions,
+          fee: { ...original.Actions.fee, getUserToken: vi.fn(async () => undefined) },
+          token: { ...original.Actions.token, getBalance },
+        },
+      }
+    })
+
+    try {
+      const { charge: chargeWithMockedBalance } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedBalance({ account, getClient: () => client })
+
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({ amount: '1', chainId, currency: mach(chainId).address }),
+        }),
+      ).resolves.toBe(-1)
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({
+            amount: '1',
+            chainId,
+            currency: mach(chainId).address,
+            feePayer: true,
+          }),
+        }),
+      ).resolves.toBe(2)
     } finally {
       vi.doUnmock('viem/tempo')
       vi.resetModules()

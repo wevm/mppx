@@ -74,15 +74,17 @@ export function charge(parameters: charge.Parameters = {}) {
     },
 
     async getChallengePriority({ challenge }) {
-      if (parameters.autoSwap) return 0
       const { amount, currency } = challenge.request
-      const methodDetails = challenge.request.methodDetails as { chainId?: number } | undefined
+      const methodDetails = challenge.request.methodDetails as
+        | { chainId?: number; feePayer?: boolean }
+        | undefined
       if (typeof amount !== 'string' || typeof currency !== 'string') return 0
 
       let amountRaw: bigint
       try {
         amountRaw = BigInt(amount)
-      } catch {
+      } catch (error) {
+        if (error instanceof AutoSwap.InsufficientFundsError) return -1
         return 0
       }
       if (amountRaw === 0n) return 1
@@ -97,7 +99,40 @@ export function charge(parameters: charge.Parameters = {}) {
           decimals: 0,
           token: currency as Address,
         })
-        return balance.amount >= amountRaw ? 1 : -1
+        if (balance.amount >= amountRaw) {
+          const machAddress = mach.addresses[chainId as keyof typeof mach.addresses]
+          if (
+            machAddress &&
+            isAddressEqual(currency as Address, machAddress) &&
+            !methodDetails?.feePayer
+          ) {
+            const allowedFeeTokens = defaultFeeTokens(chainId)
+            const feeToken = await resolveFeeToken({
+              account: account.address,
+              allowedTokens: allowedFeeTokens,
+              candidateTokens: allowedFeeTokens,
+              client,
+              prioritizeCandidates: true,
+              requireBalance: true,
+            })
+            if (!feeToken) return -1
+          }
+          return 2
+        }
+
+        const autoSwap = AutoSwap.resolve(parameters.autoSwap, AutoSwap.defaultCurrencies)
+        const machAddress = mach.addresses[chainId as keyof typeof mach.addresses]
+        if (!autoSwap || (machAddress && isAddressEqual(currency as Address, machAddress)))
+          return -1
+
+        const calls = await AutoSwap.findCalls(client, {
+          account: account.address,
+          amountOut: amountRaw,
+          tokenOut: currency as Address,
+          tokenIn: autoSwap.tokenIn,
+          slippage: autoSwap.slippage,
+        })
+        return calls ? 1 : 2
       } catch {
         return 0
       }

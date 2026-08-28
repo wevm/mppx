@@ -56,8 +56,10 @@ export async function resolveFeeToken(parameters: {
   candidateTokens?: readonly Address[] | undefined
   client: Client
   prioritizeCandidates?: boolean | undefined
+  requireBalance?: boolean | undefined
 }): Promise<Address | undefined> {
-  const { account, allowedTokens, candidateTokens, client, prioritizeCandidates } = parameters
+  const { account, allowedTokens, candidateTokens, client, prioritizeCandidates, requireBalance } =
+    parameters
   const tokens: Address[] = []
 
   if (prioritizeCandidates)
@@ -76,5 +78,5 @@ export async function resolveFeeToken(parameters: {
     if (await hasBalance(client, account, token)) return token
   }
 
-  return tokens[0]
+  return requireBalance ? undefined : tokens[0]
 }
