@@ -14,7 +14,6 @@ const knownAssets: readonly (readonly [string, Assets.KnownAsset])[] = [
   ...Object.entries(evmAssets.celo),
   ...Object.entries(evmAssets.celoSepolia),
 ]
-const knownCurrencies = knownAssets.map(([, asset]) => asset)
 
 /** Pays recognized x402 exact EVM challenges with the configured CLI account. */
 export function x402() {
@@ -25,6 +24,7 @@ export function x402() {
     async setup({ challenge, options }) {
       const request = challenge.request as {
         asset?: Address | undefined
+        extra?: Record<string, unknown> | undefined
         network?: x402_Types.EvmNetwork | undefined
       }
       const chain = request.network ? resolveEvmChain(Assets.toChainId(request.network)) : undefined
@@ -32,11 +32,22 @@ export function x402() {
         request.network && request.asset
           ? knownAssets.find(([, asset]) => Assets.matches(asset, request.asset!, request.network!))
           : undefined
+      const name = request.extra?.name
+      const version = request.extra?.version
+      const currency =
+        request.asset && request.network && typeof name === 'string' && typeof version === 'string'
+          ? Assets.define({
+              address: request.asset,
+              decimals: known?.[1].decimals ?? 6,
+              network: request.network,
+              transfer: { name, type: 'eip3009', version },
+            })
+          : undefined
       const account = await resolveAccount(options.account)
 
       return {
         explorerUrl: chain?.blockExplorers?.default?.url,
-        methods: [...evmMethods({ account, currencies: knownCurrencies })],
+        methods: [...evmMethods({ account, ...(currency && { currencies: [currency] }) })],
         tokenDecimals: known?.[1].decimals ?? 6,
         tokenSymbol: known?.[0] ?? '',
       }

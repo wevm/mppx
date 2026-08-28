@@ -35,6 +35,7 @@ import {
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
+import cli from '../cli/cli.js'
 import * as Header from './Header.js'
 import * as ChallengeBrand from './internal/ChallengeBrand.js'
 import * as Types from './Types.js'
@@ -46,6 +47,7 @@ const chainId = 31_337
 const network = `eip155:${chainId}` as const
 const rpcUrl = process.env.X402_ANVIL_RPC_URL ?? 'http://127.0.0.1:18546'
 const mnemonic = 'test test test test test test test test test test test junk'
+const payerPrivateKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
 const payer = mnemonicToAccount(mnemonic, { accountIndex: 0 })
 const recipient = mnemonicToAccount(mnemonic, { addressIndex: 1 })
 const facilitatorAccount = mnemonicToAccount(mnemonic, { addressIndex: 2 })
@@ -213,6 +215,42 @@ describeLocalnet('Coinbase x402 client interoperability', () => {
     }
   })
 
+  test('pays a live Coinbase resource server with the CLI', { timeout: 60_000 }, async () => {
+    const harness = await setupCoinbaseHarness()
+
+    try {
+      const payerBefore = await balanceOf(harness.artifact, harness.token, payer.address)
+      const recipientBefore = await balanceOf(harness.artifact, harness.token, recipient.address)
+      const result = await runCli(
+        [
+          `${harness.resourceServer.url}/paid`,
+          '--protocol',
+          'x402',
+          '--currency',
+          harness.token.toUpperCase(),
+          '--silent',
+        ],
+        { MPPX_PRIVATE_KEY: payerPrivateKey },
+      )
+
+      expect(result.exitCode).toBeUndefined()
+      expect(result.output).toContain('paid by mppx')
+      expect(await balanceOf(harness.artifact, harness.token, payer.address)).toBe(
+        payerBefore - paymentAmount,
+      )
+      expect(await balanceOf(harness.artifact, harness.token, recipient.address)).toBe(
+        recipientBefore + paymentAmount,
+      )
+      expect(harness.facilitator.stats).toEqual({
+        settleRequests: 1,
+        supportedRequests: 1,
+        verifyRequests: 1,
+      })
+    } finally {
+      closeCoinbaseHarness(harness)
+    }
+  })
+
   test('rejects a replayed mppx credential', { timeout: 60_000 }, async () => {
     const harness = await setupCoinbaseHarness()
 
@@ -290,6 +328,46 @@ async function setupCoinbaseHarness(): Promise<CoinbaseHarness> {
 function closeCoinbaseHarness(harness: CoinbaseHarness): void {
   harness.resourceServer.close()
   harness.facilitator.close()
+}
+
+/** Runs the CLI in-process while isolating its account environment and stdout. */
+async function runCli(
+  argv: string[],
+  env: Record<string, string | undefined>,
+): Promise<{ exitCode: number | undefined; output: string }> {
+  const output: Buffer[] = []
+  const previousEnv: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(env)) {
+    previousEnv[key] = process.env[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+
+  const originalStdoutWrite = process.stdout.write
+  process.stdout.write = ((chunk: unknown) => {
+    output.push(Buffer.from(chunk instanceof Uint8Array ? chunk : String(chunk)))
+    return true
+  }) as typeof process.stdout.write
+
+  let exitCode: number | undefined
+  try {
+    await cli.serve(argv, {
+      exit(code: number) {
+        exitCode = code
+      },
+      stdout(value: string) {
+        output.push(Buffer.from(value))
+      },
+    })
+  } finally {
+    process.stdout.write = originalStdoutWrite
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+
+  return { exitCode, output: Buffer.concat(output).toString() }
 }
 
 async function createCoinbaseFacilitator(): Promise<CoinbaseFacilitatorServer> {
