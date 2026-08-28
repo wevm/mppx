@@ -63,6 +63,46 @@ export function charge(parameters: charge.Parameters = {}) {
   return Method.toClient(Methods.charge, {
     context: chargeContextSchema,
 
+    canHandleChallenge({ challenge }) {
+      const challengeChainId = (challenge.request.methodDetails as { chainId?: number } | undefined)
+        ?.chainId
+      return (
+        parameters.expectedChainId === undefined ||
+        challengeChainId === undefined ||
+        challengeChainId === parameters.expectedChainId
+      )
+    },
+
+    async getChallengePriority({ challenge }) {
+      if (parameters.autoSwap) return 0
+      const { amount, currency } = challenge.request
+      const methodDetails = challenge.request.methodDetails as { chainId?: number } | undefined
+      if (typeof amount !== 'string' || typeof currency !== 'string') return 0
+
+      let amountRaw: bigint
+      try {
+        amountRaw = BigInt(amount)
+      } catch {
+        return 0
+      }
+      if (amountRaw === 0n) return 1
+
+      try {
+        const chainId = methodDetails?.chainId ?? parameters.expectedChainId
+        const client = await getClient({ chainId })
+        const account = getAccount(client)
+        const balance = await Actions.token.getBalance(client as never, {
+          account: account.address,
+          // Priority compares base units only; avoid a redundant decimals RPC.
+          decimals: 0,
+          token: currency as Address,
+        })
+        return balance.amount >= amountRaw ? 1 : -1
+      } catch {
+        return 0
+      }
+    },
+
     async createCredential({ challenge, context }) {
       // Chain pinning: reject a challenge whose chain ID conflicts with the
       // pinned one, and sign on the pin when the challenge omits a chain ID.

@@ -909,5 +909,6 @@ async function resolveSessionChallengeOrder(
   override: SessionOrderChallenges | undefined,
 ): Promise<readonly AcceptPayment.ChallengeCandidate<SessionMethod>[]> {
   const orderChallenges = override
-  return orderChallenges ? orderChallenges(candidates) : candidates
+  const prioritized = await AcceptPayment.prioritizeChallengeCandidates(candidates)
+  return orderChallenges ? orderChallenges(prioritized) : prioritized
 }

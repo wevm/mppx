@@ -205,6 +205,34 @@ describe('preparePayment', () => {
     expect(createCredential).not.toHaveBeenCalled()
   })
 
+  test('behavior: applies method-owned challenge priority by default', async () => {
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const method = Method.toClient(
+      Method.from({
+        name: 'test',
+        intent: 'charge',
+        schema: Methods.charge.schema,
+      }),
+      {
+        createCredential,
+        getChallengePriority: ({ challenge }) => (challenge.id === 'funded' ? 1 : -1),
+      },
+    )
+    const mppx = Mppx.create({ methods: [method], polyfill: false })
+
+    const prepared = await mppx.preparePayment(
+      paymentRequiredResponse(paymentChallenge('unfunded'), paymentChallenge('funded')),
+    )
+
+    expect(prepared.challenge.id).toBe('funded')
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
   test('behavior: prepares a payment after the response body is consumed', async () => {
     const { method } = paymentMethod()
     const mppx = Mppx.create({ methods: [method], polyfill: false })

@@ -37,9 +37,11 @@ function createChallenge(
 }
 
 function mockMachFeeSelection() {
-  const getBalance = vi.fn(async (_client: unknown, parameters: { token: Address }) => ({
-    amount: isAddressEqual(parameters.token, Addresses.pathUsd) ? 1n : 0n,
-  }))
+  const getBalance = vi.fn(
+    async (_client: unknown, parameters: { decimals?: number; token: Address }) => ({
+      amount: isAddressEqual(parameters.token, Addresses.pathUsd) ? 1_000_000n : 0n,
+    }),
+  )
   const getUserToken = vi.fn(async () => ({ address: mach(42431).address }))
 
   vi.doMock('viem/tempo', async (importOriginal) => {
@@ -58,6 +60,46 @@ function mockMachFeeSelection() {
 }
 
 describe('tempo.charge client', () => {
+  test('prioritizes a funded charge currency over an unfunded one', async () => {
+    vi.resetModules()
+    const { getBalance } = mockMachFeeSelection()
+
+    try {
+      const { charge: chargeWithMockedBalance } = await import('./Charge.js')
+      const chainId = 42431
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedBalance({ account, getClient: () => client })
+
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({
+            amount: '1',
+            chainId,
+            currency: Addresses.pathUsd,
+          }),
+        }),
+      ).resolves.toBe(1)
+      await expect(
+        method.getChallengePriority?.({
+          challenge: createChallenge({
+            amount: '1',
+            chainId,
+            currency: mach(chainId).address,
+          }),
+        }),
+      ).resolves.toBe(-1)
+      expect(getBalance).toHaveBeenCalledTimes(2)
+      expect(getBalance.mock.calls.every(([, parameters]) => parameters.decimals === 0)).toBe(true)
+    } finally {
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  })
+
   test('uses client chain ID when the challenge omits chainId', async () => {
     const client = createClient({
       account,

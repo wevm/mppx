@@ -179,6 +179,29 @@ describe('AcceptPayment', () => {
     ])
   })
 
+  test('prioritizeChallengeCandidates reorders offers only within the same method', async () => {
+    const tempo = {
+      name: 'tempo',
+      intent: 'charge',
+      getChallengePriority: async ({ challenge }: { challenge: { id: string } }) =>
+        challenge.id === 'funded' ? 1 : -1,
+    }
+    const stripe = { name: 'stripe', intent: 'charge' }
+    const candidates = AcceptPayment.selectChallengeCandidates(
+      [
+        { id: 'unfunded', intent: 'charge', method: 'tempo', realm: 'test', request: {} },
+        { id: 'card', intent: 'charge', method: 'stripe', realm: 'test', request: {} },
+        { id: 'funded', intent: 'charge', method: 'tempo', realm: 'test', request: {} },
+      ],
+      [tempo, stripe] as const,
+      AcceptPayment.parse('tempo/charge, stripe/charge'),
+    )
+
+    const ordered = await AcceptPayment.prioritizeChallengeCandidates(candidates)
+
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual(['funded', 'card', 'unfunded'])
+  })
+
   test('selectChallengeCandidates prefers Payment-auth offers before x402 offers', () => {
     const x402Challenge = x402_ChallengeBrand.mark({
       id: 'x402:0',

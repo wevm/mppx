@@ -7,6 +7,47 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as McpClient from './McpClient.js'
 
 describe('MCP client payment approval', () => {
+  test('uses method-owned priority for multiple payment challenges', async () => {
+    const challenges = ['unfunded', 'funded'].map((id) =>
+      Challenge.from({
+        id,
+        intent: 'charge',
+        method: 'tempo',
+        realm: 'api.example.com',
+        request: { currency: id },
+      }),
+    )
+    let calls = 0
+    const client = {
+      async callTool() {
+        calls += 1
+        if (calls === 1)
+          throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+            challenges,
+            httpStatus: 402,
+          })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    }
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const method = Method.toClient(Methods.charge, {
+      createCredential,
+      getChallengePriority: ({ challenge }) => (challenge.id === 'funded' ? 1 : -1),
+    })
+    const mcp = McpClient.wrap(client as unknown as Pick<Client, 'callTool'>, {
+      methods: [method],
+    })
+
+    await mcp.callTool({ name: 'paid_tool' })
+
+    expect(createCredential.mock.calls[0]?.[0].challenge.id).toBe('funded')
+  })
+
   test('calls an approval hook before creating a credential', async () => {
     const challenge = Challenge.from({
       id: 'approval-test',

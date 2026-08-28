@@ -67,6 +67,7 @@ export type Client<
     method,
     context extends z.ZodMiniType ? z.output<context> : Record<never, never>
   >
+  getChallengePriority?: GetChallengePriorityFn | undefined
 }
 export type AnyClient = Client<any, any>
 
@@ -272,6 +273,17 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
 
 /** Predicate used when multiple client implementations share a wire method/intent. */
 export type CanHandleChallengeFn = (parameters: { challenge: Challenge.Challenge }) => boolean
+
+/**
+ * Returns a method-owned preference score for a supported challenge.
+ *
+ * Higher scores are preferred. The client only compares challenges handled by
+ * the same configured method, preserving protocol and `Accept-Payment` order
+ * across different payment methods.
+ */
+export type GetChallengePriorityFn = (parameters: {
+  challenge: Challenge.Challenge
+}) => MaybePromise<number>
 
 /** Request transform function for a single method. */
 export type RequestFn<method extends Method> = (
@@ -499,12 +511,13 @@ export function toClient<
   const method extends Method,
   const context extends z.ZodMiniType | undefined = undefined,
 >(method: method, options: toClient.Options<method, context>): Client<method, context> {
-  const { canHandleChallenge, context, createCredential } = options
+  const { canHandleChallenge, context, createCredential, getChallengePriority } = options
   return {
     ...method,
     canHandleChallenge,
     context,
     createCredential,
+    getChallengePriority,
   } as Client<method, context>
 }
 
@@ -516,6 +529,7 @@ export declare namespace toClient {
       method,
       context extends z.ZodMiniType ? z.output<context> : Record<never, never>
     >
+    getChallengePriority?: GetChallengePriorityFn | undefined
   }
 }
 

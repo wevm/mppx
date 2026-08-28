@@ -596,7 +596,8 @@ async function resolveChallengeOrder<methods extends readonly Method.AnyClient[]
   candidates: readonly AcceptPayment.ChallengeCandidate<methods[number]>[],
   orderChallenges: AcceptPayment.OrderChallenges<methods> | undefined,
 ): Promise<readonly AcceptPayment.ChallengeCandidate<methods[number]>[]> {
-  return orderChallenges ? orderChallenges(candidates) : candidates
+  const prioritized = await AcceptPayment.prioritizeChallengeCandidates(candidates)
+  return orderChallenges ? orderChallenges(prioritized) : prioritized
 }
 
 async function createCredentialForMethod(

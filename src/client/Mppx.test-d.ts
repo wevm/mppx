@@ -225,6 +225,18 @@ describe('create.Config', () => {
 })
 
 describe('Method.toClient', () => {
+  test('getChallengePriority receives an untyped challenge and may be async', () => {
+    Method.toClient(Methods.charge, {
+      async createCredential() {
+        return 'Payment ...'
+      },
+      async getChallengePriority({ challenge }) {
+        expectTypeOf(challenge.request).toEqualTypeOf<Record<string, unknown>>()
+        return 1
+      },
+    })
+  })
+
   test('createCredential receives typed challenge', () => {
     Method.toClient(Methods.charge, {
       async createCredential({ challenge }) {

@@ -4,6 +4,9 @@ import type { MaybePromise } from './types.js'
 
 type MethodLike = {
   canHandleChallenge?: ((parameters: { challenge: Challenge.Challenge }) => boolean) | undefined
+  getChallengePriority?:
+    | ((parameters: { challenge: Challenge.Challenge }) => MaybePromise<number>)
+    | undefined
   intent: string
   name: string
 }
@@ -219,6 +222,42 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
       const { match: _match, ...rest } = candidate
       return rest as unknown as ChallengeCandidate<methods[number]>
     })
+}
+
+/**
+ * Applies method-owned challenge preferences without disturbing negotiation
+ * order between different configured methods.
+ */
+export async function prioritizeChallengeCandidates<method extends MethodLike>(
+  candidates: readonly ChallengeCandidate<method>[],
+): Promise<ChallengeCandidate<method>[]> {
+  const ordered = [...candidates]
+  const positionsByMethod = new Map<method, number[]>()
+
+  for (const [index, candidate] of candidates.entries()) {
+    if (!candidate.method.getChallengePriority) continue
+    const method = candidate.method as method
+    const positions = positionsByMethod.get(method)
+    if (positions) positions.push(index)
+    else positionsByMethod.set(method, [index])
+  }
+
+  for (const [method, positions] of positionsByMethod) {
+    if (positions.length < 2 || !method.getChallengePriority) continue
+    const ranked = await Promise.all(
+      positions.map(async (position, index) => {
+        const candidate = candidates[position]!
+        const priority = await method.getChallengePriority!({ challenge: candidate.challenge })
+        if (!Number.isFinite(priority)) throw new Error('Challenge priority must be finite.')
+        return { candidate, index, priority }
+      }),
+    )
+    ranked.sort((left, right) => right.priority - left.priority || left.index - right.index)
+    for (const [index, position] of positions.entries())
+      ordered[position] = ranked[index]!.candidate
+  }
+
+  return ordered
 }
 
 /** Returns the canonical `method/intent` key for a method or challenge-like value. */

@@ -1856,6 +1856,56 @@ describe('Fetch.from: 402 retry path', () => {
     expect(createCredential.mock.calls[0]?.[0].challenge.id).toBe('usdc')
   })
 
+  test('method-owned challenge priority selects a later funded offer', async () => {
+    let callCount = 0
+    const unfunded = Challenge.from({
+      id: 'unfunded',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'mach' },
+    })
+    const funded = Challenge.from({
+      id: 'funded',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'usdc' },
+    })
+    const createCredential = vi.fn(
+      async ({ challenge }: { challenge: Challenge.Challenge }) => `credential-${challenge.id}`,
+    )
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1)
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': `${Challenge.serialize(unfunded)}, ${Challenge.serialize(funded)}`,
+          },
+        })
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('credential-funded')
+      return new Response('OK', { status: 200 })
+    }
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          ...noopMethod,
+          createCredential,
+          getChallengePriority: ({ challenge }: { challenge: Challenge.Challenge }) =>
+            challenge.id === 'funded' ? 1 : -1,
+        },
+      ],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(createCredential.mock.calls[0]?.[0].challenge.id).toBe('funded')
+  })
+
   test('request-local orderChallenges overrides configured ordering', async () => {
     let callCount = 0
     const first = Challenge.from({
