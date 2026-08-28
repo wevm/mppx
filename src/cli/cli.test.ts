@@ -26,6 +26,9 @@ import { tempo } from '../tempo/server/Methods.js'
 import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../tempo/session/precompile/Protocol.js'
+import * as x402_Assets from '../x402/Assets.js'
+import * as x402_Header from '../x402/Header.js'
+import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
 import cli from './cli.js'
 
@@ -41,6 +44,166 @@ const cliSessionFeePayerPolicy = {
 
 afterAll(() => {
   fs.rmSync(cliTestXdgDataHome, { recursive: true, force: true })
+})
+
+describe('protocol selection', () => {
+  const usdc = x402_Assets.baseSepolia.USDC
+  const payTo = '0x1234567890AbcdEF1234567890aBcdef12345678'
+
+  /** Creates a valid x402 offer bound to the URL handled by the test server. */
+  function paymentRequired(req: {
+    headers: { host?: string | undefined }
+    url?: string | undefined
+  }) {
+    return x402_Header.encodePaymentRequired({
+      accepts: [
+        {
+          amount: '5000',
+          asset: usdc.address,
+          extra: { name: usdc.transfer.name, version: usdc.transfer.version },
+          maxTimeoutSeconds: 60,
+          network: usdc.network,
+          payTo,
+          scheme: 'exact',
+        },
+      ],
+      resource: { mimeType: 'application/json', url: `http://${req.headers.host}${req.url}` },
+      x402Version: 2,
+    })
+  }
+
+  /** A valid but unsupported MPP offer for testing protocol isolation. */
+  function mppChallenge() {
+    return Challenge.serialize(
+      Challenge.from({
+        id: 'mpp-challenge',
+        intent: 'charge',
+        method: 'mock',
+        realm: 'cli-test-protocol',
+        request: { amount: '1', currency: 'MOCK', decimals: 6, recipient: payTo },
+      }),
+    )
+  }
+
+  test('--help advertises the flag', async () => {
+    const { output } = await serve(['--help'])
+    expect(output).toContain('--protocol <auto|mpp|x402>')
+  })
+
+  test('rejects an unknown protocol', async () => {
+    const { exitCode, output } = await serve(['http://localhost/', '--protocol', 'lightning'])
+    expect(exitCode).toBe(1)
+    expect(output).toContain('expected one of')
+    expect(output).toContain('x402')
+  })
+
+  test('automatically pays an x402 challenge in PAYMENT-SIGNATURE and filters by asset', async () => {
+    let paymentSignature: string | undefined
+    let authorization: string | undefined
+    const httpServer = await Http.createServer((req, res) => {
+      paymentSignature = req.headers['payment-signature'] as string | undefined
+      authorization = req.headers.authorization
+      if (!paymentSignature) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+
+    try {
+      const { output } = await serve(
+        [httpServer.url, '--currency', usdc.address.toUpperCase(), '-s'],
+        {
+          env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        },
+      )
+      expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+
+    expect(authorization).toBeUndefined()
+    const payload = x402_Header.decodePaymentSignature(paymentSignature!)
+    expect(payload.accepted).toMatchObject({ asset: usdc.address, network: usdc.network })
+    if (!('authorization' in payload.payload)) throw new Error('expected an EIP-3009 payload')
+    expect(payload.payload.authorization.from).toBe(testAccount.address)
+    expect(payload.payload.authorization.value).toBe('5000')
+  })
+
+  test('--protocol x402 skips an MPP offer from the same response', async () => {
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers['payment-signature']) {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: mppChallenge(),
+          [x402_Types.paymentRequiredHeader]: paymentRequired(req),
+        })
+        res.end()
+        return
+      }
+      res.end('paid')
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '--protocol', 'x402', '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('--protocol mpp ignores a co-offered x402 challenge', async () => {
+    const httpServer = await Http.createServer((req, res) => {
+      res.writeHead(402, {
+        [Constants.Headers.wwwAuthenticate]: mppChallenge(),
+        [x402_Types.paymentRequiredHeader]: paymentRequired(req),
+      })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--protocol', 'mpp', '-s'])
+      expect(output).toContain('mock/charge')
+      expect(exitCode).toBe(2)
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('reports a required protocol that the server did not offer', async () => {
+    const httpServer = await Http.createServer((_req, res) => {
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: mppChallenge() })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--protocol', 'x402', '-s'])
+      expect(exitCode).toBe(2)
+      expect(output).toContain('did not offer an x402 payment challenge')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('ignores a malformed x402 co-offer in automatic mode', async () => {
+    const httpServer = await Http.createServer((_req, res) => {
+      res.writeHead(402, {
+        [Constants.Headers.wwwAuthenticate]: mppChallenge(),
+        [x402_Types.paymentRequiredHeader]: 'not-base64-json',
+      })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '-s'])
+      expect(exitCode).toBe(2)
+      expect(output).toContain('mock/charge')
+    } finally {
+      httpServer.close()
+    }
+  })
 })
 
 async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {

@@ -5,10 +5,15 @@ import type * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'
-import { evm as evmPlugin, stripe as stripePlugin, tempo as tempoPlugin } from './plugins/index.js'
+import {
+  evm as evmPlugin,
+  stripe as stripePlugin,
+  tempo as tempoPlugin,
+  x402 as x402Plugin,
+} from './plugins/index.js'
 import type { Plugin } from './plugins/plugin.js'
 
-const builtinPlugins: Plugin[] = [tempoPlugin(), stripePlugin(), evmPlugin()]
+const builtinPlugins: Plugin[] = [tempoPlugin(), stripePlugin(), evmPlugin(), x402Plugin()]
 
 export function resolvePlugin(
   challenge: Challenge.Challenge,

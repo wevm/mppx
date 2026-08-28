@@ -3,12 +3,14 @@ import { readContract } from 'viem/actions'
 import * as viemChains from 'viem/chains'
 
 import { evm as evmMethods, assets as evmAssets } from '../../evm/client/index.js'
+import * as x402_ChallengeBrand from '../../x402/internal/ChallengeBrand.js'
 import { resolveAccount } from '../account.js'
 import { createPlugin } from './plugin.js'
 
 export function evm() {
   return createPlugin({
     method: 'evm',
+    supports: (challenge) => challenge.method === 'evm' && !x402_ChallengeBrand.is(challenge),
 
     async setup({ challenge }) {
       const request = challenge.request as Record<string, unknown>
