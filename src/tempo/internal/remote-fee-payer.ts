@@ -1,5 +1,7 @@
 /** Configuration for a remote Tempo fee-payer service. */
 export type Config = Readonly<{
+  /** Custom fetch implementation used only for fee-payer JSON-RPC transport. */
+  fetch?: typeof globalThis.fetch | undefined
   headers?: Readonly<Record<string, string>> | undefined
   url: string
 }>

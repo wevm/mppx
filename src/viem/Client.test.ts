@@ -103,11 +103,9 @@ describe('getResolver', () => {
         result: { source: 'relay' },
       })
     })
-    vi.stubGlobal('fetch', fetchMock)
-
     const getClient = Client.getResolver({
       chain: tempoLocalnet,
-      remoteFeePayer: { url: 'https://sponsor.example', headers },
+      remoteFeePayer: { url: 'https://sponsor.example', fetch: fetchMock, headers },
       getClient: () => client,
       rpcUrl: { [tempoLocalnet.id]: 'https://rpc.example.com' },
     })

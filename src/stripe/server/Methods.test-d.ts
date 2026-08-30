@@ -55,6 +55,17 @@ test('tempo.session() accepts getClient, feePayer, store without casts', () => {
   expectTypeOf(session).toHaveProperty('intent')
 })
 
+test('stripe.create() accepts hosted fee-payer opt-in', () => {
+  const mp = stripe.create({
+    client: {} as any,
+    networkId: 'profile_x',
+    livemode: true,
+    hostedFeePayer: true,
+  })
+
+  expectTypeOf(mp.defaultMethods()).toHaveProperty('additional')
+})
+
 test('.charge() works with multiple charge methods (implicit compose)', async () => {
   const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
   const methods = await mp.defaultMethods()

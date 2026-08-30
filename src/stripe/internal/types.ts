@@ -7,6 +7,12 @@ import * as StripeJsTypes from '../../stripe/server/internal/html/types.js'
  * Uses loose signatures so any Stripe SDK version is assignable.
  */
 export type StripeClient = {
+  /** Stripe-node request transport used for hosted fee-payer requests. */
+  _requestSender?:
+    | {
+        _request(...args: any[]): void
+      }
+    | undefined
   paymentIntents: {
     create(...args: any[]): Promise<{
       id: string

@@ -16,6 +16,7 @@ export function remoteFeePayerTransport(
   options: { retryCount?: number | undefined } = {},
 ) {
   return http(config.url, {
+    fetchFn: config.fetch,
     fetchOptions: { headers: RemoteFeePayer.resolveHeaders(config) },
     ...options,
   })

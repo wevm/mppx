@@ -9,6 +9,7 @@ import * as PaymentIntent from '../internal/payment-intent.js'
 import type { StripeClient } from '../internal/types.js'
 import { charge as charge_ } from './Charge.js'
 import { findOrCreateDepositAddress as _findOrCreateDepositAddress } from './internal/deposit-address.js'
+import * as HostedFeePayer from './internal/hosted-fee-payer.js'
 import { recordCryptoPayment } from './internal/record-payment.js'
 import { type ConnectConfig } from './internal/request.js'
 
@@ -29,6 +30,7 @@ export declare namespace stripe {
     client: StripeClient
     networkId: string
     livemode: boolean
+    hostedFeePayer?: boolean | undefined
     connect?: ConnectConfig
     depositAddresses?: Partial<Record<Network, string>> | ((network: Network) => Promise<string>)
     metadata?: Record<string, string> | undefined
@@ -189,12 +191,18 @@ class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
  * ```
  */
 export function stripe<const P extends stripe.Parameters>(parameters: P): StripeMachinePayments<P> {
-  const { client, networkId, livemode, connect, depositAddresses, metadata } = parameters
+  const { client, networkId, livemode, hostedFeePayer, connect, depositAddresses, metadata } =
+    parameters
   if (!client.rawRequest)
     throw new Error('stripe.create() requires a Stripe SDK client with rawRequest() (v15+)')
+  if (hostedFeePayer && !livemode)
+    throw new Error('Stripe hosted fee payer requires a live-mode integration.')
+  if (hostedFeePayer && connect)
+    throw new Error('Stripe hosted fee payer does not support Connect account routing.')
   const tempoCurrency = (
     livemode ? tempoDefaults.tokens.usdc : tempoDefaults.tokens.pathUsd
   ) as `0x${string}`
+  const hostedTempoFeePayer = hostedFeePayer ? HostedFeePayer.create(client) : undefined
   const tempoPaymentHandler = createPaymentSuccessHandler(client, 'tempo', connect, metadata)
   const basePaymentHandler = createPaymentSuccessHandler(client, 'base', connect, metadata)
 
@@ -229,6 +237,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
         currency: tempoCurrency,
         recipient,
         ...(!livemode && { testnet: true }),
+        ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
         canOffer: cryptoCanOffer,
         onPaymentSuccess: handler,
         ...rest,
@@ -244,6 +253,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
       currency: tempoCurrency,
       recipient,
       ...(!livemode && { testnet: true }),
+      ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
     } as tempoSession.Parameters) as Method.AnyServer
   }

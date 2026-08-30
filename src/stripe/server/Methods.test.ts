@@ -19,6 +19,13 @@ function createMockStripeClient(): StripeClient {
   }
 }
 
+function createHostedFeePayerStripeClient(): StripeClient {
+  return {
+    ...createMockStripeClient(),
+    _requestSender: { _request: vi.fn() },
+  }
+}
+
 function findMethod(methods: readonly AnyServer[], name: string, intent: string) {
   return methods.find((m) => m.name === name && m.intent === intent)!
 }
@@ -80,6 +87,88 @@ describe('stripe.create() defaultMethods', () => {
       }),
       expect.anything(),
     )
+  })
+
+  test('uses Stripe feepayer when hostedFeePayer set', async () => {
+    const client = createHostedFeePayerStripeClient()
+    const methods = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: true,
+      hostedFeePayer: true,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    }).defaultMethods()
+
+    const chargeRequest = await findMethod(methods, 'tempo', 'charge').request!({
+      request: {
+        amount: '10000',
+        currency: 'test-currency',
+        decimals: 6,
+        recipient: 'test-recipient',
+      },
+    } as never)
+
+    expect(chargeRequest.feePayer).toBe(true)
+    expect(JSON.stringify(chargeRequest)).not.toContain('mpp.stripe.com')
+  })
+
+  test('does not use Stripe feepayer when hostedFeePayer unset', async () => {
+    const client = createMockStripeClient()
+    const methods = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: true,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    }).defaultMethods()
+
+    const request = await findMethod(methods, 'tempo', 'charge').request!({
+      request: {
+        amount: '10000',
+        currency: 'test-currency',
+        decimals: 6,
+        recipient: 'test-recipient',
+      },
+    } as never)
+
+    expect(request.feePayer).toBeUndefined()
+  })
+
+  test('rejects Stripe feepayer in test mode', () => {
+    const client = createHostedFeePayerStripeClient()
+
+    expect(() =>
+      stripe({
+        client,
+        networkId: 'test-profile',
+        livemode: false,
+        hostedFeePayer: true,
+      }),
+    ).toThrow('requires a live-mode integration')
+  })
+
+  test('rejects Stripe feepayer with Connect', () => {
+    const client = createHostedFeePayerStripeClient()
+
+    expect(() =>
+      stripe({
+        client,
+        networkId: 'test-profile',
+        livemode: true,
+        hostedFeePayer: true,
+        connect: { stripeAccount: 'acct_connected' },
+      }),
+    ).toThrow('does not support Connect account routing')
+  })
+
+  test('rejects Stripe feepayer without Stripe request transport', () => {
+    expect(() =>
+      stripe({
+        client: createMockStripeClient(),
+        networkId: 'test-profile',
+        livemode: true,
+        hostedFeePayer: true,
+      }),
+    ).toThrow('requires a compatible Stripe Node SDK client')
   })
 
   test.each(['tempo', 'spt'] as const)('exclude removes %s', async (excluded) => {
