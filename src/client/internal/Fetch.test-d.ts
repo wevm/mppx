@@ -57,6 +57,17 @@ describe('Fetch.from', () => {
     })
   })
 
+  test('behavior: accepts paid-response validator', () => {
+    const fetch = Fetch.from({
+      methods: [charge()],
+      validateResponse: async (payload) => {
+        expectTypeOf(payload.response).toEqualTypeOf<Response>()
+      },
+    })
+
+    expectTypeOf(fetch).toBeFunction()
+  })
+
   test('behavior: accepts payment retry cap', () => {
     const fetch = Fetch.from({
       maxPaymentRetries: 1,

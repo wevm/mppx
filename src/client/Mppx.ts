@@ -6,6 +6,7 @@ import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
+import type * as PaidResponse from './PaidResponse.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
@@ -175,6 +176,7 @@ export function create<
     ...(orderChallenges && { orderChallenges }),
     methods,
     transport,
+    ...(config.validateResponse && { validateResponse: config.validateResponse }),
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 
@@ -420,6 +422,11 @@ export declare namespace create {
     orderChallenges?: AcceptPayment.OrderChallenges<FlattenMethods<methods>> | undefined
     /** Client-declared supported payment methods, keyed by typed `method/intent` strings. */
     paymentPreferences?: AcceptPayment.Config<FlattenMethods<methods>> | undefined
+    /**
+     * Optional caller-owned validator for paid application responses.
+     * Absent keeps current fetch behavior. Throwing does not retry payment.
+     */
+    validateResponse?: PaidResponse.Validate<FlattenMethods<methods>> | undefined
     /** Array of methods to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
     /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */

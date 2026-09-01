@@ -159,6 +159,17 @@ describe('create.Config', () => {
     expectTypeOf(methods).toMatchTypeOf<readonly Method.AnyClient[]>()
   })
 
+  test('validateResponse receives a paid Response', () => {
+    const mppx = Mppx.create({
+      methods: [tempo({ account: {} as Account })],
+      polyfill: false,
+      validateResponse: async (payload) => {
+        expectTypeOf(payload.response).toEqualTypeOf<Response>()
+      },
+    })
+    expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
   test('orderChallenges receives supported challenge candidates', () => {
     const mppx = Mppx.create({
       methods: [tempo({ account: {} as Account })],

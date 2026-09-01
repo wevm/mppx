@@ -5,6 +5,7 @@ import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
+import * as PaidResponse from '../PaidResponse.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
@@ -194,6 +195,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     onChallenge,
     orderChallenges,
     transport = Transport.http(),
+    validateResponse,
   } = config
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
@@ -399,20 +401,29 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             }),
           )
         if (!paymentRequired) {
-          if (!response.ok) return response
-          return MethodResponse.handle(selected.method, {
+          const observedReceipt = PaidResponse.receiptOf(response)
+          const paid = !response.ok
+            ? response
+            : await MethodResponse.handle(selected.method, {
+                challenge: selectedChallenge,
+                credential,
+                fetch: baseFetch,
+                headers: initialRequest.headers,
+                input: paymentInput,
+                ...(canRefetch
+                  ? {
+                      refetch: () => request(cloneRequestInput(initialRequest.input), init, false),
+                    }
+                  : {}),
+                response,
+                signal: resolveRequestSignal(input, init),
+              })
+          if (!validateResponse) return paid
+          return PaidResponse.validate(paid, validateResponse, {
             challenge: selectedChallenge,
             credential,
-            fetch: baseFetch,
-            headers: initialRequest.headers,
-            input: paymentInput,
-            ...(canRefetch
-              ? {
-                  refetch: () => request(cloneRequestInput(initialRequest.input), init, false),
-                }
-              : {}),
-            response,
-            signal: resolveRequestSignal(input, init),
+            method: selected.method,
+            receipt: observedReceipt,
           })
         }
       }
@@ -432,18 +443,20 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         response,
         status: 'rejected',
       })
-      await events.emit(
-        'payment.failed',
-        createPaymentFailedPayload({
-          challenge,
-          challenges,
-          error,
-          init,
-          input,
-          method: mi,
-          response,
-        }),
-      )
+      if (!PaidResponse.isInvalidError(error)) {
+        await events.emit(
+          'payment.failed',
+          createPaymentFailedPayload({
+            challenge,
+            challenges,
+            error,
+            init,
+            input,
+            method: mi,
+            response,
+          }),
+        )
+      }
       throw error
     }
   }
@@ -497,6 +510,13 @@ export declare namespace from {
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
     /** Transport to use for challenge extraction and credential attachment. */
     transport?: Transport.AnyTransport | undefined
+    /**
+     * Optional caller-owned validator for paid application responses.
+     * Runs after payment settlement and protocol recovery. Throwing does not
+     * retry or duplicate payment; the original response and receipt remain on
+     * the thrown {@link PaidResponse.InvalidError}.
+     */
+    validateResponse?: PaidResponse.Validate<methods> | undefined
   }
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (

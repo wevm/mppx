@@ -26,4 +26,5 @@ export type {
   ResolveAccountOperation,
 } from '../tempo/client/ResolveAccount.js'
 export * as Mppx from './Mppx.js'
+export * as PaidResponse from './PaidResponse.js'
 export * as Transport from './Transport.js'
