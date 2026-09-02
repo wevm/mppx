@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { defineConfig } from './config.js'
+import { defineConfig, Extension } from './config.js'
 import { loadConfig } from './internal.js'
 
 let tmpDir: string
@@ -21,6 +21,11 @@ describe('defineConfig', () => {
   test('returns the config object as-is', () => {
     const config = defineConfig({ methods: [] })
     expect(config).toEqual({ methods: [] })
+  })
+
+  test('accepts method-agnostic payment extensions', () => {
+    const extension = Extension.from({ preparePayment: vi.fn() })
+    expect(defineConfig({ extensions: [extension] })).toEqual({ extensions: [extension] })
   })
 })
 

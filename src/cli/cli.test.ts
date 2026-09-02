@@ -139,6 +139,107 @@ describe('protocol selection', () => {
     expect(payload.payload.authorization.value).toBe('5000')
   })
 
+  test('runs configured payment extensions before paying x402 challenges', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-extension-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const markerPath = path.join(configDir, 'prepared.json')
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import * as fs from 'node:fs'
+import { defineConfig, Extension } from '${cliModuleUrl}'
+
+export default defineConfig({
+  extensions: [
+    Extension.from({
+      preparePayment({ challenge }) {
+        fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify(challenge.request))
+      },
+    }),
+  ],
+})
+      `.trim(),
+    )
+
+    let requests = 0
+    const httpServer = await Http.createServer((req, res) => {
+      requests++
+      if (!req.headers['payment-signature']) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid-after-preparation')
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--config', configPath, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('paid-after-preparation')
+      expect(requests).toBe(2)
+      expect(JSON.parse(fs.readFileSync(markerPath, 'utf8'))).toMatchObject({
+        amount: '5000',
+        asset: usdc.address,
+        network: usdc.network,
+      })
+    } finally {
+      httpServer.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  test('lets configured payment extensions reject before signing x402 challenges', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-extension-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const markerPath = path.join(configDir, 'prepared.json')
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import * as fs from 'node:fs'
+import { defineConfig, Extension } from '${cliModuleUrl}'
+
+export default defineConfig({
+  extensions: [
+    Extension.from({
+      preparePayment({ challenge }) {
+        fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify(challenge.request))
+        throw new Error('blocked by payment extension')
+      },
+    }),
+  ],
+})
+      `.trim(),
+    )
+
+    let requests = 0
+    const httpServer = await Http.createServer((req, res) => {
+      requests++
+      res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--config', configPath, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBe(1)
+      expect(output).toContain('blocked by payment extension')
+      expect(requests).toBe(1)
+      expect(JSON.parse(fs.readFileSync(markerPath, 'utf8'))).toMatchObject({
+        amount: '5000',
+        asset: usdc.address,
+        network: usdc.network,
+      })
+    } finally {
+      httpServer.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
   test('--protocol x402 skips an MPP offer from the same response', async () => {
     const httpServer = await Http.createServer((req, res) => {
       if (!req.headers['payment-signature']) {

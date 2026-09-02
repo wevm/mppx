@@ -39,8 +39,10 @@ export interface Plugin {
     methods: Method.AnyClient[]
     /** Optional context to pass to createCredential */
     credentialContext?: unknown
-    /** Override credential creation entirely (e.g., delegating to an external CLI) */
-    createCredential?: ((response: Response) => Promise<string>) | undefined
+    /** Override credential creation entirely (e.g., delegating to an external CLI). */
+    createCredential?:
+      | ((response: Response, credentialContext?: unknown) => Promise<string>)
+      | undefined
   }>
 
   /**

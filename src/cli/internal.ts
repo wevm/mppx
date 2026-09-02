@@ -5,6 +5,7 @@ import type * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'
+import type * as Extension from './Extension.js'
 import {
   evm as evmPlugin,
   stripe as stripePlugin,
@@ -14,6 +15,23 @@ import {
 import type { Plugin } from './plugins/plugin.js'
 
 const builtinPlugins: Plugin[] = [tempoPlugin(), stripePlugin(), evmPlugin(), x402Plugin()]
+
+/** Runs configured payment extensions in order and threads credential context between them. */
+export async function preparePayment(
+  challenge: Challenge.Challenge,
+  extensions: readonly Extension.Extension[] | undefined,
+  credentialContext?: unknown,
+): Promise<unknown> {
+  let current = credentialContext
+  for (const extension of extensions ?? []) {
+    const result = await extension.preparePayment?.({
+      challenge,
+      ...(current !== undefined ? { credentialContext: current } : {}),
+    })
+    if (result && 'credentialContext' in result) current = result.credentialContext
+  }
+  return current
+}
 
 export function resolvePlugin(
   challenge: Challenge.Challenge,

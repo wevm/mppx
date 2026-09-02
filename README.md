@@ -138,6 +138,25 @@ that do not support custom escrows should leave it unset. See the
 Pass `mpp` or `x402` to require one protocol. x402 payments use the same EVM account as EVM
 charges, so `MPPX_PRIVATE_KEY` or a stored account works for both.
 
+Payment extensions can enforce policy or prepare funds after challenge selection and confirmation,
+immediately before credential creation:
+
+```ts
+import { defineConfig, Extension } from 'mppx/cli'
+
+export default defineConfig({
+  extensions: [
+    Extension.from({
+      async preparePayment({ challenge }) {
+        await prepareFunds(challenge)
+      },
+    }),
+  ],
+})
+```
+
+Extensions run in configuration order. Throwing rejects the payment before Mppx signs it.
+
 You can also install globally to use the `mppx` CLI from anywhere:
 
 ```bash

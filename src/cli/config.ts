@@ -1,6 +1,8 @@
 export { resolveAccount } from './account.js'
+export * as Extension from './Extension.js'
 
 import type * as Mppx from '../client/Mppx.js'
+import type * as Extension from './Extension.js'
 import type { Plugin } from './plugins/plugin.js'
 
 /**
@@ -44,6 +46,8 @@ export declare namespace defineConfig {
       : undefined
     /** Array of plugins to use. */
     plugins?: Plugin[] | undefined
+    /** Ordered, method-agnostic payment lifecycle extensions. */
+    extensions?: readonly Extension.Extension[] | undefined
   }
 }
 
