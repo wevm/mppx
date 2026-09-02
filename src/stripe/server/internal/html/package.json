@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@stripe/stripe-js": "9.13.0",
+    "@stripe/stripe-js": "9.14.0",
     "mppx": "workspace:*"
   }
 }

@@ -33,7 +33,7 @@
   ],
   "devDependencies": {
     "@changesets/cli": "^3.0.0",
-    "@hono/node-server": "2.1.0",
+    "@hono/node-server": "2.1.1",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "^1.62.1",
     "@types/express": "^5.0.6",
@@ -41,9 +41,9 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.8",
-    "@x402/core": "2.22.0",
-    "@x402/evm": "2.22.0",
-    "@x402/express": "2.22.0",
+    "@x402/core": "2.23.0",
+    "@x402/evm": "2.23.0",
+    "@x402/express": "2.23.0",
     "@x402/hono": "2.22.0",
     "@x402/mcp": "2.22.0",
     "@x402/next": "2.22.0",
@@ -54,7 +54,7 @@
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
     "frog": "^1.1.0",
-    "hono": "4.13.1",
+    "hono": "4.13.5",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
     "next": "16.3.2",
@@ -66,8 +66,8 @@
     "testcontainers": "^12.1.0",
     "tsx": "^4.23.12",
     "typescript": "catalog:",
-    "viem": "2.55.13",
-    "vite": "^8.2.1",
+    "viem": "2.55.19",
+    "vite": "^8.2.2",
     "vp": "npm:vite-plus@~0.1.24",
     "ws": "^8.21.3",
     "zile": "^0.0.30"
@@ -311,8 +311,8 @@
     }
   },
   "dependencies": {
-    "@stripe/stripe-js": "9.13.0",
-    "eventsource-parser": "3.1.1",
+    "@stripe/stripe-js": "9.14.0",
+    "eventsource-parser": "4.1.0",
     "ox": "catalog:",
     "structured-headers": "2.0.3",
     "zod": "^4.4.3"
