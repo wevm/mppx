@@ -16,7 +16,8 @@ import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
-import { loadConfig, resolvePlugin } from '../internal.js'
+import type * as Extension from '../Extension.js'
+import { loadConfig, preparePayment, resolvePlugin } from '../internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
 import { buildUrl } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
@@ -191,6 +192,8 @@ export async function validatePaymentFlow(
     return results
   }
 
+  const loaded = await loadConfig().catch(() => undefined)
+
   // Testnet Tempo: always use ephemeral wallet (zero-setup, free money)
   const tempoTestnetChallenge = challenges.find((ch) => {
     if (ch.method !== Constants.Methods.tempo) return false
@@ -210,7 +213,11 @@ export async function validatePaymentFlow(
       })
       try {
         const mppx = Mppx.create({ methods: provisioned.methods, polyfill: false })
-        const cred = await mppx.createCredential(fakeResp)
+        const credentialContext = await preparePayment(
+          tempoTestnetChallenge,
+          loaded?.config.extensions,
+        )
+        const cred = await mppx.createCredential(fakeResp, credentialContext as never)
         results.push(check('Payment: submitted', 'ephemeral testnet wallet'))
         await sendAndValidateResponse(
           results,
@@ -235,7 +242,6 @@ export async function validatePaymentFlow(
 
   // Try each remaining challenge method (tempo testnet already handled above),
   // so validate exercises every payment method the server offers, same as mainnet.
-  const loaded = await loadConfig().catch(() => undefined)
   const isInteractive = options.interactive
   const stripeKey = process.env.MPPX_STRIPE_SECRET_KEY ?? resolveStripeKey(verbose)
   const isStripeTestKey = stripeKey?.startsWith('sk_test_') || stripeKey?.startsWith('rk_test_')
@@ -419,7 +425,10 @@ async function attemptCryptoPayment(
   }
 
   let methods: AnyClient[]
-  let createCredentialFn: ((response: Response) => Promise<string>) | undefined
+  let createCredentialFn:
+    | ((response: Response, credentialContext?: unknown) => Promise<string>)
+    | undefined
+  let credentialContext: unknown
   if (plugin) {
     try {
       const pluginResult = await plugin.setup({
@@ -429,6 +438,7 @@ async function attemptCryptoPayment(
       })
       methods = pluginResult.methods
       createCredentialFn = pluginResult.createCredential
+      credentialContext = pluginResult.credentialContext
     } catch (error) {
       results.push(skip(tag, (error as Error).message))
       return
@@ -437,7 +447,15 @@ async function attemptCryptoPayment(
     methods = [directMethod!]
   }
 
-  const credential = await createAndSend(challenge, methods, createCredentialFn, tag, results)
+  const credential = await createAndSend(
+    challenge,
+    methods,
+    createCredentialFn,
+    tag,
+    results,
+    loaded?.config.extensions,
+    credentialContext,
+  )
   if (!credential) return
 
   plugin?.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
@@ -505,7 +523,10 @@ async function attemptStripePayment(
   }
 
   let methods: AnyClient[]
-  let createCredentialFn: ((response: Response) => Promise<string>) | undefined
+  let createCredentialFn:
+    | ((response: Response, credentialContext?: unknown) => Promise<string>)
+    | undefined
+  let credentialContext: unknown
   try {
     const methodOpts: Record<string, string> = { paymentMethod: 'pm_card_visa' }
     if (stripeKey) methodOpts.secretKey = stripeKey
@@ -516,12 +537,21 @@ async function attemptStripePayment(
     })
     methods = pluginResult.methods
     createCredentialFn = pluginResult.createCredential
+    credentialContext = pluginResult.credentialContext
   } catch (error) {
     results.push(skip(tag, (error as Error).message))
     return
   }
 
-  const credential = await createAndSend(challenge, methods, createCredentialFn, tag, results)
+  const credential = await createAndSend(
+    challenge,
+    methods,
+    createCredentialFn,
+    tag,
+    results,
+    loaded?.config.extensions,
+    credentialContext,
+  )
   if (!credential) return
 
   plugin.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
@@ -566,21 +596,26 @@ async function attemptStripePayment(
 async function createAndSend(
   challenge: Challenge.Challenge,
   methods: AnyClient[],
-  createCredentialFn: ((response: Response) => Promise<string>) | undefined,
+  createCredentialFn:
+    | ((response: Response, credentialContext?: unknown) => Promise<string>)
+    | undefined,
   tag: string,
   results: CheckResult[],
+  extensions?: readonly Extension.Extension[] | undefined,
+  initialCredentialContext?: unknown,
 ): Promise<string | undefined> {
   const fakeResponse = new Response(null, {
     status: 402,
     headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
   })
   try {
+    const credentialContext = await preparePayment(challenge, extensions, initialCredentialContext)
     let credential: string
     if (createCredentialFn) {
-      credential = await createCredentialFn(fakeResponse)
+      credential = await createCredentialFn(fakeResponse, credentialContext)
     } else {
       const mppx = Mppx.create({ methods, polyfill: false })
-      credential = await mppx.createCredential(fakeResponse)
+      credential = await mppx.createCredential(fakeResponse, credentialContext as never)
     }
     results.push(check(`${tag}: submitted`))
     return credential

@@ -13,7 +13,11 @@ import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
-import { hydrateSessionSnapshot, type SessionContext } from '../client/CredentialState.js'
+import {
+  hydrateSessionSnapshot,
+  sessionContextSchema,
+  type SessionContext,
+} from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
 import * as Channel from '../precompile/Channel.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
@@ -161,6 +165,15 @@ function requestInitWithSessionHint(
   }
 }
 
+/** @internal Merges manager-wide context without allowing it to replace an operation's fields. */
+export function mergeSessionCredentialContext(
+  credentialContext: unknown,
+  operationContext: SessionContext,
+): SessionContext {
+  if (credentialContext === undefined) return operationContext
+  return { ...sessionContextSchema.parse(credentialContext), ...operationContext }
+}
+
 function resolveSessionManagerConfig(parameters: sessionManager.Parameters): SessionManagerConfig {
   const decimals = parameters.decimals ?? 6
   const WebSocket =
@@ -198,6 +211,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
   const getAccount = Account.getResolver({ account: parameters.account })
   const runtime = createSessionManagerRuntime()
+  const credentialContext =
+    parameters.credentialContext === undefined
+      ? undefined
+      : mergeSessionCredentialContext(parameters.credentialContext, {})
   const receipts = createSessionReceiptCoordinator({
     getSocketSession: () => runtime.socketSession,
   })
@@ -374,7 +391,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   function createSessionCredential(challenge: TempoSessionChallenge, context: SessionContext) {
-    return method.createCredential({ challenge, context })
+    return method.createCredential({
+      challenge,
+      context: mergeSessionCredentialContext(credentialContext, context),
+    })
   }
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
@@ -696,6 +716,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
       const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
       let effectiveInit = requestInitWithSessionHint(input, init, liveHint)
+      if (credentialContext)
+        effectiveInit = { ...effectiveInit, context: credentialContext } as RequestInit
       // Stored channels may be stale, so retry once after evicting the resumed entry.
       let canRetryResumed = !previous.channel?.opened
 
@@ -986,6 +1008,8 @@ export namespace sessionManager {
       escrow?: Address | undefined
       /** Fetch implementation used for HTTP probes, management posts, and paid retries. */
       fetch?: typeof globalThis.fetch | undefined
+      /** Base context supplied to every session credential created by the manager. */
+      credentialContext?: unknown
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
       /**

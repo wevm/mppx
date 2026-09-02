@@ -240,6 +240,47 @@ export default defineConfig({
     }
   })
 
+  test('validates session options before running payment extensions', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-extension-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const markerPath = path.join(configDir, 'prepared')
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import * as fs from 'node:fs'
+import { defineConfig, Extension } from '${cliModuleUrl}'
+
+export default defineConfig({
+  extensions: [
+    Extension.from({
+      preparePayment() {
+        fs.writeFileSync(${JSON.stringify(markerPath)}, '')
+      },
+    }),
+  ],
+})
+      `.trim(),
+    )
+    const httpServer = await Http.createServer((req, res) => {
+      res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve(
+        [httpServer.url, '--config', configPath, '--session', 'new', '-s'],
+        { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+      )
+      expect(exitCode).toBe(2)
+      expect(output).toContain('--session requires a tempo/session payment challenge')
+      expect(fs.existsSync(markerPath)).toBe(false)
+    } finally {
+      httpServer.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
   test('--protocol x402 skips an MPP offer from the same response', async () => {
     const httpServer = await Http.createServer((req, res) => {
       if (!req.headers['payment-signature']) {

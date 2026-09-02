@@ -15,7 +15,11 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
-import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
+import {
+  computeFallbackCloseAmount,
+  mergeSessionCredentialContext,
+  sessionManager,
+} from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -289,6 +293,15 @@ describe('Session', () => {
       expect(s.channelId).toBeUndefined()
       expect(s.cumulative).toBe(0n)
       expect(s.opened).toBe(false)
+    })
+
+    test('merges manager credential context into generated session operations', () => {
+      expect(
+        mergeSessionCredentialContext(
+          { account, action: 'close', depositRaw: '2000000' },
+          { action: 'open', channelId },
+        ),
+      ).toEqual({ account, action: 'open', channelId, depositRaw: '2000000' })
     })
   })
 

@@ -1,4 +1,8 @@
+import * as fs from 'node:fs'
 import type * as http from 'node:http'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -771,6 +775,58 @@ describe('validate: payment methods coverage', () => {
       }
     },
   )
+})
+
+describe('validate: payment extensions', () => {
+  test('runs configured extensions before credential creation', { timeout: 15_000 }, async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-validate-extension-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { defineConfig, Extension } from '${cliModuleUrl}'
+
+export default defineConfig({
+  extensions: [
+    Extension.from({
+      preparePayment() {
+        throw new Error('blocked by validate extension')
+      },
+    }),
+  ],
+})
+      `.trim(),
+    )
+    const challenge = makeChallenge({
+      method: 'stripe',
+      request: {
+        amount: '100',
+        currency: 'usd',
+        methodDetails: {
+          networkId: 'profile_test123',
+          paymentMethodTypes: ['card'],
+        },
+      },
+    } as Partial<Challenge.Challenge>)
+    const server = await mppServer(challenge)
+    const previousConfig = process.env.MPPX_CONFIG
+    const previousStripeKey = process.env.MPPX_STRIPE_SECRET_KEY
+    process.env.MPPX_CONFIG = configPath
+    process.env.MPPX_STRIPE_SECRET_KEY = 'sk_test_example'
+
+    try {
+      const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
+      expect(output).toContain('blocked by validate extension')
+      expect(output).not.toContain('Payment: submitted')
+    } finally {
+      if (previousConfig === undefined) delete process.env.MPPX_CONFIG
+      else process.env.MPPX_CONFIG = previousConfig
+      if (previousStripeKey === undefined) delete process.env.MPPX_STRIPE_SECRET_KEY
+      else process.env.MPPX_STRIPE_SECRET_KEY = previousStripeKey
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('validate: JSON mode', () => {

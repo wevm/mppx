@@ -670,20 +670,20 @@ const cli = Cli.create('mppx', {
         }
       }
 
-      const credentialContext = await preparePayment(
-        challenge,
-        loaded?.config.extensions,
-        pluginResult?.credentialContext,
-      )
-
       const persistentSessionAccount =
         process.env.MPPX_PRIVATE_KEY?.trim() ||
         !isTempoAccount(resolveAccountName(c.options.account))
       if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
         try {
+          const credentialContext = await preparePayment(
+            challenge,
+            loaded?.config.extensions,
+            pluginResult?.credentialContext,
+          )
           await runPersistentSessionRequest({
             challenge,
             challengeResponse: selectedChallengeResponse,
+            credentialContext,
             endpoint: url,
             fetch: targetFetch,
             fetchInput: fetchUrl,
@@ -713,6 +713,12 @@ const cli = Cli.create('mppx', {
           message: '--session requires a tempo/session payment challenge.',
           exitCode: 2,
         })
+
+      const credentialContext = await preparePayment(
+        challenge,
+        loaded?.config.extensions,
+        pluginResult?.credentialContext,
+      )
 
       // Create credential
       let credential: string

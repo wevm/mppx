@@ -49,6 +49,7 @@ export type PersistentSessionRequestOptions = {
 export type PersistentSessionRequestParameters = {
   challenge: TempoSessionChallenge
   challengeResponse: Response
+  credentialContext?: unknown
   endpoint: string
   fetch: typeof globalThis.fetch
   fetchInput: RequestInfo | URL
@@ -274,6 +275,7 @@ export async function runPersistentSessionRequest(
       bootstrap: false,
       client,
       channelStore,
+      credentialContext: parameters.credentialContext,
       decimals: sessionDecimals(parameters.challenge),
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,
