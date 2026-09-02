@@ -1,5 +1,15 @@
 # mppx
 
+## 0.9.2
+
+### Patch Changes
+
+- 14e8b25: Added CLI support for selecting and paying x402 payment challenges.
+- 5cbc5e4: Added request-scoped PaymentIntent customer, receipt email, and Tax calculation options, with fallback recording without rejected optional fields for completed crypto payments.
+- b12e65b: Fixed framework adapters to preserve multi-method intent challenges.
+- f13f800: Added a machine-payment metadata field to every Stripe PaymentIntent created by mppx.
+- 9dd9969: Added opt-in Stripe-hosted Tempo fee sponsorship to `stripe.create()` using the configured Stripe client.
+
 ## 0.9.1
 
 ### Patch Changes
