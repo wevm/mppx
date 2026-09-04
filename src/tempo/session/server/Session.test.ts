@@ -2067,6 +2067,79 @@ describe('precompile server session unit guardrails', () => {
   })
 
   describe('default HTTP auto-billing', () => {
+    test('retries a failed mandatory settlement without charging the failed HTTP request', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n, operator: payer.address })
+      await persistPrecompileChannel(store, openPayload)
+      let settled = 0n
+      let ready = false
+      const state = () => ({ settled, deposit: 1_000n, closeRequestedAt: 0 })
+      const unavailable = createServerClient([], null, openPayload.channelId, { state })
+      const available = createServerClient([], payer, openPayload.channelId, {
+        state,
+        receipt: () => {
+          settled = 1n
+          return transactionReceipt([settledLog(openPayload.channelId, 1n)])
+        },
+      })
+      const route = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            amount: '1',
+            chainId,
+            currency: token,
+            decimals: 0,
+            getClient: () => (ready ? available : unavailable),
+            operator: payer.address,
+            recipient: payee,
+            settlementSchedule: { units: 1 },
+            store: rawStore,
+            unitType: 'request',
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'test-secret-key-test-secret-key-32',
+      }).session({ amount: '1', decimals: 0, unitType: 'request' })
+      const initial = await route(new Request('https://api.example.com/resource'))
+      if (initial.status !== 402) throw new Error('expected challenge')
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+      const authorization = Credential.serialize({
+        challenge: Challenge.fromResponse(initial.challenge),
+        payload: voucher,
+        source: sourceFor(),
+      })
+      const request = () =>
+        new Request('https://api.example.com/resource', {
+          headers: { authorization },
+        })
+
+      const failed = await route(request())
+      expect(failed.status).toBe(402)
+      expect(await store.getChannel(openPayload.channelId)).toMatchObject({ spent: 0n, units: 0 })
+
+      ready = true
+      const paid = await route(request())
+      expect(paid.status).toBe(200)
+      if (paid.status !== 200) throw new Error('expected paid response')
+      const response = paid.withReceipt(new Response('paid-content'))
+      const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
+      expect(receipt).toMatchObject({ spent: '1', units: 1 })
+      expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+        spent: 1n,
+        units: 1,
+        settledOnChain: 1n,
+        lastSettlementSpent: 1n,
+        lastSettlementUnits: 1,
+      })
+    })
+
     function createRoute(rawStore: Store.AtomicStore) {
       return Mppx_server.create({
         methods: [

@@ -244,9 +244,6 @@ export async function markSettlementComplete(parameters: MarkSettlementCompleteP
   )
 }
 
-/** Callback used by post-verification accounting to deduct spend from a channel. */
-export type ChargeSessionChannel = (channelId: Hex, amount: bigint) => Promise<ChannelStore.State>
-
 /** Callback used by post-verification accounting to run server-owned settlement policy. */
 export type SettleChargedSessionChannel = (channel: ChannelStore.State) => Promise<Hex | undefined>
 
@@ -264,8 +261,8 @@ export type ChargeParameters = {
 export type ApplyVerifiedHttpAccountingParameters = {
   /** Captured request metadata from the verified envelope, when this is a request-backed flow. */
   capturedRequest?: Method.CapturedRequest | undefined
-  /** Deducts the configured request amount from channel spend. */
-  charge: ChargeSessionChannel
+  /** Channel store used to preview and atomically commit the request charge. */
+  store: ChannelStore.ChannelStore
   /** Returns the raw request amount to deduct for one content response. Called only when charging. */
   getRequestAmount: () => bigint
   /** Credential action that produced the receipt. Only open/voucher can pay for content. */
@@ -276,7 +273,7 @@ export type ApplyVerifiedHttpAccountingParameters = {
   markPrepaidReceipt?: ((receipt: SessionReceipt) => SessionReceipt) | undefined
   /** Whether SSE transport is enabled. SSE accounting is stream-driven, not HTTP-response-driven. */
   sseEnabled: boolean
-  /** Runs optional server settlement policy after a successful content charge. */
+  /** Runs server settlement policy against the projected charge before committing it. */
   settleCharged: SettleChargedSessionChannel
 }
 
@@ -291,8 +288,39 @@ export async function applyVerifiedHttpAccounting(
   if (!isSessionContentRequest(capturedRequest)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
-  const charged = await parameters.charge(receipt.channelId, requestAmount)
-  const settlementTxHash = await parameters.settleCharged(charged)
+  let settlementTxHash: Hex | undefined
+  let charged: ChannelStore.State
+  while (true) {
+    const current = await parameters.store.getChannel(receipt.channelId)
+    if (!current) throw new ChannelClosedError({ reason: 'channel not found' })
+    const projected = requireCharge(
+      ChannelStore.planDeduction(current, requestAmount).result,
+      requestAmount,
+    )
+    // Settlement failures must not consume a content charge.
+    settlementTxHash =
+      (await parameters.settleCharged(projected).catch((cause) => {
+        // Receipt validation errors during scheduled settlement are operational failures, not invalid credentials.
+        throw new Error('Session settlement failed', { cause })
+      })) ?? settlementTxHash
+    const result = await ChannelStore.deductFromChannel(
+      parameters.store,
+      receipt.channelId,
+      requestAmount,
+      {
+        expected: current,
+        ...(settlementTxHash ? { settledAt: new Date().toISOString() } : {}),
+      },
+    )
+    // Another charge can cross a settlement threshold while awaiting the RPC. Evaluate its updated counters before committing.
+    if (
+      !result.ok &&
+      (result.channel.spent !== current.spent || result.channel.units !== current.units)
+    )
+      continue
+    charged = requireCharge(result, requestAmount)
+    break
+  }
   const chargedReceipt = {
     ...receipt,
     spent: charged.spent.toString(),
@@ -315,6 +343,14 @@ export async function chargeSessionChannel(
   } catch {
     throw new ChannelClosedError({ reason: 'channel not found' })
   }
+  return requireCharge(result, amount)
+}
+
+function requireCharge(
+  result: ChannelStore.DeductResult | null,
+  amount: bigint,
+): ChannelStore.State {
+  if (!result) throw new ChannelClosedError({ reason: 'channel not found' })
   if (!result.ok) {
     if (result.channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
     if (result.channel.closeRequestedAt !== 0n)

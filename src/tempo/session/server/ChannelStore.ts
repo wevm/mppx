@@ -822,11 +822,12 @@ export async function deductFromChannel(
   store: ChannelStore,
   channelId: State['channelId'],
   amount: bigint,
+  options: DeductOptions = {},
 ): Promise<DeductResult> {
   if (store.updateChannelResult) {
     const result = await store.updateChannelResult<DeductResult | null>(
       channelId,
-      (current): DeductionChange => planDeduction(current, amount),
+      (current): DeductionChange => planDeduction(current, amount, options),
     )
     if (!result) throw new Error('channel not found')
     return result
@@ -834,7 +835,7 @@ export async function deductFromChannel(
 
   let result: DeductResult | null = null
   const channel = await store.updateChannel(channelId, (current) => {
-    const change = planDeduction(current, amount)
+    const change = planDeduction(current, amount, options)
     result = change.result
     if (change.op === 'set') return change.value
     return current
@@ -843,8 +844,26 @@ export async function deductFromChannel(
   return result ?? { ok: false, channel }
 }
 
-function planDeduction(current: State | null, amount: bigint): DeductionChange {
+/** Conditions and settlement metadata for an atomic charge. */
+export type DeductOptions = {
+  /** Counters used to evaluate settlement; changed counters require another evaluation. */
+  expected?: Pick<State, 'spent' | 'units'> | undefined
+  /** Confirmation time for the settlement boundary committed with this charge. */
+  settledAt?: string | undefined
+}
+
+/** Computes a charge without mutating the channel, optionally including its confirmed settlement boundary. */
+export function planDeduction(
+  current: State | null,
+  amount: bigint,
+  options: DeductOptions = {},
+): DeductionChange {
   if (!current) return { op: 'noop', result: null }
+  if (
+    options.expected &&
+    (current.spent !== options.expected.spent || current.units !== options.expected.units)
+  )
+    return { op: 'noop', result: { ok: false, channel: current } }
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.closeRequestedAt !== 0n)
     return { op: 'noop', result: { ok: false, channel: current } }
@@ -852,5 +871,10 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
     return { op: 'noop', result: { ok: false, channel: current } }
 
   const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
+  if (options.settledAt !== undefined) {
+    next.lastSettlementAt = options.settledAt
+    next.lastSettlementSpent = next.spent
+    next.lastSettlementUnits = next.units
+  }
   return { op: 'set', value: next, result: { ok: true, channel: next } }
 }

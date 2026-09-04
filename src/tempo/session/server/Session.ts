@@ -461,8 +461,7 @@ export function session<const parameters extends session.Parameters>(
       getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
       sseEnabled: Boolean(parameters.sse),
       markPrepaidReceipt: Transport.markPrepaidSessionTick,
-      charge: (channelId, requestAmount) =>
-        chargeSessionChannel({ store, channelId, amount: requestAmount }),
+      store,
       settleCharged: (channel) =>
         maybeSettleScheduled({
           account,

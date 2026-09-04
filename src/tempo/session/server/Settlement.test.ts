@@ -4,16 +4,20 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
+import { VerificationFailedError } from '../../../Errors.js'
 import type * as Method from '../../../Method.js'
+import * as Store from '../../../Store.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
-import type * as ChannelStore from './ChannelStore.js'
+import * as ChannelStore from './ChannelStore.js'
 import {
   applyVerifiedHttpAccounting,
+  chargeSessionChannel,
   isSettlementDue,
   readRequestFeePayer,
   resolveCredentialFeePayer,
   resolveRequestFeePayer,
   resolveSettlementProgress,
+  type SettleChargedSessionChannel,
 } from './Settlement.js'
 
 describe('FeePayerResolution', () => {
@@ -197,21 +201,30 @@ describe('applyVerifiedHttpAccounting', () => {
     }
   }
 
-  function chargedChannel(): ChannelStore.State {
-    return {
+  async function channelStore() {
+    const store = ChannelStore.fromStore(Store.memory())
+    await store.updateChannel(
       channelId,
-      spent: 75n,
-      units: 1,
-    } as ChannelStore.State
+      () =>
+        ({
+          channelId,
+          closeRequestedAt: 0n,
+          finalized: false,
+          highestVoucherAmount: 200n,
+          spent: 0n,
+          units: 0,
+        }) as ChannelStore.State,
+    )
+    return store
   }
 
   test('precharges SSE GET content and marks the receipt as prepaid', async () => {
-    const charge = vi.fn(async () => chargedChannel())
+    const store = await channelStore()
     const markPrepaidReceipt = vi.fn((value) => value)
 
     await applyVerifiedHttpAccounting({
       capturedRequest: capturedRequest({ method: 'GET' }),
-      charge,
+      store,
       getRequestAmount: () => 75n,
       markPrepaidReceipt,
       payloadAction: 'voucher',
@@ -220,16 +233,16 @@ describe('applyVerifiedHttpAccounting', () => {
       sseEnabled: true,
     })
 
-    expect(charge).toHaveBeenCalledWith(channelId, 75n)
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 75n, units: 1 })
     expect(markPrepaidReceipt).toHaveBeenCalledOnce()
   })
 
   test('does not charge SSE voucher management POSTs', async () => {
-    const charge = vi.fn(async () => chargedChannel())
+    const store = await channelStore()
 
     const result = await applyVerifiedHttpAccounting({
       capturedRequest: capturedRequest({ hasBody: true, method: 'POST' }),
-      charge,
+      store,
       getRequestAmount: () => 75n,
       payloadAction: 'voucher',
       receipt: receipt(),
@@ -237,16 +250,16 @@ describe('applyVerifiedHttpAccounting', () => {
       sseEnabled: true,
     })
 
-    expect(charge).not.toHaveBeenCalled()
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
     expect(result.spent).toBe('0')
   })
 
   test('keeps non-SSE POST content accounting unchanged', async () => {
-    const charge = vi.fn(async () => chargedChannel())
+    const store = await channelStore()
 
     await applyVerifiedHttpAccounting({
       capturedRequest: capturedRequest({ hasBody: true, method: 'POST' }),
-      charge,
+      store,
       getRequestAmount: () => 75n,
       payloadAction: 'voucher',
       receipt: receipt(),
@@ -254,7 +267,7 @@ describe('applyVerifiedHttpAccounting', () => {
       sseEnabled: false,
     })
 
-    expect(charge).toHaveBeenCalledWith(channelId, 75n)
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 75n, units: 1 })
   })
 })
 
@@ -302,6 +315,129 @@ describe('SettlementSchedule', () => {
       ...overrides,
     }
   }
+
+  describe('HTTP settlement accounting', () => {
+    async function setup(settleCharged: SettleChargedSessionChannel) {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () =>
+        channel({
+          spent: 0n,
+          units: 0,
+          settledOnChain: 0n,
+          highestVoucherAmount: 100n,
+          highestVoucher: { channelId, cumulativeAmount: 100n, signature: '0x1234' },
+        }),
+      )
+      const parameters = {
+        capturedRequest: {
+          hasBody: false,
+          headers: new Headers(),
+          method: 'GET',
+          url: new URL('https://api.example.com/session'),
+        },
+        getRequestAmount: () => 25n,
+        payloadAction: 'voucher' as const,
+        receipt: createSessionReceipt({
+          acceptedCumulative: 100n,
+          challengeId: 'challenge-1',
+          channelId,
+          spent: 0n,
+          units: 0,
+        }),
+        settleCharged,
+        sseEnabled: false,
+        store,
+      }
+      return { parameters, store }
+    }
+
+    test('preserves the charge balance after failed settlement and charges a retry once', async () => {
+      const { parameters, store } = await setup(async (projected) => {
+        expect(projected).toMatchObject({ spent: 25n, units: 1 })
+        throw new Error('settlement unavailable')
+      })
+      await expect(applyVerifiedHttpAccounting(parameters)).rejects.toMatchObject({
+        message: 'Session settlement failed',
+        cause: { message: 'settlement unavailable' },
+      })
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+
+      const result = await applyVerifiedHttpAccounting({
+        ...parameters,
+        settleCharged: async () => `0x${'ab'.repeat(32)}`,
+      })
+      expect(result).toMatchObject({ spent: '25', units: 1 })
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 25n,
+        units: 1,
+        lastSettlementSpent: 25n,
+        lastSettlementUnits: 1,
+      })
+    })
+
+    test('preserves another request charge when settlement fails', async () => {
+      const { parameters, store } = await setup(async () => {
+        await chargeSessionChannel({ store, channelId, amount: 10n })
+        throw new Error('settlement unavailable')
+      })
+      await expect(applyVerifiedHttpAccounting(parameters)).rejects.toMatchObject({
+        message: 'Session settlement failed',
+        cause: { message: 'settlement unavailable' },
+      })
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 10n, units: 1 })
+    })
+
+    test('rechecks voucher coverage after settlement before committing the charge', async () => {
+      const { parameters, store } = await setup(async () => {
+        await chargeSessionChannel({ store, channelId, amount: 100n })
+        return `0x${'ab'.repeat(32)}`
+      })
+      await expect(applyVerifiedHttpAccounting(parameters)).rejects.toThrow('available 0')
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 100n, units: 1 })
+    })
+
+    test('reevaluates the settlement threshold when another request commits a charge', async () => {
+      const projections: number[] = []
+      const { parameters, store } = await setup(async (projected) => {
+        projections.push(projected.units)
+        if (projected.units === 1) {
+          await chargeSessionChannel({ store, channelId, amount: 10n })
+          return undefined
+        }
+        return `0x${'ab'.repeat(32)}`
+      })
+      const receipt = await applyVerifiedHttpAccounting(parameters)
+      expect(projections).toEqual([1, 2])
+      expect(receipt).toMatchObject({ spent: '35', units: 2, txHash: `0x${'ab'.repeat(32)}` })
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 35n,
+        units: 2,
+        lastSettlementSpent: 35n,
+        lastSettlementUnits: 2,
+      })
+    })
+
+    test('reports settlement receipt validation errors as operational failures', async () => {
+      const cause = new VerificationFailedError({ reason: 'precompile transaction reverted' })
+      const { parameters, store } = await setup(async () => {
+        throw cause
+      })
+      await expect(applyVerifiedHttpAccounting(parameters)).rejects.toMatchObject({
+        message: 'Session settlement failed',
+        cause,
+      })
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+    })
+
+    test('rejects a channel closed during settlement without committing a charge', async () => {
+      const { parameters, store } = await setup(async () => {
+        await store.updateChannel(channelId, (current) => ({ ...current!, closeRequestedAt: 1n }))
+        return `0x${'ab'.repeat(32)}`
+      })
+      await expect(applyVerifiedHttpAccounting(parameters)).rejects.toThrow('pending close request')
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+    })
+  })
 
   describe('SettlementSchedule', () => {
     test('resolves progress from the previous scheduled settlement boundary', () => {
