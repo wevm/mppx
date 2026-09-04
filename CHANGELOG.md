@@ -1,5 +1,17 @@
 # mppx
 
+## 0.9.3
+
+### Patch Changes
+
+- 1fd8746: Expanded Tempo session close rollback and expiring-nonce transaction coverage.
+- 459b517: Added challenge context to payment-success hooks, standardized Stripe PaymentIntent analytics
+  metadata, and added a shared SDK version identifier.
+- a5451d0: Updated `fast-uri` and `qs` to patched versions, resolving their latest security advisories.
+- a802ce9: Added method-agnostic CLI payment extensions that can enforce policy or prepare funds before credential creation.
+- f494ffd: Added request-scoped PaymentIntent option resolvers that run before terminal Stripe payments.
+- 7949db6: Fixed server-side session transactions to use expiring nonces across independent processes.
+
 ## 0.9.2
 
 ### Patch Changes
