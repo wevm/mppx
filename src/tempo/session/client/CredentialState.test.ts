@@ -16,7 +16,6 @@ import {
   deserializeEntry,
   entryKey,
   serializeEntry,
-  type ChannelSink,
 } from './ChannelStore.js'
 import {
   canSignDescriptor,
@@ -37,11 +36,6 @@ import {
   type ChallengeContext,
   type SessionContext,
 } from './CredentialState.js'
-
-/** Builds a credential sink backed by a fresh in-memory store. */
-function sink(): ChannelSink {
-  return { store: createChannelStore(), notifyUpdate: () => {} }
-}
 
 describe('ChannelCache', () => {
   const channelId = `0x${'11'.repeat(32)}` as Hex
@@ -262,6 +256,7 @@ describe('CredentialPlan', () => {
   const channelId = `0x${'11'.repeat(32)}` as Hex
   const snapshotChannelId = `0x${'12'.repeat(32)}` as Hex
   const escrow = '0x4D50500000000000000000000000000000000000' as Address
+  const feeToken = '0x20c0000000000000000000000000000000000004' as Address
   const payee = '0x0000000000000000000000000000000000000002' as Address
   const token = '0x20c0000000000000000000000000000000000001' as Address
 
@@ -351,6 +346,7 @@ describe('CredentialPlan', () => {
           chainId: 42431,
           escrowContract: escrow,
           feePayer: true,
+          feeToken,
           [Constants.MethodDetailKeys.sessionSnapshot]: snapshot(),
         },
         recipient: payee,
@@ -375,6 +371,7 @@ describe('CredentialPlan', () => {
         client,
         escrow: escrow.toLowerCase(),
         feePayer: true,
+        feeToken,
         payee,
         snapshot: snapshot(),
         suggestedDepositRaw: '100',
@@ -501,20 +498,16 @@ describe('CredentialPlan', () => {
         resolved: challengeContext(),
       })
 
-      await expect(executeCredentialPlan(plan, sink())).rejects.toThrow(
+      await expect(executeCredentialPlan(plan)).rejects.toThrow(
         'context descriptor payee does not match challenge',
       )
     })
 
     test('leaves stored scope entry unchanged when a manual credential targets another channel', async () => {
       const entry = channel()
-      const originalCumulative = entry.cumulativeAmount
-      const notifications: ChannelEntry[] = []
-      const store = createChannelStore()
       const manualDescriptor = { ...descriptor, salt: `0x${'55'.repeat(32)}` as Hex }
-      await store.set(entry)
 
-      await executeCredentialPlan(
+      const result = await executeCredentialPlan(
         planCredential({
           account,
           entry,
@@ -526,13 +519,10 @@ describe('CredentialPlan', () => {
           decimals: 6,
           resolved: challengeContext(),
         }),
-        { store, notifyUpdate: (updated) => notifications.push(updated) },
       )
 
-      const stored = await store.get(entryKey(entry))
-      expect(stored?.channelId).toBe(entry.channelId)
-      expect(stored?.cumulativeAmount).toBe(originalCumulative)
-      expect(notifications).toEqual([])
+      expect(result.entry).toBeUndefined()
+      expect(entry.cumulativeAmount).toBe(10n)
     })
 
     test('plans recovery from server snapshot when no reusable cache entry exists', () => {
@@ -547,6 +537,25 @@ describe('CredentialPlan', () => {
       if (plan.type !== 'recover') throw new Error('expected recover plan')
       expect(plan.context.channelId).toBe(snapshotChannelId)
       expect(plan.context.descriptor).toBe(snapshotDescriptor)
+    })
+
+    test('plans a fresh open when the snapshot descriptor targets another rail', () => {
+      const machineSnapshot = {
+        ...snapshot(),
+        descriptor: {
+          ...snapshotDescriptor,
+          payee: '0x0000000000000000000000000000000000000009' as Address,
+          token: '0x20c0000000000000000000000000000000000002' as Address,
+        },
+      }
+      const plan = planCredential({
+        account,
+        entry: undefined,
+        decimals: 6,
+        resolved: challengeContext({ snapshot: machineSnapshot }),
+      })
+
+      expect(plan.type).toBe('open')
     })
 
     test('plans voucher reuse before snapshot recovery when cache entry is open', () => {

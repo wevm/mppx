@@ -52,6 +52,7 @@ const mppx = Mppx.create({
   methods: [
     tempo({
       currency: '0x20c0000000000000000000000000000000000000',
+      machineTokenEnabled: true,
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
   ],
@@ -82,6 +83,11 @@ Mppx.create({
 // Global fetch now handles 402 automatically
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
+
+The client API is the same for PathUSD, USDC.e, and MACH. A server advertises
+`machineTokenEnabled`; the client uses MACH when a verified route and sufficient balance
+are available, and otherwise pays the token requested by the challenge. Sessions keep the selected
+rail until the channel closes. The canonical MACH route is currently available on Tempo Moderato.
 
 ## Examples
 

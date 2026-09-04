@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
 import type * as Method from '../../../Method.js'
+import * as defaults from '../../internal/defaults.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
 import type * as ChannelStore from './ChannelStore.js'
 import {
@@ -12,6 +13,7 @@ import {
   isSettlementDue,
   readRequestFeePayer,
   resolveCredentialFeePayer,
+  resolveChannelTransactionOptions,
   resolveRequestFeePayer,
   resolveSettlementProgress,
 } from './Settlement.js'
@@ -170,6 +172,48 @@ describe('FeePayerResolution', () => {
           request: { feePayer: {} },
         }),
       ).toBe(defaultFeePayer)
+    })
+
+    test('derives settlement fee tokens from the channel rail', () => {
+      const chainId = defaults.chainId.testnet
+      const deployment = defaults.machineToken[chainId]
+      const machineChannel = { chainId, token: deployment.token }
+      const directChannel = { chainId, token: defaults.tokens.usdc }
+      expect(
+        resolveChannelTransactionOptions(
+          machineChannel,
+          undefined,
+          defaultFeePayer,
+          deployment.swap,
+        ),
+      ).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.pathUsd],
+        feeToken: defaults.tokens.pathUsd,
+      })
+      const directOptions = resolveChannelTransactionOptions(
+        directChannel,
+        { feePayer: true },
+        defaultFeePayer,
+        undefined,
+      )
+      expect(directOptions).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.usdc],
+        feePayer: true,
+      })
+      // Direct channels leave the fee token unset so balance-aware selection
+      // can pick a funded candidate.
+      expect(directOptions).not.toHaveProperty('feeToken')
+      expect(
+        resolveChannelTransactionOptions(
+          directChannel,
+          { feeToken: defaults.tokens.pathUsd },
+          defaultFeePayer,
+          undefined,
+        ),
+      ).toMatchObject({
+        candidateFeeTokens: [defaults.tokens.pathUsd],
+        feeToken: defaults.tokens.pathUsd,
+      })
     })
   })
 })

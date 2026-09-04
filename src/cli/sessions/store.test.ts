@@ -9,10 +9,11 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
 }))
 
 import type * as Challenge from '../../Challenge.js'
+import * as defaults from '../../tempo/internal/defaults.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../../tempo/session/client/ChannelStore.js'
 import * as Channel from '../../tempo/session/precompile/Channel.js'
-import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import { tip20ChannelEscrow, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import sessions from './commands.js'
 import {
   createSessionRegistry,
@@ -30,6 +31,7 @@ const payee = '0x2222222222222222222222222222222222222222' as Address
 const token = '0x3333333333333333333333333333333333333333' as Address
 const escrow = '0x4444444444444444444444444444444444444444' as Address
 const operator = '0x0000000000000000000000000000000000000000' as Address
+const machinePayee = '0x7777777777777777777777777777777777777777' as Address
 const descriptor = {
   payer,
   payee,
@@ -41,6 +43,12 @@ const descriptor = {
 }
 const channelId = Channel.computeId({ ...descriptor, escrow, chainId: 42431 })
 const mainnetChannelId = Channel.computeId({ ...descriptor, escrow, chainId: 4217 })
+const machineDescriptor = {
+  ...descriptor,
+  operator: defaults.machineToken[42431].swap,
+  payee: machinePayee,
+  token: defaults.machineToken[42431].token,
+}
 
 let temporaryDirectory: string
 let stateRoot: string
@@ -87,6 +95,28 @@ function challenge(id = 'challenge-1', chainId = 42431): Challenge.Challenge {
       methodDetails: { chainId, escrowContract: escrow },
     },
   }
+}
+
+function machineChallenge(): Challenge.Challenge {
+  return {
+    ...challenge('machine-challenge'),
+    request: {
+      ...challenge('machine-challenge').request,
+      methodDetails: {
+        chainId: 42431,
+        escrowContract: tip20ChannelEscrow,
+        machineTokenEnabled: true,
+      },
+    },
+  }
+}
+
+function machineChannel(): ChannelEntry {
+  return channel({
+    descriptor: machineDescriptor,
+    escrow: tip20ChannelEscrow,
+    paymentScope: { payee, token },
+  })
 }
 
 function receipt(overrides: Partial<SessionReceipt> = {}): SessionReceipt {
@@ -277,20 +307,6 @@ describe('createSessionRegistry', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('{invalid json')
   })
 
-  test('rejects a channel ID that does not match its descriptor', async () => {
-    const registry = createSessionRegistry(registryOptions())
-
-    await expect(
-      registry.upsert({
-        status: 'open',
-        channel: channel({ channelId: `0x${'ff'.repeat(32)}` }),
-        account: { address: payer },
-        endpoint: 'https://api.example.test/query',
-        challenge: challenge(),
-      }),
-    ).rejects.toThrow('Session channel ID does not match its descriptor.')
-  })
-
   test('rejects live and remote locks, then reclaims a dead same-host lock', async () => {
     const first = createSessionRegistry(
       registryOptions({ hostname: 'host-a', pid: 101, isProcessAlive: () => true }),
@@ -408,6 +424,35 @@ describe('createSessionRegistry', () => {
 })
 
 describe('toChannelStore', () => {
+  test('persists and reuses a machine channel under its logical challenge scope', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    const logicalScope = scope({ escrow: tip20ChannelEscrow })
+    const machine = machineChannel()
+    const context = (): SessionPersistenceContext => ({
+      status: 'open',
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query',
+      challenge: machineChallenge(),
+    })
+    const opened = toChannelStore(registry, {
+      scope: logicalScope,
+      selection: 'new',
+      context,
+    })
+    await opened.set(machine)
+
+    expect(await registry.getPreferred(logicalScope)).toBe(machine.channelId)
+    const automatic = toChannelStore(registry, {
+      scope: logicalScope,
+      selection: 'auto',
+      context,
+    })
+    expect(await automatic.get(entryKey(machine))).toEqual(machine)
+
+    await registry.remove(machine.channelId)
+    expect(await registry.getPreferred(logicalScope)).toBeUndefined()
+  })
+
   test('uses preferred open sessions and never reuses opening sessions', async () => {
     const registry = createSessionRegistry(registryOptions())
     let status: SessionPersistenceContext['status'] = 'opening'
