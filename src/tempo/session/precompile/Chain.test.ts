@@ -364,7 +364,8 @@ describe('precompile server transactions', () => {
             maxPriorityFeePerGas: 1n,
           } as never)) as never,
       }))
-      const options = { feeToken: descriptor.token }
+      const validBefore = Math.floor(Date.now() / 1_000) + 20
+      const options = { feeToken: descriptor.token, validBefore }
       const signature = `0x${'11'.repeat(65)}` as const
       if (operation === 'settle')
         await Chain.settleOnChain(client, descriptor, 1n, signature, tip20ChannelEscrow, options)
@@ -377,13 +378,14 @@ describe('precompile server transactions', () => {
       )
       expect(transaction.nonce).toBe(0)
       expect(transaction.nonceKey).toBe(maxUint256)
-      expect(transaction.validBefore).toBeDefined()
+      expect(transaction.validBefore).toBe(validBefore)
       expect(transaction.validAfter).toBeDefined()
       expect(rpcMethods).toEqual(['eth_sendRawTransaction'])
     },
   )
 
   test('marks server transactions for hosted sponsorship and preserves their fee token', async () => {
+    const validBefore = Math.floor(Date.now() / 1_000) + 20
     const rpcMethods: string[] = []
     const preparedRequests: Record<string, unknown>[] = []
     const signedRequests: Record<string, unknown>[] = []
@@ -413,15 +415,21 @@ describe('precompile server transactions', () => {
         account: sender,
         feePayer: true,
         feeToken: sourceToken,
+        validBefore,
       },
     )
     await Chain.settleOnChain(client, descriptor, 1n, `0x${'11'.repeat(65)}`, tip20ChannelEscrow, {
       account: sender,
       feePayer: true,
       feeToken: sourceToken,
+      validBefore,
     })
     expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
     expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
+    expect(preparedRequests.map(({ validBefore }) => validBefore)).toEqual([
+      validBefore,
+      validBefore,
+    ])
     expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
     expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)

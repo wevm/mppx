@@ -397,6 +397,8 @@ export type ChannelTransactionOptions = {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Explicit fee token for the transaction. */
   feeToken?: Address | undefined
+  /** Expiry for an expiring-nonce transaction, in Unix seconds. */
+  validBefore?: number | undefined
 }
 
 type ParsedPrecompileCredentialTransaction = {
@@ -582,6 +584,7 @@ async function prepareFeePayerCallTransaction(
     data: Hex
     feeToken?: Address | undefined
     to: Address
+    validBefore?: number | undefined
   },
 ) {
   const { account, data, feeToken, to } = parameters
@@ -592,6 +595,7 @@ async function prepareFeePayerCallTransaction(
     calls: [{ to, data }],
     feePayer: true,
     nonceKey: 'expiring',
+    ...(parameters.validBefore !== undefined ? { validBefore: parameters.validBefore } : {}),
     ...(feeToken ? { feeToken } : {}),
   } as never)
 }
@@ -604,6 +608,7 @@ function sendPrecompileContractCall(
     feePayer?: true | undefined
     feeToken?: Address | undefined
     to: Address
+    validBefore?: number | undefined
   },
 ): Promise<Hex> {
   const { account, data, feePayer, feeToken, to } = parameters
@@ -615,6 +620,7 @@ function sendPrecompileContractCall(
     data,
     // Server processes can share a signer without sharing viem's concurrency detection.
     nonceKey: 'expiring',
+    ...(parameters.validBefore !== undefined ? { validBefore: parameters.validBefore } : {}),
     ...(feePayer ? { feePayer } : {}),
     ...(feeToken ? { feeToken } : {}),
   } as never)
@@ -1237,6 +1243,7 @@ async function sendPrecompileTransaction(
       feePayer: true,
       feeToken: options.feeToken,
       to,
+      validBefore: options.validBefore,
     })
   }
 
@@ -1254,6 +1261,7 @@ async function sendPrecompileTransaction(
       data,
       feeToken,
       to,
+      validBefore: options.validBefore,
     })
     assertPrecompileFeePayerPolicy({ prepared, policy: options.feePayerPolicy })
     const serialized = await signTempoTransaction(client, {
@@ -1286,5 +1294,6 @@ async function sendPrecompileTransaction(
     to,
     data,
     feeToken,
+    validBefore: options?.validBefore,
   })
 }
