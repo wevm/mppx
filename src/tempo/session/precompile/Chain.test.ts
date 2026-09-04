@@ -12,7 +12,9 @@ import {
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { prepareTransactionRequest } from 'viem/actions'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
+import { tempo } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
 import { VerificationFailedError } from '../../../Errors.js'
@@ -333,6 +335,54 @@ describe('precompile receipt wait', () => {
 })
 
 describe('precompile server transactions', () => {
+  test.each(['settle', 'close'] as const)(
+    'uses expiring nonces for %s without concurrent requests',
+    async (operation) => {
+      const rpcMethods: string[] = []
+      const transactions: Hex[] = []
+      const client = createClient({
+        account: feePayer,
+        chain: tempo,
+        transport: custom({
+          async request({ method, params }) {
+            rpcMethods.push(method)
+            if (method === 'eth_getTransactionCount') return '0x7'
+            if (method === 'eth_sendRawTransaction') {
+              transactions.push((params as [Hex])[0])
+              return txHash
+            }
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      }).extend((client) => ({
+        prepareTransactionRequest: ((parameters: Record<string, unknown>) =>
+          prepareTransactionRequest(client, {
+            ...parameters,
+            chainId: tempo.id,
+            gas: 100_000n,
+            maxFeePerGas: 1n,
+            maxPriorityFeePerGas: 1n,
+          } as never)) as never,
+      }))
+      const options = { feeToken: descriptor.token }
+      const signature = `0x${'11'.repeat(65)}` as const
+      if (operation === 'settle')
+        await Chain.settleOnChain(client, descriptor, 1n, signature, tip20ChannelEscrow, options)
+      else
+        await Chain.closeOnChain(client, descriptor, 1n, 1n, signature, tip20ChannelEscrow, options)
+
+      expect(transactions).toHaveLength(1)
+      const transaction = Transaction.deserialize(
+        transactions[0] as Transaction.TransactionSerializedTempo,
+      )
+      expect(transaction.nonce).toBe(0)
+      expect(transaction.nonceKey).toBe(maxUint256)
+      expect(transaction.validBefore).toBeDefined()
+      expect(transaction.validAfter).toBeDefined()
+      expect(rpcMethods).toEqual(['eth_sendRawTransaction'])
+    },
+  )
+
   test('marks server transactions for hosted sponsorship and preserves their fee token', async () => {
     const rpcMethods: string[] = []
     const preparedRequests: Record<string, unknown>[] = []

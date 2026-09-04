@@ -591,6 +591,7 @@ async function prepareFeePayerCallTransaction(
     account,
     calls: [{ to, data }],
     feePayer: true,
+    nonceKey: 'expiring',
     ...(feeToken ? { feeToken } : {}),
   } as never)
 }
@@ -612,6 +613,8 @@ function sendPrecompileContractCall(
     ...(account ? { account } : {}),
     to,
     data,
+    // Server processes can share a signer without sharing viem's concurrency detection.
+    nonceKey: 'expiring',
     ...(feePayer ? { feePayer } : {}),
     ...(feeToken ? { feeToken } : {}),
   } as never)
