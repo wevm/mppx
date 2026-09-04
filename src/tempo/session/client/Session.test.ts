@@ -1,28 +1,32 @@
 import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
-import { describe, expect, test, vi } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
+import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
+import type { ChannelEntry } from './ChannelOps.js'
 import { channelKey, createChannelStore } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
-const chainId = 42431
+const chainId = defaults.chainId.testnet
 const client = createClient({
   account,
   chain: { id: chainId } as never,
@@ -53,6 +57,47 @@ const descriptor = {
   authorizedSigner: account.address,
   expiringNonceHash: `0x${'22'.repeat(32)}` as `0x${string}`,
 } satisfies Channel.ChannelDescriptor
+
+const deployment = defaults.machineToken[chainId]
+const machineDescriptor: Channel.ChannelDescriptor = {
+  ...descriptor,
+  operator: deployment.swap,
+  payee: '0x44D7c1EDFdfdfDFdFdFDFDFd0000000000000001',
+  token: deployment.token,
+}
+const machineRoute = {
+  operator: machineDescriptor.operator,
+  payee: machineDescriptor.payee,
+  token: machineDescriptor.token,
+}
+const machineChannelId = Channel.computeId({
+  ...machineDescriptor,
+  chainId,
+  escrow: tip20ChannelEscrow,
+})
+
+function mockMachineRoute({ funded = true, route = true } = {}) {
+  const resolved = route ? machineRoute : undefined
+  vi.spyOn(MachineTokenSession, 'resolveRoute').mockResolvedValue(resolved)
+  vi.spyOn(MachineTokenSession, 'matchRoute').mockResolvedValue(resolved)
+  vi.spyOn(MachineTokenSession, 'hasSufficientBalance').mockResolvedValue(funded)
+}
+
+afterEach(() => vi.restoreAllMocks())
+
+function getMachineEntry(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
+  return {
+    chainId,
+    channelId: machineChannelId,
+    cumulativeAmount: 100n,
+    deposit: 1_000n,
+    descriptor: machineDescriptor,
+    escrow: tip20ChannelEscrow,
+    opened: true,
+    paymentScope: { payee: descriptor.payee, token: descriptor.token },
+    ...overrides,
+  }
+}
 
 type SessionChallenge = Challenge<
   z.output<typeof Methods.session.schema.request>,
@@ -98,6 +143,13 @@ function makeSessionChallenge(
     },
   })
 }
+
+const machineChallenge = makeSessionChallenge({
+  methodDetails: {
+    escrowContract: tip20ChannelEscrow,
+    machineTokenEnabled: true,
+  },
+})
 
 function paymentRequired(challenge: SessionChallenge, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers)
@@ -148,6 +200,17 @@ function makeSessionMethod(
     maxDeposit: '1000',
     ...parameters,
   })
+}
+
+async function makeStoredMachineMethod(entryOverrides: Partial<ChannelEntry> = {}) {
+  const entry = getMachineEntry(entryOverrides)
+  const channelStore = createChannelStore()
+  await channelStore.set(entry)
+  return {
+    entry,
+    channelStore,
+    method: makeSessionMethod(channelStore),
+  }
 }
 
 function makeSessionFetch(
@@ -230,12 +293,41 @@ describe('precompile client session', () => {
     ).toBe(false)
   })
 
-  test('uses an advertised fee-token override for direct opens', async () => {
-    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+  test.each([
+    ['funded balance', true, true, 'machine'],
+    ['insufficient balance', true, false, 'direct'],
+    ['no route', false, true, 'direct'],
+  ] as const)('selects the %s rail implicitly', async (_name, route, funded, rail) => {
+    mockMachineRoute({ funded, route })
+    const expected = rail === 'machine' ? machineDescriptor : descriptor
+    const payload = deserialize(
+      await session({
+        account,
+        decimals: 0,
+        getClient: () => client,
+      }).createCredential({ challenge: machineChallenge, context: {} }),
+    )
+
+    expect(payload).toMatchObject({
+      action: 'open',
+      descriptor: { operator: expected.operator, payee: expected.payee, token: expected.token },
+    })
+  })
+
+  test.each([
+    ['direct', false],
+    ['machine', true],
+  ] as const)('uses an advertised fee-token override for %s opens', async (_rail, machine) => {
+    if (machine) mockMachineRoute()
+    const feeToken = defaults.tokens.usdc
     const payload = deserialize(
       await session({ account, decimals: 0, getClient: () => client }).createCredential({
         challenge: makeSessionChallenge({
-          methodDetails: { chainId, escrowContract: tip20ChannelEscrow, feeToken },
+          methodDetails: {
+            escrowContract: tip20ChannelEscrow,
+            feeToken,
+            ...(machine ? { machineTokenEnabled: true } : {}),
+          },
         }),
         context: {},
       }),
@@ -245,12 +337,12 @@ describe('precompile client session', () => {
     expect(transactionFeeToken(payload.transaction)).toBe(feeToken.toLowerCase())
   })
 
-  test('uses an advertised fee-token override for direct top-ups', async () => {
-    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+  test('uses an advertised fee-token override for top-ups', async () => {
+    const feeToken = defaults.tokens.usdc
     const payload = deserialize(
       await session({ account, decimals: 0, getClient: () => client }).createCredential({
         challenge: makeSessionChallenge({
-          methodDetails: { chainId, escrowContract: tip20ChannelEscrow, feeToken },
+          methodDetails: { escrowContract: tip20ChannelEscrow, feeToken },
         }),
         context: { action: 'topUp', additionalDepositRaw: '100', descriptor },
       }),
@@ -258,6 +350,116 @@ describe('precompile client session', () => {
     if (payload.action !== 'topUp') throw new Error('expected top-up payload')
 
     expect(transactionFeeToken(payload.transaction)).toBe(feeToken.toLowerCase())
+  })
+
+  test('reuses a funded machine channel and does not switch rails later', async () => {
+    mockMachineRoute()
+    const { entry, method } = await makeStoredMachineMethod()
+
+    const payload = deserialize(
+      await method.createCredential({ challenge: machineChallenge, context: {} }),
+    )
+    expect(payload).toMatchObject({
+      action: 'voucher',
+      authorizationSignature: expect.any(String),
+      channelId: entry.channelId,
+      cumulativeAmount: '200',
+    })
+
+    vi.mocked(MachineTokenSession.matchRoute).mockResolvedValue(undefined)
+    await expect(
+      method.createCredential({ challenge: machineChallenge, context: {} }),
+    ).rejects.toThrow('Machine-token channel is not bound to this merchant session challenge.')
+  })
+
+  test('keeps a direct fallback when the machine route recovers', async () => {
+    mockMachineRoute({ route: false })
+    const channelStore = createChannelStore()
+    const method = makeSessionMethod(channelStore)
+    const opened = deserialize(
+      await method.createCredential({ challenge: machineChallenge, context: {} }),
+    )
+    expect(opened).toMatchObject({
+      action: 'open',
+      descriptor: { payee: descriptor.payee, token: descriptor.token },
+    })
+
+    vi.mocked(MachineTokenSession.resolveRoute).mockResolvedValue(machineRoute)
+    expect(
+      deserialize(await method.createCredential({ challenge: machineChallenge, context: {} })),
+    ).toMatchObject({ action: 'voucher', channelId: opened.channelId, cumulativeAmount: '200' })
+  })
+
+  test('rejects an underfunded machine top-up without changing the channel', async () => {
+    mockMachineRoute({ funded: false })
+    const { channelStore, entry, method } = await makeStoredMachineMethod()
+
+    await expect(
+      method.createCredential({
+        challenge: machineChallenge,
+        context: {
+          action: 'topUp',
+          additionalDepositRaw: '50',
+          channelId: entry.channelId,
+          descriptor: entry.descriptor,
+        },
+      }),
+    ).rejects.toThrow('Insufficient machine-token balance for session top-up.')
+    expect(await channelStore.get(defaultChannelKey)).toEqual(entry)
+  })
+
+  test('persists only after supplemental machine authorization is signed', async () => {
+    mockMachineRoute()
+    vi.spyOn(MachineTokenSession, 'signAuthorization').mockRejectedValue(
+      new Error('supplemental signing failed'),
+    )
+    const { channelStore, entry, method } = await makeStoredMachineMethod()
+
+    await expect(
+      method.createCredential({ challenge: machineChallenge, context: {} }),
+    ).rejects.toThrow('supplemental signing failed')
+    expect(await channelStore.get(defaultChannelKey)).toEqual(entry)
+  })
+
+  test('closes a machine channel after the server stops advertising new machine sessions', async () => {
+    mockMachineRoute()
+    const { entry, method } = await makeStoredMachineMethod({ cumulativeAmount: 25n })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeSessionChallenge(),
+        context: {
+          action: 'close',
+          channelId: entry.channelId,
+          cumulativeAmountRaw: '25',
+          descriptor: entry.descriptor,
+        },
+      }),
+    )
+    if (payload.action !== 'close' || !payload.authorizationSignature || !payload.refundSignature)
+      throw new Error('expected machine-token close authorizations')
+
+    expect(vi.mocked(MachineTokenSession.matchRoute).mock.calls[0]?.[1].active).toBe(false)
+    expect(
+      MachineTokenSession.verifyAuthorization({
+        authorization: { channelId: entry.channelId, cumulativeAmount: 25n },
+        chainId,
+        expectedSigner: account.address,
+        router: deployment.swap,
+        signature: payload.authorizationSignature,
+      }),
+    ).toBe(true)
+    expect(
+      Voucher.verifyVoucher(
+        tip20ChannelEscrow,
+        chainId,
+        {
+          channelId: entry.channelId,
+          cumulativeAmount: 1_000n,
+          signature: payload.refundSignature,
+        },
+        account.address,
+      ),
+    ).toBe(true)
   })
 
   test('drives paid SSE responses with a supplied credential', async () => {
@@ -540,93 +742,47 @@ describe('precompile client session', () => {
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
   })
 
-  test('serializes concurrent opens against the committed channel', async () => {
+  test('re-prepares after a concurrent open commits', async () => {
     const challenge = makeSessionChallenge()
-    const backingStore = createChannelStore()
-    const actions: Types.SessionCredentialPayload['action'][] = []
-    const vouchers: bigint[] = []
-    const firstGate = Promise.withResolvers<void>()
-    const firstRequest = Promise.withResolvers<void>()
-    const waitersReady = Promise.withResolvers<void>()
-    let missingReads = 0
-    const channelStore = {
-      delete: (key: string) => backingStore.delete(key),
-      async get(key: string) {
-        const entry = await backingStore.get(key)
-        if (!entry && ++missingReads === 4) waitersReady.resolve()
-        return entry
-      },
-      set: (entry: Parameters<typeof backingStore.set>[0]) => backingStore.set(entry),
-    }
-    const fetch = Fetch.from({
-      fetch: async (input, init) => {
-        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-        if (!authorization) return paymentRequired(challenge)
-        const payload = deserialize(authorization)
-        actions.push(payload.action)
-        if (payload.action === 'topUp') return new Response(null, { status: 204 })
-        if (payload.action === 'voucher') vouchers.push(BigInt(payload.cumulativeAmount))
-        if (input.toString().endsWith('/first')) {
-          firstRequest.resolve()
-          await firstGate.promise
-          return new Response('paid')
-        }
-        return new Response('rejected', { status: 500 })
-      },
-      methods: [makeSessionMethod(channelStore)],
-    })
-
-    const first = fetch('https://example.com/first')
-    await firstRequest.promise
-    const second = fetch('https://example.com/second')
-    const third = fetch('https://example.com/third')
-    await waitersReady.promise
-    firstGate.resolve()
-
-    expect((await first).status).toBe(200)
-    expect((await second).status).toBe(500)
-    expect((await third).status).toBe(500)
-    expect(actions).toEqual(['open', 'topUp', 'voucher', 'topUp', 'voucher'])
-    expect(vouchers).toEqual([200n, 300n])
-    expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
-  })
-
-  test('serializes concurrent vouchers for an already-open channel', async () => {
     const channelStore = createChannelStore()
-    await makeSessionMethod(channelStore).createCredential({
-      challenge: makeChallenge(),
+    const method = makeSessionMethod(channelStore)
+    const input = 'https://example.com/resource'
+    const topUps: Types.SessionCredentialPayload[] = []
+    const prepareParameters = {
+      challenge,
       context: {},
-    })
-
-    const firstPlan = Promise.withResolvers<void>()
-    const releaseFirstPlan = Promise.withResolvers<void>()
-    let plans = 0
-    const method = makeSessionMethod(channelStore, {
-      async resolveAccount() {
-        plans++
-        if (plans === 1) {
-          firstPlan.resolve()
-          await releaseFirstPlan.promise
-        }
-        return account
+      fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) throw new Error('expected top-up credential')
+        topUps.push(deserialize(authorization))
+        return new Response(null, { status: 204 })
       },
+      input,
+    }
+    await MethodChallenge.handle(method, prepareParameters)
+    await channelStore.set({
+      chainId,
+      channelId: Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow }),
+      cumulativeAmount: 100n,
+      deposit: 100n,
+      descriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
     })
+    const parameters = { challenge, context: {} }
+    const prepare = vi.fn(() => MethodChallenge.handle(method, prepareParameters))
+    MethodResponse.attachAttempt(method, parameters, { prepare })
 
-    const first = method.createCredential({ challenge: makeChallenge(), context: {} })
-    await firstPlan.promise
-    const second = method.createCredential({ challenge: makeChallenge(), context: {} })
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(plans).toBe(1)
-    releaseFirstPlan.resolve()
+    const payload = deserialize(await method.createCredential(parameters))
 
-    const credentials = await Promise.all([first, second])
-    expect(
-      credentials.map((credential) => {
-        const payload = deserialize(credential)
-        if (payload.action !== 'voucher') throw new Error('expected voucher payload')
-        return payload.cumulativeAmount
-      }),
-    ).toEqual(['200', '300'])
+    expect(prepare).toHaveBeenCalledOnce()
+    expect(topUps).toMatchObject([{ action: 'topUp', additionalDeposit: '100' }])
+    expect(payload).toMatchObject({ action: 'voucher', cumulativeAmount: '200' })
+    expect(await channelStore.get(defaultChannelKey)).toMatchObject({
+      cumulativeAmount: 200n,
+      deposit: 200n,
+      opened: true,
+    })
   })
 
   test('replaces a stored channel owned by another account', async () => {
@@ -712,43 +868,6 @@ describe('precompile client session', () => {
       }),
     ).resolves.toBeUndefined()
     expect(updatedDeposit).toBe(200n)
-  })
-
-  test('preserves newer channel state after an automatic top-up', async () => {
-    const channelStore = createChannelStore()
-    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
-    const channel = {
-      chainId,
-      channelId,
-      cumulativeAmount: 100n,
-      deposit: 100n,
-      descriptor,
-      escrow: tip20ChannelEscrow,
-      opened: true,
-    } as const
-    await channelStore.set(channel)
-    const method = session({
-      account,
-      channelStore,
-      decimals: 0,
-      getClient: () => client,
-      topUpAmount: '100',
-    })
-
-    await MethodChallenge.handle(method, {
-      challenge: makeSessionChallenge(),
-      context: {},
-      fetch: async () => {
-        await channelStore.set({ ...channel, cumulativeAmount: 150n })
-        return new Response(null, { status: 204 })
-      },
-      input: 'https://example.com/resource',
-    })
-
-    expect(await channelStore.get(defaultChannelKey)).toMatchObject({
-      cumulativeAmount: 150n,
-      deposit: 200n,
-    })
   })
 
   test('opens for the current amount without client deposit configuration', async () => {

@@ -1,10 +1,12 @@
 import { createClient, custom, encodeFunctionResult, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test, vi } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createJsonChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import * as Channel from '../precompile/Channel.js'
@@ -15,11 +17,13 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
+import { getSessionManagerInternals } from './internal/SessionManager.js'
 import {
   computeFallbackCloseAmount,
   mergeSessionCredentialContext,
   sessionManager,
 } from './SessionManager.js'
+import type { TempoSessionChallenge } from './Transports.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -27,6 +31,8 @@ const realm = 'test.example.com'
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
+
+afterEach(() => vi.restoreAllMocks())
 
 const client = createClient({
   account,
@@ -80,6 +86,19 @@ const storedDescriptor = {
 const storedChannelId = Channel.computeId({
   ...storedDescriptor,
   chainId: 4217,
+  escrow: tip20ChannelEscrow,
+})
+const machineChainId = defaults.chainId.testnet
+const machineDeployment = defaults.machineToken[machineChainId]
+const machineDescriptor = {
+  ...storedDescriptor,
+  operator: machineDeployment.swap,
+  payee: '0x44D7c1EDFdfdfDFdFdFDFDFd0000000000000001' as Address,
+  token: machineDeployment.token,
+}
+const machineChannelId = Channel.computeId({
+  ...machineDescriptor,
+  chainId: machineChainId,
   escrow: tip20ChannelEscrow,
 })
 
@@ -427,18 +446,23 @@ describe('Session', () => {
       expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
     })
 
-    test('seeds a same-route HEAD snapshot and resolves the account when resuming it', async () => {
+    test('seeds a machine HEAD snapshot under its logical scope', async () => {
       const { store, set } = makeChannelStore()
       const posted: SessionCredentialPayload[] = []
+      vi.spyOn(MachineTokenSession, 'matchRoute').mockResolvedValue({
+        operator: machineDescriptor.operator,
+        payee: machineDescriptor.payee,
+        token: machineDescriptor.token,
+      })
       const highestVoucher = {
-        channelId: storedChannelId,
+        channelId: machineChannelId,
         cumulativeAmount: '1000000',
         signature: await Voucher.signVoucher(
           client,
           account,
-          { channelId: storedChannelId, cumulativeAmount: 1_000_000n },
+          { channelId: machineChannelId, cumulativeAmount: 1_000_000n },
           tip20ChannelEscrow,
-          4217,
+          machineChainId,
         ),
       }
       const resolveAccount = vi.fn(
@@ -460,10 +484,10 @@ describe('Session', () => {
               headers: {
                 [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
                   acceptedCumulative: '1000000',
-                  chainId: 4217,
-                  channelId: storedChannelId,
+                  chainId: machineChainId,
+                  channelId: machineChannelId,
                   deposit: '10000000',
-                  descriptor: storedDescriptor,
+                  descriptor: machineDescriptor,
                   escrow: tip20ChannelEscrow,
                   highestVoucher,
                   requiredCumulative: '1000000',
@@ -483,9 +507,31 @@ describe('Session', () => {
           : undefined
         if (payload) posted.push(payload)
         if (!payload) {
-          expect(s.channelId).toBe(storedChannelId)
+          expect(s.channelId).toBe(machineChannelId)
           expect(s.cumulative).toBe(1_000_000n)
-          return Promise.resolve(make402Response())
+          return Promise.resolve(
+            make402Response(
+              makeChallenge({
+                methodDetails: {
+                  chainId: machineChainId,
+                  escrowContract: tip20ChannelEscrow,
+                  machineTokenEnabled: true,
+                  sessionProtocol: Constants.SessionProtocols.v2,
+                  sessionSnapshot: {
+                    acceptedCumulative: '1000000',
+                    chainId: machineChainId,
+                    channelId: machineChannelId,
+                    deposit: '10000000',
+                    descriptor: machineDescriptor,
+                    escrow: tip20ChannelEscrow,
+                    requiredCumulative: '1000000',
+                    settled: '0',
+                    spent: '0',
+                  },
+                },
+              }),
+            ),
+          )
         }
         return Promise.resolve(makeOkResponse())
       })
@@ -501,16 +547,21 @@ describe('Session', () => {
       const response = await s.fetch('https://api.example.com/data')
 
       expect(response.status).toBe(200)
-      expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
-      expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
+      expect(set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: machineChannelId,
+          paymentScope: { payee: storedDescriptor.payee, token: storedDescriptor.token },
+        }),
+      )
+      expect(posted[0]).toMatchObject({ action: 'voucher', channelId: machineChannelId })
       expect(resolveAccount).toHaveBeenCalledTimes(2)
       expect(resolveAccount).toHaveBeenNthCalledWith(1, {
         account,
-        chainId: 4217,
+        chainId: machineChainId,
         operation: { authority: account.address, kind: 'authorizePaymentChannel' },
       })
       const contentCall = mockFetch.mock.calls.find((call) => call[1]?.method !== 'HEAD')
-      expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBe(storedChannelId)
+      expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBe(machineChannelId)
     })
 
     test('does not cache a server snapshot for a channel that is closed on-chain', async () => {
@@ -686,6 +737,54 @@ describe('Session', () => {
       expect(postedPayloads.map((payload) => payload.action)).toEqual(['voucher', 'open'])
       expect(s.opened).toBe(true)
       expect(s.channelId).not.toBe(storedChannelId)
+    })
+
+    // The retry after a failed paid request must never evict entries whose
+    // descriptor is the only local copy (machine-rail, or any rewritten scope
+    // the current deployment table no longer recognizes).
+    test('keeps non-derivable channels instead of retrying without them', async () => {
+      const rotatedDescriptor = {
+        ...machineDescriptor,
+        operator: '0x00000000000000000000000000000000000000AA' as Address,
+        token: '0x20c0000000000000000000000000000000000009' as Address,
+      }
+      const paymentScope = {
+        payee: storedDescriptor.payee,
+        token: storedDescriptor.token,
+      }
+      const variants = [
+        // The challenge no longer advertises `machineTokenEnabled`.
+        channelEntry({ channelId: machineChannelId, descriptor: machineDescriptor, paymentScope }),
+        // Opened against a deployment the current table no longer lists.
+        channelEntry({
+          channelId: Channel.computeId({
+            ...rotatedDescriptor,
+            chainId: 4217,
+            escrow: tip20ChannelEscrow,
+          }),
+          descriptor: rotatedDescriptor,
+          paymentScope,
+        }),
+      ]
+      for (const seeded of variants) {
+        const { store, delete: remove, map } = makeChannelStore([seeded])
+        const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+          const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+          if (!authorization) return Promise.resolve(make402Response())
+          throw new Error('unexpected credential for a non-derivable machine channel')
+        })
+        const s = sessionManager({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          maxDeposit: '10',
+          channelStore: store,
+        })
+
+        await expect(s.fetch('https://api.example.com/data')).rejects.toThrow()
+        expect(remove).not.toHaveBeenCalled()
+        expect(map.get(entryKey(seeded))).toMatchObject({ channelId: seeded.channelId })
+      }
     })
 
     test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {
@@ -1779,6 +1878,59 @@ describe('Session', () => {
 
       await s.close()
       expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    test('classifies a snapshot-hydrated machine channel without paymentScope', async () => {
+      vi.spyOn(MachineTokenSession, 'matchRoute').mockResolvedValue({
+        operator: machineDescriptor.operator,
+        payee: machineDescriptor.payee,
+        token: machineDescriptor.token,
+      })
+      const challenge = makeChallenge({
+        amount: '100',
+        methodDetails: {
+          chainId: machineChainId,
+          escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+          sessionSnapshot: {
+            acceptedCumulative: '900',
+            chainId: machineChainId,
+            channelId: machineChannelId,
+            deposit: '1000',
+            descriptor: machineDescriptor,
+            escrow: tip20ChannelEscrow,
+            requiredCumulative: '900',
+            settled: '600',
+            spent: '400',
+          },
+        },
+      }) as TempoSessionChallenge
+      let closePayload: Extract<SessionCredentialPayload, { action: 'close' }> | undefined
+      const fetch = vi.fn(async (_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) throw new Error('expected close credential')
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action !== 'close') throw new Error(`unexpected ${payload.action} credential`)
+        closePayload = payload
+        return new Response(null, { status: 200 })
+      })
+      const manager = sessionManager({ account, client, fetch })
+      getSessionManagerInternals(manager).rehydrate({
+        channel: channelEntry({
+          chainId: machineChainId,
+          channelId: machineChannelId,
+          cumulativeAmount: 900n,
+          deposit: 1_000n,
+          descriptor: machineDescriptor,
+        }),
+        challenge,
+        input: 'https://api.example.com/resource',
+        spent: 400n,
+      })
+
+      await manager.close()
+
+      expect(closePayload?.cumulativeAmount).toBe('600')
     })
 
     test('tracks spent from HTTP error receipts and closes at that amount', async () => {

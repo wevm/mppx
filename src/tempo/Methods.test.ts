@@ -55,6 +55,20 @@ describe('charge', () => {
     expect(result.data.methodDetails?.supportedModes).toEqual(['pull'])
   })
 
+  test('schema: serializes the machine-token hint into methodDetails', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      machineTokenEnabled: true,
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data.methodDetails?.machineTokenEnabled).toBe(true)
+  })
+
   test('schema: rejects empty supportedModes', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',
@@ -249,18 +263,40 @@ describe('session', () => {
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
 
-  test('schema: advertises a session fee token in method details', () => {
-    const feeToken = '0x0000000000000000000000000000000000000005'
+  test('schema: binds machine-token capability without changing logical payment fields', () => {
+    const currency = '0x20c0000000000000000000000000000000000001'
+    const feeToken = '0x20c0000000000000000000000000000000000002'
+    const recipient = '0x1234567890abcdef1234567890abcdef12345678'
     const request = Methods.session.schema.request.parse({
       amount: '1',
-      currency: '0x20c0000000000000000000000000000000000001',
+      currency,
       decimals: 6,
       feeToken,
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      machineTokenEnabled: true,
+      recipient,
       unitType: 'token',
     })
 
-    expect(request.methodDetails?.feeToken).toBe(feeToken)
+    expect(request).toMatchObject({
+      currency,
+      methodDetails: { feeToken, machineTokenEnabled: true },
+      recipient,
+    })
+  })
+
+  test('schema: preserves machine-token close refund authorization', () => {
+    const authorizationSignature = `0x${'44'.repeat(65)}`
+    const refundSignature = `0x${'22'.repeat(65)}`
+    const credential = Methods.session.schema.credential.payload.parse({
+      action: 'close',
+      authorizationSignature,
+      channelId: `0x${'11'.repeat(32)}`,
+      cumulativeAmount: '100000',
+      refundSignature,
+      signature: `0x${'33'.repeat(65)}`,
+    })
+
+    expect(credential).toMatchObject({ authorizationSignature, refundSignature })
   })
 
   test('schema: preserves precompile session snapshots in method details', () => {

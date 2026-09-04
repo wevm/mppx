@@ -1,6 +1,7 @@
 import { Hex } from 'ox'
 import { type Address, createClient, custom, zeroAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import * as Channel from '../precompile/Channel.js'
@@ -234,5 +235,41 @@ describe('precompile client ChannelOps credential builders', () => {
       }),
     )
     expect(mocks.prepareTransactionRequest.mock.calls[0]?.[1]).not.toHaveProperty('feePayer')
+  })
+
+  test('uses an explicit liquid fee token for machine-token channel management', async () => {
+    mocks.prepareTransactionRequest.mockClear()
+    const feeToken = '0x0000000000000000000000000000000000000004' as Address
+    const transaction = await Transaction.serialize({
+      chainId,
+      calls: [],
+      feeToken,
+      nonce: 0,
+    })
+    mocks.signTransaction.mockResolvedValueOnce(transaction)
+
+    await ChannelOps.createOpenPayload(client, account, {
+      chainId,
+      deposit: 100n,
+      feeToken,
+      initialAmount: 10n,
+      payee: descriptor.payee,
+      token: descriptor.token,
+    })
+    await ChannelOps.createTopUpPayload(
+      client,
+      account,
+      descriptor,
+      10n,
+      chainId,
+      false,
+      tip20ChannelEscrow,
+      [],
+      feeToken,
+    )
+
+    expect(mocks.prepareTransactionRequest.mock.calls).toHaveLength(2)
+    expect(mocks.prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({ feeToken })
+    expect(mocks.prepareTransactionRequest.mock.calls[1]?.[1]).toMatchObject({ feeToken })
   })
 })
