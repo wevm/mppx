@@ -60,8 +60,11 @@ describe('escrowContract', () => {
 })
 
 describe('machineToken', () => {
-  test('mainnet does not advertise an undeployed MACH swapper', () => {
-    expect(machineToken[chainId.mainnet as keyof typeof machineToken]).toBeUndefined()
+  test('mainnet uses the MACH swapper deployment', () => {
+    expect(machineToken[chainId.mainnet]).toEqual({
+      swap: '0xF72E5107c32C655ffA7539a3C8e97B7C3cE16A3F',
+      token: '0x20c000000000000000000000f37de3740ADec032',
+    })
   })
 
   test('testnet uses the MACH swapper deployment', () => {
