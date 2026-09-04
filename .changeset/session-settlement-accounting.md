@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Fixed HTTP session charges being retained when scheduled settlement failed, while preserving atomic balance checks for concurrent requests.
+Fixed HTTP session charges being retained after failed settlement and duplicate scheduled settlements across concurrent requests.

@@ -315,6 +315,15 @@ export interface BaseState {
   lastSettlementSpent?: bigint | undefined
   /** Charge operation count when the last server-scheduled settlement ran. */
   lastSettlementUnits?: number | undefined
+  /** Shared ownership of a scheduled settlement while its expiring transaction can still execute. */
+  settlementAttempt?:
+    | {
+        /** Identity used to fence release and settlement callbacks. */
+        id: string
+        /** Transaction expiry and reservation deadline, in Unix seconds. */
+        validBefore: number
+      }
+    | undefined
 }
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */

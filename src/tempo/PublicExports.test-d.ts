@@ -81,6 +81,7 @@ test('tempo session chain exports canonical transaction options', () => {
     feePayer?: import('viem').Account | true | undefined
     feePayerPolicy?: Partial<import('./internal/fee-payer.js').Policy> | undefined
     feeToken?: import('viem').Address | undefined
+    validBefore?: number | undefined
   }>()
 })
 

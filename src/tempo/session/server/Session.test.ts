@@ -4010,7 +4010,12 @@ describe('session settlement extensions', () => {
 })
 
 describe('onSessionSettlement', () => {
-  function createSettleClient(channelId: Hex, settledAmount: bigint) {
+  function createSettleClient(
+    channelId: Hex,
+    settledAmount: bigint,
+    onSend?: () => void | Promise<void>,
+  ) {
+    let sent = false
     return createClient({
       account: payer,
       chain: testChain,
@@ -4021,15 +4026,18 @@ describe('onSessionSettlement', () => {
           if (args.method === 'eth_estimateGas') return '0x5208'
           if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
           if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-          if (args.method === 'eth_sendRawTransaction') return `0x${'cc'.repeat(32)}`
-          if (args.method === 'eth_sendTransaction') return `0x${'cc'.repeat(32)}`
+          if (args.method === 'eth_sendRawTransaction' || args.method === 'eth_sendTransaction') {
+            sent = true
+            await onSend?.()
+            return `0x${'cc'.repeat(32)}`
+          }
           if (args.method === 'eth_getTransactionReceipt')
             return transactionReceipt([settledLog(channelId, settledAmount)])
           if (args.method === 'eth_call') {
             return encodeFunctionResult({
               abi: escrowAbi,
               functionName: 'getChannelState',
-              result: { settled: settledAmount, deposit: 1_000n, closeRequestedAt: 0 },
+              result: { settled: sent ? settledAmount : 0n, deposit: 1_000n, closeRequestedAt: 0 },
             })
           }
           throw new Error(`unexpected rpc request: ${args.method}`)
@@ -4119,6 +4127,159 @@ describe('onSessionSettlement', () => {
       amount: 500n,
       delta: 500n,
     })
+  })
+
+  test('shares one scheduled settlement across concurrent channel requests', async () => {
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 0n,
+      units: 0,
+    })
+    let broadcasts = 0
+    const events: unknown[] = []
+    const client = createSettleClient(openPayload.channelId, 100n, () => {
+      broadcasts++
+    })
+    const { applyVerifiedHttpAccounting, maybeSettleScheduled } = await import('./Settlement.js')
+    const parameters = {
+      account: payer,
+      client,
+      schedule: { units: 1 },
+      store,
+      onSessionSettlement: (event: unknown) => {
+        events.push(event)
+      },
+    }
+
+    await Promise.all(
+      [store, channelStore({ ...rawStore })].map((store) =>
+        applyVerifiedHttpAccounting({
+          capturedRequest: {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'GET',
+            url: new URL('https://api.example.com/session'),
+          },
+          getRequestAmount: () => 25n,
+          payloadAction: 'voucher',
+          receipt: Types.createSessionReceipt({
+            acceptedCumulative: 100n,
+            challengeId: 'challenge-1',
+            channelId: openPayload.channelId,
+            spent: 0n,
+            units: 0,
+          }),
+          settleCharged: (channel) => maybeSettleScheduled({ ...parameters, channel, store }),
+          sseEnabled: false,
+          store,
+        }),
+      ),
+    )
+
+    expect(broadcasts).toBe(1)
+    expect(events).toHaveLength(1)
+    expect((await store.getChannel(openPayload.channelId))?.settlementAttempt).toBeUndefined()
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({ spent: 50n, units: 2 })
+  })
+
+  test.each([false, true])(
+    'recovers an expired attempt after an RPC error (confirmed: %s)',
+    async (confirmed) => {
+      const store = channelStore(Store.memory())
+      const openPayload = await createOpenPayload()
+      await persistPrecompileChannel(store, openPayload, {
+        payee: payer.address,
+        spent: 25n,
+        units: 1,
+      })
+      const channel = (await store.getChannel(openPayload.channelId))!
+      const { maybeSettleScheduled } = await import('./Settlement.js')
+      let broadcasts = 0
+      const client = createSettleClient(openPayload.channelId, 100n, () => {
+        broadcasts++
+        throw new Error('broadcast response lost')
+      })
+      const events: unknown[] = []
+      const parameters = {
+        account: payer,
+        channel,
+        client,
+        schedule: { units: 1 },
+        store,
+        onSessionSettlement: (event: unknown) => {
+          events.push(event)
+        },
+      }
+
+      await expect(maybeSettleScheduled(parameters)).rejects.toThrow('broadcast response lost')
+      const attempt = (await store.getChannel(openPayload.channelId))?.settlementAttempt
+      expect(attempt).toBeDefined()
+      expect(events).toHaveLength(0)
+      const previousBroadcasts = broadcasts
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime((attempt!.validBefore + 1) * 1_000)
+        await maybeSettleScheduled({
+          ...parameters,
+          client: confirmed
+            ? client
+            : createSettleClient(openPayload.channelId, 100n, () => {
+                broadcasts++
+              }),
+        })
+        expect(broadcasts - previousBroadcasts).toBe(confirmed ? 0 : 1)
+        expect(events).toHaveLength(confirmed ? 0 : 1)
+        expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+          settledOnChain: 100n,
+          spent: 25n,
+          units: 1,
+        })
+        expect((await store.getChannel(openPayload.channelId))?.settlementAttempt).toBeUndefined()
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  test('preserves a replacement reservation when an older attempt finishes', async () => {
+    const store = channelStore(Store.memory())
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 25n,
+      units: 1,
+    })
+    const channel = (await store.getChannel(openPayload.channelId))!
+    const replacement = { id: 'replacement', validBefore: Math.floor(Date.now() / 1_000) + 25 }
+    const client = createSettleClient(openPayload.channelId, 100n, async () => {
+      await store.updateChannel(openPayload.channelId, (current) =>
+        current
+          ? {
+              ...current,
+              settlementAttempt: replacement,
+            }
+          : current,
+      )
+    })
+    const events: unknown[] = []
+    const { maybeSettleScheduled } = await import('./Settlement.js')
+
+    await maybeSettleScheduled({
+      account: payer,
+      channel,
+      client,
+      schedule: { units: 1 },
+      store,
+      onSessionSettlement: (event) => {
+        events.push(event)
+      },
+    })
+
+    expect(events).toHaveLength(0)
+    expect((await store.getChannel(openPayload.channelId))?.settlementAttempt).toEqual(replacement)
   })
 
   test('delta reflects incremental scheduled settlement with prior on-chain settlement', async () => {
