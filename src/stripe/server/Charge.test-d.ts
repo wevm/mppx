@@ -57,6 +57,35 @@ test('allows request fields configured as Stripe defaults', () => {
   void server.charge({ amount: '1', currency: 'usd' })
 })
 
+test('accepts a typed PaymentIntent options resolver', () => {
+  const server = Mppx.create({
+    methods: [
+      stripe.charge({
+        client,
+        networkId: 'internal',
+        paymentMethodTypes: ['card'],
+      }),
+    ],
+    realm: 'api.example.com',
+    secretKey,
+  })
+
+  void server.charge({
+    amount: '1',
+    currency: 'usd',
+    decimals: 2,
+    paymentIntentOptions({ challenge, credential, envelope, request }) {
+      expectTypeOf(challenge.id).toEqualTypeOf<string>()
+      expectTypeOf(credential.challenge.id).toEqualTypeOf<string>()
+      expectTypeOf(envelope).toEqualTypeOf<
+        import('mppx').Method.VerifiedChallengeEnvelope | undefined
+      >()
+      expectTypeOf(request).toEqualTypeOf<Record<string, unknown>>()
+      return Promise.resolve({ metadata: { challenge_id: challenge.id } })
+    },
+  })
+})
+
 test('does not treat optional properties on widened config as defaults', () => {
   const parameters: StripeCharge.Parameters = {
     client,

@@ -1,5 +1,5 @@
 import { Methods } from 'mppx/stripe'
-import { describe, expect, expectTypeOf, test } from 'vp/test'
+import { describe, expect, expectTypeOf, test, vi } from 'vp/test'
 
 describe('charge', () => {
   test('has correct name and intent', () => {
@@ -32,6 +32,22 @@ describe('charge', () => {
       },
     })
     expect(result.success).toBe(true)
+    if (result.success) expect(result.data).not.toHaveProperty('paymentIntentOptions')
+  })
+
+  test('schema: accepts a PaymentIntent options resolver without invoking it', () => {
+    const paymentIntentOptions = vi.fn(() => ({ customer: 'cus_123' }))
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: 'usd',
+      decimals: 2,
+      networkId: 'profile_123',
+      paymentIntentOptions,
+      paymentMethodTypes: ['card'],
+    })
+
+    expect(result.success).toBe(true)
+    expect(paymentIntentOptions).not.toHaveBeenCalled()
     if (result.success) expect(result.data).not.toHaveProperty('paymentIntentOptions')
   })
 

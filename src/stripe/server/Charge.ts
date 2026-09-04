@@ -11,7 +11,7 @@ import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
 import type * as z from '../../zod.js'
 import { stripePreviewVersion } from '../internal/constants.js'
-import type * as PaymentIntent from '../internal/payment-intent.js'
+import * as PaymentIntent from '../internal/payment-intent.js'
 import type {
   StripeClient,
   CreatePaymentMethodFromElements,
@@ -154,7 +154,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
     async verify({ credential, envelope, request }) {
       const { challenge } = credential
-      const { paymentIntentOptions, ...methodRequest } = request
+      const { paymentIntentOptions: paymentIntentOptionsInput, ...methodRequest } = request
       const resolvedRequest = (() => {
         const parsed = Methods.charge.schema.request.safeParse(methodRequest)
         if (parsed.success) return parsed.data
@@ -182,6 +182,19 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       const userMetadata = resolvedRequest.methodDetails?.metadata as
         | Record<string, string>
         | undefined
+      const settlement = validateConnectSettlement({
+        amount: resolvedRequest.amount,
+        settlement:
+          typeof connect === 'function'
+            ? await connect({ challenge, credential, envelope, request: resolvedRequest })
+            : connect,
+      })
+      const paymentIntentOptions = await PaymentIntent.resolve(paymentIntentOptionsInput, {
+        challenge,
+        credential,
+        envelope,
+        request: resolvedRequest,
+      })
       const {
         customer,
         hooks,
@@ -198,13 +211,6 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         },
         ...(receipt_email !== undefined && { receipt_email }),
       }
-      const settlement = validateConnectSettlement({
-        amount: resolvedRequest.amount,
-        settlement:
-          typeof connect === 'function'
-            ? await connect({ challenge, credential, envelope, request: resolvedRequest })
-            : connect,
-      })
       const pi = client
         ? await createWithClient({
             client,
@@ -284,6 +290,8 @@ export declare namespace charge {
    * `decimals` remains required when it was not configured on `stripe.charge()`.
    */
   type DeriveDefaults<parameters extends Parameters> = ConfiguredDefaults<parameters, Defaults>
+
+  type ResolvePaymentIntentOptionsContext = PaymentIntent.ResolveOptionsContext
 
   /**
    * Server-side Stripe Connect settlement parameters.

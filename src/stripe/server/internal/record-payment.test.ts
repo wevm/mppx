@@ -71,7 +71,12 @@ describe('recordCryptoPayment', () => {
         },
       }),
     )
-    expect(create.mock.calls[1]?.[1]).toEqual(create.mock.calls[0]?.[1])
+    expect(create.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ idempotencyKey: '0xtx123' }),
+    )
+    expect(create.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ idempotencyKey: '0xtx123_fallback' }),
+    )
     expect(warning).toHaveBeenCalledWith(
       expect.stringContaining('retrying without them'),
       invalidRequest,

@@ -28,7 +28,7 @@ export const charge = Method.from({
         externalId: z.optional(z.string()),
         metadata: z.optional(z.record(z.string(), z.string())),
         networkId: z.string(),
-        paymentIntentOptions: z.optional(PaymentIntent.Schema),
+        paymentIntentOptions: z.optional(PaymentIntent.InputSchema),
         paymentMethodTypes: z.array(z.string()).check(z.minLength(1)),
         recipient: z.optional(z.string()),
       }),

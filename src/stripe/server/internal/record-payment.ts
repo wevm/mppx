@@ -78,7 +78,10 @@ export function recordCryptoPayment(
         '[stripe] optional PI recording fields were rejected; retrying without them:',
         error,
       )
-      return createPaymentIntent(client, requiredParams, options)
+      return createPaymentIntent(client, requiredParams, {
+        ...options,
+        idempotencyKey: `${reference}_fallback`,
+      })
     })
     .then(
       () => {},

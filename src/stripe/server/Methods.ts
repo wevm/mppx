@@ -19,6 +19,8 @@ import { type ConnectConfig } from './internal/request.js'
 export declare namespace stripe {
   type Network = 'tempo' | 'base' | 'solana'
 
+  type ResolvePaymentIntentOptionsContext = PaymentIntent.ResolveOptionsContext
+
   type DepositAddress<N extends Network = Network> = string & {
     readonly __brand: 'StripeDepositAddress'
     readonly __network: N
@@ -191,10 +193,10 @@ class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
  * })
  * ```
  *
- * Caller-provided `paymentIntentOptions` are best-effort when recording completed
- * crypto payments. If Stripe rejects those options, mppx retries the recording
- * once without them so the on-chain payment can still be represented by a
- * PaymentIntent. SPT payments do not use this fallback.
+ * PaymentIntent option resolvers run after non-mutating method validation, when
+ * available, and before the terminal payment operation. If Stripe later rejects
+ * resolved optional fields while recording a completed crypto payment, mppx
+ * retries the recording once without them. SPT payments do not use this fallback.
  */
 export function stripe<const P extends stripe.Parameters>(parameters: P): StripeMachinePayments<P> {
   const { client, networkId, livemode, hostedFeePayer, connect, depositAddresses, metadata } =
@@ -463,12 +465,17 @@ function createPaymentSuccessHandler(
   return (params: { challenge?: any; receipt: any; request: any; requestInput?: any }) => {
     const { challenge, receipt, request, requestInput } = params
     if (receipt?.reference && request?.amount) {
+      const paymentIntentOptionsInput = requestInput?.paymentIntentOptions as
+        | PaymentIntent.OptionsInput
+        | undefined
+      const paymentIntentOptions =
+        typeof paymentIntentOptionsInput === 'function' ? undefined : paymentIntentOptionsInput
       const resolvedMetadata = {
         ...metadata,
-        ...requestInput?.paymentIntentOptions?.metadata,
+        ...paymentIntentOptions?.metadata,
       }
-      const paymentIntentOptions = {
-        ...requestInput?.paymentIntentOptions,
+      const resolvedPaymentIntentOptions = {
+        ...paymentIntentOptions,
         ...(Object.keys(resolvedMetadata).length > 0 && { metadata: resolvedMetadata }),
       }
       return recordCryptoPayment(client, {
@@ -477,7 +484,9 @@ function createPaymentSuccessHandler(
         amount: String(request.amount),
         ...(connect && { connect }),
         analyticsMetadata: buildAnalytics({ challenge }),
-        ...(Object.keys(paymentIntentOptions).length > 0 && { paymentIntentOptions }),
+        ...(Object.keys(resolvedPaymentIntentOptions).length > 0 && {
+          paymentIntentOptions: resolvedPaymentIntentOptions,
+        }),
       })
     }
   }
@@ -487,8 +496,9 @@ function createPaymentSuccessHandler(
  * Extends a rail's server-only input with Stripe PaymentIntent options while
  * keeping its canonical request unchanged. The schema strips the options
  * before challenge serialization, and delegated lifecycle hooks receive the
- * underlying rail request without Stripe-only fields. The wrapper retains the
- * options only in `requestInput` for payment-success recording.
+ * underlying rail request without Stripe-only fields. After method validation,
+ * the wrapper resolves the options immediately before the terminal operation
+ * and retains the result in `requestInput` for payment-success recording.
  */
 function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
   const baseSchema = method.schema.request
@@ -506,12 +516,12 @@ function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
       request: z.pipe(
         z.custom<
           z.input<typeof baseSchema> & {
-            paymentIntentOptions?: PaymentIntent.Options | undefined
+            paymentIntentOptions?: PaymentIntent.OptionsInput | undefined
           }
         >(),
         z.transform((input) => {
           const { paymentIntentOptions, ...request } = input
-          z.optional(PaymentIntent.Schema).parse(paymentIntentOptions)
+          z.optional(PaymentIntent.InputSchema).parse(paymentIntentOptions)
           // Only the base schema's output is included in the challenge.
           return baseSchema.parse(request)
         }),
@@ -520,6 +530,8 @@ function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
     async request(context: Method.RequestContext<Method.AnyServer>) {
       const { paymentIntentOptions, ...request } = context.request
       const resolved = baseRequest ? await baseRequest({ ...context, request }) : request
+      // Keep the server-only value in requestInput for the success hook. The
+      // schema transform above still excludes it from the signed challenge.
       return { ...resolved, paymentIntentOptions }
     },
     ...(baseRespond && {
@@ -527,18 +539,38 @@ function withPaymentIntentInput(method: Method.AnyServer): Method.AnyServer {
         baseRespond(withoutPaymentIntentOptions(context)),
     }),
     ...(baseBroadcast && {
-      broadcast: (context: Method.VerifyContext<Method.AnyServer>) =>
-        baseBroadcast(withoutPaymentIntentOptions(context)),
+      async broadcast(context: Method.VerifyContext<Method.AnyServer>) {
+        await resolvePaymentIntentOptions(context)
+        return baseBroadcast(withoutPaymentIntentOptions(context))
+      },
     }),
     ...(baseValidate && {
       validate: (context: Method.ValidateContext<Method.AnyServer>) =>
         baseValidate(withoutPaymentIntentOptions(context)),
     }),
     ...(baseVerify && {
-      verify: (context: Method.VerifyContext<Method.AnyServer>) =>
-        baseVerify(withoutPaymentIntentOptions(context)),
+      async verify(context: Method.VerifyContext<Method.AnyServer>) {
+        await resolvePaymentIntentOptions(context)
+        return baseVerify(withoutPaymentIntentOptions(context))
+      },
     }),
   }
+}
+
+/** Resolves Stripe-only options immediately before the terminal payment operation. */
+async function resolvePaymentIntentOptions(
+  context: Method.VerifyContext<Method.AnyServer>,
+): Promise<void> {
+  const { paymentIntentOptions } = context.request
+  const resolved = await PaymentIntent.resolve(paymentIntentOptions, {
+    challenge: context.credential.challenge,
+    credential: context.credential,
+    envelope: context.envelope,
+    request: context.envelope?.request ?? context.credential.challenge.request,
+  })
+  // MPPX later snapshots this request-local input for onPaymentSuccess. Replacing
+  // only the schema-stripped field keeps the canonical challenge unchanged.
+  context.request.paymentIntentOptions = resolved
 }
 
 function withoutPaymentIntentOptions<context extends { request: Record<string, unknown> }>(
