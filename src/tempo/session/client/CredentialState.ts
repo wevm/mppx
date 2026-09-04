@@ -28,7 +28,7 @@ import {
   type ChannelEntry,
   type TempoChannelCall,
 } from './ChannelOps.js'
-import { channelKey, entryKey, type ChannelSink } from './ChannelStore.js'
+import { channelKey } from './ChannelStore.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -52,32 +52,24 @@ export function readCredentialCumulativeAmount(
   return BigInt(payload.cumulativeAmount)
 }
 
-/**
- * Persists a channel entry through the sink and notifies observers. Closed
- * channels are removed from the store but still reported to observers so callers
- * can react to the close.
- */
-async function storeChannelEntry(sink: ChannelSink, entry: ChannelEntry): Promise<void> {
-  if (entry.opened) await sink.store.set(entry)
-  else await sink.store.delete(entryKey(entry))
-  sink.notifyUpdate(entry)
-}
-
-/** Applies a credential payload's cumulative amount to the stored channel at `key`. */
-async function applyCumulative(
-  sink: ChannelSink,
-  key: string,
+/** Applies a credential payload to a matching cached channel without persisting it. */
+function applyCredential(
+  entry: ChannelEntry | undefined,
   payload: SessionCredentialPayload,
-): Promise<void> {
+): ChannelEntry | undefined {
   const cumulativeAmount = readCredentialCumulativeAmount(payload)
-  if (cumulativeAmount === undefined) return
-  const entry = await sink.store.get(key)
-  if (!entry) return
-  if (entry.channelId.toLowerCase() !== payload.channelId.toLowerCase()) return
-  entry.cumulativeAmount =
-    entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
-  if (payload.action === 'close') entry.opened = false
-  await storeChannelEntry(sink, entry)
+  if (
+    cumulativeAmount === undefined ||
+    !entry ||
+    entry.channelId.toLowerCase() !== payload.channelId.toLowerCase()
+  )
+    return undefined
+  return {
+    ...entry,
+    cumulativeAmount:
+      entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount,
+    opened: payload.action === 'close' ? false : entry.opened,
+  }
 }
 
 const hexSchema = z.custom<Hex>(
@@ -281,6 +273,8 @@ export type ChallengeContext = {
   key: string
   operator?: Address | undefined
   payee: Address
+  /** Logical merchant scope when the channel uses an indirect payment route. */
+  paymentScope?: { payee: Address; token: Address } | undefined
   snapshot?: SessionSnapshot | undefined
   /** Server-provided raw deposit hint for opening a channel, before local maxDeposit capping. */
   suggestedDepositRaw?: string | undefined
@@ -373,8 +367,15 @@ export type CredentialPlan =
       account: ViemAccount
       context: ManualSessionDescriptorContext
       decimals: number
+      entry?: ChannelEntry | undefined
       resolved: ChallengeContext
     }
+
+/** Signed credential plus the channel state to commit after all signing succeeds. */
+export type CredentialResult = {
+  payload: SessionCredentialPayload
+  entry?: ChannelEntry | undefined
+}
 
 type ManualCredentialParameters = Pick<
   Extract<CredentialPlan, { type: 'manual' }>,
@@ -644,6 +645,7 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
       account,
       context,
       decimals,
+      entry,
       resolved,
     }
   }
@@ -652,14 +654,24 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     throw new Error('descriptor required to reuse TIP-1034 channel')
   const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
   if (!entry && recoverContext && canSignDescriptor(account, recoverContext.descriptor)) {
-    return {
-      type: 'recover',
-      account,
-      context: recoverContext,
-      decimals,
-      maxDeposit,
-      resolved,
-    }
+    // A server snapshot may describe another rail's channel (e.g. a
+    // machine-token descriptor advertised to a direct-rail client); ignore
+    // hints that do not match this challenge instead of failing recovery on
+    // every attempt. Explicit caller descriptors keep failing loudly in
+    // recovery validation.
+    const recoverable =
+      context?.descriptor !== undefined ||
+      (isSameAddress(recoverContext.descriptor.payee, resolved.payee) &&
+        isSameAddress(recoverContext.descriptor.token, resolved.token))
+    if (recoverable)
+      return {
+        type: 'recover',
+        account,
+        context: recoverContext,
+        decimals,
+        maxDeposit,
+        resolved,
+      }
   }
   if (entry?.opened && canSignDescriptor(account, entry.descriptor))
     return { type: 'voucher', account, entry, maxDeposit, resolved }
@@ -669,18 +681,18 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
 /** Executes a credential plan and returns the concrete session credential payload. */
 export async function executeCredentialPlan(
   plan: CredentialPlan,
-  sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false = false,
-): Promise<SessionCredentialPayload> {
+  feeToken?: Address | undefined,
+): Promise<CredentialResult> {
   switch (plan.type) {
     case 'open':
-      return open(plan, sink, autoSwap)
+      return open(plan, autoSwap, feeToken)
     case 'recover':
-      return recover(plan, sink)
+      return recover(plan)
     case 'voucher':
-      return voucher(plan, sink)
+      return voucher(plan)
     case 'manual':
-      return manual(plan, sink, autoSwap)
+      return manual(plan, autoSwap, feeToken)
   }
 }
 
@@ -705,9 +717,9 @@ async function resolveAutoSwapCalls(
 
 async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
-  sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
-): Promise<SessionCredentialPayload> {
+  feeToken?: Address | undefined,
+): Promise<CredentialResult> {
   const { account, resolved } = plan
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
@@ -720,7 +732,7 @@ async function open(
     deposit,
     escrow: resolved.escrow,
     feePayer: resolved.feePayer,
-    feeToken: resolved.feeToken,
+    feeToken,
     initialAmount: resolved.amount,
     operator: resolved.operator,
     payee: resolved.payee,
@@ -732,22 +744,24 @@ async function open(
     }),
     token: resolved.token,
   })
-  await storeChannelEntry(sink, {
-    channelId: payload.channelId,
-    cumulativeAmount: resolved.amount,
-    deposit,
-    descriptor: payload.descriptor,
-    escrow: resolved.escrow,
-    chainId: resolved.chainId,
-    opened: true,
-  })
-  return payload
+  return {
+    payload,
+    entry: {
+      channelId: payload.channelId,
+      cumulativeAmount: resolved.amount,
+      deposit,
+      descriptor: payload.descriptor,
+      escrow: resolved.escrow,
+      chainId: resolved.chainId,
+      opened: true,
+      ...(resolved.paymentScope && { paymentScope: resolved.paymentScope }),
+    },
+  }
 }
 
 async function recover(
   plan: Extract<CredentialPlan, { type: 'recover' }>,
-  sink: ChannelSink,
-): Promise<SessionCredentialPayload> {
+): Promise<CredentialResult> {
   const { account, context, decimals, maxDeposit, resolved } = plan
   const { descriptor } = context
   const reusable = await resolveReusableChannel({
@@ -781,22 +795,24 @@ async function recover(
     resolved.chainId,
     resolved.escrow,
   )
-  await storeChannelEntry(sink, {
-    channelId: reusable.channelId,
-    cumulativeAmount,
-    deposit: reusable.state.deposit,
-    descriptor,
-    escrow: resolved.escrow,
-    chainId: resolved.chainId,
-    opened: true,
-  })
-  return payload
+  return {
+    payload,
+    entry: {
+      channelId: reusable.channelId,
+      cumulativeAmount,
+      deposit: reusable.state.deposit,
+      descriptor,
+      escrow: resolved.escrow,
+      chainId: resolved.chainId,
+      opened: true,
+      ...(resolved.paymentScope && { paymentScope: resolved.paymentScope }),
+    },
+  }
 }
 
 async function voucher(
   plan: Extract<CredentialPlan, { type: 'voucher' }>,
-  sink: ChannelSink,
-): Promise<SessionCredentialPayload> {
+): Promise<CredentialResult> {
   const { account, entry, resolved } = plan
   const cumulativeAmount = entry.cumulativeAmount + resolved.amount
   assertWithinMaxDeposit(cumulativeAmount, plan.maxDeposit)
@@ -808,16 +824,14 @@ async function voucher(
     resolved.chainId,
     resolved.escrow,
   )
-  entry.cumulativeAmount = cumulativeAmount
-  await storeChannelEntry(sink, entry)
-  return payload
+  return { payload, entry: { ...entry, cumulativeAmount } }
 }
 
 async function manual(
   plan: Extract<CredentialPlan, { type: 'manual' }>,
-  sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
-): Promise<SessionCredentialPayload> {
+  feeToken?: Address | undefined,
+): Promise<CredentialResult> {
   const { account, context, decimals, resolved } = plan
   const { descriptor } = context
   const channelId = Channel.computeId({
@@ -845,20 +859,21 @@ async function manual(
       resolved,
     },
     autoSwap,
+    feeToken,
   )
-  await applyCumulative(sink, resolved.key, payload)
-  return payload
+  return { payload, entry: applyCredential(plan.entry, payload) }
 }
 
 async function executeManualCredential(
   parameters: ManualCredentialParameters,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   switch (parameters.context.action) {
     case 'open':
       return manualOpen(parameters)
     case 'topUp':
-      return manualTopUp(parameters, autoSwap)
+      return manualTopUp(parameters, autoSwap, feeToken)
     case 'voucher':
       return manualVoucher(parameters)
     case 'close':
@@ -895,6 +910,7 @@ async function manualOpen(
 async function manualTopUp(
   parameters: ManualCredentialParameters,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   const { account, channelId, context, decimals, descriptor, resolved } = parameters
   const additionalDeposit = requireContextAmount(context, decimals, 'additionalDeposit', 'topUp')
@@ -922,7 +938,7 @@ async function manualTopUp(
       client: resolved.client,
       tokenOut: resolved.token,
     }),
-    resolved.feeToken,
+    feeToken,
   )
 }
 

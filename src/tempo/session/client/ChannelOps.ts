@@ -15,6 +15,7 @@ import { Transaction } from 'viem/tempo'
 
 import type { Challenge } from '../../../Challenge.js'
 import * as Credential from '../../../Credential.js'
+import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
@@ -53,6 +54,8 @@ export type ChannelEntry = {
   chainId: number
   /** Whether the client considers the channel reusable for new vouchers. */
   opened: boolean
+  /** Logical merchant payment scope when it differs from the on-chain descriptor. */
+  paymentScope?: { payee: Address; token: Address } | undefined
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -155,6 +158,32 @@ export function serializeCredential(
 /** Case-insensitive EVM address equality. */
 export function isSameAddress(a: Address, b: Address): boolean {
   return a.toLowerCase() === b.toLowerCase()
+}
+
+/** Returns whether a stored entry funds a machine-token session channel. */
+export function isMachineChannel(entry: Pick<ChannelEntry, 'chainId' | 'descriptor' | 'escrow'>) {
+  return (
+    isSameAddress(entry.escrow, tip20ChannelEscrow) &&
+    MachineTokenSession.matchDeployment({
+      chainId: entry.chainId,
+      descriptor: entry.descriptor,
+    }) !== undefined
+  )
+}
+
+/**
+ * Returns whether a stored entry's logical payment scope differs from its
+ * on-chain descriptor. Such entries cannot be re-derived from a challenge, so
+ * their descriptor is the only local copy — even when the deployment table no
+ * longer recognizes the route (for example after a rotation).
+ */
+export function hasRewrittenScope(entry: Pick<ChannelEntry, 'descriptor' | 'paymentScope'>) {
+  const scope = entry.paymentScope
+  if (!scope) return false
+  return (
+    !isSameAddress(scope.payee, entry.descriptor.payee) ||
+    !isSameAddress(scope.token, entry.descriptor.token)
+  )
 }
 
 /**

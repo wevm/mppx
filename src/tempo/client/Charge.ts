@@ -20,6 +20,7 @@ import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 import { mach } from '../Tokens.js'
@@ -144,6 +145,7 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
+      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
       const account =
         (await parameters.resolveAccount?.({
@@ -151,7 +153,7 @@ export function charge(parameters: charge.Parameters = {}) {
           chainId,
           operation: {
             kind: 'executeCalls',
-            ...(autoSwap ? {} : { calls: transferCalls }),
+            ...(autoSwap || machineTokenEnabled ? {} : { calls: transferCalls }),
           },
         })) ?? defaultAccount
 
@@ -168,17 +170,27 @@ export function charge(parameters: charge.Parameters = {}) {
         return supportedModes[0]!
       })()
 
-      const swapCalls = autoSwap
-        ? await AutoSwap.findCalls(client, {
+      const machineTokenRoute = machineTokenEnabled
+        ? await MachineTokenCharge.findRoute(client, {
             account: account.address,
-            amountOut: BigInt(amount),
-            tokenOut: currency,
-            tokenIn: autoSwap.tokenIn,
-            slippage: autoSwap.slippage,
+            chainId,
+            currency,
+            transfers,
           })
         : undefined
 
-      const calls = [...(swapCalls ?? []), ...transferCalls]
+      const swapCalls =
+        !machineTokenRoute && autoSwap
+          ? await AutoSwap.findCalls(client, {
+              account: account.address,
+              amountOut: BigInt(amount),
+              tokenOut: currency,
+              tokenIn: autoSwap.tokenIn,
+              slippage: autoSwap.slippage,
+            })
+          : undefined
+
+      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
 
       const machAddress = mach.addresses[chainId as keyof typeof mach.addresses]
       const allowedFeeTokens = defaultFeeTokens(chainId)

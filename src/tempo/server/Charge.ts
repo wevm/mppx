@@ -32,6 +32,7 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
@@ -57,6 +58,7 @@ export function charge<const parameters extends charge.Parameters>(
   >,
 ): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>> {
   const {
+    machineTokenEnabled,
     amount,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
@@ -143,6 +145,10 @@ export function charge<const parameters extends charge.Parameters>(
     const currency = resolvedRequest.currency as `0x${string}`
     const recipient = resolvedRequest.recipient as `0x${string}`
     const memo = methodDetails?.memo as `0x${string}` | undefined
+    const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
+    const settlementSender = machineTokenEnabled
+      ? MachineTokenCharge.getSettlementSender(chainId)
+      : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -152,6 +158,7 @@ export function charge<const parameters extends charge.Parameters>(
 
     return {
       amount,
+      machineTokenEnabled,
       chainId,
       challenge,
       client: await getClient({ chainId }),
@@ -163,6 +170,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
       requestAllowsFeePayer: request.feePayer !== false,
       resolvedRequest,
+      settlementSenders: settlementSender ? [settlementSender] : [],
       supportedModes,
     }
   }
@@ -187,6 +195,7 @@ export function charge<const parameters extends charge.Parameters>(
       memo,
       methodDetails,
       recipient,
+      settlementSenders,
       supportedModes,
     } = context
     if (supportedModes && !supportedModes.includes('push'))
@@ -204,6 +213,7 @@ export function charge<const parameters extends charge.Parameters>(
     const matchedLogs = await assertTransferLogs(receipt, {
       currency,
       sender,
+      settlementSenders,
       source,
       transfers,
       validateSender,
@@ -266,6 +276,7 @@ export function charge<const parameters extends charge.Parameters>(
     context: CredentialContext,
   ) {
     const {
+      machineTokenEnabled,
       amount,
       chainId,
       challenge,
@@ -296,11 +307,21 @@ export function charge<const parameters extends charge.Parameters>(
       requestAllowsFeePayer &&
       !!(Account.is(request.feePayer) ? request.feePayer : feePayer || remoteFeePayer)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-    const matchedCalls = assertTransferCalls(transaction.calls ?? [], {
-      currency,
-      exactCount: isFeePayerTx,
-      transfers,
-    })
+    const machineTokenRoute = machineTokenEnabled
+      ? MachineTokenCharge.matchRoute({
+          calls: transaction.calls ?? [],
+          chainId: chainId ?? client.chain?.id,
+          currency,
+          transfers,
+        })
+      : undefined
+    const matchedCalls =
+      machineTokenRoute?.transfers ??
+      assertTransferCalls(transaction.calls ?? [], {
+        currency,
+        exactCount: isFeePayerTx,
+        transfers,
+      })
     if (!memo)
       assertChallengeBoundCallMemo(matchedCalls, {
         challengeId: challenge.id,
@@ -308,11 +329,12 @@ export function charge<const parameters extends charge.Parameters>(
       })
 
     if (isFeePayerTx) {
-      FeePayer.validateCalls(
-        transaction.calls,
-        { amount, currency, recipient },
-        { currency, expectedTransfers: transfers },
-      )
+      if (!machineTokenRoute)
+        FeePayer.validateCalls(
+          transaction.calls,
+          { amount, currency, recipient },
+          { currency, expectedTransfers: transfers },
+        )
       FeePayer.assertAllowedFeeToken(transaction, FeePayer.defaultAllowedFeeTokens(chainId))
     } else {
       await viem_call(
@@ -321,7 +343,13 @@ export function charge<const parameters extends charge.Parameters>(
       )
     }
 
-    return { isFeePayerTx, serializedTransaction, transaction, transfers }
+    return {
+      isFeePayerTx,
+      serializedTransaction,
+      settlementSenders: machineTokenRoute ? [machineTokenRoute.settlementSender] : [],
+      transaction,
+      transfers,
+    }
   }
 
   async function validateCredential(
@@ -350,7 +378,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
 
       case 'transaction': {
-        const { isFeePayerTx, serializedTransaction, transaction, transfers } =
+        const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
           await validateTransactionCredential(credential, context.payload, request, context)
         return {
           details: {
@@ -361,6 +389,7 @@ export function charge<const parameters extends charge.Parameters>(
           },
           isFeePayerTx,
           serializedTransaction,
+          settlementSenders,
           transaction,
           transfers,
           type: 'transaction' as const,
@@ -374,6 +403,7 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
+      machineTokenEnabled,
       amount,
       currency,
       decimals,
@@ -434,6 +464,8 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
+      if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
+        throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -444,6 +476,7 @@ export function charge<const parameters extends charge.Parameters>(
 
       return {
         ...request,
+        machineTokenEnabled: request.machineTokenEnabled || undefined,
         chainId,
         feePayer: resolvedFeePayer,
         memo: request.memo || undefined,
@@ -516,7 +549,8 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const { isFeePayerTx, serializedTransaction, transaction, transfers } = validated
+          const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
+            validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -673,6 +707,7 @@ export function charge<const parameters extends charge.Parameters>(
               const matchedLogs = await assertTransferLogs(receipt, {
                 currency,
                 sender: transaction.from! as `0x${string}`,
+                settlementSenders,
                 transfers,
               })
               if (!memo)
@@ -752,6 +787,8 @@ export declare namespace charge {
   }
 
   type Parameters = {
+    /** Enables first-party machine-token settlement for supported Tempo charges. */
+    machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
     /**
@@ -806,6 +843,7 @@ export declare namespace charge {
      * relay broadcasts pull credentials, while it recognizes a push
      * credential as already broadcast and returns its receipt without sending
      * it again.
+     *
      */
     relay?: RelayOptions | undefined
     /**
@@ -877,12 +915,20 @@ function chargeBinding(request: ChargeRequest) {
     request
   requestRest satisfies Record<string, never>
 
-  const { chainId, feePayer, memo, splits, supportedModes, ...methodDetailsRest } =
-    methodDetails ?? {}
+  const {
+    chainId,
+    feePayer,
+    machineTokenEnabled,
+    memo,
+    splits,
+    supportedModes,
+    ...methodDetailsRest
+  } = methodDetails ?? {}
   methodDetailsRest satisfies Record<string, never>
   void feePayer
 
   return {
+    machineTokenEnabled,
     amount,
     chainId,
     currency,
@@ -1042,6 +1088,7 @@ async function assertTransferLogs(
   parameters: {
     currency: `0x${string}`
     sender: `0x${string}`
+    settlementSenders?: readonly `0x${string}`[] | undefined
     source?: { address: `0x${string}`; chainId: number } | undefined
     transfers: readonly ExpectedTransfer[]
     validateSender?: charge.ValidateSender | undefined
@@ -1077,7 +1124,9 @@ async function assertTransferLogs(
         !(await isValidTransferSender({
           expectedSender: parameters.sender,
           sender: log.args.from,
+          settlementSenders: parameters.settlementSenders,
           source: parameters.source,
+          transactionSender: receipt.from,
           validateSender: parameters.validateSender,
         }))
       )
@@ -1185,10 +1234,17 @@ function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean 
 async function isValidTransferSender(parameters: {
   expectedSender: `0x${string}`
   sender: `0x${string}`
+  settlementSenders?: readonly `0x${string}`[] | undefined
   source?: { address: `0x${string}`; chainId: number } | undefined
+  transactionSender: `0x${string}`
   validateSender?: charge.ValidateSender | undefined
 }): Promise<boolean> {
   if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender)) return true
+  if (
+    TempoAddress.isEqual(parameters.transactionSender, parameters.expectedSender) &&
+    parameters.settlementSenders?.some((sender) => TempoAddress.isEqual(parameters.sender, sender))
+  )
+    return true
   if (!parameters.validateSender) return false
   return parameters.validateSender({
     expectedSender: parameters.expectedSender,
@@ -1347,7 +1403,7 @@ function assertChallengeBoundMemo(
 }
 
 function assertChallengeBoundCallMemo(
-  matchedCalls: readonly Charge_internal.Transfer[],
+  matchedCalls: readonly { memo?: string | undefined }[],
   parameters: { challengeId: string; realm: string },
 ) {
   const bound = matchedCalls.some((call) => {

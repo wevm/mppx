@@ -11,6 +11,7 @@ import * as Constants from '../../../Constants.js'
 import type * as Credential from '../../../Credential.js'
 import { VerificationFailedError } from '../../../Errors.js'
 import type { Challenge } from '../../../index.js'
+import type { MaybePromise } from '../../../internal/types.js'
 import type * as z from '../../../zod.js'
 import * as Methods from '../../Methods.js'
 import {
@@ -19,10 +20,18 @@ import {
   type RequestBodyProbe,
 } from '../../server/internal/request-body.js'
 import type * as PrecompileChain from '../precompile/Chain.js'
-import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
+import {
+  tip20ChannelEscrow,
+  uint96,
+  type SessionCredentialPayload,
+} from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
-import { requireSessionCredentialAction } from './CredentialVerification.js'
+import {
+  requireSessionCredentialAction,
+  requireSessionCredentialPayload,
+} from './CredentialVerification.js'
 import {
   resolveCredentialFeePayer,
   resolveRequestFeePayer,
@@ -34,10 +43,14 @@ import {
 export type ResolveSessionSnapshotParameters = {
   /** Raw request amount that must be covered by the next voucher. */
   amount: bigint
+  /** Already-loaded channel for `channelId`, skipping the store read. */
+  channel?: ChannelStore.State | null | undefined
   /** Channel ID from credential or challenge request, when available. */
   channelId: Hex | undefined
   /** Payment fields the reusable channel must match before it is advertised. */
   expected?: SessionSnapshotPaymentFields | undefined
+  /** Optional alternate-rail matcher when the stored descriptor differs from logical payment fields. */
+  matchPaymentFields?: MatchSessionSnapshotPaymentFields | undefined
   /** Server channel store. */
   store: ChannelStore.ChannelStore
 }
@@ -53,6 +66,18 @@ export type SessionSnapshotPaymentFields = {
   /** Payee address expected by the challenge. */
   recipient: Address
 }
+
+/**
+ * Validates an alternate channel descriptor against the logical session payment
+ * fields. `options.action` names the credential the snapshot serves: close
+ * credentials accept retired routes, so their recovery snapshots match
+ * inactive routes too.
+ */
+export type MatchSessionSnapshotPaymentFields = (
+  channel: ChannelStore.StoredPrecompileChannel,
+  expected: SessionSnapshotPaymentFields,
+  options?: { action?: SessionCredentialPayload['action'] | undefined } | undefined,
+) => MaybePromise<boolean>
 
 /** Request metadata available to `resolveChannelId` without exposing a mutable `Request`. */
 export type SessionChannelIdRequest = {
@@ -110,6 +135,33 @@ function normalizeResolvedSessionChannelId(value: string | null | undefined): He
   return ChannelStore.normalizeChannelId(value)
 }
 
+/** Returns a close credential's channel once its voucher signature verifies. */
+async function verifiedCloseCredentialChannel(
+  credential: Credential.Credential | null | undefined,
+  store: ChannelStore.ChannelStore,
+): Promise<{ channelId: Hex; channel: ChannelStore.StoredPrecompileChannel } | undefined> {
+  try {
+    const payload = requireSessionCredentialPayload(credential?.payload)
+    if (payload.action !== 'close') return undefined
+    const channelId = payload.channelId
+    const channel = await store.getChannel(channelId)
+    if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
+    const verified = Voucher.verifyVoucher(
+      channel.escrowContract,
+      channel.chainId,
+      {
+        channelId,
+        cumulativeAmount: uint96(BigInt(payload.cumulativeAmount)),
+        signature: payload.signature,
+      },
+      channel.authorizedSigner,
+    )
+    return verified ? { channelId, channel } : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Resolves the channel ID used to build server-side session bootstrap hints. */
 export async function resolveSessionChannelId(parameters: {
   capturedRequest?: RequestBodyProbe | undefined
@@ -138,15 +190,25 @@ export async function resolveSessionChannelId(parameters: {
 export async function resolveSessionSnapshot(
   parameters: ResolveSessionSnapshotParameters,
 ): Promise<SessionSnapshot | undefined> {
-  const { amount, channelId, expected, store } = parameters
+  const { amount, channelId, expected, matchPaymentFields, store } = parameters
   if (!channelId) return undefined
-  const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
+  const channel =
+    parameters.channel ?? (await store.getChannel(ChannelStore.normalizeChannelId(channelId)))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
   if (channel.finalized) return undefined
   if (channel.closeRequestedAt !== 0n) return undefined
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
-  if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
+  if (expected && !matchesSnapshotPaymentFields(channel, expected)) {
+    // The snapshot is an optional reuse hint: a failing matcher (for example a
+    // transient RPC error during the route check) must omit the hint rather
+    // than fail challenge issuance or bootstrap preflight.
+    let matched = false
+    try {
+      matched = (await matchPaymentFields?.(channel, expected)) ?? false
+    } catch {}
+    if (!matched) return undefined
+  }
   const requiredCumulative = channel.spent + amount
   return {
     acceptedCumulative: channel.highestVoucherAmount.toString(),
@@ -244,6 +306,8 @@ export type SessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Fee token clients must use for open/top-up transactions. */
   feeToken?: Address | undefined
+  /** Whether clients may fund this logical session through the first-party machine-token rail. */
+  machineTokenEnabled?: boolean | undefined
   /** Minimum raw-unit increase required for voucher credentials. */
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
@@ -266,6 +330,7 @@ export type ResolveSessionPaymentRequestParameters = {
   decimals: number
   defaultFeePayer?: viem_Account | undefined
   getClient: ResolveRequestChainIdParameters['getClient']
+  matchSnapshotPaymentFields?: MatchSessionSnapshotPaymentFields | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   parameterFeePayer?: ParameterFeePayer
@@ -332,6 +397,7 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     (value.feePayer === undefined || typeof value.feePayer === 'boolean') &&
     (value.feeToken === undefined ||
       (typeof value.feeToken === 'string' && isAddress(value.feeToken, { strict: false }))) &&
+    (value.machineTokenEnabled === undefined || typeof value.machineTokenEnabled === 'boolean') &&
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
@@ -388,6 +454,7 @@ export async function resolveSessionPaymentRequest(
     decimals,
     defaultFeePayer,
     getClient,
+    matchSnapshotPaymentFields,
     parameterChainId,
     parameterEscrowContract,
     parameterFeePayer,
@@ -414,16 +481,25 @@ export async function resolveSessionPaymentRequest(
   )
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
-  const channelId = await resolveSessionChannelId({
-    capturedRequest,
-    credential,
-    request,
-    resolveChannelId,
-    source,
-    store,
-  })
+  // A close credential names the channel it settles; advertising that channel's
+  // snapshot on the retry challenge lets clients without a configured
+  // `resolveChannelId` learn the exact capture amount a machine-token close
+  // voucher must match. Only trusted once the voucher signature verifies, and
+  // matched with close semantics so retired routes stay closable.
+  const verifiedClose = await verifiedCloseCredentialChannel(credential, store)
+  const channelId =
+    verifiedClose?.channelId ??
+    (await resolveSessionChannelId({
+      capturedRequest,
+      credential,
+      request,
+      resolveChannelId,
+      source,
+      store,
+    }))
   const sessionSnapshot = await resolveSessionSnapshot({
     amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
+    channel: verifiedClose?.channel,
     channelId,
     expected: {
       chainId,
@@ -431,6 +507,15 @@ export async function resolveSessionPaymentRequest(
       escrowContract,
       recipient: readChallengeAddress(request.recipient, 'recipient'),
     },
+    matchPaymentFields:
+      matchSnapshotPaymentFields && (verifiedClose || request.machineTokenEnabled)
+        ? (channel, expected) =>
+            matchSnapshotPaymentFields(
+              channel,
+              expected,
+              verifiedClose ? { action: 'close' } : undefined,
+            )
+        : undefined,
     store,
   })
   const { operator: _operator, ...requestWithoutOperator } = request
