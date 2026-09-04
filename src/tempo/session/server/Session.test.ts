@@ -3599,7 +3599,7 @@ describe('precompile server session unit guardrails', () => {
                   functionName: 'getChannelState',
                   result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
                 })
-              if (args.method === 'eth_getTransactionCount') {
+              if (args.method === 'eth_sendRawTransaction') {
                 observedPending =
                   (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
                 throw new Error('broadcast failed')
