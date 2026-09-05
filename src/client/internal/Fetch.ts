@@ -363,17 +363,24 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
-        response = await baseFetch(
-          paymentInput,
-          transport.setCredential(
-            {
-              ...fetchInit,
-              headers: initialRequest.headers,
-            },
-            credential,
-            { challenge: selectedChallenge },
-          ),
+        const credentialInit = transport.setCredential(
+          {
+            ...fetchInit,
+            headers: initialRequest.headers,
+          },
+          credential,
+          { challenge: selectedChallenge },
         )
+        const signal = resolveRequestSignal(paymentInput, credentialInit)
+        const dispatched = !signal?.aborted
+        try {
+          response = await baseFetch(paymentInput, credentialInit)
+        } catch (error) {
+          await settleAttempt(prepared, {
+            status: dispatched ? 'unknown' : 'rejected',
+          })
+          throw error
+        }
         const paymentRequired = await transport.isPaymentRequired(
           response,
           transportRequest as never,
@@ -985,7 +992,7 @@ async function resolveCredential(
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
-  if (attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
+  if (attempt) MethodResponse.attachAttempt(parameters, attempt)
   return mi.createCredential(parameters as never)
 }
 

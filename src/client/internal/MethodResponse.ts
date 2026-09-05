@@ -8,7 +8,7 @@ const attempts = new WeakMap<object, Attempt>()
 export type AttemptOutcome = {
   challenges?: readonly Challenge.Challenge[] | undefined
   response?: Response | undefined
-  status: 'accepted' | 'pending' | 'rejected'
+  status: 'accepted' | 'pending' | 'rejected' | 'unknown'
 }
 
 export type Attempt = {
@@ -47,16 +47,17 @@ export function unregister(method: Method.AnyClient): void {
   handlers.delete(method)
 }
 
-/** Adds response lifecycle state to internal credential parameters. */
-export function attachAttempt(
-  method: Method.AnyClient,
-  parameters: object,
-  attempt: Attempt,
-): void {
-  if (handlers.has(method)) attempts.set(parameters, attempt)
+/** Returns whether Fetch owns successful-response handling for this method. */
+export function hasHandler(method: Method.AnyClient): boolean {
+  return handlers.has(method)
 }
 
-/** Reads response lifecycle state when Fetch owns this credential. */
+/** Adds transport lifecycle state to internal credential parameters. */
+export function attachAttempt(parameters: object, attempt: Attempt): void {
+  attempts.set(parameters, attempt)
+}
+
+/** Reads transport lifecycle state for this credential attempt. */
 export function getAttempt(parameters: object): Attempt | undefined {
   return attempts.get(parameters)
 }
