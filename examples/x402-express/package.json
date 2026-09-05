@@ -11,13 +11,13 @@
     "@types/express": "5.0.6",
     "@types/node": "26.2.0",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@x402/core": "2.22.0",
-    "@x402/evm": "2.22.0",
-    "@x402/express": "2.22.0",
+    "@x402/core": "2.23.0",
+    "@x402/evm": "2.23.0",
+    "@x402/express": "2.23.0",
     "express": "5.2.1",
     "mppx": "latest",
     "tsx": "4.23.12",
     "typescript": "catalog:",
-    "viem": "2.55.13"
+    "viem": "2.55.19"
   }
 }
