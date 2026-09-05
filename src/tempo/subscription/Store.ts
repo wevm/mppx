@@ -10,6 +10,7 @@ const defaultActivationPrefix = 'tempo:subscription:activation:'
 const defaultAccessKeyPrefix = 'tempo:subscription:access-key:'
 const defaultCredentialPrefix = 'tempo:subscription:credential:'
 const defaultActivationTimeoutMs = 15 * 60 * 1_000
+const defaultActivationRecoveryTimeoutMs = 15 * 60 * 1_000
 const defaultRenewalTimeoutMs = 15 * 60 * 1_000
 
 /** Subscription-aware wrapper around a generic key-value store. */
@@ -73,6 +74,12 @@ type ActivationMarker = {
   challengeId?: string
   committingAt?: string
   startedAt?: string
+  /**
+   * The created subscription, persisted alongside `committingAt` so a commit
+   * interrupted after `create()` (and its settlement) can be resumed from the
+   * durable record instead of re-running `create()` and charging again.
+   */
+  subscription?: SubscriptionRecord
 }
 
 /** Wraps a generic key-value {@link Store.Store} with subscription-specific accessors. */
@@ -84,6 +91,7 @@ export function fromStore(
     accessKeyPrefix = defaultAccessKeyPrefix,
     activationPrefix = defaultActivationPrefix,
     activationTimeoutMs = defaultActivationTimeoutMs,
+    activationRecoveryTimeoutMs = defaultActivationRecoveryTimeoutMs,
     credentialPrefix = defaultCredentialPrefix,
     keyPrefix = defaultKeyPrefix,
     recordPrefix = defaultRecordPrefix,
@@ -168,6 +176,27 @@ export function fromStore(
         return { status: 'existing', subscription: existing }
       }
 
+      // Resume a commit a crash interrupted: an earlier activation created (and
+      // settled) the subscription and stored it under `committingAt`, but its
+      // terminal record puts did not all land, so the non-expiring
+      // `committingAt` marker would otherwise leave this lookup key stuck in
+      // `inFlight` forever. Once the marker is older than the recovery timeout
+      // (so a live commit cannot still be in progress), re-apply the record
+      // puts idempotently from the stored subscription and finish. `create()`
+      // is never called again, so the period is not charged twice.
+      const pending = (await store.get(activationKey(lookupKey))) as ActivationMarker | null
+      if (
+        pending?.committingAt &&
+        pending.subscription &&
+        isRecoverableCommit(pending, activationRecoveryTimeoutMs)
+      ) {
+        const subscription = pending.subscription
+        await store.put(recordKey(subscription.subscriptionId), subscription)
+        await store.put(lookupRecordKey(subscription.lookupKey), subscription.subscriptionId)
+        await clearActivationState(lookupKey, pending.challengeId ?? challengeId)
+        return { status: 'existing', subscription }
+      }
+
       const started = await store.update(
         activationKey(lookupKey),
         (current): Store.Change<unknown, { status: 'started' } | { status: 'inFlight' }> => {
@@ -207,6 +236,7 @@ export function fromStore(
             ...marker,
             committingAt: timestamp(),
             startedAt: timestamp(),
+            subscription,
           },
           result: true,
         }
@@ -407,6 +437,14 @@ export declare namespace fromStore {
     activationPrefix?: string | undefined
     /** Milliseconds before a stuck activation lock can be replaced. @default `900000` */
     activationTimeoutMs?: number | undefined
+    /**
+     * Milliseconds after which a `committingAt` activation marker whose commit
+     * never completed (e.g. the process crashed mid-commit) is resumed from its
+     * persisted subscription instead of blocking the lookup key forever. The
+     * subscription is not re-created, so no additional charge occurs.
+     * @default `900000`
+     */
+    activationRecoveryTimeoutMs?: number | undefined
     /** Key prefix for single-use activation credential markers. @default `'tempo:subscription:credential:'` */
     credentialPrefix?: string | undefined
     /** Key prefix for subscription records. @default `'tempo:subscription:record:'` */
@@ -428,6 +466,15 @@ function isStaleActivation(marker: { startedAt?: string | undefined }, timeoutMs
 
 function isStaleRenewal(subscription: SubscriptionRecord, timeoutMs: number) {
   return isStaleActivation({ startedAt: subscription.inFlightStartedAt }, timeoutMs)
+}
+
+// A committing marker older than the recovery timeout cannot belong to a live
+// commit, so its persisted subscription is safe to finish idempotently.
+function isRecoverableCommit(marker: { committingAt?: string | undefined }, timeoutMs: number) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return false
+  const committingAt = new Date(marker.committingAt ?? '').getTime()
+  if (!Number.isFinite(committingAt)) return false
+  return Date.now() - committingAt >= timeoutMs
 }
 
 function clearRenewal(subscription: SubscriptionRecord): SubscriptionRecord {
