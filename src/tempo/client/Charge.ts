@@ -1,5 +1,5 @@
 import type * as Hex from 'ox/Hex'
-import { type Address, isAddressEqual } from 'viem'
+import type { Address } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
@@ -19,11 +19,9 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
-import { mach } from '../Tokens.js'
 import type * as AccountResolution from './ResolveAccount.js'
 
 /** Runtime context accepted by the Tempo charge client method. */
@@ -191,19 +189,6 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
 
-      const machAddress = mach.addresses[chainId as keyof typeof mach.addresses]
-      const allowedFeeTokens = defaultFeeTokens(chainId)
-      const feeToken =
-        machAddress && isAddressEqual(currency, machAddress)
-          ? await resolveFeeToken({
-              account: account.address,
-              allowedTokens: allowedFeeTokens,
-              candidateTokens: allowedFeeTokens,
-              client,
-              prioritizeCandidates: true,
-            })
-          : undefined
-
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + 25
         if (!challenge.expires) return defaultExpiry
@@ -219,7 +204,6 @@ export function charge(parameters: charge.Parameters = {}) {
                   await sendTransactionSync(client, {
                     account,
                     calls,
-                    ...(feeToken ? { feeToken } : {}),
                     nonceKey: 'expiring',
                     validBefore,
                   } as never),
@@ -227,7 +211,6 @@ export function charge(parameters: charge.Parameters = {}) {
               }
             : await sendCallsSync(client, {
                 account,
-                ...(feeToken ? { capabilities: { feeToken } } : {}),
                 calls: calls as never,
                 experimental_fallback: calls.length === 1,
                 forceAtomic: calls.length > 1,
@@ -244,7 +227,6 @@ export function charge(parameters: charge.Parameters = {}) {
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls,
-        ...(feeToken ? { feeToken } : {}),
         nonceKey: 'expiring',
         validBefore,
       } as never)
