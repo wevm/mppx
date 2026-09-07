@@ -60,6 +60,13 @@ describe('escrowContract', () => {
 })
 
 describe('machineToken', () => {
+  test('is deeply frozen', () => {
+    expect(Object.isFrozen(machineToken)).toBe(true)
+    expect(Object.values(machineToken).every((deployment) => Object.isFrozen(deployment))).toBe(
+      true,
+    )
+  })
+
   test('mainnet uses the MACH swapper deployment', () => {
     expect(machineToken[chainId.mainnet]).toEqual({
       swap: '0xF72E5107c32C655ffA7539a3C8e97B7C3cE16A3F',

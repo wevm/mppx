@@ -20,17 +20,19 @@ export const currency = {
   [chainId.testnet]: tokens.pathUsd,
 } as const satisfies Record<ChainId, string>
 
-/** Canonical first-party machine-token deployments used by charges and sessions. */
-export const machineToken = {
-  [chainId.mainnet]: {
+/** Immutable canonical first-party machine-token deployments used by charges and sessions. */
+export const machineToken = Object.freeze({
+  [chainId.mainnet]: Object.freeze({
     swap: '0xF72E5107c32C655ffA7539a3C8e97B7C3cE16A3F',
     token: '0x20c000000000000000000000f37de3740ADec032',
-  },
-  [chainId.testnet]: {
+  }),
+  [chainId.testnet]: Object.freeze({
     swap: '0xd05f8EdFBB54Da0d765C9fE9b2B3f7d2E3a8C466',
     token: '0x20c000000000000000000000f37de3740ADec032',
-  },
-} as const satisfies Partial<Record<ChainId, { swap: `0x${string}`; token: `0x${string}` }>>
+  }),
+} as const) satisfies Readonly<
+  Partial<Record<ChainId, Readonly<{ swap: `0x${string}`; token: `0x${string}` }>>>
+>
 
 /**
  * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).
