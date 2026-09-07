@@ -88,7 +88,7 @@ Servers price payments in PathUSD, USDC.e, or another supported settlement token
 advertises `machineTokenEnabled`, the client can fund the payment with MACH when a verified route
 and sufficient balance are available; otherwise it pays the token requested by the challenge.
 Sessions keep the selected rail until the channel closes. The `mach` export provides MACH token
-metadata for balance and display use. The canonical MACH route is currently available on Tempo
+metadata for balance and display use. The canonical MACH route is available on Tempo mainnet and
 Moderato.
 
 ## Examples
