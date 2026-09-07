@@ -144,15 +144,57 @@ export function charge(parameters: charge.Parameters = {}) {
       )
       const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
-      const account =
+      const resolveAccount = async (calls?: readonly AccountResolution.ResolveAccountCall[]) =>
         (await parameters.resolveAccount?.({
           account: defaultAccount,
           chainId,
           operation: {
             kind: 'executeCalls',
-            ...(autoSwap || machineTokenEnabled ? {} : { calls: transferCalls }),
+            ...(calls ? { calls } : {}),
           },
         })) ?? defaultAccount
+
+      const machineTokenCandidate = machineTokenEnabled
+        ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
+        : undefined
+      let account = defaultAccount
+      let machineTokenRoute: typeof machineTokenCandidate
+      if (machineTokenCandidate) {
+        const machineTokenAccount = await (async () => {
+          try {
+            return await resolveAccount(machineTokenCandidate.calls)
+          } catch {
+            // A machine-token route is optional. A scoped account that cannot
+            // execute it may still be able to satisfy the direct fallback.
+            return undefined
+          }
+        })()
+        if (machineTokenAccount) {
+          machineTokenRoute = await MachineTokenCharge.findRoute(client, {
+            account: machineTokenAccount.address,
+            chainId,
+            currency,
+            transfers,
+          })
+          if (machineTokenRoute) account = machineTokenAccount
+        }
+      }
+
+      let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
+      if (!machineTokenRoute) {
+        account = await resolveAccount(autoSwap ? undefined : transferCalls)
+        swapCalls = autoSwap
+          ? await AutoSwap.findCalls(client, {
+              account: account.address,
+              amountOut: BigInt(amount),
+              tokenOut: currency,
+              tokenIn: autoSwap.tokenIn,
+              slippage: autoSwap.slippage,
+            })
+          : undefined
+      }
+
+      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
 
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
@@ -166,28 +208,6 @@ export function charge(parameters: charge.Parameters = {}) {
         if (supportedModes.includes(preferredMode)) return preferredMode
         return supportedModes[0]!
       })()
-
-      const machineTokenRoute = machineTokenEnabled
-        ? await MachineTokenCharge.findRoute(client, {
-            account: account.address,
-            chainId,
-            currency,
-            transfers,
-          })
-        : undefined
-
-      const swapCalls =
-        !machineTokenRoute && autoSwap
-          ? await AutoSwap.findCalls(client, {
-              account: account.address,
-              amountOut: BigInt(amount),
-              tokenOut: currency,
-              tokenIn: autoSwap.tokenIn,
-              slippage: autoSwap.slippage,
-            })
-          : undefined
-
-      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + 25
