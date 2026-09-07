@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "accounts": "0.16.0",
+    "accounts": "0.18.0",
     "mppx": "workspace:*",
-    "viem": "2.55.13"
+    "viem": "2.56.0"
   }
 }
