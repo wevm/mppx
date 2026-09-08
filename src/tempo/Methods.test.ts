@@ -56,17 +56,23 @@ describe('charge', () => {
   })
 
   test('schema: serializes the machine-token hint into methodDetails', () => {
+    const currency = '0x20c0000000000000000000000000000000000001'
+    const recipient = '0x1234567890abcdef1234567890abcdef12345678'
     const result = Methods.charge.schema.request.safeParse({
       machineTokenEnabled: true,
       amount: '1',
-      currency: '0x20c0000000000000000000000000000000000001',
+      currency,
       decimals: 6,
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      recipient,
     })
     expect(result.success).toBe(true)
     if (!result.success) return
 
-    expect(result.data.methodDetails?.machineTokenEnabled).toBe(true)
+    expect(result.data).toMatchObject({
+      currency,
+      methodDetails: { machineTokenEnabled: true },
+      recipient,
+    })
   })
 
   test('schema: rejects empty supportedModes', () => {

@@ -787,7 +787,7 @@ export declare namespace charge {
   }
 
   type Parameters = {
-    /** Enables first-party machine-token settlement for supported Tempo charges. */
+    /** Enables first-party machine-token funding through the canonical swapper. */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined

@@ -1249,6 +1249,8 @@ describe('tempo', () => {
       challenge = Challenge.fromResponse(response, {
         methods: [tempo_client.charge()],
       })
+      expect(challenge.request.currency).toBe(asset)
+      expect(challenge.request.recipient).toBe(accounts[0].address)
       expect(
         (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
       ).toBe(true)
