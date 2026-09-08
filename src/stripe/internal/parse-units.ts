@@ -1,6 +1,8 @@
 /**
  * Converts a decimal string to its integer representation at the given precision.
  * Fractional digits beyond the precision are rounded half away from zero.
+ *
+ * @see https://github.com/wevm/viem/blob/main/src/utils/unit/Value.ts
  */
 export function parseUnits(value: string, decimals: number): bigint {
   if (!Number.isInteger(decimals) || decimals < 0)
