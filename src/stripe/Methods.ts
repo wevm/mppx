@@ -1,7 +1,6 @@
-import { parseUnits } from 'viem'
-
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import { parseUnits } from './internal/parse-units.js'
 import * as PaymentIntent from './internal/payment-intent.js'
 
 /**

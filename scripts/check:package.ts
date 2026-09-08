@@ -75,14 +75,28 @@ try {
     exports?: Record<string, unknown>
     main?: string
     module?: string
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>
     types?: string
   }
   if (manifest.bin?.mppx !== './dist/bin.js')
     throw new Error(`Expected the mppx binary to target dist/bin.js, got ${manifest.bin?.mppx}`)
   if (manifest.bin?.['mppx.src']) throw new Error('Published manifest includes mppx.src')
   if (manifest.dependencies?.incur) throw new Error('Published manifest includes incur')
+  if (manifest.peerDependenciesMeta?.viem?.optional !== true)
+    throw new Error('Published manifest must mark viem as an optional peer dependency')
   if (JSON.stringify(manifest.exports).includes('"src"'))
     throw new Error('Published exports include a src condition')
+
+  const stripeViemImports = paths.filter(
+    (file) =>
+      file.startsWith('dist/stripe/') &&
+      file.endsWith('.js') &&
+      /["']viem(?:\/[^"']*)?["']/.test(fs.readFileSync(path.join(root, file), 'utf8')),
+  )
+  if (stripeViemImports.length > 0)
+    throw new Error(
+      `Stripe package files import viem:\n${stripeViemImports.map((file) => `- ${file}`).join('\n')}`,
+    )
 
   const packageRoot = path.join(extractDirectory, 'package')
   const missingTargets = packageTargets({

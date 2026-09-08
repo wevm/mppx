@@ -41,6 +41,12 @@ Contributors changing Tempo sessions should read the [session design](./src/temp
 npm i mppx
 ```
 
+Tempo and EVM integrations also require the optional `viem` peer dependency:
+
+```bash
+npm i viem
+```
+
 ## Quick Start
 
 ### Server

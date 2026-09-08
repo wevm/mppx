@@ -32,7 +32,10 @@ describe('charge', () => {
       },
     })
     expect(result.success).toBe(true)
-    if (result.success) expect(result.data).not.toHaveProperty('paymentIntentOptions')
+    if (result.success) {
+      expect(result.data.amount).toBe('100')
+      expect(result.data).not.toHaveProperty('paymentIntentOptions')
+    }
   })
 
   test('schema: accepts a PaymentIntent options resolver without invoking it', () => {
