@@ -309,9 +309,6 @@
     },
     "next": {
       "optional": true
-    },
-    "viem": {
-      "optional": true
     }
   },
   "dependencies": {

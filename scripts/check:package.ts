@@ -75,15 +75,12 @@ try {
     exports?: Record<string, unknown>
     main?: string
     module?: string
-    peerDependenciesMeta?: Record<string, { optional?: boolean }>
     types?: string
   }
   if (manifest.bin?.mppx !== './dist/bin.js')
     throw new Error(`Expected the mppx binary to target dist/bin.js, got ${manifest.bin?.mppx}`)
   if (manifest.bin?.['mppx.src']) throw new Error('Published manifest includes mppx.src')
   if (manifest.dependencies?.incur) throw new Error('Published manifest includes incur')
-  if (manifest.peerDependenciesMeta?.viem?.optional !== true)
-    throw new Error('Published manifest must mark viem as an optional peer dependency')
   if (JSON.stringify(manifest.exports).includes('"src"'))
     throw new Error('Published exports include a src condition')
 
