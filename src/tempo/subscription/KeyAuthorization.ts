@@ -1,3 +1,4 @@
+import { Base64, Hex } from 'ox'
 import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { isAddress, isAddressEqual, type Address } from 'viem'
 
@@ -142,6 +143,17 @@ export function getSubscriptionRpcAllowedCalls(
   ] as const
 }
 
+/** Decodes the server-issued challenge identifier for use as a signed Tempo witness. */
+export function getSubscriptionChallengeWitness(challengeId: string): Hex.Hex {
+  try {
+    const witness = Hex.fromBytes(Base64.toBytes(challengeId))
+    if (Hex.size(witness) !== 32) throw new Error('invalid challenge id size')
+    return witness
+  } catch {
+    throw new VerificationFailedError({ reason: 'challenge id must encode 32 bytes' })
+  }
+}
+
 /**
  * Creates and signs a Tempo key authorization for subscription payments when the account can sign
  * arbitrary hashes locally.
@@ -151,17 +163,19 @@ export async function signSubscriptionKeyAuthorization(parameters: {
   account: {
     sign?: ((parameters: { hash: `0x${string}` }) => Promise<`0x${string}`>) | undefined
   }
+  challengeId: string
   chainId: number
   request: Pick<
     SubscriptionRequest,
     'amount' | 'currency' | 'periodCount' | 'periodUnit' | 'recipient' | 'subscriptionExpires'
   >
 }) {
-  const { accessKey, account, chainId, request } = parameters
+  const { accessKey, account, challengeId, chainId, request } = parameters
   if (typeof account.sign !== 'function') return undefined
 
   const authorization = createUnsignedAuthorization({
     accessKey,
+    challengeId,
     chainId,
     request,
   })
@@ -185,11 +199,12 @@ export async function signSubscriptionKeyAuthorization(parameters: {
  */
 export function verifySubscriptionKeyAuthorization(parameters: {
   accessKey?: SubscriptionAccessKey | undefined
+  challengeId: string
   chainId: number
   payload: SubscriptionCredentialPayload
   request: SubscriptionRequest
 }) {
-  const { accessKey, chainId, payload, request } = parameters
+  const { accessKey, challengeId, chainId, payload, request } = parameters
   if (payload.type !== 'keyAuthorization') {
     throw new VerificationFailedError({ reason: 'invalid keyAuthorization payload' })
   }
@@ -202,6 +217,9 @@ export function verifySubscriptionKeyAuthorization(parameters: {
     authorization,
     chainId,
   })
+  if (authorization.witness?.toLowerCase() !== getSubscriptionChallengeWitness(challengeId)) {
+    throw new VerificationFailedError({ reason: 'keyAuthorization challenge mismatch' })
+  }
   assertAuthorizationExpiry(authorization, request)
   assertAuthorizationLimit(getSingleTokenLimit(authorization), request)
   assertAuthorizationScopes(authorization.scopes, request)
@@ -218,13 +236,14 @@ export function verifySubscriptionKeyAuthorization(parameters: {
 
 function createUnsignedAuthorization(parameters: {
   accessKey: SubscriptionAccessKey
+  challengeId: string
   chainId: number
   request: Pick<
     SubscriptionRequest,
     'amount' | 'currency' | 'periodCount' | 'periodUnit' | 'recipient' | 'subscriptionExpires'
   >
 }) {
-  const { accessKey, chainId, request } = parameters
+  const { accessKey, challengeId, chainId, request } = parameters
   return KeyAuthorization.from({
     address: normalizeAddress(accessKey.accessKeyAddress, 'accessKeyAddress'),
     chainId: BigInt(chainId),
@@ -238,6 +257,7 @@ function createUnsignedAuthorization(parameters: {
     ],
     scopes: getSubscriptionScopes(request),
     type: accessKey.keyType,
+    witness: getSubscriptionChallengeWitness(challengeId),
   })
 }
 

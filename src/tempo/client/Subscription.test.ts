@@ -14,6 +14,7 @@ import { subscription } from './Subscription.js'
 const chainId = 4217
 const currency = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x1234567890abcdef1234567890abcdef12345678'
+const challengeId = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const selectedAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000001',
 )
@@ -50,7 +51,7 @@ function createChallenge(
     ...overrides,
   })
   return Challenge.from({
-    id: 'test-challenge-id',
+    id: challengeId,
     intent: 'subscription',
     method: 'tempo',
     realm: 'api.example.com',
@@ -112,6 +113,7 @@ describe('tempo.subscription client', () => {
     const keyAuthorization = await signSubscriptionKeyAuthorization({
       accessKey,
       account: selectedAccount,
+      challengeId: challenge.id,
       chainId,
       request: challenge.request,
     })
@@ -149,6 +151,7 @@ describe('tempo.subscription client', () => {
           recipients: expect.any(Array),
         },
       ],
+      witness: `0x${'00'.repeat(32)}`,
     })
     expect(capturedParams).not.toHaveProperty('allowedCalls')
   })
@@ -158,6 +161,7 @@ describe('tempo.subscription client', () => {
     const keyAuthorization = await signSubscriptionKeyAuthorization({
       accessKey,
       account: otherRootAccount,
+      challengeId: challenge.id,
       chainId,
       request: challenge.request,
     })

@@ -19,6 +19,8 @@ import {
 import type { SubscriptionAccessKey } from './Types.js'
 
 const secondsPerDay = 86_400
+const challengeId = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+const otherChallengeId = 'AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 const rootAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000001',
@@ -60,6 +62,7 @@ async function createPayload(request = parseRequest()) {
   const keyAuthorization = await signSubscriptionKeyAuthorization({
     accessKey,
     account: rootAccount,
+    challengeId,
     chainId: 4217,
     request,
   })
@@ -96,6 +99,7 @@ describe('tempo subscription key authorization', () => {
 
     const result = verifySubscriptionKeyAuthorization({
       accessKey,
+      challengeId,
       chainId: 4217,
       payload,
       request,
@@ -124,6 +128,7 @@ describe('tempo subscription key authorization', () => {
               return serializeCompositeSignature(type, inner)
             },
           },
+          challengeId,
           chainId: 4217,
           request,
         }),
@@ -142,6 +147,7 @@ describe('tempo subscription key authorization', () => {
       expect(() =>
         verifySubscriptionKeyAuthorization({
           accessKey,
+          challengeId,
           chainId: 4217,
           payload: {
             ...payload,
@@ -197,6 +203,7 @@ describe('tempo subscription key authorization', () => {
       expect(() =>
         verifySubscriptionKeyAuthorization({
           accessKey,
+          challengeId,
           chainId: 4217,
           payload,
           request,
@@ -215,6 +222,7 @@ describe('tempo subscription key authorization', () => {
           accessKeyAddress: otherAccessAccount.address,
           keyType: 'secp256k1',
         },
+        challengeId,
         chainId: 4217,
         payload,
         request,
@@ -237,11 +245,27 @@ describe('tempo subscription key authorization', () => {
     expect(() =>
       verifySubscriptionKeyAuthorization({
         accessKey,
+        challengeId,
         chainId: 4217,
         payload: { ...payload, signature: transferOnly },
         request,
       }),
     ).toThrow('keyAuthorization must allow transferWithMemo')
+  })
+
+  test('rejects an authorization replayed against another challenge', async () => {
+    const request = parseRequest()
+    const payload = await createPayload(request)
+
+    expect(() =>
+      verifySubscriptionKeyAuthorization({
+        accessKey,
+        challengeId: otherChallengeId,
+        chainId: 4217,
+        payload,
+        request,
+      }),
+    ).toThrow('keyAuthorization challenge mismatch')
   })
 
   test('rejects subscription periods that cannot be represented by the Tempo client', () => {

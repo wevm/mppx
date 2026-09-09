@@ -98,6 +98,7 @@ async function createCredential(
   const keyAuthorization = await signSubscriptionKeyAuthorization({
     accessKey: key,
     account,
+    challengeId: challenge.id,
     chainId,
     request: challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>,
   })

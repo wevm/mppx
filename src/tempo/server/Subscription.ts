@@ -248,6 +248,7 @@ export function subscription<const parameters extends subscription.Parameters>(
       }
       const verified = verifySubscriptionKeyAuthorization({
         accessKey,
+        challengeId: credential.challenge.id,
         chainId: parsedRequest.methodDetails?.chainId ?? defaults.chainId.testnet,
         payload: credential.payload as SubscriptionCredentialPayload,
         request: parsedRequest,

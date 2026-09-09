@@ -12,6 +12,7 @@ import * as z from '../../zod.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 import {
+  getSubscriptionChallengeWitness,
   getSubscriptionScopes,
   signSubscriptionKeyAuthorization,
   toSubscriptionExpiryDate,
@@ -62,12 +63,14 @@ export function subscription(parameters: subscription.Parameters = {}) {
       const keyAuthorization = await authorizeAccessKey(client, {
         accessKey,
         account,
+        challengeId: challenge.id,
         chainId,
         request: challenge.request,
       } as never)
 
       const verified = verifySubscriptionKeyAuthorization({
         accessKey,
+        challengeId: challenge.id,
         chainId,
         payload: {
           signature: KeyAuthorization.serialize(keyAuthorization as never),
@@ -96,6 +99,7 @@ async function authorizeAccessKey(
   parameters: {
     accessKey: SubscriptionAccessKey
     account: Account.Account
+    challengeId: string
     chainId: number
     request: Pick<
       SubscriptionRequest,
@@ -103,11 +107,12 @@ async function authorizeAccessKey(
     >
   },
 ) {
-  const { accessKey, account, chainId, request } = parameters
+  const { accessKey, account, challengeId, chainId, request } = parameters
 
   const local = await signSubscriptionKeyAuthorization({
     accessKey,
     account,
+    challengeId,
     chainId,
     request,
   })
@@ -128,6 +133,7 @@ async function authorizeAccessKey(
           },
         ],
         scopes: getSubscriptionScopes(request),
+        witness: getSubscriptionChallengeWitness(challengeId),
       },
     ],
   } as never)) as {
