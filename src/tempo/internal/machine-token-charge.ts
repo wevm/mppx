@@ -3,6 +3,7 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   isAddressEqual,
+  parseAbi,
   type Address,
   type Client,
 } from 'viem'
@@ -11,21 +12,9 @@ import { Abis, Actions } from 'viem/tempo'
 
 import * as defaults from './defaults.js'
 
-const swapAbi = [
-  {
-    inputs: [
-      { name: 'inputToken', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-      { name: 'targetToken', type: 'address' },
-      { name: 'recipient', type: 'address' },
-      { name: 'memo', type: 'bytes32' },
-    ],
-    name: 'swapTo',
-    outputs: [],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const
+const machineTokenSwapperAbi = parseAbi([
+  'function swapTo(address inputToken,uint256 amount,address targetToken,address recipient,bytes32 memo)',
+])
 
 type Call = {
   data?: Hex.Hex | undefined
@@ -84,7 +73,7 @@ export function getRoute(parameters: {
       },
       {
         data: encodeFunctionData({
-          abi: swapAbi,
+          abi: machineTokenSwapperAbi,
           functionName: 'swapTo',
           args: [deployment.token, amount, parameters.currency, transfer.recipient, memo],
         }),
@@ -138,7 +127,7 @@ export function matchRoute(parameters: {
   if (!transfer || parameters.calls.length !== 2 || !swap?.data) return undefined
 
   try {
-    const decoded = decodeFunctionData({ abi: swapAbi, data: swap.data })
+    const decoded = decodeFunctionData({ abi: machineTokenSwapperAbi, data: swap.data })
     const route = getRoute({
       ...parameters,
       transfers: [{ ...transfer, memo: transfer.memo ?? decoded.args[4] }],
