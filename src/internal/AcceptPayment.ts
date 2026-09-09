@@ -37,10 +37,9 @@ export type Key<methods extends readonly MethodLike[]> = methods[number] extends
 /** Method keys grouped by method name for ergonomic config callbacks. */
 export type KeyTree<methods extends readonly MethodLike[]> = {
   [name in methods[number]['name']]: {
-    [mi in Extract<
-      methods[number],
-      { name: name }
-    > as mi['intent']]: `${mi['name']}/${mi['intent']}`
+    [
+      mi in Extract<methods[number], { name: name }> as mi['intent']
+    ]: `${mi['name']}/${mi['intent']}`
   }
 }
 

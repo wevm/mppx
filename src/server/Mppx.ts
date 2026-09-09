@@ -384,9 +384,9 @@ type IntentHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [intent in methods[number]['intent'] as intent extends ReservedKey
-    ? never
-    : intent]: IsUniqueIntent<methods, intent> extends true
+  [
+    intent in methods[number]['intent'] as intent extends ReservedKey ? never : intent
+  ]: IsUniqueIntent<methods, intent> extends true
     ? MethodFn<
         Extract<methods[number], { intent: intent }>,
         EffectiveTransportOf<Extract<methods[number], { intent: intent }>, transport>,
@@ -455,9 +455,11 @@ type Handlers<
     MethodExtensions<mi>
 } & IntentHandlers<methods, transport> &
   NestedHandlers<methods, transport> & {
-    [mi in methods[number] as PublicAlias<mi> extends string
-      ? `${mi['name']}/${PublicAlias<mi>}`
-      : never]: MethodFn<mi, EffectiveTransportOf<mi, transport>, NonNullable<mi['defaults']>> &
+    [
+      mi in methods[number] as PublicAlias<mi> extends string
+        ? `${mi['name']}/${PublicAlias<mi>}`
+        : never
+    ]: MethodFn<mi, EffectiveTransportOf<mi, transport>, NonNullable<mi['defaults']>> &
       MethodExtensions<mi>
   }
 

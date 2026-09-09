@@ -222,12 +222,14 @@ export function render(options: {
                 aria-controls="mppx-panel-${i}"
                 ${i !== 0 ? 'tabindex="-1"' : ''}
                 data-amount="${sanitize(data.formattedAmount)}"
-                ${data.challenge.description
-                  ? `data-description="${sanitize(data.challenge.description)}"`
-                  : ''}
-                ${data.challenge.expires
-                  ? `data-expires="${sanitize(data.challenge.expires)}"`
-                  : ''}
+                ${
+                  data.challenge.description
+                    ? `data-description="${sanitize(data.challenge.description)}"`
+                    : ''
+                }
+                ${
+                  data.challenge.expires ? `data-expires="${sanitize(data.challenge.expires)}"` : ''
+                }
                 ${data.challenge.expires ? `data-expires-label="${sanitize(text.expires)}"` : ''}
               >
                 ${sanitize(data.label)}
@@ -282,12 +284,16 @@ export function render(options: {
           </header>
           <section class="${classNames.summary}" aria-label="Payment summary">
             <h1 class="${classNames.summaryAmount}">${sanitize(formattedAmount)}</h1>
-            ${firstChallenge.description
-              ? `<p class="${classNames.summaryDescription}">${sanitize(firstChallenge.description)}</p>`
-              : ''}
-            ${firstChallenge.expires
-              ? `<p class="${classNames.summaryExpires}">${text.expires} <time datetime="${new Date(firstChallenge.expires).toISOString()}">${new Date(firstChallenge.expires).toLocaleString()}</time></p>`
-              : ''}
+            ${
+              firstChallenge.description
+                ? `<p class="${classNames.summaryDescription}">${sanitize(firstChallenge.description)}</p>`
+                : ''
+            }
+            ${
+              firstChallenge.expires
+                ? `<p class="${classNames.summaryExpires}">${text.expires} <time datetime="${new Date(firstChallenge.expires).toISOString()}">${new Date(firstChallenge.expires).toLocaleString()}</time></p>`
+                : ''
+            }
           </section>
           ${tabListHtml} ${panelsHtml}
           <script

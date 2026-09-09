@@ -37,18 +37,21 @@ export const charge = Method.from({
           decimals,
           metadata,
           networkId,
-          paymentIntentOptions: _,
+          paymentIntentOptions,
           paymentMethodTypes,
           ...rest
-        }) => ({
-          ...rest,
-          amount: parseUnits(amount, decimals).toString(),
-          methodDetails: {
-            networkId,
-            paymentMethodTypes,
-            ...(metadata !== undefined && { metadata }),
-          },
-        }),
+        }) => {
+          void paymentIntentOptions
+          return {
+            ...rest,
+            amount: parseUnits(amount, decimals).toString(),
+            methodDetails: {
+              networkId,
+              paymentMethodTypes,
+              ...(metadata !== undefined && { metadata }),
+            },
+          }
+        },
       ),
     ),
   },

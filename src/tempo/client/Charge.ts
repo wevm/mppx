@@ -130,14 +130,13 @@ export function charge(parameters: charge.Parameters = {}) {
         },
         recipient: request.recipient as Address,
       })
-      const transferCalls = transfers.map(
-        (transfer): AccountResolution.ResolveAccountCall =>
-          Actions.token.transfer.call(client, {
-            amount: BigInt(transfer.amount),
-            ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
-            to: transfer.recipient as Address,
-            token: currency,
-          }),
+      const transferCalls = transfers.map((transfer): AccountResolution.ResolveAccountCall =>
+        Actions.token.transfer.call(client, {
+          amount: BigInt(transfer.amount),
+          ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
+          to: transfer.recipient as Address,
+          token: currency,
+        }),
       )
 
       const autoSwap = AutoSwap.resolve(

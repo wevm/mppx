@@ -1973,11 +1973,14 @@ describe('server events', () => {
             inputOnly: z.optional(z.string()),
             recipient: z.string(),
           }),
-          z.transform(({ amount, currency, decimals, inputOnly: _, recipient }) => ({
-            amount: String(Number(amount) * 10 ** decimals),
-            currency,
-            recipient,
-          })),
+          z.transform(({ amount, currency, decimals, inputOnly, recipient }) => {
+            void inputOnly
+            return {
+              amount: String(Number(amount) * 10 ** decimals),
+              currency,
+              recipient,
+            }
+          }),
         ),
       },
     })
