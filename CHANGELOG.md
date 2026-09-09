@@ -1,5 +1,23 @@
 # mppx
 
+## 0.9.3
+
+### Patch Changes
+
+- 43ec92c: Bound subscription key authorizations to their server-issued payment challenge.
+- 175d709: Allowed EVM and x402 payments to be prepared without an account and signed using an account supplied during credential creation.
+- 5932b08: Added non-mutating EVM credential validation with facilitator checks and revalidation before settlement through the existing broadcast lifecycle.
+- 1fd8746: Expanded Tempo session close rollback and expiring-nonce transaction coverage.
+- 459b517: Added challenge context to payment-success hooks, standardized Stripe PaymentIntent analytics
+  metadata, and added a shared SDK version identifier.
+- 203bad2: Added typed multi-offer composition for MCP SDK and JSON-RPC transports while preserving selected-payment dispatch and receipt metadata.
+- a5451d0: Updated `fast-uri` and `qs` to patched versions, resolving their latest security advisories.
+- a802ce9: Added method-agnostic CLI payment extensions that can enforce policy or prepare funds before credential creation.
+- baa0fd5: Added a fee-payer policy option to reject sponsored key authorizations while allowing them by default.
+- f494ffd: Added request-scoped PaymentIntent option resolvers that run before terminal Stripe payments.
+- 7949db6: Fixed server-side session transactions to use expiring nonces across independent processes.
+- 26f9840: Removed the Stripe SPT runtime dependency on viem.
+
 ## 0.9.2
 
 ### Patch Changes
