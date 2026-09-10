@@ -364,8 +364,10 @@ async function attemptCryptoPayment(
 
   // Pre-flight balance check and chain resolution
   let paymentChain: Chain | undefined
-  if (challenge.method === Constants.Methods.tempo) paymentChain = tempoMainnetChain
-  else if (challenge.method === Constants.Methods.evm) {
+  if (challenge.method === Constants.Methods.tempo) {
+    const chainId = (methodDetails?.chainId as number | undefined) ?? tempoMainnetChain.id
+    paymentChain = chainId === tempoModerato.id ? tempoModerato : resolveEvmChain(chainId)
+  } else if (challenge.method === Constants.Methods.evm) {
     const chainId = methodDetails?.chainId as number | undefined
     if (chainId) paymentChain = resolveEvmChain(chainId)
   }
@@ -375,7 +377,7 @@ async function attemptCryptoPayment(
     try {
       let balance: bigint
       if (challenge.method === Constants.Methods.tempo) {
-        const client = createClient({ chain: tempoMainnetChain, transport: http() })
+        const client = createClient({ chain: paymentChain, transport: http() })
         const info = await fetchTokenInfo(client, currency as Address, walletAddress as Address)
         balance = info.balance
         tokenSymbol = info.symbol
@@ -495,7 +497,9 @@ async function attemptStripePayment(
     results.push(skip(tag, 'no Stripe payment method available'))
     return
   }
-  const isStripeTestKey = !directMethod && ctx.isStripeTestKey
+  const isStripeTestKey = Boolean(
+    plugin && !loaded?.config.plugins?.includes(plugin) && ctx.isStripeTestKey,
+  )
   const request = challenge.request as Record<string, unknown>
   const requiredAmount = isValidIntegerAmount(request.amount)
     ? BigInt(request.amount as string)
