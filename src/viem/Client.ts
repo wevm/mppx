@@ -108,3 +108,9 @@ export declare namespace getResolver {
     getClient?: ((parameters: { chainId?: number | undefined }) => MaybePromise<Client>) | undefined
   }
 }
+
+/** Rejects a resolved client whose known chain conflicts with the requested payment chain. */
+export function assertChainId(client: Client, chainId: number | undefined): void {
+  if (chainId !== undefined && client.chain?.id !== undefined && client.chain.id !== chainId)
+    throw new Error(`Chain ID mismatch: expected ${chainId}, got ${client.chain.id}.`)
+}

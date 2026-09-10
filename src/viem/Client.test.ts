@@ -405,3 +405,19 @@ describe('getResolver serializer injection', () => {
     ).rejects.toThrow()
   })
 })
+
+describe('assertChainId', () => {
+  test.each([
+    { actual: 4217, expected: 42431, rejects: true },
+    { actual: 4217, expected: 4217, rejects: false },
+    { actual: undefined, expected: 4217, rejects: false },
+    { actual: 4217, expected: undefined, rejects: false },
+  ])('validates known chain $actual against $expected', ({ actual, expected, rejects }) => {
+    const client = createClient({
+      chain: actual === undefined ? undefined : ({ id: actual } as never),
+      transport: custom({ request: vi.fn() }),
+    })
+    if (rejects) expect(() => Client.assertChainId(client, expected)).toThrow('Chain ID mismatch')
+    else expect(() => Client.assertChainId(client, expected)).not.toThrow()
+  })
+})

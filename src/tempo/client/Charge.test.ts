@@ -624,9 +624,16 @@ describe('tempo.charge client', () => {
   })
 
   describe('chain pinning', () => {
+    test('rejects a resolved client whose chain conflicts with the pin', async () => {
+      const method = charge({ account, expectedChainId: 4217, getClient: () => client })
+      await expect(
+        method.createCredential({ challenge: createChallenge(), context: {} }),
+      ).rejects.toThrow('Chain ID mismatch: expected 4217, got 42431.')
+    })
+
     const client = createClient({
       account,
-      chain: tempoLocalnet,
+      chain: { ...tempoLocalnet, id: 42431 },
       transport: http('http://127.0.0.1'),
     })
 

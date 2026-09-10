@@ -1990,10 +1990,12 @@ describe('expectedChainId', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  test.each(['challenge', 'snapshot'] as const)(
-    'rejects cross-chain bootstrap %s before resolving a client',
+  test.each(['challenge', 'snapshot', 'resolved client'] as const)(
+    'rejects cross-chain bootstrap %s before hydration or signing',
     async (mode) => {
-      const getClient = vi.fn(() => client)
+      const getClient = vi.fn(() =>
+        mode === 'resolved client' ? { ...client, chain: { id: 42431 } as never } : client,
+      )
       const store = makeChannelStore()
       const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method !== 'HEAD') return makeOkResponse()
@@ -2019,13 +2021,13 @@ describe('expectedChainId', () => {
       const manager = sessionManager({
         account,
         bootstrap: true,
-        expectedChainId: 42431,
+        expectedChainId: mode === 'resolved client' ? 4217 : 42431,
         getClient,
         fetch,
         channelStore: store.store,
       })
       expect((await manager.fetch('https://api.example.com')).status).toBe(200)
-      expect(getClient).not.toHaveBeenCalled()
+      expect(getClient).toHaveBeenCalledTimes(mode === 'resolved client' ? 1 : 0)
       expect(store.set).not.toHaveBeenCalled()
       expect(fetch).toHaveBeenCalledTimes(2)
     },

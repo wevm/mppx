@@ -10,6 +10,7 @@ import {
 import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
+import { assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as Chain from '../precompile/Chain.js'
@@ -439,6 +440,7 @@ export async function resolveChallengeContext(
     throw new Error(`Chain ID mismatch: expected ${expectedChainId}, got ${methodDetails.chainId}.`)
   const requestedChainId = methodDetails.chainId ?? expectedChainId
   const client = await getClient({ chainId: requestedChainId })
+  assertChainId(client, requestedChainId)
   const chainId = requestedChainId ?? client.chain?.id
   if (!chainId) throw new Error('No chainId configured for TIP-1034 session challenge.')
 

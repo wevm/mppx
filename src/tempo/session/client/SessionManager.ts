@@ -445,6 +445,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${snapshot.chainId}.`,
       )
     const client = await getClient({ chainId: snapshot.chainId })
+    Client.assertChainId(client, snapshot.chainId)
     const defaultAccount = getAccount(client)
     const account =
       (await parameters.resolveAccount?.({

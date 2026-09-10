@@ -1495,6 +1495,26 @@ describe('precompile client session', () => {
 
 describe('session chain pinning', () => {
   test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
+    'rejects a resolved client on another chain for %s',
+    async (action) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, expectedChainId: 4217, getClient })
+      const challenge = makeSessionChallenge()
+      delete challenge.request.methodDetails!.chainId
+      const context =
+        action === 'automatic'
+          ? {}
+          : action === 'recover'
+            ? { descriptor }
+            : { action, descriptor, transaction: '0x1234' as const, cumulativeAmountRaw: '100' }
+      await expect(method.createCredential({ challenge, context })).rejects.toThrow(
+        `Chain ID mismatch: expected 4217, got ${chainId}.`,
+      )
+      expect(getClient).toHaveBeenCalledWith({ chainId: 4217 })
+    },
+  )
+
+  test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
     'rejects a foreign chain before resolving a client for %s',
     async (action) => {
       const getClient = vi.fn(() => client)
