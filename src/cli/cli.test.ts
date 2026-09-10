@@ -2905,3 +2905,91 @@ test('configured charge methods do not probe the CLI wallet to rank offers', asy
     fs.rmSync(configDir, { recursive: true, force: true })
   }
 })
+
+test.each(['unchanged', 'amount', 'recipient', 'extension'] as const)(
+  'configured session retry rechecks approval and extensions: %s',
+  async (mode) => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-retry-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const logPath = path.join(configDir, 'events.jsonl')
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+      import { appendFileSync } from 'node:fs'
+      import { Credential, Method, z } from '${moduleUrl}'
+      const record = event => appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(event) + '\\n')
+      export default {
+        extensions: [{ preparePayment({ challenge }) {
+          record({ extension: challenge.id })
+          if ('${mode}' === 'extension' && challenge.id === 'retry') throw new Error('retry blocked by extension')
+        } }],
+        methods: [Method.toClient(Method.from({ name: 'tempo', intent: 'session', schema: {
+          credential: { payload: z.object({}) },
+          request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
+        } }), { async createCredential({ challenge }) {
+          record({ signed: challenge.id })
+          return Credential.serialize({ challenge, payload: {} })
+        } })],
+      }
+    `,
+    )
+    const challenge = Challenge.from({
+      id: 'initial',
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '100',
+        currency: Addresses.pathUsd,
+        recipient: accounts[0].address,
+      },
+    })
+    let paidRequests = 0
+    const server = await Http.createServer((req, res) => {
+      if (req.headers.authorization && ++paidRequests > 1) {
+        res.end('accepted')
+        return
+      }
+      const retry = req.headers.authorization
+        ? {
+            ...challenge,
+            id: 'retry',
+            request: {
+              ...challenge.request,
+              ...(mode === 'amount' ? { amount: '200' } : {}),
+              ...(mode === 'recipient' ? { recipient: accounts[1].address } : {}),
+            },
+          }
+        : challenge
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(retry) })
+      res.end()
+    })
+    try {
+      const { output } = await serve([server.url, '-s', '--config', configPath])
+      const events = fs
+        .readFileSync(logPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(events.filter((event) => event.extension).map((event) => event.extension)).toEqual([
+        'initial',
+        'retry',
+      ])
+      expect(events.filter((event) => event.signed).map((event) => event.signed)).toEqual(
+        mode === 'unchanged' ? ['initial', 'retry'] : ['initial'],
+      )
+      expect(paidRequests).toBe(mode === 'unchanged' ? 2 : 1)
+      expect(output).toContain(
+        mode === 'unchanged'
+          ? 'accepted'
+          : mode === 'extension'
+            ? 'retry blocked by extension'
+            : 'Payment request changed on retry',
+      )
+    } finally {
+      server.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  },
+)

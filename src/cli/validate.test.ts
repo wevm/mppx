@@ -1025,3 +1025,76 @@ test.each([
     }
   },
 )
+
+test.each(['accepted', 'rejected', 'network failure'] as const)(
+  'configured session validation settles pending state after %s',
+  async (outcome) => {
+    const { Credential, Method, z } = await import('../index.js')
+    const MethodChallenge = await import('../client/internal/MethodChallenge.js')
+    const MethodResponse = await import('../client/internal/MethodResponse.js')
+    const internal = await import('./internal.js')
+    const events: unknown[] = []
+    const method = Method.toClient(
+      Method.from({
+        name: 'tempo',
+        intent: 'session',
+        schema: {
+          credential: { payload: z.object({}) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        async createCredential(parameters) {
+          const attempt = MethodResponse.getAttempt(parameters)
+          events.push({ attempt: !!attempt })
+          if (attempt)
+            attempt.settle = (outcome) => {
+              events.push({ settled: outcome.status })
+              return true
+            }
+          return Credential.serialize({ challenge: parameters.challenge, payload: {} })
+        },
+      },
+    )
+    MethodChallenge.register(method, async () => {})
+    MethodResponse.register(method, ({ response }) => response)
+    const loadConfig = vi
+      .spyOn(internal, 'loadConfig')
+      .mockResolvedValue({ config: { methods: [method] }, path: '' })
+    const challenge = makeChallenge({
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '100',
+        currency: '0x20c0000000000000000000000000000000000000',
+        methodDetails: { chainId: 4217 },
+      },
+    })
+    const server = await testServer((req, res) => {
+      if (!req.headers.authorization) {
+        res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+        res.end()
+        return
+      }
+      if (outcome === 'network failure') {
+        req.socket.destroy()
+        return
+      }
+      res.writeHead(outcome === 'accepted' ? 200 : 402)
+      res.end('{}')
+    })
+    try {
+      const { validatePaymentFlow } = await import('./validate/payment.js')
+      await validatePaymentFlow(server.url, { path: '/', method: 'GET' }, false, {
+        yes: true,
+        silent: true,
+      })
+      expect(events).toEqual([
+        { attempt: true },
+        { settled: outcome === 'accepted' ? 'accepted' : 'rejected' },
+      ])
+    } finally {
+      loadConfig.mockRestore()
+    }
+  },
+)

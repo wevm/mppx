@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type * as Challenge from '../Challenge.js'
+import * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'
@@ -141,4 +141,18 @@ function resolveConfigPath(configFile?: string | undefined): string | undefined 
   }
 
   return undefined
+}
+
+/** Rejects retry challenges that change the payment the caller approved. */
+export function assertSamePaymentRequest(
+  approved: Challenge.Challenge,
+  retry: Challenge.Challenge,
+): void {
+  if (
+    Challenge.serialize({ ...retry, id: approved.id, expires: approved.expires }) !==
+    Challenge.serialize(approved)
+  )
+    throw new Error(
+      'Payment request changed on retry. Run the command again to approve the new payment.',
+    )
 }

@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../Challenge.js'
 import * as Assets from '../evm/Assets.js'
 import { charge } from '../evm/client/Charge.js'
-import { resolvePlugin, selectChallenge } from './internal.js'
+import { assertSamePaymentRequest, resolvePlugin, selectChallenge } from './internal.js'
 import { evm } from './plugins/evm.js'
 
 const account = privateKeyToAccount(
@@ -63,4 +63,26 @@ test('preserves the configured method selected by challenge filtering', () => {
   expect(resolvePlugin(challenge, config).method).toBe(second)
   expect(resolvePlugin(challenge, { methods: [first] })).toEqual({})
   expect(selectChallenge([challenge], { methods: [first] })).toBeUndefined()
+})
+
+describe('retry approval', () => {
+  test('allows a refreshed ID and expiry for the same payment', () => {
+    expect(() =>
+      assertSamePaymentRequest(challenge, {
+        ...challenge,
+        id: 'retry',
+        expires: '2099-01-01T00:00:00Z',
+      }),
+    ).not.toThrow()
+  })
+  test.each([
+    { realm: 'another.example' },
+    { request: { ...challenge.request, amount: '9000000' } },
+    { request: { ...challenge.request, recipient: account.address } },
+    { request: { ...challenge.request, methodDetails: { chainId: 1 } } },
+  ])('rejects changed payment fields %j', (changes) => {
+    expect(() => assertSamePaymentRequest(challenge, { ...challenge, ...changes })).toThrow(
+      'Payment request changed on retry',
+    )
+  })
 })

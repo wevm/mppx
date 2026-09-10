@@ -14,10 +14,17 @@ import type { AnyClient } from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
+import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import type * as Extension from '../Extension.js'
-import { flattenConfigMethods, loadConfig, preparePayment, resolvePlugin } from '../internal.js'
+import {
+  assertSamePaymentRequest,
+  flattenConfigMethods,
+  loadConfig,
+  preparePayment,
+  resolvePlugin,
+} from '../internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
 import { buildUrl } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
@@ -461,6 +468,44 @@ async function attemptCryptoPayment(
     methods = [directMethod!]
   }
 
+  if (directMethod && isTempoSessionChallenge(challenge)) {
+    let initial = true
+    const mppx = Mppx.create({
+      methods: [directMethod],
+      polyfill: false,
+      async onChallenge(retry, { createCredential }) {
+        const context = await preparePayment(retry, loaded?.config.extensions)
+        assertSamePaymentRequest(challenge, retry)
+        const credential = await createCredential(context as never)
+        results.push(check(`${tag}: submitted`))
+        return credential
+      },
+      fetch: async (input, init) => {
+        if (initial) {
+          initial = false
+          return new Response(null, {
+            status: 402,
+            headers: {
+              [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
+            },
+          })
+        }
+        return fetchWithTimeout(input, init ?? {}, 30_000)
+      },
+    })
+    try {
+      const response = await mppx.fetch(url, {
+        method: endpoint.method,
+        headers: fetchHeaders,
+        body: fetchBody ?? null,
+      })
+      await validatePaymentResponse(results, response, verbose, paymentChain)
+    } catch (error) {
+      results.push(fail(tag, (error as Error).message))
+    }
+    return
+  }
+
   const credential = await createAndSend(
     challenge,
     methods,
@@ -664,6 +709,15 @@ async function sendAndValidateResponse(
     return results
   }
 
+  return validatePaymentResponse(results, paymentResponse, verbose, explorerChain)
+}
+
+async function validatePaymentResponse(
+  results: CheckResult[],
+  paymentResponse: Response,
+  verbose: boolean,
+  explorerChain?: Chain | undefined,
+): Promise<CheckResult[]> {
   if (paymentResponse.status === 402) {
     const body = await paymentResponse.text().catch(() => '')
     let detail = 'Payment rejected'

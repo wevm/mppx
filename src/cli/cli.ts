@@ -23,6 +23,7 @@ import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import {
+  assertSamePaymentRequest,
   flattenConfigMethods,
   loadConfig,
   preparePayment,
@@ -740,11 +741,14 @@ const cli = Cli.create('mppx', {
           exitCode: 2,
         })
 
-      const credentialContext = await preparePayment(
-        challenge,
-        loaded?.config.extensions,
-        pluginResult?.credentialContext,
-      )
+      const credentialContext =
+        configMethod && isTempoSessionChallenge(challenge)
+          ? undefined
+          : await preparePayment(
+              challenge,
+              loaded?.config.extensions,
+              pluginResult?.credentialContext,
+            )
 
       let credentialResponse: Response
       let credential: string | undefined
@@ -755,6 +759,15 @@ const cli = Cli.create('mppx', {
         const mppx = Mppx.create({
           methods: [configMethod],
           polyfill: false,
+          async onChallenge(retry, { createCredential }) {
+            const context = await preparePayment(
+              retry,
+              loaded?.config.extensions,
+              pluginResult?.credentialContext,
+            )
+            assertSamePaymentRequest(challenge, retry)
+            return createCredential(context as never)
+          },
           fetch: async (input, requestInit) => {
             if (initialResponse) {
               const response = initialResponse
