@@ -898,7 +898,11 @@ describe('validate: JSON mode', () => {
   })
 })
 
-test('validate uses a configured Stripe method without a plugin', async () => {
+test.each([
+  { yes: true, status: 200 },
+  { yes: true, status: 500 },
+  { yes: false, status: 200 },
+])('configured Stripe method ignores ambient test key ($yes, $status)', async ({ yes, status }) => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-config-'))
   const configPath = path.join(configDir, 'mppx.config.mjs')
   const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
@@ -925,16 +929,81 @@ test('validate uses a configured Stripe method without a plugin', async () => {
       methodDetails: { networkId: 'profile_test123', paymentMethodTypes: ['card'] },
     },
   })
-  const server = await mppServer(challenge)
+  const server = await mppServer(challenge, { postPaymentStatus: status })
+  const previousKey = process.env.MPPX_STRIPE_SECRET_KEY
+  process.env.MPPX_STRIPE_SECRET_KEY = 'sk_test_unrelated'
   const previousConfig = process.env.MPPX_CONFIG
   process.env.MPPX_CONFIG = configPath
   try {
-    const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
-    expect(output).toContain('Payment [stripe]: submitted')
-    expect(output).not.toContain('no Stripe')
+    const { output } = await serve([
+      'validate',
+      server.url,
+      '--outputJson',
+      ...(yes ? ['--yes'] : []),
+    ])
+    expect(output).not.toContain('server is in livemode')
+    if (yes) {
+      expect(output).toContain('Payment [stripe]: submitted')
+      if (status === 500) expect(output).toContain('Got 500')
+    } else {
+      expect(output).toContain('non-interactive mode, use --yes to approve')
+      expect(output).not.toContain('Payment [stripe]: submitted')
+    }
   } finally {
+    if (previousKey === undefined) delete process.env.MPPX_STRIPE_SECRET_KEY
+    else process.env.MPPX_STRIPE_SECRET_KEY = previousKey
     if (previousConfig === undefined) delete process.env.MPPX_CONFIG
     else process.env.MPPX_CONFIG = previousConfig
     fs.rmSync(configDir, { recursive: true, force: true })
   }
 })
+
+test.each([
+  ['tempo', 4217],
+  ['tempo', 42431],
+  ['evm', 1],
+] as const)(
+  'validate uses configured %s payer on chain %i without a CLI wallet',
+  async (method, chainId) => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-direct-config-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+      import { Method, z } from '${moduleUrl}'
+      export default { methods: [[Method.toClient(Method.from({
+        name: '${method}', intent: 'charge',
+        schema: { credential: { payload: z.object({}) }, request: z.object({ amount: z.string() }) }
+      }), { async createCredential() { throw new Error('configured payer reached') } })]] }
+    `,
+    )
+    const previousConfig = process.env.MPPX_CONFIG
+    const previousAccount = process.env.MPPX_ACCOUNT
+    process.env.MPPX_CONFIG = configPath
+    process.env.MPPX_ACCOUNT = 'missing-validation-wallet'
+    const challenge = makeChallenge({
+      method,
+      request: {
+        amount: '10000',
+        currency: '0x20c0000000000000000000000000000000000000',
+        recipient: '0x1234567890123456789012345678901234567890',
+        methodDetails: { chainId },
+      },
+    })
+    const server = await mppServer(challenge)
+    try {
+      const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
+      expect(output).toContain('configured payer reached')
+      expect(output).not.toContain('no wallet configured')
+      expect(output).not.toContain('insufficient balance')
+      expect(output).not.toContain('ephemeral testnet wallet')
+    } finally {
+      if (previousConfig === undefined) delete process.env.MPPX_CONFIG
+      else process.env.MPPX_CONFIG = previousConfig
+      if (previousAccount === undefined) delete process.env.MPPX_ACCOUNT
+      else process.env.MPPX_ACCOUNT = previousAccount
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  },
+)

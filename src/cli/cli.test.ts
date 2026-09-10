@@ -2713,3 +2713,106 @@ test.each(['auto', 'new'])(
     }
   },
 )
+
+test('configured session handles SSE voucher requests with its own channel store', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-stream-'))
+  const configPath = path.join(configDir, 'mppx.config.mjs')
+  const sourceUrl = pathToFileURL(path.join(process.cwd(), 'src/tempo/session/')).href
+  fs.writeFileSync(
+    configPath,
+    `
+    import { createClient, custom, encodeFunctionResult } from '${import.meta.resolve('viem')}'
+    import { privateKeyToAccount } from '${import.meta.resolve('viem/accounts')}'
+    import { session } from '${sourceUrl}client/Session.ts'
+    import { createChannelStore } from '${sourceUrl}client/ChannelStore.ts'
+    import { computeId } from '${sourceUrl}precompile/Channel.ts'
+    import { escrowAbi } from '${sourceUrl}precompile/escrow.abi.ts'
+    const account = privateKeyToAccount('${testPrivateKey}')
+    const descriptor = {
+      payer: account.address, authorizedSigner: account.address,
+      payee: '${accounts[0].address}', token: '${Addresses.pathUsd}',
+      operator: '0x0000000000000000000000000000000000000000',
+      salt: '0x${'11'.repeat(32)}', expiringNonceHash: '0x${'22'.repeat(32)}',
+    }
+    const escrow = '${tip20ChannelEscrow}'
+    const channelStore = createChannelStore()
+    await channelStore.set({ descriptor, escrow, chainId: 42431,
+      channelId: computeId({ ...descriptor, escrow, chainId: 42431 }),
+      deposit: 1000n, cumulativeAmount: 0n, opened: true,
+    })
+    const client = createClient({ account, chain: { id: 42431 }, transport: custom({
+      async request({ method }) {
+        if (method === 'eth_call') return encodeFunctionResult({ abi: escrowAbi,
+          functionName: 'getChannelState', result: { settled: 0n, deposit: 1000n, closeRequestedAt: 0 },
+        })
+        throw new Error('unexpected RPC: ' + method)
+      }
+    }) })
+    export default { methods: [session({ account, expectedChainId: 42431,
+      channelStore, getClient: () => client, decimals: 0, maxDeposit: '1000',
+    })] }
+  `,
+  )
+  const challenge = Challenge.from({
+    id: 'configured-stream',
+    realm: 'localhost',
+    method: 'tempo',
+    intent: 'session',
+    request: {
+      amount: '100',
+      currency: Addresses.pathUsd,
+      recipient: accounts[0].address,
+      unitType: 'token',
+      methodDetails: {
+        chainId: 42431,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    },
+  })
+  const { formatMessageEvent, formatNeedVoucherEvent } =
+    await import('../tempo/session/precompile/Protocol.js')
+  const vouchers: string[] = []
+  const server = await Http.createServer((req, res) => {
+    if (!req.headers.authorization) {
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+      res.end()
+      return
+    }
+    const payload = Credential.deserialize<SessionCredentialPayload>(
+      req.headers.authorization,
+    ).payload
+    if (payload.action !== 'voucher') throw new Error('expected voucher')
+    vouchers.push(payload.cumulativeAmount)
+    if (req.method === 'POST') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(
+      formatMessageEvent('first') +
+        formatNeedVoucherEvent({
+          acceptedCumulative: '100',
+          channelId: payload.channelId,
+          deposit: '1000',
+          requiredCumulative: '200',
+        }) +
+        formatMessageEvent('second'),
+    )
+  })
+  try {
+    const { output, exitCode } = await serve(
+      [server.url, '-s', '--config', configPath, '-H', 'accept: text/event-stream'],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+    expect(exitCode).toBeUndefined()
+    expect(output).toContain('first')
+    expect(output).toContain('second')
+    expect(output).not.toContain('need-voucher')
+    expect(vouchers).toEqual(['100', '200'])
+  } finally {
+    server.close()
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})
