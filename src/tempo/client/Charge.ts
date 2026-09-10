@@ -95,6 +95,19 @@ export function charge(parameters: charge.Parameters = {}) {
         | undefined) ?? ['pull', 'push']
       const defaultAccount = getAccount(client, context)
 
+      if (parameters.expectedRecipients) {
+        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+        if (!request.recipient || !allowed.has(request.recipient.toLowerCase()))
+          throw new Error(`Unexpected primary recipient: ${request.recipient}`)
+        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
+        if (splits) {
+          for (const split of splits) {
+            if (!allowed.has(split.recipient.toLowerCase()))
+              throw new Error(`Unexpected split recipient: ${split.recipient}`)
+          }
+        }
+      }
+
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
         const signature = await signTypedData(client, {
@@ -116,16 +129,6 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       const currency = request.currency as Address
-      if (parameters.expectedRecipients) {
-        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
-        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
-        if (splits) {
-          for (const split of splits) {
-            if (!allowed.has(split.recipient.toLowerCase()))
-              throw new Error(`Unexpected split recipient: ${split.recipient}`)
-          }
-        }
-      }
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ challengeId: challenge.id, clientId, serverId: challenge.realm })
@@ -292,8 +295,8 @@ export declare namespace charge {
      */
     allowedChainIds?: readonly number[] | undefined
     /**
-     * Allowlist of expected split recipient addresses. When set, the client
-     * rejects any challenge whose split recipients are not in this list.
+     * Allowlist of payment recipient addresses. When set, both the primary
+     * recipient and every split recipient must be included in this list.
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
