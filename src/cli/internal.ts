@@ -73,7 +73,11 @@ export function selectChallenge(
       resolvedPreferences.entries,
     )
     if (selected) {
-      return { challenge: selected.challenge, ...resolvePlugin(selected.challenge, config) }
+      const plugin = config?.plugins?.find((plugin) => supportsPlugin(plugin, selected.challenge))
+      return {
+        challenge: selected.challenge,
+        ...(plugin ? { plugin } : { method: selected.method }),
+      }
     }
 
     return undefined

@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
@@ -21,7 +22,13 @@ import * as x402_Header from '../x402/Header.js'
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
-import { loadConfig, preparePayment, resolveAcceptPayment, selectChallenge } from './internal.js'
+import {
+  flattenConfigMethods,
+  loadConfig,
+  preparePayment,
+  resolveAcceptPayment,
+  selectChallenge,
+} from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
 import {
   orderTempoChargeChallengesByBalance,
@@ -112,7 +119,17 @@ function outputResult<Data>(
 }
 
 async function writeResponseBody(response: Response) {
-  process.stdout.write(Buffer.from(await response.arrayBuffer()))
+  if (!response.body) return
+  const reader = response.body.getReader()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!process.stdout.write(Buffer.from(value))) await once(process.stdout, 'drain')
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function canReadCommandStdin() {
@@ -543,13 +560,17 @@ const cli = Cli.create('mppx', {
           exitCode: 2,
         })
       }
-      const challenges = await orderTempoChargeChallengesByBalance(currencyChallenges, {
-        options: {
-          account: c.options.account,
-          network: c.options.network,
-          rpcUrl: c.options.rpcUrl,
-        },
-      })
+      // Configured methods own their payer and preference ordering. The CLI
+      // wallet's balances cannot determine which of their offers are payable.
+      const challenges = flattenConfigMethods(loaded?.config)?.length
+        ? currencyChallenges
+        : await orderTempoChargeChallengesByBalance(currencyChallenges, {
+            options: {
+              account: c.options.account,
+              network: c.options.network,
+              rpcUrl: c.options.rpcUrl,
+            },
+          })
 
       const selected = selectChallenge(challenges, loaded?.config)
       if (!selected) {
@@ -673,7 +694,9 @@ const cli = Cli.create('mppx', {
       const persistentSessionAccount =
         process.env.MPPX_PRIVATE_KEY?.trim() ||
         !isTempoAccount(resolveAccountName(c.options.account))
-      if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
+      // Configured methods own their signing policies and channel storage.
+      // Rebuilding a persistent manager would discard those policies.
+      if (isTempoSessionChallenge(challenge) && persistentSessionAccount && !configMethod) {
         try {
           const credentialContext = await preparePayment(
             challenge,
@@ -710,7 +733,10 @@ const cli = Cli.create('mppx', {
       if (c.options.session !== 'auto')
         return c.error({
           code: 'UNSUPPORTED_SESSION',
-          message: '--session requires a tempo/session payment challenge.',
+          message:
+            configMethod && isTempoSessionChallenge(challenge)
+              ? '--session cannot override a configured session method. Configure its channelStore instead.'
+              : '--session requires a tempo/session payment challenge.',
           exitCode: 2,
         })
 
@@ -720,57 +746,80 @@ const cli = Cli.create('mppx', {
         pluginResult?.credentialContext,
       )
 
-      // Create credential
-      let credential: string
-      if (pluginResult?.createCredential)
-        credential = await pluginResult.createCredential(
-          selectedChallengeResponse,
-          credentialContext,
-        )
-      else if (pluginResult) {
-        const mppx = Mppx.create({
-          methods: pluginResult.methods,
-          polyfill: false,
-          transport: selectedChallengeTransport(challenge),
-        })
-        credential = await mppx.createCredential(
-          selectedChallengeResponse,
-          credentialContext as undefined,
-        )
-      } else if (configMethod) {
+      let credentialResponse: Response
+      let credential: string | undefined
+      if (configMethod && isTempoSessionChallenge(challenge)) {
+        // Reuse the selected challenge, then let the method settle channel state
+        // and handle SSE vouchers through the payment-aware fetch lifecycle.
+        let initialResponse: Response | undefined = selectedChallengeResponse
         const mppx = Mppx.create({
           methods: [configMethod],
           polyfill: false,
-          transport: selectedChallengeTransport(challenge),
+          fetch: async (input, requestInit) => {
+            if (initialResponse) {
+              const response = initialResponse
+              initialResponse = undefined
+              return response
+            }
+            return targetFetch(input, requestInit)
+          },
         })
-        credential = await mppx.createCredential(
-          selectedChallengeResponse,
-          credentialContext as never,
-        )
-      } else throw new Error('unreachable')
+        credentialResponse = await mppx.fetch(fetchUrl, {
+          ...init,
+          context: credentialContext as never,
+        })
+      } else {
+        // Create credential
+        if (pluginResult?.createCredential)
+          credential = await pluginResult.createCredential(
+            selectedChallengeResponse,
+            credentialContext,
+          )
+        else if (pluginResult) {
+          const mppx = Mppx.create({
+            methods: pluginResult.methods,
+            polyfill: false,
+            transport: selectedChallengeTransport(challenge),
+          })
+          credential = await mppx.createCredential(
+            selectedChallengeResponse,
+            credentialContext as undefined,
+          )
+        } else if (configMethod) {
+          const mppx = Mppx.create({
+            methods: [configMethod],
+            polyfill: false,
+            transport: selectedChallengeTransport(challenge),
+          })
+          credential = await mppx.createCredential(
+            selectedChallengeResponse,
+            credentialContext as never,
+          )
+        } else throw new Error('unreachable')
 
-      // Send credential and get response
-      const credentialHeader = isX402Challenge
-        ? x402_Types.paymentSignatureHeader
-        : Challenge.credentialHeader(challenge)
-      const credentialHeaders = {
-        ...normalizeHeaders(init.headers),
-        [credentialHeader]: credential,
-      }
-      const credentialTarget = isX402Challenge
-        ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
-        : initialTarget
-      if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
-      plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
+        // Send credential and get response
+        const credentialHeader = isX402Challenge
+          ? x402_Types.paymentSignatureHeader
+          : Challenge.credentialHeader(challenge)
+        const credentialHeaders = {
+          ...normalizeHeaders(init.headers),
+          [credentialHeader]: credential,
+        }
+        const credentialTarget = isX402Challenge
+          ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
+          : initialTarget
+        if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
+        plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
-      const credentialFetchInit = {
-        ...init,
-        ...(isX402Challenge && { redirect: 'manual' as const }),
-        headers: credentialHeaders,
+        const credentialFetchInit = {
+          ...init,
+          ...(isX402Challenge && { redirect: 'manual' as const }),
+          headers: credentialHeaders,
+        }
+        if (c.options.verbose >= 2)
+          printRequestHeaders(credentialTarget.url, credentialFetchInit, info)
+        credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
       }
-      if (c.options.verbose >= 2)
-        printRequestHeaders(credentialTarget.url, credentialFetchInit, info)
-      const credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
 
       if (c.options.fail && credentialResponse.status >= 400)
         return c.error({
@@ -801,21 +850,23 @@ const cli = Cli.create('mppx', {
       printResponseHeaders(credentialResponse, headerOpts)
 
       // Let plugin own the response lifecycle if it wants to
-      const handled = await plugin?.handleResponse?.({
-        challenge,
-        credential,
-        response: credentialResponse,
-        fetchUrl,
-        fetchInit: init,
-        silent: c.options.silent,
-        verbose: c.options.verbose,
-        confirmEnabled,
-        confirm,
-        tokenSymbol,
-        tokenDecimals,
-        explorerUrl,
-        shownKeys,
-      })
+      const handled =
+        credential &&
+        (await plugin?.handleResponse?.({
+          challenge,
+          credential,
+          response: credentialResponse,
+          fetchUrl,
+          fetchInit: init,
+          silent: c.options.silent,
+          verbose: c.options.verbose,
+          confirmEnabled,
+          confirm,
+          tokenSymbol,
+          tokenDecimals,
+          explorerUrl,
+          shownKeys,
+        }))
 
       if (!handled) {
         // Default: print receipt + body
