@@ -1962,3 +1962,103 @@ describe('Session', () => {
     })
   })
 })
+
+describe('expectedChainId', () => {
+  test('rejects a fixed client on a different chain before any request', () => {
+    const fetch = vi.fn()
+    expect(() => sessionManager({ account, client, expectedChainId: 42431, fetch })).toThrow(
+      'Chain ID mismatch: expected 42431, got 4217.',
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test.each([4217, undefined])(
+    'accepts a fixed client with compatible pin %s',
+    (expectedChainId) => {
+      expect(() => sessionManager({ account, client, expectedChainId })).not.toThrow()
+    },
+  )
+
+  test('rejects session challenges before resolving a client or signing', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn(async () => make402Response())
+    const manager = sessionManager({ account, expectedChainId: 42431, getClient, fetch })
+    await expect(manager.fetch('https://api.example.com')).rejects.toThrow(
+      'Chain ID mismatch: expected 42431, got 4217.',
+    )
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['challenge', 'snapshot', 'resolved client'] as const)(
+    'rejects cross-chain bootstrap %s before hydration or signing',
+    async (mode) => {
+      const getClient = vi.fn(() =>
+        mode === 'resolved client' ? { ...client, chain: { id: 42431 } as never } : client,
+      )
+      const store = makeChannelStore()
+      const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method !== 'HEAD') return makeOkResponse()
+        if (mode === 'challenge') return make402Response(makeChargeChallenge())
+        return new Response(null, {
+          status: 204,
+          headers: {
+            [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+              acceptedCumulative: '0',
+              chainId: 4217,
+              channelId: storedChannelId,
+              deposit: '10000000',
+              descriptor: storedDescriptor,
+              escrow: tip20ChannelEscrow,
+              requiredCumulative: '0',
+              settled: '0',
+              spent: '0',
+              units: 0,
+            }),
+          },
+        })
+      })
+      const manager = sessionManager({
+        account,
+        bootstrap: true,
+        expectedChainId: mode === 'resolved client' ? 4217 : 42431,
+        getClient,
+        fetch,
+        channelStore: store.store,
+      })
+      expect((await manager.fetch('https://api.example.com')).status).toBe(200)
+      expect(getClient).toHaveBeenCalledTimes(mode === 'resolved client' ? 1 : 0)
+      expect(store.set).not.toHaveBeenCalled()
+      expect(fetch).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  test.each([4217, undefined])(
+    'signs vouchers on the pinned chain when advertised chain is %s',
+    async (chainId) => {
+      const getClient = vi.fn(() => client)
+      const store = makeChannelStore([channelEntry()])
+      const challenge = makeChallenge({
+        methodDetails: {
+          chainId,
+          escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+        },
+      })
+      const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (!new Headers(init?.headers).has(Constants.Headers.authorization))
+          return make402Response(challenge)
+        return makeOkResponse()
+      })
+      const manager = sessionManager({
+        account,
+        expectedChainId: 4217,
+        getClient,
+        fetch,
+        channelStore: store.store,
+      })
+      expect((await manager.fetch('https://api.example.com')).status).toBe(200)
+      expect(getClient).toHaveBeenCalledWith({ chainId: 4217 })
+    },
+  )
+})

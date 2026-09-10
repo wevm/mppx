@@ -398,14 +398,14 @@ describe('CredentialPlan', () => {
       await expect(
         resolveChallengeContext({
           challenge: paymentChallenge({ recipient: undefined }),
-          getClient: async () => ({ chain: { id: 4217 } }) as Client,
+          getClient: async () => ({ chain: { id: 42431 } }) as Client,
         }),
       ).rejects.toThrow('tempo session challenge missing recipient')
 
       await expect(
         resolveChallengeContext({
           challenge: paymentChallenge({ currency: 'pathUSD' }),
-          getClient: async () => ({ chain: { id: 4217 } }) as Client,
+          getClient: async () => ({ chain: { id: 42431 } }) as Client,
         }),
       ).rejects.toThrow('tempo session challenge missing currency')
     })

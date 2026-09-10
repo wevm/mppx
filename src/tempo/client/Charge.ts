@@ -77,6 +77,7 @@ export function charge(parameters: charge.Parameters = {}) {
         )
       const resolvedChainId = challengeChainId ?? parameters.expectedChainId
       const client = await getClient({ chainId: resolvedChainId })
+      Client.assertChainId(client, resolvedChainId)
       const chainId = resolvedChainId ?? client.chain?.id
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')

@@ -75,6 +75,8 @@ export function getResolver(
       return Object.assign({}, resolvedClient, {
         chain: {
           ...chain,
+          // Serializer defaults must not replace an explicitly requested network.
+          ...(params.chainId !== undefined ? { id: params.chainId } : {}),
           ...resolvedClient.chain,
           formatters: resolvedClient.chain?.formatters ?? chain.formatters,
           prepareTransactionRequest:
@@ -107,4 +109,10 @@ export declare namespace getResolver {
     /** Function that returns a client for the given chain ID. */
     getClient?: ((parameters: { chainId?: number | undefined }) => MaybePromise<Client>) | undefined
   }
+}
+
+/** Rejects a resolved client whose known chain conflicts with the requested payment chain. */
+export function assertChainId(client: Client, chainId: number | undefined): void {
+  if (chainId !== undefined && client.chain?.id !== undefined && client.chain.id !== chainId)
+    throw new Error(`Chain ID mismatch: expected ${chainId}, got ${client.chain.id}.`)
 }

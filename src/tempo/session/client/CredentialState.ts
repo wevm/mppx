@@ -10,6 +10,7 @@ import {
 import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
+import { assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as Chain from '../precompile/Chain.js'
@@ -220,6 +221,8 @@ export type ResolveChallengeContextParameters = {
   challenge: Challenge.Challenge
   /** Optional local escrow override. */
   escrowOverride?: Address | undefined
+  /** Locally pinned chain, enforced before resolving a client or authorizing payment. */
+  expectedChainId?: number | undefined
   /** Resolves the viem client for the challenge chain. */
   getClient(parameters: { chainId?: number | undefined }): Client | Promise<Client>
 }
@@ -427,10 +430,18 @@ function readSuggestedDeposit(value: unknown): string | undefined {
 export async function resolveChallengeContext(
   parameters: ResolveChallengeContextParameters,
 ): Promise<ChallengeContext> {
-  const { allowCustomEscrow, challenge, escrowOverride, getClient } = parameters
+  const { allowCustomEscrow, challenge, escrowOverride, expectedChainId, getClient } = parameters
   const methodDetails = readMethodDetails(challenge)
-  const client = await getClient({ chainId: methodDetails.chainId })
-  const chainId = methodDetails.chainId ?? client.chain?.id
+  if (
+    expectedChainId !== undefined &&
+    methodDetails.chainId !== undefined &&
+    methodDetails.chainId !== expectedChainId
+  )
+    throw new Error(`Chain ID mismatch: expected ${expectedChainId}, got ${methodDetails.chainId}.`)
+  const requestedChainId = methodDetails.chainId ?? expectedChainId
+  const client = await getClient({ chainId: requestedChainId })
+  assertChainId(client, requestedChainId)
+  const chainId = requestedChainId ?? client.chain?.id
   if (!chainId) throw new Error('No chainId configured for TIP-1034 session challenge.')
 
   const escrow = resolveEscrow(challenge, escrowOverride, allowCustomEscrow)

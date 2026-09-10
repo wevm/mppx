@@ -323,6 +323,18 @@ describe('feePayer transaction serialization', () => {
 })
 
 describe('getResolver serializer injection', () => {
+  test.each([tempoModerato.id, undefined])(
+    'uses requested chain %s when injecting serializers into a chain-agnostic client',
+    async (chainId) => {
+      const client = createClient({ transport: mockTransport })
+      const resolver = Client.getResolver({ chain: tempoMainnetChain, getClient: () => client })
+      const resolved = await resolver({ chainId })
+      expect(resolved.chain?.id).toBe(chainId ?? tempoMainnetChain.id)
+      expect(resolved.chain?.serializers?.transaction).toBeDefined()
+      expect(client.chain).toBeUndefined()
+    },
+  )
+
   test('behavior: injects Tempo serializer onto plain clients', async () => {
     const plainClient = createPlainClient()
     expect(plainClient.chain?.serializers?.transaction).toBeUndefined()
@@ -403,5 +415,21 @@ describe('getResolver serializer injection', () => {
         type: 'legacy' as const,
       } as never),
     ).rejects.toThrow()
+  })
+})
+
+describe('assertChainId', () => {
+  test.each([
+    { actual: 4217, expected: 42431, rejects: true },
+    { actual: 4217, expected: 4217, rejects: false },
+    { actual: undefined, expected: 4217, rejects: false },
+    { actual: 4217, expected: undefined, rejects: false },
+  ])('validates known chain $actual against $expected', ({ actual, expected, rejects }) => {
+    const client = createClient({
+      chain: actual === undefined ? undefined : ({ id: actual } as never),
+      transport: custom({ request: vi.fn() }),
+    })
+    if (rejects) expect(() => Client.assertChainId(client, expected)).toThrow('Chain ID mismatch')
+    else expect(() => Client.assertChainId(client, expected)).not.toThrow()
   })
 })
