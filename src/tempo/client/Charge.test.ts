@@ -708,3 +708,91 @@ describe('tempo.charge client', () => {
     })
   })
 })
+
+describe('recipient allowlist', () => {
+  test.each([
+    { name: 'no splits', splits: undefined },
+    { name: 'allowed split', splits: [{ recipient: currency, amount: '0.1' }] },
+  ])('rejects an unlisted primary recipient with $name', async ({ splits }) => {
+    const resolveAccount = vi.fn(() => account)
+    const client = createClient({
+      account,
+      chain: tempoLocalnet,
+      transport: http('http://127.0.0.1'),
+    })
+    const method = charge({
+      account,
+      getClient: () => client,
+      expectedRecipients: [currency],
+      resolveAccount,
+    })
+    await expect(
+      method.createCredential({
+        challenge: createChallenge({ amount: '1', splits }),
+        context: {},
+      }),
+    ).rejects.toThrow(`Unexpected primary recipient: ${recipient}`)
+    expect(resolveAccount).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    {
+      name: 'matching recipients',
+      allowed: [recipient, currency],
+      splits: [{ recipient: currency, amount: '0.1' }],
+      error: undefined,
+    },
+    {
+      name: 'unlisted split',
+      allowed: [recipient],
+      splits: [{ recipient: currency, amount: '0.1' }],
+      error: `Unexpected split recipient: ${currency}`,
+    },
+    {
+      name: 'empty allowlist',
+      allowed: [],
+      splits: undefined,
+      error: `Unexpected primary recipient: ${recipient}`,
+    },
+    { name: 'no allowlist', allowed: undefined, splits: undefined, error: undefined },
+  ])('$name', async ({ allowed, splits, error }) => {
+    vi.resetModules()
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest: vi.fn(async () => ({})),
+      signTransaction,
+      sendCallsSync: vi.fn(),
+      signTypedData: vi.fn(),
+    }))
+    try {
+      const { charge: mockedCharge } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = mockedCharge({
+        account,
+        getClient: () => client,
+        expectedRecipients: allowed as readonly Address[] | undefined,
+      })
+      const result = method.createCredential({
+        challenge: createChallenge({ amount: '1', splits, supportedModes: ['pull'] }),
+        context: {},
+      })
+      if (error) {
+        await expect(result).rejects.toThrow(error)
+        expect(signTransaction).not.toHaveBeenCalled()
+      } else {
+        expect(Credential.deserialize(await result).payload).toEqual({
+          signature: '0xdeadbeef',
+          type: 'transaction',
+        })
+        expect(signTransaction).toHaveBeenCalledOnce()
+      }
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+})

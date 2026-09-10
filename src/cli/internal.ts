@@ -33,6 +33,7 @@ export async function preparePayment(
   return current
 }
 
+/** Resolves explicit payment configuration before falling back to built-in plugins. */
 export function resolvePlugin(
   challenge: Challenge.Challenge,
   config?: { plugins?: Plugin[] | undefined; methods?: any },
@@ -40,14 +41,14 @@ export function resolvePlugin(
   const configPlugin = config?.plugins?.find((p) => supportsPlugin(p, challenge))
   if (configPlugin) return { plugin: configPlugin }
 
-  const builtin = builtinPlugins.find((p) => supportsPlugin(p, challenge))
-  if (builtin) return { plugin: builtin }
-
   const configMethods = flattenConfigMethods(config)
   const matched = configMethods?.find(
     (m) => m.name === challenge.method && m.intent === challenge.intent,
   )
   if (matched) return { method: matched }
+
+  const builtin = builtinPlugins.find((p) => supportsPlugin(p, challenge))
+  if (builtin) return { plugin: builtin }
 
   return {}
 }

@@ -111,6 +111,8 @@ export function charge(parameters: charge.Parameters = {}) {
       const currency = request.currency as Address
       if (parameters.expectedRecipients) {
         const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+        if (!request.recipient || !allowed.has(request.recipient.toLowerCase()))
+          throw new Error(`Unexpected primary recipient: ${request.recipient}`)
         const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
         if (splits) {
           for (const split of splits) {

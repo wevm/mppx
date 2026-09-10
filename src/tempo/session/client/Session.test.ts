@@ -1492,3 +1492,64 @@ describe('precompile client session', () => {
     ).toBe(true)
   })
 })
+
+describe('session chain pinning', () => {
+  test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
+    'rejects a foreign chain before resolving a client for %s',
+    async (action) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, expectedChainId: chainId, getClient })
+      const context =
+        action === 'automatic'
+          ? {}
+          : action === 'recover'
+            ? { descriptor }
+            : { action, descriptor, transaction: '0x1234' as const, cumulativeAmountRaw: '100' }
+      await expect(
+        method.createCredential({
+          challenge: makeSessionChallenge({
+            methodDetails: { chainId: 4217, escrowContract: tip20ChannelEscrow },
+          }),
+          context,
+        }),
+      ).rejects.toThrow(`Chain ID mismatch: expected ${chainId}, got 4217.`)
+      expect(getClient).not.toHaveBeenCalled()
+    },
+  )
+
+  test('rejects a foreign chain in the automatic top-up hook', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn()
+    const method = session({ account, expectedChainId: chainId, getClient })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge({
+          methodDetails: { chainId: 4217, escrowContract: tip20ChannelEscrow },
+        }),
+        context: {},
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).rejects.toThrow('Chain ID mismatch')
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test.each([chainId, undefined])(
+    'signs on the pin with advertised chain %s',
+    async (advertised) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, expectedChainId: chainId, getClient })
+      const challenge = makeSessionChallenge()
+      if (advertised === undefined) delete challenge.request.methodDetails!.chainId
+      const credential = await method.createCredential({
+        challenge,
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      })
+      expect(getClient).toHaveBeenCalledWith({ chainId })
+      expect(Credential.deserialize(credential).source).toBe(
+        `did:pkh:eip155:${chainId}:${account.address}`,
+      )
+    },
+  )
+})
