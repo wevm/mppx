@@ -448,26 +448,57 @@ describe('Fetch.from: method responses', () => {
   })
 
   test.each([
-    ['a rejected paid response', () => new Response('rejected', { status: 500 }), 500, undefined],
-    ['the final payment retry', () => make402(), 402, 1],
+    [
+      'a rejected paid response',
+      () => new Response('rejected', { status: 500 }),
+      500,
+      undefined,
+      'rejected',
+    ],
+    ['the final payment retry', () => make402(), 402, 1, 'rejected'],
     [
       'the paid request throwing',
       () => Promise.reject(new Error('paid request failed')),
       undefined,
       undefined,
+      'unknown',
     ],
-  ])('settles credential state after %s', async (_name, paidRequest, status, maxPaymentRetries) => {
+  ])(
+    'settles credential state after %s',
+    async (_name, paidRequest, status, maxPaymentRetries, expected) => {
+      const settlements: MethodResponse.AttemptOutcome['status'][] = []
+      let calls = 0
+      const fetch = Fetch.from({
+        fetch: async () => (++calls === 1 ? make402() : paidRequest()),
+        maxPaymentRetries,
+        methods: [trackedMethod(settlements)],
+      })
+
+      const result = fetch('https://example.com/paid')
+      if (status) expect((await result).status).toBe(status)
+      else await expect(result).rejects.toThrow('paid request failed')
+      expect(settlements).toEqual([expected])
+    },
+  )
+
+  test('rejects credential state when an already-aborted paid request throws', async () => {
+    const controller = new AbortController()
     const settlements: MethodResponse.AttemptOutcome['status'][] = []
     let calls = 0
     const fetch = Fetch.from({
-      fetch: async () => (++calls === 1 ? make402() : paidRequest()),
-      maxPaymentRetries,
+      fetch: async () => {
+        if (++calls === 1) {
+          controller.abort()
+          return make402()
+        }
+        throw new Error('paid request aborted')
+      },
       methods: [trackedMethod(settlements)],
     })
 
-    const result = fetch('https://example.com/paid')
-    if (status) expect((await result).status).toBe(status)
-    else await expect(result).rejects.toThrow('paid request failed')
+    await expect(fetch('https://example.com/paid', { signal: controller.signal })).rejects.toThrow(
+      'paid request aborted',
+    )
     expect(settlements).toEqual(['rejected'])
   })
 })
