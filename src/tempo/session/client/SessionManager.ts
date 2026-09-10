@@ -202,6 +202,15 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  * `channelStore` can persist reusable channels between manager instances.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
+  const clientChainId = parameters.client?.chain?.id
+  if (
+    parameters.expectedChainId !== undefined &&
+    clientChainId !== undefined &&
+    clientChainId !== parameters.expectedChainId
+  )
+    throw new Error(
+      `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${clientChainId}.`,
+    )
   const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const config = resolveSessionManagerConfig(parameters)
   const getClient = Client.getResolver({

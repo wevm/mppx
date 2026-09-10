@@ -21,7 +21,13 @@ import * as x402_Header from '../x402/Header.js'
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
-import { loadConfig, preparePayment, resolveAcceptPayment, selectChallenge } from './internal.js'
+import {
+  flattenConfigMethods,
+  loadConfig,
+  preparePayment,
+  resolveAcceptPayment,
+  selectChallenge,
+} from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
 import {
   orderTempoChargeChallengesByBalance,
@@ -543,13 +549,17 @@ const cli = Cli.create('mppx', {
           exitCode: 2,
         })
       }
-      const challenges = await orderTempoChargeChallengesByBalance(currencyChallenges, {
-        options: {
-          account: c.options.account,
-          network: c.options.network,
-          rpcUrl: c.options.rpcUrl,
-        },
-      })
+      // Configured methods own their payer and preference ordering. The CLI
+      // wallet's balances cannot determine which of their offers are payable.
+      const challenges = flattenConfigMethods(loaded?.config)?.length
+        ? currencyChallenges
+        : await orderTempoChargeChallengesByBalance(currencyChallenges, {
+            options: {
+              account: c.options.account,
+              network: c.options.network,
+              rpcUrl: c.options.rpcUrl,
+            },
+          })
 
       const selected = selectChallenge(challenges, loaded?.config)
       if (!selected) {

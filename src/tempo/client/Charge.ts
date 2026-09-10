@@ -282,8 +282,8 @@ export declare namespace charge {
      */
     expectedChainId?: number | undefined
     /**
-     * Allowlist of expected split recipient addresses. When set, the client
-     * rejects any challenge whose split recipients are not in this list.
+     * Allowlist of payment recipient addresses. When set, both the primary
+     * recipient and every split recipient must be included in this list.
      */
     expectedRecipients?: readonly Address[] | undefined
     /**

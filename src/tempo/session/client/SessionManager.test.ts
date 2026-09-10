@@ -1964,6 +1964,21 @@ describe('Session', () => {
 })
 
 describe('expectedChainId', () => {
+  test('rejects a fixed client on a different chain before any request', () => {
+    const fetch = vi.fn()
+    expect(() => sessionManager({ account, client, expectedChainId: 42431, fetch })).toThrow(
+      'Chain ID mismatch: expected 42431, got 4217.',
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test.each([4217, undefined])(
+    'accepts a fixed client with compatible pin %s',
+    (expectedChainId) => {
+      expect(() => sessionManager({ account, client, expectedChainId })).not.toThrow()
+    },
+  )
+
   test('rejects session challenges before resolving a client or signing', async () => {
     const getClient = vi.fn(() => client)
     const fetch = vi.fn(async () => make402Response())

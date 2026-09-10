@@ -2816,3 +2816,70 @@ test('configured session handles SSE voucher requests with its own channel store
     fs.rmSync(configDir, { recursive: true, force: true })
   }
 })
+
+test('configured charge methods do not probe the CLI wallet to rank offers', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-config-offers-'))
+  const configPath = path.join(configDir, 'mppx.config.mjs')
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+  fs.writeFileSync(
+    configPath,
+    `
+    import { Credential, Method, z } from '${moduleUrl}'
+    export default { methods: [[Method.toClient(Method.from({
+      name: 'tempo', intent: 'charge',
+      schema: { credential: { payload: z.object({}) },
+        request: z.object({ amount: z.string(), currency: z.string() }),
+      }
+    }), { async createCredential({ challenge }) {
+      return Credential.serialize({ challenge, payload: {} })
+    } })]] }
+  `,
+  )
+  let balanceRequests = 0
+  const balanceServer = await Http.createServer((_req, res) => {
+    balanceRequests++
+    res.writeHead(400)
+    res.end()
+  })
+  const offers = [unfundedToken, Addresses.pathUsd].map((currency, index) =>
+    Challenge.from({
+      id: `offer-${index}`,
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'charge',
+      request: {
+        amount: '100',
+        currency,
+        recipient: accounts[0].address,
+        methodDetails: { chainId: 42431 },
+      },
+    }),
+  )
+  let selectedCurrency: unknown
+  const server = await Http.createServer((req, res) => {
+    if (req.headers.authorization) {
+      selectedCurrency = Credential.deserialize(req.headers.authorization).challenge.request
+        .currency
+      res.end('configured-payer')
+      return
+    }
+    res.writeHead(402, {
+      [Constants.Headers.wwwAuthenticate]: offers.map(Challenge.serialize).join(', '),
+    })
+    res.end()
+  })
+  try {
+    const { output, exitCode } = await serve(
+      [server.url, '-s', '--config', configPath, '--rpc-url', balanceServer.url],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+    expect(exitCode).toBeUndefined()
+    expect(output).toContain('configured-payer')
+    expect(selectedCurrency).toBe(unfundedToken)
+    expect(balanceRequests).toBe(0)
+  } finally {
+    server.close()
+    balanceServer.close()
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})
