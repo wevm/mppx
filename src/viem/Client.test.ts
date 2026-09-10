@@ -323,6 +323,18 @@ describe('feePayer transaction serialization', () => {
 })
 
 describe('getResolver serializer injection', () => {
+  test.each([tempoModerato.id, undefined])(
+    'uses requested chain %s when injecting serializers into a chain-agnostic client',
+    async (chainId) => {
+      const client = createClient({ transport: mockTransport })
+      const resolver = Client.getResolver({ chain: tempoMainnetChain, getClient: () => client })
+      const resolved = await resolver({ chainId })
+      expect(resolved.chain?.id).toBe(chainId ?? tempoMainnetChain.id)
+      expect(resolved.chain?.serializers?.transaction).toBeDefined()
+      expect(client.chain).toBeUndefined()
+    },
+  )
+
   test('behavior: injects Tempo serializer onto plain clients', async () => {
     const plainClient = createPlainClient()
     expect(plainClient.chain?.serializers?.transaction).toBeUndefined()

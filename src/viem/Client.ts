@@ -75,6 +75,8 @@ export function getResolver(
       return Object.assign({}, resolvedClient, {
         chain: {
           ...chain,
+          // Serializer defaults must not replace an explicitly requested network.
+          ...(params.chainId !== undefined ? { id: params.chainId } : {}),
           ...resolvedClient.chain,
           formatters: resolvedClient.chain?.formatters ?? chain.formatters,
           prepareTransactionRequest:

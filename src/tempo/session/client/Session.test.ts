@@ -1494,6 +1494,24 @@ describe('precompile client session', () => {
 })
 
 describe('session chain pinning', () => {
+  test.each([chainId, undefined])(
+    'accepts a chain-agnostic client with advertised chain %s',
+    async (advertised) => {
+      const getClient = vi.fn(() => ({ ...client, chain: undefined }))
+      const method = session({ account, expectedChainId: chainId, getClient })
+      const challenge = makeSessionChallenge()
+      if (advertised === undefined) delete challenge.request.methodDetails!.chainId
+      const credential = await method.createCredential({
+        challenge,
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      })
+      expect(getClient).toHaveBeenCalledWith({ chainId })
+      expect(Credential.deserialize(credential).source).toBe(
+        `did:pkh:eip155:${chainId}:${account.address}`,
+      )
+    },
+  )
+
   test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
     'rejects a resolved client on another chain for %s',
     async (action) => {
