@@ -456,7 +456,10 @@ export default defineConfig({
   })
 })
 
-async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {
+async function serve(
+  argv: string[],
+  options?: { env?: Record<string, string | undefined>; onOutput?: (chunk: string) => void },
+) {
   const stdoutChunks: Buffer[] = []
   let stderr = ''
   let exitCode: number | undefined
@@ -481,6 +484,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
     if (typeof chunk === 'string') stdoutChunks.push(Buffer.from(chunk))
     else if (chunk instanceof Uint8Array) stdoutChunks.push(Buffer.from(chunk))
     else stdoutChunks.push(Buffer.from(String(chunk)))
+    options?.onOutput?.(stdoutChunks.at(-1)!.toString())
     return true
   }) as typeof process.stdout.write
   process.stderr.write = ((chunk: unknown) => {
@@ -2773,6 +2777,9 @@ test('configured session handles SSE voucher requests with its own channel store
   const { formatMessageEvent, formatNeedVoucherEvent } =
     await import('../tempo/session/precompile/Protocol.js')
   const vouchers: string[] = []
+  let closeStream: (() => void) | undefined
+  let streamClosed = false
+  let outputBeforeClose = false
   const server = await Http.createServer((req, res) => {
     if (!req.headers.authorization) {
       res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
@@ -2790,7 +2797,13 @@ test('configured session handles SSE voucher requests with its own channel store
       return
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' })
-    res.end(
+    closeStream = () => {
+      clearTimeout(timeout)
+      streamClosed = true
+      res.end()
+    }
+    const timeout = setTimeout(() => closeStream?.(), 2000)
+    res.write(
       formatMessageEvent('first') +
         formatNeedVoucherEvent({
           acceptedCumulative: '100',
@@ -2804,14 +2817,23 @@ test('configured session handles SSE voucher requests with its own channel store
   try {
     const { output, exitCode } = await serve(
       [server.url, '-s', '--config', configPath, '-H', 'accept: text/event-stream'],
-      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+      {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        onOutput(chunk) {
+          if (!chunk.includes('first')) return
+          outputBeforeClose = !streamClosed
+          closeStream?.()
+        },
+      },
     )
     expect(exitCode).toBeUndefined()
+    expect(outputBeforeClose).toBe(true)
     expect(output).toContain('first')
     expect(output).toContain('second')
     expect(output).not.toContain('need-voucher')
     expect(vouchers).toEqual(['100', '200'])
   } finally {
+    closeStream?.()
     server.close()
     fs.rmSync(configDir, { recursive: true, force: true })
   }

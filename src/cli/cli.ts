@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
@@ -118,7 +119,17 @@ function outputResult<Data>(
 }
 
 async function writeResponseBody(response: Response) {
-  process.stdout.write(Buffer.from(await response.arrayBuffer()))
+  if (!response.body) return
+  const reader = response.body.getReader()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!process.stdout.write(Buffer.from(value))) await once(process.stdout, 'drain')
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function canReadCommandStdin() {
