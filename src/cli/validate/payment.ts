@@ -241,6 +241,7 @@ export async function validatePaymentFlow(
           fetchBody,
           verbose,
           tempoModerato,
+          Challenge.credentialHeader(tempoTestnetChallenge),
         )
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
@@ -372,8 +373,11 @@ async function attemptCryptoPayment(
   // Pre-flight balance check and chain resolution
   let paymentChain: Chain | undefined
   if (challenge.method === Constants.Methods.tempo) {
-    const chainId = (methodDetails?.chainId as number | undefined) ?? tempoMainnetChain.id
-    paymentChain = chainId === tempoModerato.id ? tempoModerato : resolveEvmChain(chainId)
+    const chainId =
+      (methodDetails?.chainId as number | undefined) ??
+      (directMethod ? undefined : tempoMainnetChain.id)
+    if (chainId !== undefined)
+      paymentChain = chainId === tempoModerato.id ? tempoModerato : resolveEvmChain(chainId)
   } else if (challenge.method === Constants.Methods.evm) {
     const chainId = methodDetails?.chainId as number | undefined
     if (chainId) paymentChain = resolveEvmChain(chainId)
@@ -527,6 +531,7 @@ async function attemptCryptoPayment(
     fetchBody,
     verbose,
     paymentChain,
+    Challenge.credentialHeader(challenge),
   )
 }
 
@@ -615,7 +620,7 @@ async function attemptStripePayment(
       url,
       {
         method: endpoint.method,
-        headers: { ...fetchHeaders, [Constants.Headers.authorization]: credential },
+        headers: { ...fetchHeaders, [Challenge.credentialHeader(challenge)]: credential },
         body: fetchBody ?? null,
       },
       30_000,
@@ -643,6 +648,7 @@ async function attemptStripePayment(
     fetchBody,
     verbose,
     undefined,
+    Challenge.credentialHeader(challenge),
   )
 }
 
@@ -692,6 +698,7 @@ async function sendAndValidateResponse(
   fetchBody: string | undefined,
   verbose: boolean,
   explorerChain?: Chain | undefined,
+  credentialHeader: string = Constants.Headers.authorization,
 ): Promise<CheckResult[]> {
   let paymentResponse: Response
   try {
@@ -699,7 +706,7 @@ async function sendAndValidateResponse(
       url,
       {
         method: endpoint.method,
-        headers: { ...baseHeaders, [Constants.Headers.authorization]: credential },
+        headers: { ...baseHeaders, [credentialHeader]: credential },
         body: fetchBody ?? null,
       },
       30_000,

@@ -86,3 +86,21 @@ describe('retry approval', () => {
     )
   })
 })
+
+test.each([false, true])('session snapshots cannot hide changed payment terms: %s', (changed) => {
+  const approved = { ...challenge, method: 'tempo', intent: 'session' }
+  const retry = {
+    ...approved,
+    request: {
+      ...approved.request,
+      ...(changed ? { amount: '9000000' } : {}),
+      methodDetails: {
+        ...approved.request.methodDetails,
+        sessionSnapshot: { acceptedCumulative: '100' },
+      },
+    },
+  }
+  const check = () => assertSamePaymentRequest(approved, retry)
+  if (changed) expect(check).toThrow('Payment request changed on retry')
+  else expect(check).not.toThrow()
+})

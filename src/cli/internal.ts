@@ -148,10 +148,24 @@ export function assertSamePaymentRequest(
   approved: Challenge.Challenge,
   retry: Challenge.Challenge,
 ): void {
-  if (
-    Challenge.serialize({ ...retry, id: approved.id, expires: approved.expires }) !==
-    Challenge.serialize(approved)
-  )
+  function paymentTerms(challenge: Challenge.Challenge): string {
+    const request = { ...challenge.request }
+    if (challenge.method === 'tempo' && challenge.intent === 'session') {
+      const methodDetails = { ...(request.methodDetails as Record<string, unknown> | undefined) }
+      // Snapshots advance session state; the session method validates them against
+      // the unchanged payment terms before authorizing the next credential.
+      delete methodDetails.sessionSnapshot
+      if (Object.keys(methodDetails).length) request.methodDetails = methodDetails
+      else delete request.methodDetails
+    }
+    return Challenge.serialize({
+      ...challenge,
+      request,
+      id: approved.id,
+      expires: approved.expires,
+    })
+  }
+  if (paymentTerms(retry) !== paymentTerms(approved))
     throw new Error(
       'Payment request changed on retry. Run the command again to approve the new payment.',
     )

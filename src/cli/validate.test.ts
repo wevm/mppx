@@ -140,7 +140,7 @@ async function mppServer(
       res.end(makeDiscoveryDoc({ '/api/test': {} }))
       return
     }
-    const hasAuth = req.headers[Constants.Headers.authorization.toLowerCase()]
+    const hasAuth = req.headers[Challenge.credentialHeader(challenge).toLowerCase()]
     if (hasAuth && hasAuth !== `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`) {
       const status = opts?.postPaymentStatus ?? 200
       const receipt = Receipt.serialize({
@@ -396,7 +396,7 @@ describe('validate: challenge', () => {
         res.end(doc)
       } else {
         requestCount++
-        const hasAuth = req.headers[Constants.Headers.authorization.toLowerCase()]
+        const hasAuth = req.headers[Challenge.credentialHeader(challenge).toLowerCase()]
         if (hasAuth) {
           res.writeHead(402, {
             [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
@@ -973,12 +973,14 @@ test.each([
 )
 
 test.each([
-  ['tempo', 4217],
-  ['tempo', 42431],
-  ['evm', 1],
+  ['tempo', 4217, undefined],
+  ['tempo', 42431, undefined],
+  ['evm', 1, undefined],
+  ['tempo', 42431, 'Payment-Authorization'],
+  ['tempo', undefined, undefined],
 ] as const)(
   'validate uses configured %s payer on chain %i without a CLI wallet',
-  async (method, chainId) => {
+  async (method, chainId, header) => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-direct-config-'))
     const configPath = path.join(configDir, 'mppx.config.mjs')
     const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
@@ -998,6 +1000,7 @@ test.each([
     process.env.MPPX_ACCOUNT = 'missing-validation-wallet'
     const challenge = makeChallenge({
       method,
+      ...(header ? { header } : {}),
       request: {
         amount: '10000',
         currency: '0x20c0000000000000000000000000000000000000',
@@ -1009,10 +1012,12 @@ test.each([
     try {
       const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
       expect(output).toContain(`Payment [${method}]: submitted`)
-      if (method === 'tempo') {
+      if (method === 'tempo' && chainId !== undefined) {
         const chain = chainId === tempoModerato.id ? tempoModerato : tempoMainnet
         expect(output).toContain(`${chain.blockExplorers.default.url}/receipt/`)
       }
+      expect(output).toContain('Payment: successful')
+      if (chainId === undefined) expect(output).not.toContain('/receipt/')
       expect(output).not.toContain('no wallet configured')
       expect(output).not.toContain('insufficient balance')
       expect(output).not.toContain('ephemeral testnet wallet')

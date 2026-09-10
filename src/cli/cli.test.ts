@@ -2906,7 +2906,7 @@ test('configured charge methods do not probe the CLI wallet to rank offers', asy
   }
 })
 
-test.each(['unchanged', 'amount', 'recipient', 'extension'] as const)(
+test.each(['unchanged', 'snapshot', 'amount', 'recipient', 'extension'] as const)(
   'configured session retry rechecks approval and extensions: %s',
   async (mode) => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-retry-'))
@@ -2959,6 +2959,9 @@ test.each(['unchanged', 'amount', 'recipient', 'extension'] as const)(
               ...challenge.request,
               ...(mode === 'amount' ? { amount: '200' } : {}),
               ...(mode === 'recipient' ? { recipient: accounts[1].address } : {}),
+              ...(mode === 'snapshot'
+                ? { methodDetails: { sessionSnapshot: { acceptedCumulative: '100' } } }
+                : {}),
             },
           }
         : challenge
@@ -2977,11 +2980,11 @@ test.each(['unchanged', 'amount', 'recipient', 'extension'] as const)(
         'retry',
       ])
       expect(events.filter((event) => event.signed).map((event) => event.signed)).toEqual(
-        mode === 'unchanged' ? ['initial', 'retry'] : ['initial'],
+        mode === 'unchanged' || mode === 'snapshot' ? ['initial', 'retry'] : ['initial'],
       )
-      expect(paidRequests).toBe(mode === 'unchanged' ? 2 : 1)
+      expect(paidRequests).toBe(mode === 'unchanged' || mode === 'snapshot' ? 2 : 1)
       expect(output).toContain(
-        mode === 'unchanged'
+        mode === 'unchanged' || mode === 'snapshot'
           ? 'accepted'
           : mode === 'extension'
             ? 'retry blocked by extension'
