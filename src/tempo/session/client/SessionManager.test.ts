@@ -1963,28 +1963,34 @@ describe('Session', () => {
   })
 })
 
-describe('expectedChainId', () => {
+describe('allowedChainIds', () => {
   test('rejects a fixed client on a different chain before any request', () => {
     const fetch = vi.fn()
-    expect(() => sessionManager({ account, client, expectedChainId: 42431, fetch })).toThrow(
-      'Chain ID mismatch: expected 42431, got 4217.',
+    expect(() => sessionManager({ account, client, allowedChainIds: [42431], fetch })).toThrow(
+      'Chain ID not allowed: 4217.',
     )
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  test.each([4217, undefined])(
-    'accepts a fixed client with compatible pin %s',
-    (expectedChainId) => {
-      expect(() => sessionManager({ account, client, expectedChainId })).not.toThrow()
+  test.each([[4217], [42431, 4217], undefined])(
+    'accepts a fixed client with compatible allowlist %s',
+    (allowedChainIds) => {
+      expect(() =>
+        sessionManager({
+          account,
+          client,
+          allowedChainIds,
+        }),
+      ).not.toThrow()
     },
   )
 
   test('rejects session challenges before resolving a client or signing', async () => {
     const getClient = vi.fn(() => client)
     const fetch = vi.fn(async () => make402Response())
-    const manager = sessionManager({ account, expectedChainId: 42431, getClient, fetch })
+    const manager = sessionManager({ account, allowedChainIds: [42431], getClient, fetch })
     await expect(manager.fetch('https://api.example.com')).rejects.toThrow(
-      'Chain ID mismatch: expected 42431, got 4217.',
+      'Chain ID not allowed: 4217.',
     )
     expect(getClient).not.toHaveBeenCalled()
     expect(fetch).toHaveBeenCalledTimes(1)
@@ -2021,7 +2027,7 @@ describe('expectedChainId', () => {
       const manager = sessionManager({
         account,
         bootstrap: true,
-        expectedChainId: mode === 'resolved client' ? 4217 : 42431,
+        allowedChainIds: mode === 'resolved client' ? [4217, 42431] : [42431, 1],
         getClient,
         fetch,
         channelStore: store.store,
@@ -2034,7 +2040,7 @@ describe('expectedChainId', () => {
   )
 
   test.each([4217, undefined])(
-    'signs vouchers on the pinned chain when advertised chain is %s',
+    'signs vouchers on the allowed chain when advertised chain is %s',
     async (chainId) => {
       const getClient = vi.fn(() => client)
       const store = makeChannelStore([channelEntry()])
@@ -2052,7 +2058,7 @@ describe('expectedChainId', () => {
       })
       const manager = sessionManager({
         account,
-        expectedChainId: 4217,
+        allowedChainIds: [4217],
         getClient,
         fetch,
         channelStore: store.store,

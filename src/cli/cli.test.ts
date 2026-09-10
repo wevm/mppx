@@ -2669,7 +2669,7 @@ test.each(['auto', 'new'])(
       configPath,
       `
     import { session } from '${moduleUrl}'
-    export default { methods: [session({ expectedChainId: 4217,
+    export default { methods: [session({ allowedChainIds: [4217],
       getClient() { throw new Error('unexpected client resolution') }
     })] }
   `,
@@ -2707,7 +2707,7 @@ test.each(['auto', 'new'])(
       expect(exitCode).toBeDefined()
       expect(output).toContain(
         selection === 'auto'
-          ? 'Chain ID mismatch: expected 4217, got 42431.'
+          ? 'Chain ID not allowed: 42431.'
           : '--session cannot override a configured session method',
       )
       expect(paidRequests).toBe(0)
@@ -2752,7 +2752,7 @@ test('configured session handles SSE voucher requests with its own channel store
         throw new Error('unexpected RPC: ' + method)
       }
     }) })
-    export default { methods: [session({ account, expectedChainId: 42431,
+    export default { methods: [session({ account, allowedChainIds: [42431],
       channelStore, getClient: () => client, decimals: 0, maxDeposit: '1000',
     })] }
   `,

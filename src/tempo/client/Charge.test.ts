@@ -705,3 +705,54 @@ describe('tempo.charge client', () => {
     })
   })
 })
+
+describe('charge chain allowlists', () => {
+  test.each([
+    { allowed: [4217, 42431], advertised: 4217, resolved: 4217, pin: undefined, accepted: true },
+    { allowed: [4217, 42431], advertised: 42431, resolved: 42431, pin: undefined, accepted: true },
+    {
+      allowed: [4217, 42431],
+      advertised: undefined,
+      resolved: 42431,
+      pin: undefined,
+      accepted: true,
+    },
+    { allowed: [42431], advertised: undefined, resolved: 42431, pin: undefined, accepted: true },
+    { allowed: [4217, 42431], advertised: undefined, resolved: 1, pin: undefined, accepted: false },
+    { allowed: [], advertised: undefined, resolved: 42431, pin: undefined, accepted: false },
+    { allowed: [], advertised: 42431, resolved: 42431, pin: undefined, accepted: false },
+    { allowed: [4217], advertised: undefined, resolved: 42431, pin: 42431, accepted: false },
+    { allowed: [4217, 42431], advertised: 1, resolved: 1, pin: undefined, accepted: false },
+  ])(
+    'enforces $allowed for challenge $advertised, client $resolved, and pin $pin',
+    async ({ allowed, advertised, resolved, pin, accepted }) => {
+      const getClient = vi.fn(() =>
+        createClient({
+          account,
+          chain: { ...tempoLocalnet, id: resolved },
+          transport: http('http://127.0.0.1'),
+        }),
+      )
+      const signTypedData = vi.spyOn(account, 'signTypedData')
+      const method = charge({ account, allowedChainIds: allowed, expectedChainId: pin, getClient })
+      try {
+        const result = method.createCredential({
+          challenge: createChallenge({ chainId: advertised }),
+          context: {},
+        })
+        if (accepted) {
+          expect(Credential.deserialize(await result).source).toBe(
+            `did:pkh:eip155:${resolved}:${account.address}`,
+          )
+        } else {
+          await expect(result).rejects.toThrow('Chain ID not allowed')
+          expect(signTypedData).not.toHaveBeenCalled()
+          if (advertised !== undefined || allowed.length === 0)
+            expect(getClient).not.toHaveBeenCalled()
+        }
+      } finally {
+        signTypedData.mockRestore()
+      }
+    },
+  )
+})

@@ -433,3 +433,17 @@ describe('assertChainId', () => {
     else expect(() => Client.assertChainId(client, expected)).not.toThrow()
   })
 })
+
+describe('assertAllowedChainId', () => {
+  test.each([
+    { allowed: undefined, chainId: undefined, rejects: false },
+    { allowed: [4217, 42431], chainId: undefined, rejects: true },
+    { allowed: [], chainId: 4217, rejects: true },
+    { allowed: [4217, 42431], chainId: 1, rejects: true },
+    { allowed: [4217, 42431], chainId: 42431, rejects: false },
+  ])('checks $chainId against $allowed', ({ allowed, chainId, rejects }) => {
+    const check = () => Client.assertAllowedChainId(allowed, chainId)
+    if (rejects) expect(check).toThrow('Chain ID not allowed')
+    else expect(check).not.toThrow()
+  })
+})

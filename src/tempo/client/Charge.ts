@@ -75,10 +75,16 @@ export function charge(parameters: charge.Parameters = {}) {
         throw new Error(
           `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`,
         )
-      const resolvedChainId = challengeChainId ?? parameters.expectedChainId
+      if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
+        Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
+      const resolvedChainId =
+        challengeChainId ??
+        parameters.expectedChainId ??
+        (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined)
       const client = await getClient({ chainId: resolvedChainId })
       Client.assertChainId(client, resolvedChainId)
       const chainId = resolvedChainId ?? client.chain?.id
+      Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
@@ -279,6 +285,12 @@ export declare namespace charge {
      * chain when the challenge omits a chain ID.
      */
     expectedChainId?: number | undefined
+    /**
+     * Chains permitted for payment credentials. Omitted allows any chain; empty rejects all.
+     * A single entry supplies an omitted challenge chain unless `expectedChainId` is set.
+     * When both policies are set, the selected chain must satisfy both.
+     */
+    allowedChainIds?: readonly number[] | undefined
     /**
      * Allowlist of expected split recipient addresses. When set, the client
      * rejects any challenge whose split recipients are not in this list.

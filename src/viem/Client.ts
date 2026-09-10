@@ -116,3 +116,15 @@ export function assertChainId(client: Client, chainId: number | undefined): void
   if (chainId !== undefined && client.chain?.id !== undefined && client.chain.id !== chainId)
     throw new Error(`Chain ID mismatch: expected ${chainId}, got ${client.chain.id}.`)
 }
+
+/** Rejects disallowed or unknown payment chains when an allowlist is configured. */
+export function assertAllowedChainId(
+  allowedChainIds: readonly number[] | undefined,
+  chainId: number | undefined,
+): void {
+  if (
+    allowedChainIds !== undefined &&
+    (chainId === undefined || !allowedChainIds.includes(chainId))
+  )
+    throw new Error(`Chain ID not allowed: ${chainId ?? 'unknown'}.`)
+}

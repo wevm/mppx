@@ -203,14 +203,8 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const clientChainId = parameters.client?.chain?.id
-  if (
-    parameters.expectedChainId !== undefined &&
-    clientChainId !== undefined &&
-    clientChainId !== parameters.expectedChainId
-  )
-    throw new Error(
-      `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${clientChainId}.`,
-    )
+  if (clientChainId !== undefined || parameters.allowedChainIds?.length === 0)
+    Client.assertAllowedChainId(parameters.allowedChainIds, clientChainId)
   const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const config = resolveSessionManagerConfig(parameters)
   const getClient = Client.getResolver({
@@ -351,7 +345,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     resolveAccount: parameters.resolveAccount,
     escrow: parameters.escrow,
-    expectedChainId: parameters.expectedChainId,
+    allowedChainIds: parameters.allowedChainIds,
     decimals: config.decimals,
     maxDeposit: parameters.maxDeposit,
     topUpAmount: parameters.topUpAmount,
@@ -373,7 +367,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
   MethodResponse.unregister(method)
   const chargeMethod = chargePlugin({
-    expectedChainId: parameters.expectedChainId,
+    allowedChainIds: parameters.allowedChainIds,
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
@@ -440,10 +434,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
     if (!header) return undefined
     const snapshot = deserializeSessionSnapshot(header)
-    if (parameters.expectedChainId !== undefined && snapshot.chainId !== parameters.expectedChainId)
-      throw new Error(
-        `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${snapshot.chainId}.`,
-      )
+    Client.assertAllowedChainId(parameters.allowedChainIds, snapshot.chainId)
     const client = await getClient({ chainId: snapshot.chainId })
     Client.assertChainId(client, snapshot.chainId)
     const defaultAccount = getAccount(client)
@@ -1022,8 +1013,12 @@ export namespace sessionManager {
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
-      /** Reject challenges and bootstrap snapshots on other chains; use this chain when omitted. */
-      expectedChainId?: number | undefined
+      /**
+       * Chains permitted for sessions, bootstrap proofs, and snapshots. Omitted allows any
+       * chain; empty rejects all. A single entry supplies an omitted challenge chain;
+       * otherwise the challenge or resolved client must select an allowed chain.
+       */
+      allowedChainIds?: readonly number[] | undefined
       /** Fetch implementation used for HTTP probes, management posts, and paid retries. */
       fetch?: typeof globalThis.fetch | undefined
       /** Base context supplied to every session credential created by the manager. */
