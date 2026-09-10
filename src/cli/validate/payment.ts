@@ -514,11 +514,11 @@ async function attemptStripePayment(
     if (!options.silent) console.log(pc.dim(`    Auto-approved: ${paymentDesc}`))
   }
 
-  // Resolve plugin
   const resolved = resolvePlugin(challenge, loaded?.config)
   const plugin = resolved.plugin
-  if (!plugin) {
-    results.push(skip(tag, 'no Stripe plugin available'))
+  const directMethod = resolved.method
+  if (!plugin && !directMethod) {
+    results.push(skip(tag, 'no Stripe payment method available'))
     return
   }
 
@@ -527,20 +527,24 @@ async function attemptStripePayment(
     | ((response: Response, credentialContext?: unknown) => Promise<string>)
     | undefined
   let credentialContext: unknown
-  try {
-    const methodOpts: Record<string, string> = { paymentMethod: 'pm_card_visa' }
-    if (stripeKey) methodOpts.secretKey = stripeKey
-    const pluginResult = await plugin.setup({
-      challenge,
-      options: {},
-      methodOpts,
-    })
-    methods = pluginResult.methods
-    createCredentialFn = pluginResult.createCredential
-    credentialContext = pluginResult.credentialContext
-  } catch (error) {
-    results.push(skip(tag, (error as Error).message))
-    return
+  if (plugin) {
+    try {
+      const methodOpts: Record<string, string> = { paymentMethod: 'pm_card_visa' }
+      if (stripeKey) methodOpts.secretKey = stripeKey
+      const pluginResult = await plugin.setup({
+        challenge,
+        options: {},
+        methodOpts,
+      })
+      methods = pluginResult.methods
+      createCredentialFn = pluginResult.createCredential
+      credentialContext = pluginResult.credentialContext
+    } catch (error) {
+      results.push(skip(tag, (error as Error).message))
+      return
+    }
+  } else {
+    methods = [directMethod!]
   }
 
   const credential = await createAndSend(
@@ -554,7 +558,7 @@ async function attemptStripePayment(
   )
   if (!credential) return
 
-  plugin.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
+  plugin?.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
 
   // Stripe testmode: detect livemode rejection gracefully
   if (isStripeTestKey) {

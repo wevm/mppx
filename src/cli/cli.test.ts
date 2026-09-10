@@ -2652,3 +2652,64 @@ export default defineConfig({
     },
   )
 })
+
+test.each(['auto', 'new'])(
+  'configured session policies cannot be replaced by persistent session %s',
+  async (selection) => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-config-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const moduleUrl = pathToFileURL(
+      path.join(process.cwd(), 'src/tempo/session/client/Session.ts'),
+    ).href
+    fs.writeFileSync(
+      configPath,
+      `
+    import { session } from '${moduleUrl}'
+    export default { methods: [session({ expectedChainId: 4217,
+      getClient() { throw new Error('unexpected client resolution') }
+    })] }
+  `,
+    )
+    const challenge = Challenge.from({
+      id: 'pinned-session',
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '100',
+        currency: Addresses.pathUsd,
+        recipient: accounts[0].address,
+        unitType: 'request',
+        methodDetails: {
+          chainId: 42431,
+          escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+        },
+      },
+    })
+    let paidRequests = 0
+    const server = await Http.createServer((req, res) => {
+      if (req.headers.authorization) paidRequests++
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+      res.end()
+    })
+    try {
+      const { output, exitCode } = await serve(
+        [server.url, '-s', '--config', configPath, '--session', selection],
+        {
+          env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        },
+      )
+      expect(exitCode).toBeDefined()
+      expect(output).toContain(
+        selection === 'auto'
+          ? 'Chain ID mismatch: expected 4217, got 42431.'
+          : '--session cannot override a configured session method',
+      )
+      expect(paidRequests).toBe(0)
+    } finally {
+      server.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  },
+)

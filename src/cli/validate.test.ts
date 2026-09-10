@@ -897,3 +897,44 @@ describe('validate: JSON mode', () => {
     expect(result.suggestions).toEqual([missingDiscoverySuggestion])
   })
 })
+
+test('validate uses a configured Stripe method without a plugin', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-config-'))
+  const configPath = path.join(configDir, 'mppx.config.mjs')
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+  fs.writeFileSync(
+    configPath,
+    `
+    import { Credential, Method, z } from '${moduleUrl}'
+    export default { methods: [Method.toClient(Method.from({
+      name: 'stripe', intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ spt: z.string() }) },
+        request: z.object({ amount: z.string(), currency: z.string() }),
+      },
+    }), { async createCredential({ challenge }) {
+      return Credential.serialize({ challenge, payload: { spt: 'configured-token' } })
+    } })] }
+  `,
+  )
+  const challenge = makeChallenge({
+    method: 'stripe',
+    request: {
+      amount: '100',
+      currency: 'usd',
+      methodDetails: { networkId: 'profile_test123', paymentMethodTypes: ['card'] },
+    },
+  })
+  const server = await mppServer(challenge)
+  const previousConfig = process.env.MPPX_CONFIG
+  process.env.MPPX_CONFIG = configPath
+  try {
+    const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
+    expect(output).toContain('Payment [stripe]: submitted')
+    expect(output).not.toContain('no Stripe')
+  } finally {
+    if (previousConfig === undefined) delete process.env.MPPX_CONFIG
+    else process.env.MPPX_CONFIG = previousConfig
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})

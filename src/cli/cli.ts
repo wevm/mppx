@@ -673,7 +673,9 @@ const cli = Cli.create('mppx', {
       const persistentSessionAccount =
         process.env.MPPX_PRIVATE_KEY?.trim() ||
         !isTempoAccount(resolveAccountName(c.options.account))
-      if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
+      // Configured methods own their signing policies and channel storage.
+      // Rebuilding a persistent manager would discard those policies.
+      if (isTempoSessionChallenge(challenge) && persistentSessionAccount && !configMethod) {
         try {
           const credentialContext = await preparePayment(
             challenge,
@@ -710,7 +712,10 @@ const cli = Cli.create('mppx', {
       if (c.options.session !== 'auto')
         return c.error({
           code: 'UNSUPPORTED_SESSION',
-          message: '--session requires a tempo/session payment challenge.',
+          message:
+            configMethod && isTempoSessionChallenge(challenge)
+              ? '--session cannot override a configured session method. Configure its channelStore instead.'
+              : '--session requires a tempo/session payment challenge.',
           exitCode: 2,
         })
 

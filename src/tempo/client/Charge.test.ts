@@ -796,3 +796,31 @@ describe('recipient allowlist', () => {
     }
   })
 })
+
+describe('zero-amount recipient policy', () => {
+  test.each([{ allowed: [] }, { allowed: [currency] }, { allowed: [recipient] }])(
+    'enforces allowlist %j before proof signing',
+    async ({ allowed }) => {
+      const signer = { ...account }
+      const signTypedData = vi.spyOn(signer, 'signTypedData')
+      const client = createClient({
+        account: signer,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = charge({
+        account: signer,
+        getClient: () => client,
+        expectedRecipients: allowed as Address[],
+      })
+      const pending = method.createCredential({ challenge: createChallenge(), context: {} })
+      if (allowed.includes(recipient)) {
+        expect(Credential.deserialize(await pending).payload).toMatchObject({ type: 'proof' })
+        expect(signTypedData).toHaveBeenCalledOnce()
+      } else {
+        await expect(pending).rejects.toThrow('Unexpected primary recipient')
+        expect(signTypedData).not.toHaveBeenCalled()
+      }
+    },
+  )
+})

@@ -54,3 +54,13 @@ describe('configured payment policies', () => {
     expect(resolvePlugin({ ...challenge, method: 'unknown' })).toEqual({})
   })
 })
+
+test('preserves the configured method selected by challenge filtering', () => {
+  const first = { ...charge({ account }), canHandleChallenge: () => false }
+  const second = { ...charge({ account }), canHandleChallenge: () => true }
+  const config = { methods: [first, second] }
+  expect(selectChallenge([challenge], config)?.method).toBe(second)
+  expect(resolvePlugin(challenge, config).method).toBe(second)
+  expect(resolvePlugin(challenge, { methods: [first] })).toEqual({})
+  expect(selectChallenge([challenge], { methods: [first] })).toBeUndefined()
+})
