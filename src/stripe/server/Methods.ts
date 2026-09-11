@@ -99,6 +99,10 @@ interface StripeMachinePayments<P extends stripe.Parameters = stripe.Parameters>
         metadata?: Record<string, string>
       } & Partial<Omit<Parameters<typeof tempoCharge>[0], 'currency' | 'recipient'>>,
     ) => TempoServer
+    /**
+     * Creates a session that automatically records whole-cent settlement deltas
+     * as Stripe PaymentIntents. `onSessionSettlement` runs after recording.
+     */
     session: (
       params: { recipient: stripe.DepositAddress<'tempo'> } & Omit<
         tempoSession.Parameters,
@@ -256,13 +260,24 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
   function makeTempoSession(
     params: { recipient: `0x${string}` } & Omit<tempoSession.Parameters, 'currency' | 'recipient'>,
   ): Method.AnyServer {
-    const { recipient, ...rest } = params
+    const { recipient, onSessionSettlement, ...rest } = params
     return tempoSession({
       currency: tempoCurrency,
       recipient,
       ...(!livemode && { testnet: true }),
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
+      async onSessionSettlement(context) {
+        // Stripe verifies each transaction in whole cents. Never round a
+        // settlement up or carry its sub-cent remainder into another transaction.
+        const amount = (context.delta / 10_000n) * 10_000n
+        if (amount > 0n)
+          await tempoPaymentHandler({
+            receipt: { reference: context.txHash },
+            request: { amount: amount.toString() },
+          })
+        await onSessionSettlement?.(context)
+      },
     } as tempoSession.Parameters) as Method.AnyServer
   }
 
