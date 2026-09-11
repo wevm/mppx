@@ -1,5 +1,17 @@
 # mppx
 
+## 0.10.0
+
+### Minor Changes
+
+- c0ce0fe: Enforced recipient allowlists for both primary and split recipients, including zero-amount proofs.
+
+  Migration: include the primary recipient address as well as every split recipient in `expectedRecipients`. Configurations containing only split recipients are now rejected.
+
+### Patch Changes
+
+- 3c14a65: Enforced charge and session chain policies and rejected clients on conflicting payment chains. Preserved configured payment methods, challenge preferences, session retries, incremental SSE output, and follow-up vouchers in the CLI. Updated validation to use configured methods and advertised payment metadata, avoid unrelated wallet preflights, and settle session attempts after responses or transport failures.
+
 ## 0.9.3
 
 ### Patch Changes
