@@ -3,6 +3,14 @@
     {
       "issue": "wevm/mppx#752",
       "path": ".agents/friction-log/20260803102657-pnpm-install-warns/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#758",
+      "path": ".agents/friction-log/20260803121247-test-coverage-is/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#761",
+      "path": ".agents/friction-log/20260803161432-concurrent-html-builds/friction.md"
     }
   ],
   "version": 1
