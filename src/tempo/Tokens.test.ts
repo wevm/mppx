@@ -3,14 +3,17 @@ import { describe, expect, test } from 'vp/test'
 import { mach } from './Tokens.js'
 
 describe('mach', () => {
-  test.each([4217, 42431] as const)('defines the MACH currency on chain %s', (chainId) => {
-    expect(mach(chainId)).toEqual({
-      address: '0x20c000000000000000000000f37de3740ADec032',
-      currency: 'USD',
-      decimals: 6,
-      name: 'MACH',
-      popular: undefined,
-      symbol: 'MACH',
-    })
-  })
+  test.each([4217, 42431] as const)(
+    'defines MACH funding-token metadata on chain %s',
+    (chainId) => {
+      expect(mach(chainId)).toEqual({
+        address: '0x20c000000000000000000000f37de3740ADec032',
+        currency: 'USD',
+        decimals: 6,
+        name: 'MACH',
+        popular: undefined,
+        symbol: 'MACH',
+      })
+    },
+  )
 })

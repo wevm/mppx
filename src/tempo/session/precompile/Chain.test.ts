@@ -426,15 +426,43 @@ describe('precompile server transactions', () => {
       feePayer: true,
       feeToken: sourceToken,
     })
-    expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
-    expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
-    expect(preparedRequests.map(({ nonceKey }) => nonceKey)).toEqual(['expiring', 'expiring'])
-    expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true])
-    expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([sourceToken, sourceToken])
-    expect(signedRequests.map(({ nonceKey }) => nonceKey)).toEqual(['expiring', 'expiring'])
-    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
+    await Chain.closeMachineSessionOnChain(
+      client,
+      descriptor,
+      1n,
+      `0x${'11'.repeat(65)}`,
+      `0x${'22'.repeat(65)}`,
+      `0x${'33'.repeat(65)}`,
+      '0x7777777777777777777777777777777777777777',
+      { account: sender, feePayer: true, feeToken: sourceToken },
+    )
+
+    expect(preparedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
+    expect(preparedRequests.map(({ feeToken }) => feeToken)).toEqual([
+      sourceToken,
+      sourceToken,
+      sourceToken,
+    ])
+    expect(signedRequests.map(({ feePayer }) => feePayer)).toEqual([true, true, true])
+    expect(signedRequests.map(({ feeToken }) => feeToken)).toEqual([
+      sourceToken,
+      sourceToken,
+      sourceToken,
+    ])
+    expect(preparedRequests.map(({ nonceKey }) => nonceKey)).toEqual([
+      'expiring',
+      'expiring',
+      'expiring',
+    ])
+    expect(signedRequests.map(({ nonceKey }) => nonceKey)).toEqual([
+      'expiring',
+      'expiring',
+      'expiring',
+    ])
+    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(3)
     expect(rpcMethods).not.toContain('eth_sendTransaction')
     expect(rpcMethods).not.toContain('eth_call')
+    expect((preparedRequests[2]!.data as Hex).slice(0, 10)).toBe('0x6563b635')
   })
 
   test('does not add a fee-payer signature when the sender and fee payer are the same account', async () => {
