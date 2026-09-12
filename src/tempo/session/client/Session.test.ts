@@ -1611,3 +1611,142 @@ describe('precompile client session', () => {
     ).toBe(true)
   })
 })
+
+describe('session chain policy', () => {
+  test.each([chainId, undefined])(
+    'accepts a chain-agnostic client with advertised chain %s',
+    async (advertised) => {
+      const getClient = vi.fn(() => ({ ...client, chain: undefined }))
+      const method = session({ account, allowedChainIds: [chainId], getClient })
+      const challenge = makeSessionChallenge()
+      if (advertised === undefined) delete challenge.request.methodDetails!.chainId
+      const credential = await method.createCredential({
+        challenge,
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      })
+      expect(getClient).toHaveBeenCalledWith({ chainId })
+      expect(Credential.deserialize(credential).source).toBe(
+        `did:pkh:eip155:${chainId}:${account.address}`,
+      )
+    },
+  )
+
+  test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
+    'rejects a resolved client on another chain for %s',
+    async (action) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, allowedChainIds: [4217], getClient })
+      const challenge = makeSessionChallenge()
+      delete challenge.request.methodDetails!.chainId
+      const context =
+        action === 'automatic'
+          ? {}
+          : action === 'recover'
+            ? { descriptor }
+            : { action, descriptor, transaction: '0x1234' as const, cumulativeAmountRaw: '100' }
+      await expect(method.createCredential({ challenge, context })).rejects.toThrow(
+        `Chain ID mismatch: expected 4217, got ${chainId}.`,
+      )
+      expect(getClient).toHaveBeenCalledWith({ chainId: 4217 })
+    },
+  )
+
+  test.each(['automatic', 'open', 'topUp', 'voucher', 'close', 'recover'] as const)(
+    'rejects a foreign chain before resolving a client for %s',
+    async (action) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, allowedChainIds: [chainId], getClient })
+      const context =
+        action === 'automatic'
+          ? {}
+          : action === 'recover'
+            ? { descriptor }
+            : { action, descriptor, transaction: '0x1234' as const, cumulativeAmountRaw: '100' }
+      await expect(
+        method.createCredential({
+          challenge: makeSessionChallenge({
+            methodDetails: { chainId: 4217, escrowContract: tip20ChannelEscrow },
+          }),
+          context,
+        }),
+      ).rejects.toThrow(`Chain ID not allowed: 4217.`)
+      expect(getClient).not.toHaveBeenCalled()
+    },
+  )
+
+  test('rejects a foreign chain in the automatic top-up hook', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn()
+    const method = session({ account, allowedChainIds: [chainId], getClient })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge({
+          methodDetails: { chainId: 4217, escrowContract: tip20ChannelEscrow },
+        }),
+        context: {},
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).rejects.toThrow('Chain ID not allowed')
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test.each([chainId, undefined])(
+    'signs on the allowed chain with advertised chain %s',
+    async (advertised) => {
+      const getClient = vi.fn(() => client)
+      const method = session({ account, allowedChainIds: [chainId], getClient })
+      const challenge = makeSessionChallenge()
+      if (advertised === undefined) delete challenge.request.methodDetails!.chainId
+      const credential = await method.createCredential({
+        challenge,
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      })
+      expect(getClient).toHaveBeenCalledWith({ chainId })
+      expect(Credential.deserialize(credential).source).toBe(
+        `did:pkh:eip155:${chainId}:${account.address}`,
+      )
+    },
+  )
+})
+
+describe('session chain allowlists', () => {
+  test.each([
+    { allowed: [4217, chainId], advertised: chainId, resolved: chainId, accepted: true },
+    { allowed: [4217, chainId], advertised: 4217, resolved: 4217, accepted: true },
+    { allowed: [4217, chainId], advertised: undefined, resolved: chainId, accepted: true },
+    { allowed: [4217, chainId], advertised: undefined, resolved: 1, accepted: false },
+    { allowed: [], advertised: chainId, resolved: chainId, accepted: false },
+    { allowed: [], advertised: undefined, resolved: chainId, accepted: false },
+    { allowed: [4217, chainId], advertised: 1, resolved: 1, accepted: false },
+  ])(
+    'enforces $allowed for challenge $advertised and client $resolved',
+    async ({ allowed, advertised, resolved, accepted }) => {
+      const getClient = vi.fn(() => ({ ...client, chain: { id: resolved } as never }))
+      const signTypedData = vi.spyOn(account, 'signTypedData')
+      const method = session({ account, allowedChainIds: allowed, getClient })
+      const challenge = makeSessionChallenge()
+      if (advertised === undefined) delete challenge.request.methodDetails!.chainId
+      else challenge.request.methodDetails!.chainId = advertised
+      try {
+        const result = method.createCredential({
+          challenge,
+          context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+        })
+        if (accepted) {
+          const credential = Credential.deserialize(await result)
+          expect(credential.source).toBe(`did:pkh:eip155:${resolved}:${account.address}`)
+          expect(getClient).toHaveBeenCalledWith({ chainId: advertised })
+        } else {
+          await expect(result).rejects.toThrow('Chain ID not allowed')
+          expect(signTypedData).not.toHaveBeenCalled()
+          if (advertised !== undefined || allowed.length === 0)
+            expect(getClient).not.toHaveBeenCalled()
+        }
+      } finally {
+        signTypedData.mockRestore()
+      }
+    },
+  )
+})

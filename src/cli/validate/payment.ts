@@ -14,10 +14,17 @@ import type { AnyClient } from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
+import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import type * as Extension from '../Extension.js'
-import { loadConfig, preparePayment, resolvePlugin } from '../internal.js'
+import {
+  assertSamePaymentRequest,
+  flattenConfigMethods,
+  loadConfig,
+  preparePayment,
+  resolvePlugin,
+} from '../internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
 import { buildUrl } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
@@ -197,6 +204,12 @@ export async function validatePaymentFlow(
   // Testnet Tempo: always use ephemeral wallet (zero-setup, free money)
   const tempoTestnetChallenge = challenges.find((ch) => {
     if (ch.method !== Constants.Methods.tempo) return false
+    if (
+      flattenConfigMethods(loaded?.config)?.some(
+        (method) => method.name === ch.method && method.intent === ch.intent,
+      )
+    )
+      return false
     const req = ch.request as Record<string, unknown>
     const md = req.methodDetails as Record<string, unknown> | undefined
     return typeof md?.chainId === 'number' && md.chainId !== tempoChainIds.mainnet
@@ -228,6 +241,7 @@ export async function validatePaymentFlow(
           fetchBody,
           verbose,
           tempoModerato,
+          Challenge.credentialHeader(tempoTestnetChallenge),
         )
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
@@ -338,30 +352,43 @@ async function attemptCryptoPayment(
     (methodDetails?.decimals as number | undefined) ?? (request.decimals as number | undefined) ?? 6
   const currency = request.currency as string | undefined
 
-  // Resolve wallet
-  let walletAddress: string | undefined
-  try {
-    walletAddress = await resolveWalletAddress()
-  } catch {}
-  if (!walletAddress) {
-    results.push(skip(tag, 'no wallet configured. Run "mppx account create" to create one.'))
+  const { plugin, method: directMethod } = resolvePlugin(challenge, loaded?.config)
+  if (!plugin && !directMethod) {
+    results.push(skip(tag, methodSetupHint(challenge)))
     return
+  }
+
+  // Direct methods own their payer; the CLI wallet may be unrelated or absent.
+  let walletAddress: string | undefined
+  if (!directMethod) {
+    try {
+      walletAddress = await resolveWalletAddress()
+    } catch {}
+    if (!walletAddress) {
+      results.push(skip(tag, 'no wallet configured. Run "mppx account create" to create one.'))
+      return
+    }
   }
 
   // Pre-flight balance check and chain resolution
   let paymentChain: Chain | undefined
-  if (challenge.method === Constants.Methods.tempo) paymentChain = tempoMainnetChain
-  else if (challenge.method === Constants.Methods.evm) {
+  if (challenge.method === Constants.Methods.tempo) {
+    const chainId =
+      (methodDetails?.chainId as number | undefined) ??
+      (directMethod ? undefined : tempoMainnetChain.id)
+    if (chainId !== undefined)
+      paymentChain = chainId === tempoModerato.id ? tempoModerato : resolveEvmChain(chainId)
+  } else if (challenge.method === Constants.Methods.evm) {
     const chainId = methodDetails?.chainId as number | undefined
     if (chainId) paymentChain = resolveEvmChain(chainId)
   }
 
   let tokenSymbol: string | undefined
-  if (requiredAmount && currency && paymentChain) {
+  if (walletAddress && requiredAmount && currency && paymentChain) {
     try {
       let balance: bigint
       if (challenge.method === Constants.Methods.tempo) {
-        const client = createClient({ chain: tempoMainnetChain, transport: http() })
+        const client = createClient({ chain: paymentChain, transport: http() })
         const info = await fetchTokenInfo(client, currency as Address, walletAddress as Address)
         balance = info.balance
         tokenSymbol = info.symbol
@@ -398,9 +425,16 @@ async function attemptCryptoPayment(
   const chainName = paymentChain?.name
   const paymentDesc = `${amountDisplay}${tokenDisplay ? ` ${tokenDisplay}` : ''}${chainName ? ` on ${chainName}` : ''}`
 
-  if (!options.silent) console.log(pc.dim(`    Attempting payment with wallet ${walletAddress}`))
+  if (!options.silent)
+    console.log(
+      pc.dim(
+        walletAddress
+          ? `    Attempting payment with wallet ${walletAddress}`
+          : '    Attempting payment with configured method',
+      ),
+    )
 
-  if (paymentChain?.testnet) {
+  if (!directMethod && paymentChain?.testnet) {
     if (!options.silent) console.log(pc.dim(`    Auto-approved: ${paymentDesc} (testnet)`))
   } else if (!options.yes && !ctx.isInteractive) {
     results.push(skip(tag, 'non-interactive mode, use --yes to approve'))
@@ -413,15 +447,6 @@ async function attemptCryptoPayment(
     }
   } else {
     if (!options.silent) console.log(pc.dim(`    Auto-approved: ${paymentDesc}`))
-  }
-
-  // Resolve plugin and pay
-  const resolved = resolvePlugin(challenge, loaded?.config)
-  const plugin = resolved.plugin
-  const directMethod = resolved.method
-  if (!plugin && !directMethod) {
-    results.push(skip(tag, methodSetupHint(challenge)))
-    return
   }
 
   let methods: AnyClient[]
@@ -447,6 +472,44 @@ async function attemptCryptoPayment(
     methods = [directMethod!]
   }
 
+  if (directMethod && isTempoSessionChallenge(challenge)) {
+    let initial = true
+    const mppx = Mppx.create({
+      methods: [directMethod],
+      polyfill: false,
+      async onChallenge(retry, { createCredential }) {
+        const context = await preparePayment(retry, loaded?.config.extensions)
+        assertSamePaymentRequest(challenge, retry)
+        const credential = await createCredential(context as never)
+        results.push(check(`${tag}: submitted`))
+        return credential
+      },
+      fetch: async (input, init) => {
+        if (initial) {
+          initial = false
+          return new Response(null, {
+            status: 402,
+            headers: {
+              [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
+            },
+          })
+        }
+        return fetchWithTimeout(input, init ?? {}, 30_000)
+      },
+    })
+    try {
+      const response = await mppx.fetch(url, {
+        method: endpoint.method,
+        headers: fetchHeaders,
+        body: fetchBody ?? null,
+      })
+      await validatePaymentResponse(results, response, verbose, paymentChain)
+    } catch (error) {
+      results.push(fail(tag, (error as Error).message))
+    }
+    return
+  }
+
   const credential = await createAndSend(
     challenge,
     methods,
@@ -468,6 +531,7 @@ async function attemptCryptoPayment(
     fetchBody,
     verbose,
     paymentChain,
+    Challenge.credentialHeader(challenge),
   )
 }
 
@@ -476,18 +540,16 @@ async function attemptStripePayment(
   tag: string,
   ctx: PaymentContext & { isStripeTestKey: boolean; stripeKey?: string | undefined },
 ): Promise<void> {
-  const {
-    results,
-    url,
-    endpoint,
-    fetchHeaders,
-    fetchBody,
-    verbose,
-    loaded,
-    options,
-    isStripeTestKey,
-    stripeKey,
-  } = ctx
+  const { results, url, endpoint, fetchHeaders, fetchBody, verbose, loaded, options, stripeKey } =
+    ctx
+  const { plugin, method: directMethod } = resolvePlugin(challenge, loaded?.config)
+  if (!plugin && !directMethod) {
+    results.push(skip(tag, 'no Stripe payment method available'))
+    return
+  }
+  const isStripeTestKey = Boolean(
+    plugin && !loaded?.config.plugins?.includes(plugin) && ctx.isStripeTestKey,
+  )
   const request = challenge.request as Record<string, unknown>
   const requiredAmount = isValidIntegerAmount(request.amount)
     ? BigInt(request.amount as string)
@@ -514,33 +576,29 @@ async function attemptStripePayment(
     if (!options.silent) console.log(pc.dim(`    Auto-approved: ${paymentDesc}`))
   }
 
-  // Resolve plugin
-  const resolved = resolvePlugin(challenge, loaded?.config)
-  const plugin = resolved.plugin
-  if (!plugin) {
-    results.push(skip(tag, 'no Stripe plugin available'))
-    return
-  }
-
   let methods: AnyClient[]
   let createCredentialFn:
     | ((response: Response, credentialContext?: unknown) => Promise<string>)
     | undefined
   let credentialContext: unknown
-  try {
-    const methodOpts: Record<string, string> = { paymentMethod: 'pm_card_visa' }
-    if (stripeKey) methodOpts.secretKey = stripeKey
-    const pluginResult = await plugin.setup({
-      challenge,
-      options: {},
-      methodOpts,
-    })
-    methods = pluginResult.methods
-    createCredentialFn = pluginResult.createCredential
-    credentialContext = pluginResult.credentialContext
-  } catch (error) {
-    results.push(skip(tag, (error as Error).message))
-    return
+  if (plugin) {
+    try {
+      const methodOpts: Record<string, string> = { paymentMethod: 'pm_card_visa' }
+      if (stripeKey) methodOpts.secretKey = stripeKey
+      const pluginResult = await plugin.setup({
+        challenge,
+        options: {},
+        methodOpts,
+      })
+      methods = pluginResult.methods
+      createCredentialFn = pluginResult.createCredential
+      credentialContext = pluginResult.credentialContext
+    } catch (error) {
+      results.push(skip(tag, (error as Error).message))
+      return
+    }
+  } else {
+    methods = [directMethod!]
   }
 
   const credential = await createAndSend(
@@ -554,7 +612,7 @@ async function attemptStripePayment(
   )
   if (!credential) return
 
-  plugin.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
+  plugin?.prepareCredentialRequest?.({ challenge, credential, headers: fetchHeaders })
 
   // Stripe testmode: detect livemode rejection gracefully
   if (isStripeTestKey) {
@@ -562,7 +620,7 @@ async function attemptStripePayment(
       url,
       {
         method: endpoint.method,
-        headers: { ...fetchHeaders, [Constants.Headers.authorization]: credential },
+        headers: { ...fetchHeaders, [Challenge.credentialHeader(challenge)]: credential },
         body: fetchBody ?? null,
       },
       30_000,
@@ -590,6 +648,7 @@ async function attemptStripePayment(
     fetchBody,
     verbose,
     undefined,
+    Challenge.credentialHeader(challenge),
   )
 }
 
@@ -639,6 +698,7 @@ async function sendAndValidateResponse(
   fetchBody: string | undefined,
   verbose: boolean,
   explorerChain?: Chain | undefined,
+  credentialHeader: string = Constants.Headers.authorization,
 ): Promise<CheckResult[]> {
   let paymentResponse: Response
   try {
@@ -646,7 +706,7 @@ async function sendAndValidateResponse(
       url,
       {
         method: endpoint.method,
-        headers: { ...baseHeaders, [Constants.Headers.authorization]: credential },
+        headers: { ...baseHeaders, [credentialHeader]: credential },
         body: fetchBody ?? null,
       },
       30_000,
@@ -656,6 +716,15 @@ async function sendAndValidateResponse(
     return results
   }
 
+  return validatePaymentResponse(results, paymentResponse, verbose, explorerChain)
+}
+
+async function validatePaymentResponse(
+  results: CheckResult[],
+  paymentResponse: Response,
+  verbose: boolean,
+  explorerChain?: Chain | undefined,
+): Promise<CheckResult[]> {
   if (paymentResponse.status === 402) {
     const body = await paymentResponse.text().catch(() => '')
     let detail = 'Payment rejected'

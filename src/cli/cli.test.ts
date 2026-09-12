@@ -456,7 +456,10 @@ export default defineConfig({
   })
 })
 
-async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {
+async function serve(
+  argv: string[],
+  options?: { env?: Record<string, string | undefined>; onOutput?: (chunk: string) => void },
+) {
   const stdoutChunks: Buffer[] = []
   let stderr = ''
   let exitCode: number | undefined
@@ -481,6 +484,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
     if (typeof chunk === 'string') stdoutChunks.push(Buffer.from(chunk))
     else if (chunk instanceof Uint8Array) stdoutChunks.push(Buffer.from(chunk))
     else stdoutChunks.push(Buffer.from(String(chunk)))
+    options?.onOutput?.(stdoutChunks.at(-1)!.toString())
     return true
   }) as typeof process.stdout.write
   process.stderr.write = ((chunk: unknown) => {
@@ -2652,3 +2656,343 @@ export default defineConfig({
     },
   )
 })
+
+test.each(['auto', 'new'])(
+  'configured session policies cannot be replaced by persistent session %s',
+  async (selection) => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-config-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const moduleUrl = pathToFileURL(
+      path.join(process.cwd(), 'src/tempo/session/client/Session.ts'),
+    ).href
+    fs.writeFileSync(
+      configPath,
+      `
+    import { session } from '${moduleUrl}'
+    export default { methods: [session({ allowedChainIds: [4217],
+      getClient() { throw new Error('unexpected client resolution') }
+    })] }
+  `,
+    )
+    const challenge = Challenge.from({
+      id: 'pinned-session',
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '100',
+        currency: Addresses.pathUsd,
+        recipient: accounts[0].address,
+        unitType: 'request',
+        methodDetails: {
+          chainId: 42431,
+          escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+        },
+      },
+    })
+    let paidRequests = 0
+    const server = await Http.createServer((req, res) => {
+      if (req.headers.authorization) paidRequests++
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+      res.end()
+    })
+    try {
+      const { output, exitCode } = await serve(
+        [server.url, '-s', '--config', configPath, '--session', selection],
+        {
+          env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        },
+      )
+      expect(exitCode).toBeDefined()
+      expect(output).toContain(
+        selection === 'auto'
+          ? 'Chain ID not allowed: 42431.'
+          : '--session cannot override a configured session method',
+      )
+      expect(paidRequests).toBe(0)
+    } finally {
+      server.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  },
+)
+
+test('configured session handles SSE voucher requests with its own channel store', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-stream-'))
+  const configPath = path.join(configDir, 'mppx.config.mjs')
+  const sourceUrl = pathToFileURL(path.join(process.cwd(), 'src/tempo/session/')).href
+  fs.writeFileSync(
+    configPath,
+    `
+    import { createClient, custom, encodeFunctionResult } from '${import.meta.resolve('viem')}'
+    import { privateKeyToAccount } from '${import.meta.resolve('viem/accounts')}'
+    import { session } from '${sourceUrl}client/Session.ts'
+    import { createChannelStore } from '${sourceUrl}client/ChannelStore.ts'
+    import { computeId } from '${sourceUrl}precompile/Channel.ts'
+    import { escrowAbi } from '${sourceUrl}precompile/escrow.abi.ts'
+    const account = privateKeyToAccount('${testPrivateKey}')
+    const descriptor = {
+      payer: account.address, authorizedSigner: account.address,
+      payee: '${accounts[0].address}', token: '${Addresses.pathUsd}',
+      operator: '0x0000000000000000000000000000000000000000',
+      salt: '0x${'11'.repeat(32)}', expiringNonceHash: '0x${'22'.repeat(32)}',
+    }
+    const escrow = '${tip20ChannelEscrow}'
+    const channelStore = createChannelStore()
+    await channelStore.set({ descriptor, escrow, chainId: 42431,
+      channelId: computeId({ ...descriptor, escrow, chainId: 42431 }),
+      deposit: 1000n, cumulativeAmount: 0n, opened: true,
+    })
+    const client = createClient({ account, chain: { id: 42431 }, transport: custom({
+      async request({ method }) {
+        if (method === 'eth_call') return encodeFunctionResult({ abi: escrowAbi,
+          functionName: 'getChannelState', result: { settled: 0n, deposit: 1000n, closeRequestedAt: 0 },
+        })
+        throw new Error('unexpected RPC: ' + method)
+      }
+    }) })
+    export default { methods: [session({ account, allowedChainIds: [42431],
+      channelStore, getClient: () => client, decimals: 0, maxDeposit: '1000',
+    })] }
+  `,
+  )
+  const challenge = Challenge.from({
+    id: 'configured-stream',
+    realm: 'localhost',
+    method: 'tempo',
+    intent: 'session',
+    request: {
+      amount: '100',
+      currency: Addresses.pathUsd,
+      recipient: accounts[0].address,
+      unitType: 'token',
+      methodDetails: {
+        chainId: 42431,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    },
+  })
+  const { formatMessageEvent, formatNeedVoucherEvent } =
+    await import('../tempo/session/precompile/Protocol.js')
+  const vouchers: string[] = []
+  let closeStream: (() => void) | undefined
+  let streamClosed = false
+  let outputBeforeClose = false
+  const server = await Http.createServer((req, res) => {
+    if (!req.headers.authorization) {
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+      res.end()
+      return
+    }
+    const payload = Credential.deserialize<SessionCredentialPayload>(
+      req.headers.authorization,
+    ).payload
+    if (payload.action !== 'voucher') throw new Error('expected voucher')
+    vouchers.push(payload.cumulativeAmount)
+    if (req.method === 'POST') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    closeStream = () => {
+      clearTimeout(timeout)
+      streamClosed = true
+      res.end()
+    }
+    const timeout = setTimeout(() => closeStream?.(), 2000)
+    res.write(
+      formatMessageEvent('first') +
+        formatNeedVoucherEvent({
+          acceptedCumulative: '100',
+          channelId: payload.channelId,
+          deposit: '1000',
+          requiredCumulative: '200',
+        }) +
+        formatMessageEvent('second'),
+    )
+  })
+  try {
+    const { output, exitCode } = await serve(
+      [server.url, '-s', '--config', configPath, '-H', 'accept: text/event-stream'],
+      {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        onOutput(chunk) {
+          if (!chunk.includes('first')) return
+          outputBeforeClose = !streamClosed
+          closeStream?.()
+        },
+      },
+    )
+    expect(exitCode).toBeUndefined()
+    expect(outputBeforeClose).toBe(true)
+    expect(output).toContain('first')
+    expect(output).toContain('second')
+    expect(output).not.toContain('need-voucher')
+    expect(vouchers).toEqual(['100', '200'])
+  } finally {
+    closeStream?.()
+    server.close()
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test('configured charge methods do not probe the CLI wallet to rank offers', async () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-config-offers-'))
+  const configPath = path.join(configDir, 'mppx.config.mjs')
+  const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+  fs.writeFileSync(
+    configPath,
+    `
+    import { Credential, Method, z } from '${moduleUrl}'
+    export default { methods: [[Method.toClient(Method.from({
+      name: 'tempo', intent: 'charge',
+      schema: { credential: { payload: z.object({}) },
+        request: z.object({ amount: z.string(), currency: z.string() }),
+      }
+    }), { async createCredential({ challenge }) {
+      return Credential.serialize({ challenge, payload: {} })
+    } })]] }
+  `,
+  )
+  let balanceRequests = 0
+  const balanceServer = await Http.createServer((_req, res) => {
+    balanceRequests++
+    res.writeHead(400)
+    res.end()
+  })
+  const offers = [unfundedToken, Addresses.pathUsd].map((currency, index) =>
+    Challenge.from({
+      id: `offer-${index}`,
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'charge',
+      request: {
+        amount: '100',
+        currency,
+        recipient: accounts[0].address,
+        methodDetails: { chainId: 42431 },
+      },
+    }),
+  )
+  let selectedCurrency: unknown
+  const server = await Http.createServer((req, res) => {
+    if (req.headers.authorization) {
+      selectedCurrency = Credential.deserialize(req.headers.authorization).challenge.request
+        .currency
+      res.end('configured-payer')
+      return
+    }
+    res.writeHead(402, {
+      [Constants.Headers.wwwAuthenticate]: offers.map(Challenge.serialize).join(', '),
+    })
+    res.end()
+  })
+  try {
+    const { output, exitCode } = await serve(
+      [server.url, '-s', '--config', configPath, '--rpc-url', balanceServer.url],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+    expect(exitCode).toBeUndefined()
+    expect(output).toContain('configured-payer')
+    expect(selectedCurrency).toBe(unfundedToken)
+    expect(balanceRequests).toBe(0)
+  } finally {
+    server.close()
+    balanceServer.close()
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
+test.each(['unchanged', 'snapshot', 'amount', 'recipient', 'extension'] as const)(
+  'configured session retry rechecks approval and extensions: %s',
+  async (mode) => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-session-retry-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const logPath = path.join(configDir, 'events.jsonl')
+    const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+      import { appendFileSync } from 'node:fs'
+      import { Credential, Method, z } from '${moduleUrl}'
+      const record = event => appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(event) + '\\n')
+      export default {
+        extensions: [{ preparePayment({ challenge }) {
+          record({ extension: challenge.id })
+          if ('${mode}' === 'extension' && challenge.id === 'retry') throw new Error('retry blocked by extension')
+        } }],
+        methods: [Method.toClient(Method.from({ name: 'tempo', intent: 'session', schema: {
+          credential: { payload: z.object({}) },
+          request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
+        } }), { async createCredential({ challenge }) {
+          record({ signed: challenge.id })
+          return Credential.serialize({ challenge, payload: {} })
+        } })],
+      }
+    `,
+    )
+    const challenge = Challenge.from({
+      id: 'initial',
+      realm: 'localhost',
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '100',
+        currency: Addresses.pathUsd,
+        recipient: accounts[0].address,
+      },
+    })
+    let paidRequests = 0
+    const server = await Http.createServer((req, res) => {
+      if (req.headers.authorization && ++paidRequests > 1) {
+        res.end('accepted')
+        return
+      }
+      const retry = req.headers.authorization
+        ? {
+            ...challenge,
+            id: 'retry',
+            request: {
+              ...challenge.request,
+              ...(mode === 'amount' ? { amount: '200' } : {}),
+              ...(mode === 'recipient' ? { recipient: accounts[1].address } : {}),
+              ...(mode === 'snapshot'
+                ? { methodDetails: { sessionSnapshot: { acceptedCumulative: '100' } } }
+                : {}),
+            },
+          }
+        : challenge
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(retry) })
+      res.end()
+    })
+    try {
+      const { output } = await serve([server.url, '-s', '--config', configPath])
+      const events = fs
+        .readFileSync(logPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(events.filter((event) => event.extension).map((event) => event.extension)).toEqual([
+        'initial',
+        'retry',
+      ])
+      expect(events.filter((event) => event.signed).map((event) => event.signed)).toEqual(
+        mode === 'unchanged' || mode === 'snapshot' ? ['initial', 'retry'] : ['initial'],
+      )
+      expect(paidRequests).toBe(mode === 'unchanged' || mode === 'snapshot' ? 2 : 1)
+      expect(output).toContain(
+        mode === 'unchanged' || mode === 'snapshot'
+          ? 'accepted'
+          : mode === 'extension'
+            ? 'retry blocked by extension'
+            : 'Payment request changed on retry',
+      )
+    } finally {
+      server.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  },
+)

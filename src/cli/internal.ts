@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type * as Challenge from '../Challenge.js'
+import * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'
@@ -33,6 +33,7 @@ export async function preparePayment(
   return current
 }
 
+/** Resolves explicit payment configuration before falling back to built-in plugins. */
 export function resolvePlugin(
   challenge: Challenge.Challenge,
   config?: { plugins?: Plugin[] | undefined; methods?: any },
@@ -40,14 +41,16 @@ export function resolvePlugin(
   const configPlugin = config?.plugins?.find((p) => supportsPlugin(p, challenge))
   if (configPlugin) return { plugin: configPlugin }
 
-  const builtin = builtinPlugins.find((p) => supportsPlugin(p, challenge))
-  if (builtin) return { plugin: builtin }
-
   const configMethods = flattenConfigMethods(config)
-  const matched = configMethods?.find(
+  const matching = configMethods?.filter(
     (m) => m.name === challenge.method && m.intent === challenge.intent,
   )
+  const matched = matching?.find((m) => m.canHandleChallenge?.({ challenge }) ?? true)
   if (matched) return { method: matched }
+  if (matching?.length) return {}
+
+  const builtin = builtinPlugins.find((p) => supportsPlugin(p, challenge))
+  if (builtin) return { plugin: builtin }
 
   return {}
 }
@@ -73,7 +76,11 @@ export function selectChallenge(
       resolvedPreferences.entries,
     )
     if (selected) {
-      return { challenge: selected.challenge, ...resolvePlugin(selected.challenge, config) }
+      const plugin = config?.plugins?.find((plugin) => supportsPlugin(plugin, selected.challenge))
+      return {
+        challenge: selected.challenge,
+        ...(plugin ? { plugin } : { method: selected.method }),
+      }
     }
 
     return undefined
@@ -134,4 +141,32 @@ function resolveConfigPath(configFile?: string | undefined): string | undefined 
   }
 
   return undefined
+}
+
+/** Rejects retry challenges that change the payment the caller approved. */
+export function assertSamePaymentRequest(
+  approved: Challenge.Challenge,
+  retry: Challenge.Challenge,
+): void {
+  function paymentTerms(challenge: Challenge.Challenge): string {
+    const request = { ...challenge.request }
+    if (challenge.method === 'tempo' && challenge.intent === 'session') {
+      const methodDetails = { ...(request.methodDetails as Record<string, unknown> | undefined) }
+      // Snapshots advance session state; the session method validates them against
+      // the unchanged payment terms before authorizing the next credential.
+      delete methodDetails.sessionSnapshot
+      if (Object.keys(methodDetails).length) request.methodDetails = methodDetails
+      else delete request.methodDetails
+    }
+    return Challenge.serialize({
+      ...challenge,
+      request,
+      id: approved.id,
+      expires: approved.expires,
+    })
+  }
+  if (paymentTerms(retry) !== paymentTerms(approved))
+    throw new Error(
+      'Payment request changed on retry. Run the command again to approve the new payment.',
+    )
 }

@@ -85,7 +85,7 @@ export function printResults(results: CheckResult[], counts: Counts) {
 }
 
 export async function fetchWithTimeout(
-  url: string,
+  url: RequestInfo | URL,
   init: RequestInit,
   timeoutMs = 15_000,
 ): Promise<Response> {

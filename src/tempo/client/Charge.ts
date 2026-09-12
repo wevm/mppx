@@ -74,9 +74,16 @@ export function charge(parameters: charge.Parameters = {}) {
         throw new Error(
           `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`,
         )
-      const resolvedChainId = challengeChainId ?? parameters.expectedChainId
+      if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
+        Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
+      const resolvedChainId =
+        challengeChainId ??
+        parameters.expectedChainId ??
+        (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined)
       const client = await getClient({ chainId: resolvedChainId })
+      Client.assertChainId(client, resolvedChainId)
       const chainId = resolvedChainId ?? client.chain?.id
+      Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
@@ -86,6 +93,19 @@ export function charge(parameters: charge.Parameters = {}) {
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
       const defaultAccount = getAccount(client, context)
+
+      if (parameters.expectedRecipients) {
+        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+        if (!request.recipient || !allowed.has(request.recipient.toLowerCase()))
+          throw new Error(`Unexpected primary recipient: ${request.recipient}`)
+        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
+        if (splits) {
+          for (const split of splits) {
+            if (!allowed.has(split.recipient.toLowerCase()))
+              throw new Error(`Unexpected split recipient: ${split.recipient}`)
+          }
+        }
+      }
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -108,16 +128,6 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       const currency = request.currency as Address
-      if (parameters.expectedRecipients) {
-        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
-        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
-        if (splits) {
-          for (const split of splits) {
-            if (!allowed.has(split.recipient.toLowerCase()))
-              throw new Error(`Unexpected split recipient: ${split.recipient}`)
-          }
-        }
-      }
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ challengeId: challenge.id, clientId, serverId: challenge.realm })
@@ -293,8 +303,14 @@ export declare namespace charge {
      */
     expectedChainId?: number | undefined
     /**
-     * Allowlist of expected split recipient addresses. When set, the client
-     * rejects any challenge whose split recipients are not in this list.
+     * Chains permitted for payment credentials. Omitted allows any chain; empty rejects all.
+     * A single entry supplies an omitted challenge chain unless `expectedChainId` is set.
+     * When both policies are set, the selected chain must satisfy both.
+     */
+    allowedChainIds?: readonly number[] | undefined
+    /**
+     * Allowlist of payment recipient addresses. When set, both the primary
+     * recipient and every split recipient must be included in this list.
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
