@@ -89,6 +89,7 @@ const storedChannelId = Channel.computeId({
   escrow: tip20ChannelEscrow,
 })
 const machineChainId = defaults.chainId.testnet
+const machineClient = { ...client, chain: { id: machineChainId } as never }
 const machineDeployment = defaults.machineToken[machineChainId]
 const machineDescriptor = {
   ...storedDescriptor,
@@ -458,7 +459,7 @@ describe('Session', () => {
         channelId: machineChannelId,
         cumulativeAmount: '1000000',
         signature: await Voucher.signVoucher(
-          client,
+          machineClient,
           account,
           { channelId: machineChannelId, cumulativeAmount: 1_000_000n },
           tip20ChannelEscrow,
@@ -473,7 +474,9 @@ describe('Session', () => {
         const headers = new Headers(init?.headers)
         if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
           expect(headers.get(Constants.Headers.acceptPayment)).toBe('tempo/charge')
-          return Promise.resolve(make402Response(makeChargeChallenge()))
+          return Promise.resolve(
+            make402Response(makeChargeChallenge({ methodDetails: { chainId: machineChainId } })),
+          )
         }
         if (init?.method === 'HEAD') {
           const credential = Credential.deserialize(headers.get(Constants.Headers.authorization)!)
@@ -538,7 +541,7 @@ describe('Session', () => {
       const s = sessionManager({
         account,
         bootstrap: true,
-        client,
+        client: machineClient,
         fetch: mockFetch as typeof globalThis.fetch,
         channelStore: store,
         resolveAccount,
@@ -1914,7 +1917,7 @@ describe('Session', () => {
         closePayload = payload
         return new Response(null, { status: 200 })
       })
-      const manager = sessionManager({ account, client, fetch })
+      const manager = sessionManager({ account, client: machineClient, fetch })
       getSessionManagerInternals(manager).rehydrate({
         channel: channelEntry({
           chainId: machineChainId,

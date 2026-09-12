@@ -1,5 +1,5 @@
 import { Challenge, Credential } from 'mppx'
-import { createClient, http } from 'viem'
+import { type Address, createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
 import { Account, Secp256k1 } from 'viem/tempo'
@@ -297,7 +297,7 @@ describe('tempo.charge client', () => {
       const { charge: chargeWithMockedFunding } = await import('./Charge.js')
       const client = createClient({
         account,
-        chain: tempoLocalnet,
+        chain: { ...tempoLocalnet, id: chainId },
         transport: http('http://127.0.0.1'),
       })
       const method = chargeWithMockedFunding({
@@ -387,7 +387,7 @@ describe('tempo.charge client', () => {
       const { charge: chargeWithMockedRoute } = await import('./Charge.js')
       const client = createClient({
         account,
-        chain: tempoLocalnet,
+        chain: { ...tempoLocalnet, id: chainId },
         transport: http('http://127.0.0.1'),
       })
       const resolveAccount = vi.fn((info: charge.ResolveAccountInfo) => {
@@ -464,7 +464,7 @@ describe('tempo.charge client', () => {
       const { charge: chargeWithMockedRoute } = await import('./Charge.js')
       const client = createClient({
         account,
-        chain: tempoLocalnet,
+        chain: { ...tempoLocalnet, id: chainId },
         transport: http('http://127.0.0.1'),
       })
       const resolveAccount = vi.fn((info: charge.ResolveAccountInfo) => {
@@ -538,7 +538,7 @@ describe('tempo.charge client', () => {
       const { charge: chargeWithMockedActions } = await import('./Charge.js')
       const client = createClient({
         account,
-        chain: { ...tempoLocalnet, id: 42431 },
+        chain: { ...tempoLocalnet, id: chainId },
         transport: http('http://127.0.0.1'),
       })
       const method = chargeWithMockedActions({
