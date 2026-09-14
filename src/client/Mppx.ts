@@ -37,6 +37,29 @@ export type PreparedPayment<
   ) => Transport.RequestOf<transport>
 }>
 
+/** A payment challenge prepared together with the exact HTTP request that produced it. */
+export type PreparedRequest<methods extends readonly Method.AnyClient[]> = Readonly<
+  PreparedPayment<methods, Transport.Transport<RequestInit, Response>> & {
+    /** Exact request that returned the selected payment challenge. */
+    request: Request
+    /** Payment-required response returned for {@link request}. */
+    response: Response
+    /** Redirects followed before receiving the payment challenge. */
+    redirects: readonly PreparedRequest.Redirect[]
+    /** Creates and sends a credential to the prepared request without following redirects. */
+    pay: (context?: AnyContextFor<methods> | undefined) => Promise<Response>
+  }
+>
+
+export declare namespace PreparedRequest {
+  /** A redirect followed while discovering a payment challenge. */
+  type Redirect = Readonly<{
+    from: string
+    status: number
+    to: string
+  }>
+}
+
 /**
  * Client-side payment handler.
  */
@@ -69,6 +92,17 @@ export type Mppx<
     response: Transport.ResponseOf<transport>,
     options?: preparePayment.Options<FlattenMethods<methods>, transport> | undefined,
   ) => Promise<PreparedPayment<FlattenMethods<methods>, transport>>
+  /**
+   * Follows safe pre-payment redirects and prepares the challenge with the exact request that
+   * produced it. Credential-bearing requests never follow redirects.
+   */
+  prepareRequest: transport extends Transport.Transport<RequestInit, Response>
+    ? (
+        input: RequestInfo | URL,
+        init?: RequestInit | undefined,
+        options?: prepareRequest.Options<FlattenMethods<methods>> | undefined,
+      ) => Promise<PreparedRequest<FlattenMethods<methods>>>
+    : never
   /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
     response: Transport.ResponseOf<transport>,
@@ -330,6 +364,44 @@ export function create<
     }
   }
 
+  async function prepareRequest(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+    options?: prepareRequest.Options<FlattenMethods<methods>>,
+  ): Promise<PreparedRequest<FlattenMethods<methods>>> {
+    const { maxRedirects = 20, ...paymentOptions } = options ?? {}
+    const preparedHttp = await prepareHttpRequest(attestedFetch, input, init, maxRedirects)
+    const requestInit = await requestToInit(preparedHttp.request)
+    if (!(await transport.isPaymentRequired(preparedHttp.response as never, requestInit as never)))
+      throw new Error('Response does not require payment.')
+
+    const payment = (await preparePayment(preparedHttp.response as never, {
+      ...paymentOptions,
+      request: requestInit as never,
+    })) as unknown as PreparedPayment<
+      FlattenMethods<methods>,
+      Transport.Transport<RequestInit, Response>
+    >
+
+    return Object.freeze({
+      ...payment,
+      request: preparedHttp.request,
+      response: preparedHttp.response,
+      redirects: preparedHttp.redirects,
+      async pay(context?: AnyContextFor<FlattenMethods<methods>>) {
+        const credential = await payment.createCredential(context)
+        const paidInit = payment.setCredential(
+          await requestToInit(preparedHttp.request),
+          credential,
+        )
+        return attestedFetch(preparedHttp.request.url, {
+          ...paidInit,
+          redirect: 'manual',
+        })
+      },
+    })
+  }
+
   return {
     fetch,
     rawFetch,
@@ -341,6 +413,7 @@ export function create<
     onPaymentFailed,
     onPaymentResponse,
     preparePayment,
+    prepareRequest: prepareRequest as never,
     async createCredential(
       response: Transport.ResponseOf<transport>,
       context?: AnyContextFor<FlattenMethods<methods>>,
@@ -358,6 +431,17 @@ export declare namespace preparePayment {
     methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
     transport extends Transport.AnyTransport = Transport.Transport,
   > = createCredential.Options<methods, transport>
+}
+
+export declare namespace prepareRequest {
+  /** Options for preparing a request-bound payment. */
+  type Options<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = Omit<
+    preparePayment.Options<methods, Transport.Transport<RequestInit, Response>>,
+    'request'
+  > & {
+    /** Maximum redirects followed before rejecting the request. @default 20 */
+    maxRedirects?: number | undefined
+  }
 }
 
 export declare namespace createCredential {
@@ -440,6 +524,98 @@ function createAttestedFetch(
     fetch,
     AttestationClient.composeSigners(...(values as [Attestation.Signer, ...Attestation.Signer[]])),
   )
+}
+
+const redirectStatuses = new Set([301, 302, 303, 307, 308])
+const bodyHeaders = [
+  'content-encoding',
+  'content-language',
+  'content-length',
+  'content-location',
+  'content-type',
+  'transfer-encoding',
+]
+const crossOriginHeaders = ['authorization', 'cookie', 'cookie2', 'host', 'proxy-authorization']
+
+async function prepareHttpRequest(
+  fetch: typeof globalThis.fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  maxRedirects: number,
+): Promise<{
+  request: Request
+  response: Response
+  redirects: readonly PreparedRequest.Redirect[]
+}> {
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0)
+    throw new TypeError('maxRedirects must be a non-negative integer.')
+
+  let request = new Request(input, { ...init, redirect: 'manual' })
+  let body = request.body ? await request.clone().arrayBuffer() : undefined
+  const redirects: PreparedRequest.Redirect[] = []
+
+  for (;;) {
+    const response = await fetch(request.clone())
+    if (!redirectStatuses.has(response.status))
+      return { request, response, redirects: Object.freeze(redirects) }
+
+    const location = response.headers.get('location')
+    if (!location) return { request, response, redirects: Object.freeze(redirects) }
+    if (redirects.length >= maxRedirects) {
+      await response.body?.cancel()
+      throw new Error(`Payment request exceeded ${maxRedirects} redirects.`)
+    }
+
+    const from = new URL(request.url)
+    const to = new URL(location, from)
+    if (from.protocol === 'https:' && to.protocol !== 'https:') {
+      await response.body?.cancel()
+      throw new Error(`Payment request refused HTTPS downgrade redirect to ${to.href}`)
+    }
+
+    const headers = new Headers(request.headers)
+    let method = request.method
+    const switchesToGet =
+      ((response.status === 301 || response.status === 302) && method === 'POST') ||
+      (response.status === 303 && method !== 'GET' && method !== 'HEAD')
+    if (switchesToGet) {
+      method = 'GET'
+      body = undefined
+      for (const header of bodyHeaders) headers.delete(header)
+    }
+    if (from.origin !== to.origin) for (const header of crossOriginHeaders) headers.delete(header)
+
+    redirects.push(Object.freeze({ from: from.href, status: response.status, to: to.href }))
+    await response.body?.cancel()
+    request = new Request(to, requestInit(request, headers, method, body))
+  }
+}
+
+async function requestToInit(request: Request): Promise<RequestInit> {
+  const body = request.body ? await request.clone().arrayBuffer() : undefined
+  return requestInit(request, new Headers(request.headers), request.method, body)
+}
+
+function requestInit(
+  request: Request,
+  headers: Headers,
+  method: string,
+  body: ArrayBuffer | undefined,
+): RequestInit {
+  return {
+    ...(body ? { body } : {}),
+    cache: request.cache,
+    credentials: request.credentials,
+    headers,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    method,
+    mode: request.mode,
+    redirect: 'manual',
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    signal: request.signal,
+  }
 }
 
 /**

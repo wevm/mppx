@@ -345,6 +345,134 @@ describe('preparePayment', () => {
   })
 })
 
+describe('prepareRequest', () => {
+  function setup(fetch: typeof globalThis.fetch) {
+    const method = Method.toClient(
+      Method.from({ name: 'test', intent: 'charge', schema: Methods.charge.schema }),
+      {
+        async createCredential({ challenge }) {
+          return Credential.serialize({
+            challenge,
+            payload: { signature: '0xsignature', type: 'transaction' },
+          })
+        },
+      },
+    )
+    return Mppx.create({ fetch, methods: [method], polyfill: false })
+  }
+
+  function paymentRequired(header?: string) {
+    const challenge = Challenge.from({
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      header,
+      id: 'prepared-request',
+      intent: 'charge',
+      method: 'test',
+      realm,
+      request: { amount: '100', currency: asset },
+    })
+    return new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+      status: 402,
+    })
+  }
+
+  test('behavior: retains the redirected request and pins credential delivery', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      if (requests.length === 1)
+        return new Response(null, { headers: { location: '/checkout' }, status: 303 })
+      if (requests.length === 2) return paymentRequired('Payment-Credential')
+      return new Response(null, { headers: { location: '/elsewhere' }, status: 307 })
+    })
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    const prepared = await mppx.prepareRequest('https://shop.example/start', {
+      body: 'item=book',
+      headers: {
+        Authorization: 'Bearer caller',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      method: 'POST',
+    })
+
+    expect(prepared.request.url).toBe('https://shop.example/checkout')
+    expect(prepared.request.method).toBe('GET')
+    expect(prepared.request.headers.has('content-type')).toBe(false)
+    expect(prepared.redirects).toEqual([
+      {
+        from: 'https://shop.example/start',
+        status: 303,
+        to: 'https://shop.example/checkout',
+      },
+    ])
+    expect(Object.isFrozen(prepared)).toBe(true)
+    expect(Object.isFrozen(prepared.redirects)).toBe(true)
+
+    const response = await prepared.pay()
+
+    expect(response.status).toBe(307)
+    expect(requests).toHaveLength(3)
+    expect(requests[2]?.url).toBe('https://shop.example/checkout')
+    expect(requests[2]?.redirect).toBe('manual')
+    expect(requests[2]?.headers.get('Payment-Credential')).toMatch(/^Payment /)
+  })
+
+  test('security: strips credentials on pre-payment cross-origin redirects', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return requests.length === 1
+        ? new Response(null, {
+            headers: { location: 'https://pay.example/resource' },
+            status: 307,
+          })
+        : paymentRequired()
+    })
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    const prepared = await mppx.prepareRequest('https://shop.example/start', {
+      headers: {
+        Authorization: 'Bearer secret',
+        Cookie: 'session=secret',
+        'X-Public': 'value',
+      },
+    })
+
+    expect(prepared.request.url).toBe('https://pay.example/resource')
+    expect(prepared.request.headers.get('authorization')).toBeNull()
+    expect(prepared.request.headers.get('cookie')).toBeNull()
+    expect(prepared.request.headers.get('x-public')).toBe('value')
+  })
+
+  test('security: rejects HTTPS downgrade redirects', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(null, {
+          headers: { location: 'http://shop.example/resource' },
+          status: 302,
+        }),
+    )
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    await expect(mppx.prepareRequest('https://shop.example/start')).rejects.toThrow(
+      /HTTPS downgrade/,
+    )
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  test('error: validates the redirect limit', async () => {
+    const mppx = setup(vi.fn() as typeof globalThis.fetch)
+
+    await expect(
+      mppx.prepareRequest('https://shop.example/start', undefined, { maxRedirects: -1 }),
+    ).rejects.toThrow(/non-negative integer/)
+  })
+})
+
 describe('createCredential', () => {
   function sessionChallenge(id: string, sessionProtocol?: string) {
     return {
