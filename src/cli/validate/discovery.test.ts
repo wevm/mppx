@@ -439,9 +439,11 @@ describe('validateLlmsDoc', () => {
   afterEach(() => vi.restoreAllMocks())
 
   test('passes when llms.txt is present', async () => {
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('# API\n\nDocumentation', { headers: { 'content-type': 'text/plain' } }),
-    )
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response('# API\n\nDocumentation', { headers: { 'content-type': 'text/plain' } }),
+      )
 
     expect(await validateLlmsDoc('https://example.com/api')).toMatchObject({ severity: 'pass' })
     expect(fetch).toHaveBeenCalledWith('https://example.com/llms.txt', expect.anything())
