@@ -1,9 +1,10 @@
-import { describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import {
   buildUrl,
   extractEndpointsFromDiscovery,
   extractRequestBodyFromDiscovery,
+  validateLlmsDoc,
 } from './discovery.js'
 
 describe('buildUrl', () => {
@@ -431,5 +432,31 @@ describe('extractRequestBodyFromDiscovery', () => {
       path: '/api/test',
     })
     expect(body).toBeUndefined()
+  })
+})
+
+describe('validateLlmsDoc', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  test.each([
+    { status: 200, body: '# API\n\nDocumentation', type: 'text/plain', severity: 'pass' },
+    { status: 404, body: 'Not found', type: 'text/plain', severity: 'suggested' },
+    { status: 200, body: '  \n', type: 'text/plain', severity: 'suggested' },
+    { status: 200, body: '<html>Fallback</html>', type: 'text/html', severity: 'suggested' },
+    {
+      status: 200,
+      body: '<!doctype html><html></html>',
+      type: 'text/plain',
+      severity: 'suggested',
+    },
+    { status: 200, body: '{}', type: 'application/json', severity: 'suggested' },
+    { status: 0, body: '', type: '', severity: 'suggested' },
+  ])('checks documentation ($status, $type, $body)', async ({ status, body, type, severity }) => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      if (!status) throw new Error('Network error')
+      return new Response(body, { status, headers: { 'content-type': type } })
+    })
+    expect(await validateLlmsDoc('https://example.com/api')).toMatchObject({ severity })
+    expect(fetch).toHaveBeenCalledWith('https://example.com/llms.txt', expect.anything())
   })
 })

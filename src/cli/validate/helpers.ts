@@ -4,7 +4,7 @@ export type CheckResult = {
   label: string
   detail?: string | undefined
   hint?: string | undefined
-  severity: 'pass' | 'fail' | 'warn' | 'skip'
+  severity: 'pass' | 'fail' | 'warn' | 'suggested' | 'skip'
 }
 
 export type EndpointSpec = {
@@ -56,6 +56,7 @@ const SEVERITY_ICONS = {
   pass: pc.green('✓'),
   fail: pc.red('✗'),
   warn: pc.yellow('⚠'),
+  suggested: pc.cyan('◇'),
   skip: pc.dim('○'),
 } as const
 
@@ -72,7 +73,13 @@ export function printSection(title: string) {
   console.log(`\n${pc.bold(title)}`)
 }
 
-export type Counts = { passed: number; failed: number; warnings: number; skipped: number }
+export type Counts = {
+  passed: number
+  failed: number
+  warnings: number
+  suggested: number
+  skipped: number
+}
 
 export function printResults(results: CheckResult[], counts: Counts) {
   for (const result of results) {
@@ -80,6 +87,7 @@ export function printResults(results: CheckResult[], counts: Counts) {
     if (result.severity === 'pass') counts.passed++
     else if (result.severity === 'fail') counts.failed++
     else if (result.severity === 'warn') counts.warnings++
+    else if (result.severity === 'suggested') counts.suggested++
     else if (result.severity === 'skip') counts.skipped++
   }
 }

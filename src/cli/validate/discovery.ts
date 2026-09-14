@@ -1,5 +1,5 @@
-import type { EndpointSpec, PathParameter } from './helpers.js'
-import { fetchWithTimeout, HTTP_METHODS } from './helpers.js'
+import type { CheckResult, EndpointSpec, PathParameter } from './helpers.js'
+import { check, fetchWithTimeout, HTTP_METHODS } from './helpers.js'
 
 export async function fetchDiscoveryDoc(
   baseUrl: string,
@@ -17,6 +17,33 @@ export async function fetchDiscoveryDoc(
       return { error: 'Request timed out after 15s' }
     if (error instanceof SyntaxError) return { error: 'Invalid JSON' }
     return { error: (error as Error).message }
+  }
+}
+
+/** Checks that the server publishes nonempty text documentation at /llms.txt. */
+export async function validateLlmsDoc(baseUrl: string): Promise<CheckResult> {
+  const url = new URL('/llms.txt', baseUrl).href
+  const label = 'llms.txt found and nonempty'
+  try {
+    const response = await fetchWithTimeout(url, {})
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = (await response.text()).trim()
+    if (!body) throw new Error('Empty document')
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (
+      (contentType && !contentType.startsWith('text/')) ||
+      contentType === 'text/html' ||
+      /^<(?:!doctype html|html|head|body)\b/i.test(body)
+    )
+      throw new Error('Expected text documentation, received non-text or HTML content')
+    return check(label, url)
+  } catch (error) {
+    return {
+      label,
+      detail: `${url}: ${(error as Error).message}`,
+      severity: 'suggested',
+      hint: 'Serve nonempty text documentation at /llms.txt.',
+    }
   }
 }
 

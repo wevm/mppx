@@ -60,7 +60,7 @@ const validate = Cli.create('validate', {
     const baseUrl = c.args.url.replace(/\/$/, '').replace(/\/openapi\.json$/i, '')
     console.log(`\n${pc.bold('mppx validate')} ${pc.dim(baseUrl)}\n`)
 
-    const counts: Counts = { passed: 0, failed: 0, warnings: 0, skipped: 0 }
+    const counts: Counts = { passed: 0, failed: 0, warnings: 0, suggested: 0, skipped: 0 }
     let sawMppEndpoint = false
     let sawNonMppPaymentEndpoint = false
     let sawMalformedChallenge = false
@@ -206,6 +206,7 @@ function printSummary(
   if (counts.passed > 0) parts.push(pc.green(`${counts.passed} passed`))
   if (counts.failed > 0) parts.push(pc.red(`${counts.failed} failed`))
   if (counts.warnings > 0) parts.push(pc.yellow(`${counts.warnings} warning(s)`))
+  if (counts.suggested > 0) parts.push(pc.cyan(`${counts.suggested} suggested`))
   if (counts.skipped > 0) parts.push(pc.yellow(`${counts.skipped} skipped`))
   console.log(`${pc.bold('Summary:')} ${parts.join(', ')}`)
 

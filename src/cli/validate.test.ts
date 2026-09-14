@@ -131,10 +131,15 @@ function makeDiscoveryDoc(
 
 async function mppServer(
   challenge: Challenge.Challenge,
-  opts?: { errorStatus?: number; postPaymentStatus?: number },
+  opts?: { errorStatus?: number; postPaymentStatus?: number; llms?: boolean },
 ) {
   return testServer((req, res) => {
     const url = new URL(req.url!, 'http://localhost')
+    if (url.pathname === '/llms.txt') {
+      res.writeHead(opts?.llms === false ? 404 : 200, { 'Content-Type': 'text/plain' })
+      res.end('# Test API\n\nPayment API documentation.')
+      return
+    }
     if (url.pathname === '/openapi.json') {
       res.setHeader('Content-Type', 'application/json')
       res.end(makeDiscoveryDoc({ '/api/test': {} }))
@@ -170,6 +175,21 @@ async function mppServer(
 }
 
 describe('validate: discovery', () => {
+  test('reports missing llms.txt as suggested without failing', async () => {
+    const challenge = makeChallenge()
+    challenge.request.methodDetails = { chainId: 4217 }
+    const server = await mppServer(challenge, { llms: false })
+    const { output, exitCode } = await serve(['validate', server.url, '--outputJson'])
+    const result = JSON.parse(output.slice(output.indexOf('{'), output.lastIndexOf('}') + 1))
+
+    expect(exitCode ?? 0).toBe(0)
+    expect(result.discovery.checks).toContainEqual(
+      expect.objectContaining({ label: 'llms.txt found and nonempty', severity: 'suggested' }),
+    )
+    expect(result.summary.suggested).toBe(1)
+    expect(result.summary.failed).toBe(0)
+  })
+
   test('succeeds with valid discovery doc', { timeout: 15_000 }, async () => {
     const server = await mppServer(makeChallenge())
     const { output } = await serve(['validate', server.url])

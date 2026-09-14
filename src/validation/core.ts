@@ -7,6 +7,7 @@ import {
   extractEndpointsFromDiscovery,
   extractRequestBodyFromDiscovery,
   fetchDiscoveryDoc,
+  validateLlmsDoc,
 } from '../cli/validate/discovery.js'
 import type { CheckResult, EndpointSpec, PathParameter } from '../cli/validate/helpers.js'
 import {
@@ -55,7 +56,7 @@ export type ValidateResult = {
   url: string
   discovery: DiscoveryResult
   endpoints: EndpointValidationResult[]
-  summary: { passed: number; failed: number; warnings: number; skipped: number }
+  summary: { passed: number; failed: number; warnings: number; suggested: number; skipped: number }
   suggestions: string[]
 }
 
@@ -218,12 +219,13 @@ export async function validate(options: ValidateOptions): Promise<ValidateResult
     }
   }
 
-  const summary = { passed: 0, failed: 0, warnings: 0, skipped: 0 }
+  const summary = { passed: 0, failed: 0, warnings: 0, suggested: 0, skipped: 0 }
   if (discovery) {
     for (const r of discovery.checks) {
       if (r.severity === 'pass') summary.passed++
       else if (r.severity === 'fail') summary.failed++
       else if (r.severity === 'warn') summary.warnings++
+      else if (r.severity === 'suggested') summary.suggested++
       else if (r.severity === 'skip') summary.skipped++
     }
   }
@@ -232,6 +234,7 @@ export async function validate(options: ValidateOptions): Promise<ValidateResult
       if (r.severity === 'pass') summary.passed++
       else if (r.severity === 'fail') summary.failed++
       else if (r.severity === 'warn') summary.warnings++
+      else if (r.severity === 'suggested') summary.suggested++
       else if (r.severity === 'skip') summary.skipped++
     }
   }
@@ -295,6 +298,8 @@ async function runDiscovery(baseUrl: string, options: ValidateOptions): Promise<
   let discoveryDoc: Record<string, unknown> | null = null
   let found = false
   let valid = false
+
+  checks.push(await validateLlmsDoc(baseUrl))
 
   // Try the user's path first, then root, then /api.
   const origin = new URL(baseUrl).origin
