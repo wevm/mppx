@@ -119,6 +119,7 @@ export const charge = Method.from({
     request: z.pipe(
       z
         .object({
+          machineTokenEnabled: z.optional(z.boolean()),
           amount: z.amount(),
           chainId: z.optional(z.number()),
           currency: z.string(),
@@ -153,16 +154,28 @@ export const charge = Method.from({
           }, 'Invalid splits'),
         ),
       z.transform(
-        ({ amount, chainId, decimals, feePayer, memo, splits, supportedModes, ...rest }) => ({
+        ({
+          machineTokenEnabled,
+          amount,
+          chainId,
+          decimals,
+          feePayer,
+          memo,
+          splits,
+          supportedModes,
+          ...rest
+        }) => ({
           ...rest,
           amount: parseUnits(amount, decimals).toString(),
-          ...(chainId !== undefined ||
+          ...(machineTokenEnabled !== undefined ||
+          chainId !== undefined ||
           feePayer !== undefined ||
           memo !== undefined ||
           splits !== undefined ||
           supportedModes !== undefined
             ? {
                 methodDetails: {
+                  ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
                   ...(chainId !== undefined && { chainId }),
                   ...(feePayer !== undefined && { feePayer }),
                   ...(memo !== undefined && { memo }),
@@ -196,6 +209,7 @@ export const session = Method.from({
       payload: z.discriminatedUnion('action', [
         z.object({
           action: z.literal('open'),
+          authorizationSignature: z.optional(z.signature()),
           authorizedSigner: z.optional(z.string()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
@@ -214,6 +228,7 @@ export const session = Method.from({
         }),
         z.object({
           action: z.literal('voucher'),
+          authorizationSignature: z.optional(z.signature()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
           descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
@@ -221,9 +236,11 @@ export const session = Method.from({
         }),
         z.object({
           action: z.literal('close'),
+          authorizationSignature: z.optional(z.signature()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
           descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
+          refundSignature: z.optional(z.signature()),
           signature: z.signature(),
         }),
       ]),
@@ -244,6 +261,7 @@ export const session = Method.from({
             ),
           ),
           feeToken: z.optional(z.address()),
+          machineTokenEnabled: z.optional(z.boolean()),
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
@@ -269,6 +287,7 @@ export const session = Method.from({
           escrowContract,
           feePayer,
           feeToken,
+          machineTokenEnabled,
           minVoucherDelta,
           operator,
           sessionProtocol,
@@ -292,6 +311,7 @@ export const session = Method.from({
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
             ...(feeToken !== undefined && { feeToken }),
+            ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
             ...(operator !== undefined && { operator }),
             ...(sessionProtocol !== undefined && {
               [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,

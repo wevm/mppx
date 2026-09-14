@@ -1,6 +1,6 @@
 import { defineToken } from 'viem/tokens'
 
-/** MACH token metadata and deployed addresses. */
+/** MACH funding-token metadata for canonical swapper routes; not a direct settlement currency. */
 export const mach = defineToken({
   addresses: {
     4217: '0x20c000000000000000000000f37de3740ADec032',
