@@ -8,6 +8,7 @@ import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
+import * as MethodChallenge from './internal/MethodChallenge.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -342,6 +343,279 @@ describe('preparePayment', () => {
     expect(createCredential).not.toHaveBeenCalled()
     expect(paymentFailed).toHaveBeenCalledOnce()
     expect(paymentFailed.mock.calls[0]?.[0].challenge?.id).toBe('expiring')
+  })
+})
+
+describe('prepareRequest', () => {
+  function setup(fetch: typeof globalThis.fetch) {
+    const method = Method.toClient(
+      Method.from({ name: 'test', intent: 'charge', schema: Methods.charge.schema }),
+      {
+        async createCredential({ challenge }) {
+          return Credential.serialize({
+            challenge,
+            payload: { signature: '0xsignature', type: 'transaction' },
+          })
+        },
+      },
+    )
+    return Mppx.create({ fetch, methods: [method], polyfill: false })
+  }
+
+  function paymentRequired(header?: string) {
+    const challenge = Challenge.from({
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      header,
+      id: 'prepared-request',
+      intent: 'charge',
+      method: 'test',
+      realm,
+      request: { amount: '100', currency: asset },
+    })
+    return new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+      status: 402,
+    })
+  }
+
+  test('behavior: retains the redirected request and pins credential delivery', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      if (requests.length === 1)
+        return new Response(null, { headers: { location: '/checkout' }, status: 303 })
+      if (requests.length === 2) return paymentRequired('Payment-Credential')
+      return new Response(null, { headers: { location: '/elsewhere' }, status: 307 })
+    })
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    const prepared = await mppx.prepareRequest('https://shop.example/start', {
+      body: 'item=book',
+      headers: {
+        Authorization: 'Bearer caller',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      method: 'POST',
+    })
+
+    expect(prepared.request.url).toBe('https://shop.example/checkout')
+    expect(prepared.request.method).toBe('GET')
+    expect(prepared.request.headers.has('content-type')).toBe(false)
+    expect(prepared.redirects).toEqual([
+      {
+        from: 'https://shop.example/start',
+        status: 303,
+        to: 'https://shop.example/checkout',
+      },
+    ])
+    expect(Object.isFrozen(prepared)).toBe(true)
+    expect(Object.isFrozen(prepared.redirects)).toBe(true)
+
+    const response = await prepared.pay()
+
+    expect(response.status).toBe(307)
+    expect(requests).toHaveLength(3)
+    expect(requests[2]?.url).toBe('https://shop.example/checkout')
+    expect(requests[2]?.redirect).toBe('manual')
+    expect(requests[2]?.headers.get('Payment-Credential')).toMatch(/^Payment /)
+  })
+
+  test('security: strips credentials on pre-payment cross-origin redirects', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return requests.length === 1
+        ? new Response(null, {
+            headers: { location: 'https://pay.example/resource' },
+            status: 307,
+          })
+        : paymentRequired()
+    })
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    const prepared = await mppx.prepareRequest('https://shop.example/start', {
+      headers: {
+        Authorization: 'Bearer secret',
+        Cookie: 'session=secret',
+        'Payment-Authorization': 'secret',
+        'PAYMENT-SIGNATURE': 'secret',
+        'X-Alternate-Credential': 'Payment secret',
+        'X-PAYMENT': 'secret',
+        'X-Public': 'value',
+      },
+    })
+
+    expect(prepared.request.url).toBe('https://pay.example/resource')
+    expect(prepared.request.headers.get('authorization')).toBeNull()
+    expect(prepared.request.headers.get('cookie')).toBeNull()
+    expect(prepared.request.headers.get('payment-authorization')).toBeNull()
+    expect(prepared.request.headers.get('payment-signature')).toBeNull()
+    expect(prepared.request.headers.get('x-alternate-credential')).toBeNull()
+    expect(prepared.request.headers.get('x-payment')).toBeNull()
+    expect(prepared.request.headers.get('x-public')).toBe('value')
+  })
+
+  test('behavior: preserves string bodies for MCP-over-HTTP', async () => {
+    const requests: Request[] = []
+    const challenge = Challenge.fromResponseList(paymentRequired())[0]!
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      if (requests.length > 1) return new Response('paid')
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: Mcp.paymentRequiredCode,
+            data: { challenges: [challenge] },
+            message: 'Payment Required',
+          },
+          id: 1,
+          jsonrpc: '2.0',
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      )
+    })
+    const mppx = setup(fetch as typeof globalThis.fetch)
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} })
+
+    const prepared = await mppx.prepareRequest('https://mcp.example/messages', {
+      body,
+      headers: { accept: 'application/json, text/event-stream' },
+      method: 'POST',
+    })
+    await prepared.pay()
+
+    const paidBody = JSON.parse(await requests[1]!.clone().text())
+    expect(paidBody.params._meta[Mcp.credentialMetaKey]).toBeDefined()
+  })
+
+  test('behavior: returns the attested request that produced the challenge', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return paymentRequired()
+    })
+    const methods = setup(fetch as typeof globalThis.fetch).methods
+    const mppx = Mppx.create({
+      attestation: {
+        test: {
+          protocol: 'test',
+          sign(request) {
+            const headers = new Headers(request.headers)
+            headers.set('Signature', 'test-signature')
+            return new Request(request, { headers })
+          },
+        },
+      },
+      fetch: fetch as typeof globalThis.fetch,
+      methods,
+      polyfill: false,
+    })
+
+    const prepared = await mppx.prepareRequest('https://shop.example/resource')
+
+    expect(prepared.request).toBe(requests[0])
+    expect(prepared.request.headers.get('signature')).toBe('test-signature')
+  })
+
+  test('behavior: bypasses previously installed payment wrappers', async () => {
+    const originalFetch = globalThis.fetch
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(paymentRequired())
+      .mockResolvedValueOnce(new Response('paid'))
+    const methods = setup(fetch as typeof globalThis.fetch).methods
+    globalThis.fetch = fetch as typeof globalThis.fetch
+    try {
+      Mppx.create({ fetch: fetch as typeof globalThis.fetch, methods })
+      const mppx = Mppx.create({ methods, polyfill: false })
+
+      const prepared = await mppx.prepareRequest('https://shop.example/resource')
+
+      expect(prepared.response.status).toBe(402)
+      expect(fetch).toHaveBeenCalledOnce()
+    } finally {
+      Mppx.restore()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('behavior: applies Accept-Payment policy after redirects', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return requests.length === 1
+        ? new Response(null, {
+            headers: { location: 'https://pay.example/resource' },
+            status: 307,
+          })
+        : paymentRequired()
+    })
+    const methods = setup(fetch as typeof globalThis.fetch).methods
+    const mppx = Mppx.create({
+      acceptPaymentPolicy: { origins: ['https://shop.example'] },
+      fetch: fetch as typeof globalThis.fetch,
+      methods,
+      polyfill: false,
+    })
+
+    await mppx.prepareRequest('https://shop.example/resource')
+
+    expect(requests[0]!.headers.get('accept-payment')).toBe('test/charge')
+    expect(requests[1]!.headers.get('accept-payment')).toBeNull()
+  })
+
+  test('behavior: runs method preparation before creating a credential', async () => {
+    const mppx = setup(vi.fn(async () => paymentRequired()) as typeof globalThis.fetch)
+    const prepare = vi.fn()
+    MethodChallenge.register(mppx.methods[0]!, prepare)
+    const prepared = await mppx.prepareRequest('https://shop.example/resource')
+
+    await prepared.createCredential()
+
+    expect(prepare).toHaveBeenCalledOnce()
+    expect(prepare.mock.calls[0]?.[0].input).toBeInstanceOf(Request)
+  })
+
+  test('error: explains opaque browser redirects', async () => {
+    const opaqueRedirect = {
+      headers: new Headers(),
+      status: 0,
+      type: 'opaqueredirect',
+    } as Response
+    const mppx = setup(vi.fn(async () => opaqueRedirect) as typeof globalThis.fetch)
+
+    await expect(mppx.prepareRequest('https://shop.example/resource')).rejects.toThrow(
+      /runtime that exposes manual redirect responses/,
+    )
+  })
+
+  test('security: rejects HTTPS downgrade redirects', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(null, {
+          headers: { location: 'http://shop.example/resource' },
+          status: 302,
+        }),
+    )
+    const mppx = setup(fetch as typeof globalThis.fetch)
+
+    await expect(mppx.prepareRequest('https://shop.example/start')).rejects.toThrow(
+      /HTTPS downgrade/,
+    )
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  test('error: validates the redirect limit', async () => {
+    const mppx = setup(vi.fn() as typeof globalThis.fetch)
+
+    await expect(
+      mppx.prepareRequest('https://shop.example/start', undefined, { maxRedirects: -1 }),
+    ).rejects.toThrow(/non-negative integer/)
   })
 })
 

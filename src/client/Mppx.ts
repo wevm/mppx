@@ -1,17 +1,20 @@
 import * as AttestationClient from '../attestation/Client.js'
 import type * as Attestation from '../attestation/Types.js'
 import type * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
+import * as MethodChallenge from './internal/MethodChallenge.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
 type EventResponseOf<transport extends Transport.AnyTransport> =
   | Response
   | Transport.ResponseOf<transport>
+const preparedPaymentMethods = new WeakMap<object, Method.AnyClient>()
 
 /**
  * A selected payment that can be inspected before its credential is created.
@@ -36,6 +39,29 @@ export type PreparedPayment<
     credential: string,
   ) => Transport.RequestOf<transport>
 }>
+
+/** A payment challenge prepared together with the exact HTTP request that produced it. */
+export type PreparedRequest<methods extends readonly Method.AnyClient[]> = Readonly<
+  PreparedPayment<methods, Transport.Transport<RequestInit, Response>> & {
+    /** Exact request that returned the selected payment challenge. */
+    request: Request
+    /** Payment-required response returned for {@link request}. */
+    response: Response
+    /** Redirects followed before receiving the payment challenge. */
+    redirects: readonly PreparedRequest.Redirect[]
+    /** Creates and sends a credential to the prepared request without following redirects. */
+    pay: (context?: AnyContextFor<methods> | undefined) => Promise<Response>
+  }
+>
+
+export declare namespace PreparedRequest {
+  /** A redirect followed while discovering a payment challenge. */
+  type Redirect = Readonly<{
+    from: string
+    status: number
+    to: string
+  }>
+}
 
 /**
  * Client-side payment handler.
@@ -69,6 +95,18 @@ export type Mppx<
     response: Transport.ResponseOf<transport>,
     options?: preparePayment.Options<FlattenMethods<methods>, transport> | undefined,
   ) => Promise<PreparedPayment<FlattenMethods<methods>, transport>>
+  /**
+   * Follows safe pre-payment redirects and prepares the challenge with the exact request that
+   * produced it. Credential-bearing requests never follow redirects. Requires a runtime that
+   * exposes manual redirect responses; browsers return opaque redirects and are not supported.
+   */
+  prepareRequest: transport extends Transport.Transport<RequestInit, Response>
+    ? (
+        input: RequestInfo | URL,
+        init?: RequestInit | undefined,
+        options?: prepareRequest.Options<FlattenMethods<methods>> | undefined,
+      ) => Promise<PreparedRequest<FlattenMethods<methods>>>
+    : never
   /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
     response: Transport.ResponseOf<transport>,
@@ -154,9 +192,12 @@ export function create<
     transport = Transport.http() as transport,
   } = config
 
-  const rawFetch = config.fetch ?? globalThis.fetch
-  const attestedFetch = attestation
-    ? createAttestedFetch(rawFetch, attestation as Attestation.SignerMap)
+  const rawFetch = Fetch.unwrapFetch(config.fetch ?? globalThis.fetch)
+  const attestationSigner = attestation
+    ? createAttestationSigner(attestation as Attestation.SignerMap)
+    : undefined
+  const attestedFetch = attestationSigner
+    ? AttestationClient.wrapFetch(rawFetch, attestationSigner)
     : rawFetch
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
@@ -305,7 +346,7 @@ export function create<
           }
         },
       )
-      return Object.freeze({
+      const prepared = Object.freeze({
         challenge: selectedChallenge,
         challenges: challengeSnapshots,
         createCredential: createPreparedCredential,
@@ -315,6 +356,8 @@ export function create<
           return transport.setCredential(request, credential, { challenge: transportChallenge })
         },
       })
+      preparedPaymentMethods.set(prepared, selectedMethod)
+      return prepared
     } catch (error) {
       await events.emit(
         'payment.failed',
@@ -330,6 +373,65 @@ export function create<
     }
   }
 
+  async function prepareRequest(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+    options?: prepareRequest.Options<FlattenMethods<methods>>,
+  ): Promise<PreparedRequest<FlattenMethods<methods>>> {
+    const { maxRedirects = 20, ...paymentOptions } = options ?? {}
+    const preparedHttp = await prepareHttpRequest({
+      acceptPayment: acceptPayment.header,
+      acceptPaymentPolicy,
+      fetch: rawFetch,
+      init,
+      input,
+      maxRedirects,
+      signer: attestationSigner,
+    })
+    const requestInit = requestToInit(preparedHttp.replayRequest, preparedHttp.body)
+    if (!(await transport.isPaymentRequired(preparedHttp.response as never, requestInit as never)))
+      throw new Error('Response does not require payment.')
+
+    const payment = (await preparePayment(preparedHttp.response as never, {
+      ...paymentOptions,
+      request: requestInit as never,
+    })) as unknown as PreparedPayment<
+      FlattenMethods<methods>,
+      Transport.Transport<RequestInit, Response>
+    >
+
+    const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
+    const createRequestCredential = memoizeCreateCredential(async (context) => {
+      if (MethodChallenge.has(paymentMethod))
+        await MethodChallenge.handle(paymentMethod, {
+          challenge: payment.challenge,
+          context,
+          fetch: attestedFetch,
+          input: preparedHttp.replayRequest,
+        })
+      return payment.createCredential(context)
+    })
+
+    return Object.freeze({
+      ...payment,
+      createCredential: createRequestCredential,
+      request: preparedHttp.request,
+      response: preparedHttp.response,
+      redirects: preparedHttp.redirects,
+      async pay(context?: AnyContextFor<FlattenMethods<methods>>) {
+        const credential = await createRequestCredential(context)
+        const paidInit = payment.setCredential(
+          requestToInit(preparedHttp.replayRequest, preparedHttp.body),
+          credential,
+        )
+        return attestedFetch(preparedHttp.replayRequest.url, {
+          ...paidInit,
+          redirect: 'manual',
+        })
+      },
+    })
+  }
+
   return {
     fetch,
     rawFetch,
@@ -341,6 +443,7 @@ export function create<
     onPaymentFailed,
     onPaymentResponse,
     preparePayment,
+    prepareRequest: prepareRequest as never,
     async createCredential(
       response: Transport.ResponseOf<transport>,
       context?: AnyContextFor<FlattenMethods<methods>>,
@@ -358,6 +461,17 @@ export declare namespace preparePayment {
     methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
     transport extends Transport.AnyTransport = Transport.Transport,
   > = createCredential.Options<methods, transport>
+}
+
+export declare namespace prepareRequest {
+  /** Options for preparing a request-bound payment. */
+  type Options<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = Omit<
+    preparePayment.Options<methods, Transport.Transport<RequestInit, Response>>,
+    'request'
+  > & {
+    /** Maximum redirects followed before rejecting the request. @default 20 */
+    maxRedirects?: number | undefined
+  }
 }
 
 export declare namespace createCredential {
@@ -429,17 +543,172 @@ export declare namespace create {
   }
 }
 
-function createAttestedFetch(
-  fetch: typeof globalThis.fetch,
-  signers: Attestation.SignerMap,
-): typeof globalThis.fetch {
+function createAttestationSigner(signers: Attestation.SignerMap): Attestation.Signer {
   const values = Object.values(signers)
   if (values.length === 0)
     throw new TypeError('Mppx client attestation must configure at least one signer.')
-  return AttestationClient.wrapFetch(
-    fetch,
-    AttestationClient.composeSigners(...(values as [Attestation.Signer, ...Attestation.Signer[]])),
+  return AttestationClient.composeSigners(
+    ...(values as [Attestation.Signer, ...Attestation.Signer[]]),
   )
+}
+
+const redirectStatuses = new Set([301, 302, 303, 307, 308])
+const bodyHeaders = [
+  'content-encoding',
+  'content-language',
+  'content-length',
+  'content-location',
+  'content-type',
+  'transfer-encoding',
+]
+const crossOriginHeaders = [
+  'authorization',
+  'cookie',
+  'cookie2',
+  'host',
+  'payment-authorization',
+  'payment-signature',
+  'proxy-authorization',
+  'x-payment',
+]
+
+async function prepareHttpRequest(parameters: {
+  acceptPayment: string
+  acceptPaymentPolicy: NonNullable<Fetch.from.Config['acceptPaymentPolicy']>
+  fetch: typeof globalThis.fetch
+  init: RequestInit | undefined
+  input: RequestInfo | URL
+  maxRedirects: number
+  signer: Attestation.Signer | undefined
+}): Promise<{
+  body: BodyInit | undefined
+  replayRequest: Request
+  request: Request
+  response: Response
+  redirects: readonly PreparedRequest.Redirect[]
+}> {
+  const { acceptPayment, acceptPaymentPolicy, fetch, init, input, maxRedirects, signer } =
+    parameters
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0)
+    throw new TypeError('maxRedirects must be a non-negative integer.')
+
+  let request = new Request(input, { ...init, redirect: 'manual' })
+  const explicitAcceptPayment = request.headers.has(Constants.Headers.acceptPayment)
+  let body = await replayBody(request, init?.body)
+  const redirects: PreparedRequest.Redirect[] = []
+
+  for (;;) {
+    request = withAcceptPayment(request, acceptPayment, explicitAcceptPayment, acceptPaymentPolicy)
+    const sentRequest = signer ? await signer.sign(request.clone()) : request.clone()
+    const response = await fetch(sentRequest)
+    if (response.type === 'opaqueredirect' || response.status === 0)
+      throw new Error('prepareRequest requires a runtime that exposes manual redirect responses.')
+    if (!redirectStatuses.has(response.status))
+      return {
+        body,
+        replayRequest: request,
+        request: sentRequest,
+        response,
+        redirects: Object.freeze(redirects),
+      }
+
+    const location = response.headers.get('location')
+    if (!location)
+      return {
+        body,
+        replayRequest: request,
+        request: sentRequest,
+        response,
+        redirects: Object.freeze(redirects),
+      }
+    if (redirects.length >= maxRedirects) {
+      await response.body?.cancel()
+      throw new Error(`Payment request exceeded ${maxRedirects} redirects.`)
+    }
+
+    const from = new URL(request.url)
+    const to = new URL(location, from)
+    if (from.protocol === 'https:' && to.protocol !== 'https:') {
+      await response.body?.cancel()
+      throw new Error(`Payment request refused HTTPS downgrade redirect to ${to.href}`)
+    }
+
+    const headers = new Headers(request.headers)
+    let method = request.method
+    const switchesToGet =
+      ((response.status === 301 || response.status === 302) && method === 'POST') ||
+      (response.status === 303 && method !== 'GET' && method !== 'HEAD')
+    if (switchesToGet) {
+      method = 'GET'
+      body = undefined
+      for (const header of bodyHeaders) headers.delete(header)
+    }
+    if (from.origin !== to.origin)
+      for (const header of [...headers.keys()]) {
+        const value = headers.get(header) ?? ''
+        if (crossOriginHeaders.includes(header) || value.startsWith('Payment '))
+          headers.delete(header)
+      }
+
+    redirects.push(Object.freeze({ from: from.href, status: response.status, to: to.href }))
+    await response.body?.cancel()
+    request = new Request(to, requestInit(request, headers, method, body))
+  }
+}
+
+function requestToInit(request: Request, body: BodyInit | undefined): RequestInit {
+  return requestInit(request, new Headers(request.headers), request.method, body)
+}
+
+async function replayBody(
+  request: Request,
+  suppliedBody: BodyInit | null | undefined,
+): Promise<BodyInit | undefined> {
+  if (typeof suppliedBody === 'string') return suppliedBody
+  if (!request.body) return undefined
+  const accept = request.headers.get('accept')?.toLowerCase() ?? ''
+  if (
+    request.headers.has('mcp-method') ||
+    (accept.includes('application/json') && accept.includes('text/event-stream'))
+  )
+    return request.clone().text()
+  return request.clone().arrayBuffer()
+}
+
+function withAcceptPayment(
+  request: Request,
+  acceptPayment: string,
+  explicit: boolean,
+  policy: NonNullable<Fetch.from.Config['acceptPaymentPolicy']>,
+): Request {
+  if (explicit) return request
+  const headers = new Headers(request.headers)
+  headers.delete(Constants.Headers.acceptPayment)
+  if (acceptPayment && Fetch.shouldInjectForPolicy(request, policy))
+    headers.set(Constants.Headers.acceptPayment, acceptPayment)
+  return new Request(request, { headers })
+}
+
+function requestInit(
+  request: Request,
+  headers: Headers,
+  method: string,
+  body: BodyInit | undefined,
+): RequestInit {
+  return {
+    ...(body ? { body } : {}),
+    cache: request.cache,
+    credentials: request.credentials,
+    headers,
+    integrity: request.integrity,
+    keepalive: request.keepalive,
+    method,
+    mode: request.mode,
+    redirect: 'manual',
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+    signal: request.signal,
+  }
 }
 
 /**

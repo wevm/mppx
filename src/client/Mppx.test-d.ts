@@ -63,6 +63,20 @@ describe('Mppx', () => {
     expectTypeOf(prepared.setCredential({ headers: {} }, 'credential')).toEqualTypeOf<RequestInit>()
   })
 
+  test('prepares and pays a request-bound payment', async () => {
+    const method = charge()
+    const mppx = Mppx.create({ methods: [method] })
+
+    const prepared = await mppx.prepareRequest('https://example.com/resource', {
+      method: 'POST',
+    })
+
+    expectTypeOf(prepared.request).toEqualTypeOf<Request>()
+    expectTypeOf(prepared.response).toEqualTypeOf<Response>()
+    expectTypeOf(prepared.redirects).toEqualTypeOf<readonly Mppx.PreparedRequest.Redirect[]>()
+    expectTypeOf(prepared.pay({ account: {} as Account })).toEqualTypeOf<Promise<Response>>()
+  })
+
   test('uses custom transport request and response types', async () => {
     type Request = { credential?: string | undefined }
     type Response = { challenges: Challenge.Challenge[] }

@@ -938,7 +938,8 @@ function getCallerHeaders(input: RequestInfo | URL, headers: HeadersInit | undef
 }
 
 /** @internal */
-function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+/** @internal */
+export function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   let current = fetch as WrappedFetch
   while (current[MPPX_FETCH_WRAPPER]) {
     current = current[MPPX_FETCH_WRAPPER] as WrappedFetch
@@ -1018,7 +1019,8 @@ async function resolveChallengeOrder<methods extends readonly Method.AnyClient[]
 }
 
 /** @internal */
-function shouldInjectForPolicy(
+/** @internal */
+export function shouldInjectForPolicy(
   input: RequestInfo | URL,
   policy: NonNullable<from.Config['acceptPaymentPolicy']>,
 ): boolean {
