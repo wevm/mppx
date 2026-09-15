@@ -84,6 +84,9 @@ describe('Mppx', () => {
     expectTypeOf(required.payment.pay({ account: {} as Account })).toEqualTypeOf<
       Promise<Response>
     >()
+
+    // @ts-expect-error requirePayment must be passed before the result can be narrowed
+    await mppx.prepareRequest<true>('https://example.com/resource')
   })
 
   test('uses custom transport request and response types', async () => {

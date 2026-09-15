@@ -113,11 +113,20 @@ export type Mppx<
    * redirect responses; browsers return opaque redirects and are not supported.
    */
   prepareRequest: transport extends Transport.Transport<RequestInit, Response>
-    ? <const requirePayment extends boolean = false>(
-        input: RequestInfo | URL,
-        init?: RequestInit | undefined,
-        options?: prepareRequest.Options<FlattenMethods<methods>, requirePayment> | undefined,
-      ) => Promise<PreparedRequest<FlattenMethods<methods>, requirePayment>>
+    ? {
+        <const requirePayment extends boolean>(
+          input: RequestInfo | URL,
+          init: RequestInit | undefined,
+          options: prepareRequest.Options<FlattenMethods<methods>, requirePayment> & {
+            requirePayment: requirePayment
+          },
+        ): Promise<PreparedRequest<FlattenMethods<methods>, requirePayment>>
+        (
+          input: RequestInfo | URL,
+          init?: RequestInit | undefined,
+          options?: prepareRequest.Options<FlattenMethods<methods>> | undefined,
+        ): Promise<PreparedRequest<FlattenMethods<methods>>>
+      }
     : never
   /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
