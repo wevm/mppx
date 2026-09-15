@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { sdkIdentifier } from '../../internal/version.js'
 import * as Method from '../../Method.js'
 import type { AnyServer } from '../../Method.js'
+import * as TempoSession from '../../tempo/session/server/Session.js'
 import * as z from '../../zod.js'
 import type { StripeClient } from '../internal/types.js'
 
@@ -911,4 +912,77 @@ describe('stripe.create() graceful degradation', () => {
     const withAdditional = methods.additional({})
     expect(findMethod(withAdditional, 'stripe', 'charge')).toBeDefined()
   })
+})
+
+describe('Stripe session settlement recording', () => {
+  const recipient = '0x1111111111111111111111111111111111111111' as stripe.DepositAddress<'tempo'>
+  const event = {
+    txHash: `0x${'ab'.repeat(32)}` as const,
+    channelId: `0x${'cd'.repeat(32)}` as const,
+    trigger: 'scheduled' as const,
+    amount: 50_000n,
+    delta: 10_000n,
+  }
+
+  test.each([false, true])('records automatically (additional: %s)', async (additional) => {
+    const client = createMockStripeClient()
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: true,
+      depositAddresses: { tempo: recipient },
+    })
+    const session = vi.spyOn(TempoSession, 'session')
+    try {
+      if (additional) mp.defaultMethods().additional({ tempo: { session: {} } })
+      else mp.tempo.session({ recipient })
+      await session.mock.calls.at(-1)![0]!.onSessionSettlement!(event)
+      expect(client.paymentIntents.create).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          amount: 1,
+          metadata: expect.objectContaining({ mpp_intent: 'session' }),
+          payment_method_options: {
+            crypto: {
+              mode: 'transaction_verification',
+              transaction_verification_options: {
+                network: 'tempo',
+                transaction_hash: event.txHash,
+              },
+            },
+          },
+        }),
+        expect.objectContaining({ idempotencyKey: event.txHash }),
+      )
+    } finally {
+      session.mockRestore()
+    }
+  })
+
+  test.each([
+    [0n, 0],
+    [9_999n, 0],
+    [19_999n, 1],
+  ] as const)(
+    'records %s raw units as %s cents and preserves the merchant callback',
+    async (delta, cents) => {
+      const client = createMockStripeClient()
+      const mp = stripe({ client, networkId: 'test-profile', livemode: true })
+      const onSessionSettlement = vi.fn()
+      const session = vi.spyOn(TempoSession, 'session')
+      try {
+        mp.tempo.session({ recipient, onSessionSettlement })
+        const context = { ...event, trigger: 'close' as const, delta }
+        await session.mock.calls.at(-1)![0]!.onSessionSettlement!(context)
+        expect(client.paymentIntents.create).toHaveBeenCalledTimes(cents ? 1 : 0)
+        if (cents)
+          expect(client.paymentIntents.create).toHaveBeenCalledWith(
+            expect.objectContaining({ amount: cents }),
+            expect.anything(),
+          )
+        expect(onSessionSettlement).toHaveBeenCalledExactlyOnceWith(context)
+      } finally {
+        session.mockRestore()
+      }
+    },
+  )
 })

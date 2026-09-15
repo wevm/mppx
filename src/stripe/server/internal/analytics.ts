@@ -5,14 +5,15 @@ import { machinePaymentMetadata } from '../../internal/constants.js'
 /** Builds Stripe metadata used to identify and analyze MPP payments. */
 export function buildAnalytics(parameters: {
   challenge?: Pick<Challenge.Challenge, 'id' | 'intent'> | undefined
+  intent?: string | undefined
 }): Record<string, string> {
-  const { challenge } = parameters
+  const { challenge, intent = challenge?.intent } = parameters
   const metadata = {
     ...machinePaymentMetadata,
     mpp_sdk: sdkIdentifier,
+    ...(intent && { mpp_intent: intent }),
     ...(challenge && {
       mpp_challenge_id: challenge.id,
-      mpp_intent: challenge.intent,
     }),
   }
   return Object.fromEntries(
