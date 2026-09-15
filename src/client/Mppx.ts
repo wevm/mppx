@@ -40,21 +40,32 @@ export type PreparedPayment<
   ) => Transport.RequestOf<transport>
 }>
 
-/** A payment challenge prepared together with the exact HTTP request that produced it. */
-export type PreparedRequest<methods extends readonly Method.AnyClient[]> = Readonly<
-  PreparedPayment<methods, Transport.Transport<RequestInit, Response>> & {
-    /** Exact request that returned the selected payment challenge. */
-    request: Request
-    /** Payment-required response returned for {@link request}. */
-    response: Response
-    /** Redirects followed before receiving the payment challenge. */
-    redirects: readonly PreparedRequest.Redirect[]
-    /** Creates and sends a credential to the prepared request without following redirects. */
-    pay: (context?: AnyContextFor<methods> | undefined) => Promise<Response>
-  }
->
+/** An HTTP request prepared together with its response and optional payment. */
+export type PreparedRequest<
+  methods extends readonly Method.AnyClient[],
+  requirePayment extends boolean = false,
+> = Readonly<{
+  /** Exact request that produced {@link response}. */
+  request: Request
+  /** Response returned for {@link request}. */
+  response: Response
+  /** Redirects followed before receiving {@link response}. */
+  redirects: readonly PreparedRequest.Redirect[]
+  /** Selected payment when the response requires payment. */
+  payment: requirePayment extends true
+    ? PreparedRequest.Payment<methods>
+    : PreparedRequest.Payment<methods> | undefined
+}>
 
 export declare namespace PreparedRequest {
+  /** A request-bound payment that can be inspected or paid. */
+  type Payment<methods extends readonly Method.AnyClient[]> = Readonly<
+    PreparedPayment<methods, Transport.Transport<RequestInit, Response>> & {
+      /** Creates and sends a credential to the prepared request without following redirects. */
+      pay: (context?: AnyContextFor<methods> | undefined) => Promise<Response>
+    }
+  >
+
   /** A redirect followed while discovering a payment challenge. */
   type Redirect = Readonly<{
     from: string
@@ -96,16 +107,17 @@ export type Mppx<
     options?: preparePayment.Options<FlattenMethods<methods>, transport> | undefined,
   ) => Promise<PreparedPayment<FlattenMethods<methods>, transport>>
   /**
-   * Follows safe pre-payment redirects and prepares the challenge with the exact request that
-   * produced it. Credential-bearing requests never follow redirects. Requires a runtime that
-   * exposes manual redirect responses; browsers return opaque redirects and are not supported.
+   * Follows safe pre-payment redirects and returns the response with its exact request. When the
+   * response requires payment, prepares its selected challenge without creating a credential.
+   * Credential-bearing requests never follow redirects. Requires a runtime that exposes manual
+   * redirect responses; browsers return opaque redirects and are not supported.
    */
   prepareRequest: transport extends Transport.Transport<RequestInit, Response>
-    ? (
+    ? <const requirePayment extends boolean = false>(
         input: RequestInfo | URL,
         init?: RequestInit | undefined,
-        options?: prepareRequest.Options<FlattenMethods<methods>> | undefined,
-      ) => Promise<PreparedRequest<FlattenMethods<methods>>>
+        options?: prepareRequest.Options<FlattenMethods<methods>, requirePayment> | undefined,
+      ) => Promise<PreparedRequest<FlattenMethods<methods>, requirePayment>>
     : never
   /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
@@ -376,9 +388,9 @@ export function create<
   async function prepareRequest(
     input: RequestInfo | URL,
     init?: RequestInit,
-    options?: prepareRequest.Options<FlattenMethods<methods>>,
-  ): Promise<PreparedRequest<FlattenMethods<methods>>> {
-    const { maxRedirects = 20, ...paymentOptions } = options ?? {}
+    options?: prepareRequest.Options<FlattenMethods<methods>, boolean>,
+  ): Promise<PreparedRequest<FlattenMethods<methods>, boolean>> {
+    const { maxRedirects = 20, requirePayment = false, ...paymentOptions } = options ?? {}
     const preparedHttp = await prepareHttpRequest({
       acceptPayment: acceptPayment.header,
       acceptPaymentPolicy,
@@ -389,8 +401,17 @@ export function create<
       signer: attestationSigner,
     })
     const requestInit = requestToInit(preparedHttp.replayRequest, preparedHttp.body)
-    if (!(await transport.isPaymentRequired(preparedHttp.response as never, requestInit as never)))
-      throw new Error('Response does not require payment.')
+    if (
+      !(await transport.isPaymentRequired(preparedHttp.response as never, requestInit as never))
+    ) {
+      if (requirePayment) throw new Error('Response does not require payment.')
+      return Object.freeze({
+        payment: undefined,
+        request: preparedHttp.request,
+        response: preparedHttp.response,
+        redirects: preparedHttp.redirects,
+      })
+    }
 
     const payment = (await preparePayment(preparedHttp.response as never, {
       ...paymentOptions,
@@ -412,12 +433,9 @@ export function create<
       return payment.createCredential(context)
     })
 
-    return Object.freeze({
+    const preparedPayment = Object.freeze({
       ...payment,
       createCredential: createRequestCredential,
-      request: preparedHttp.request,
-      response: preparedHttp.response,
-      redirects: preparedHttp.redirects,
       async pay(context?: AnyContextFor<FlattenMethods<methods>>) {
         const credential = await createRequestCredential(context)
         const paidInit = payment.setCredential(
@@ -429,6 +447,12 @@ export function create<
           redirect: 'manual',
         })
       },
+    })
+    return Object.freeze({
+      payment: preparedPayment,
+      request: preparedHttp.request,
+      response: preparedHttp.response,
+      redirects: preparedHttp.redirects,
     })
   }
 
@@ -465,12 +489,17 @@ export declare namespace preparePayment {
 
 export declare namespace prepareRequest {
   /** Options for preparing a request-bound payment. */
-  type Options<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = Omit<
+  type Options<
+    methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+    requirePayment extends boolean = false,
+  > = Omit<
     preparePayment.Options<methods, Transport.Transport<RequestInit, Response>>,
     'request'
   > & {
     /** Maximum redirects followed before rejecting the request. @default 20 */
     maxRedirects?: number | undefined
+    /** Throw when the response does not require payment. @default false */
+    requirePayment?: requirePayment | undefined
   }
 }
 

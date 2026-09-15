@@ -412,7 +412,7 @@ describe('prepareRequest', () => {
     expect(Object.isFrozen(prepared)).toBe(true)
     expect(Object.isFrozen(prepared.redirects)).toBe(true)
 
-    const response = await prepared.pay()
+    const response = await prepared.payment!.pay()
 
     expect(response.status).toBe(307)
     expect(requests).toHaveLength(3)
@@ -485,7 +485,7 @@ describe('prepareRequest', () => {
       headers: { accept: 'application/json, text/event-stream' },
       method: 'POST',
     })
-    await prepared.pay()
+    await prepared.payment!.pay()
 
     const paidBody = JSON.parse(await requests[1]!.clone().text())
     expect(paidBody.params._meta[Mcp.credentialMetaKey]).toBeDefined()
@@ -575,10 +575,30 @@ describe('prepareRequest', () => {
     MethodChallenge.register(mppx.methods[0]!, prepare)
     const prepared = await mppx.prepareRequest('https://shop.example/resource')
 
-    await prepared.createCredential()
+    await prepared.payment!.createCredential()
 
     expect(prepare).toHaveBeenCalledOnce()
     expect(prepare.mock.calls[0]?.[0].input).toBeInstanceOf(Request)
+  })
+
+  test('behavior: returns responses that do not require payment', async () => {
+    const response = new Response('available', { status: 200 })
+    const mppx = setup(vi.fn(async () => response) as typeof globalThis.fetch)
+
+    const prepared = await mppx.prepareRequest('https://shop.example/resource')
+
+    expect(prepared.response).toBe(response)
+    expect(prepared.payment).toBeUndefined()
+  })
+
+  test('error: optionally requires a payment response', async () => {
+    const mppx = setup(
+      vi.fn(async () => new Response('available', { status: 200 })) as typeof globalThis.fetch,
+    )
+
+    await expect(
+      mppx.prepareRequest('https://shop.example/resource', undefined, { requirePayment: true }),
+    ).rejects.toThrow('Response does not require payment.')
   })
 
   test('error: explains opaque browser redirects', async () => {

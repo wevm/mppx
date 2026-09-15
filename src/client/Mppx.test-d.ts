@@ -74,7 +74,16 @@ describe('Mppx', () => {
     expectTypeOf(prepared.request).toEqualTypeOf<Request>()
     expectTypeOf(prepared.response).toEqualTypeOf<Response>()
     expectTypeOf(prepared.redirects).toEqualTypeOf<readonly Mppx.PreparedRequest.Redirect[]>()
-    expectTypeOf(prepared.pay({ account: {} as Account })).toEqualTypeOf<Promise<Response>>()
+    expectTypeOf(prepared.payment).toEqualTypeOf<
+      Mppx.PreparedRequest.Payment<readonly [typeof method]> | undefined
+    >()
+
+    const required = await mppx.prepareRequest('https://example.com/resource', undefined, {
+      requirePayment: true,
+    })
+    expectTypeOf(required.payment.pay({ account: {} as Account })).toEqualTypeOf<
+      Promise<Response>
+    >()
   })
 
   test('uses custom transport request and response types', async () => {
