@@ -1,5 +1,11 @@
 # mppx
 
+## 0.10.1
+
+### Patch Changes
+
+- 232712e: Allowed `prepareRequest` to return responses that do not require payment by default and added a strict `requirePayment` option.
+
 ## 0.10.0
 
 ### Minor Changes
