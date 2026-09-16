@@ -9,6 +9,27 @@ function createClient(create: (...args: any[]) => Promise<any>): StripeClient {
 }
 
 describe('recordCryptoPayment', () => {
+  test.each([
+    ['14999', 1],
+    ['15000', 1],
+    ['19999', 1],
+    ['20000', 2],
+  ])('records %s raw units as %i cents', async (amount, amountCents) => {
+    const create = vi.fn().mockResolvedValue({ id: 'pi_123', status: 'processing' })
+
+    await recordCryptoPayment(createClient(create), {
+      amount,
+      network: 'tempo',
+      analyticsMetadata: {},
+      reference: '0xtx123',
+    })
+
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ amount: amountCents }),
+      expect.anything(),
+    )
+  })
+
   test('retries without optional fields after a definitive invalid request', async () => {
     const invalidRequest = Object.assign(new Error('Invalid customer'), {
       type: 'StripeInvalidRequestError',

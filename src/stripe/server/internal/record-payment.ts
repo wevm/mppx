@@ -31,10 +31,10 @@ export function recordCryptoPayment(
   const { customer, hooks, metadata, receipt_email } = paymentIntentOptions ?? {}
   const { stripeNetworkName, tokenDecimals } = NETWORK_CONFIG[network]
 
-  const amountCents = Math.round(Number(amount) / 10 ** (tokenDecimals - 2))
+  const amountCents = Number(BigInt(amount) / 10n ** BigInt(tokenDecimals - 2))
   if (amountCents < 1) {
     console.warn(
-      `[stripe] skipping PI recording: ${amount} raw units on ${network} rounds to ${amountCents} cents (below Stripe minimum)`,
+      `[stripe] skipping PI recording: ${amount} raw units on ${network} floors to ${amountCents} cents (below Stripe minimum)`,
     )
     return Promise.resolve()
   }
