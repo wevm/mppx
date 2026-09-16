@@ -27,8 +27,14 @@ jobs:
   checks:
     name: Checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@e080a269a3d37e571ad64e94f72536b48eb9921c # main
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,6 +83,9 @@ jobs:
   test-runtime:
     name: Test Runtime / ${{ matrix.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 12
     strategy:
       fail-fast: false
@@ -97,6 +106,9 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: true
       VITE_TEMPO_TAG: latest
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@e080a269a3d37e571ad64e94f72536b48eb9921c # main
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,6 +240,9 @@ jobs:
   test-x402-e2e:
     name: Test x402 E2E
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 12
     env:
       TESTCONTAINERS_RYUK_DISABLED: true
@@ -235,6 +250,9 @@ jobs:
       X402_ANVIL_RPC_URL: http://127.0.0.1:18546
       X402_LOCALNET: true
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@e080a269a3d37e571ad64e94f72536b48eb9921c # main
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -295,8 +313,14 @@ jobs:
   test-html:
     name: Test HTML
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 15
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@e080a269a3d37e571ad64e94f72536b48eb9921c # main
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

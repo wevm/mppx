@@ -37,6 +37,7 @@ jobs:
       actions: read
       contents: write
       pull-requests: write
+      id-token: write
     uses: ./.github/workflows/audit-remediation-reusable.yml
     with:
       audit-command: pnpm audit --json --ignore-registry-errors
