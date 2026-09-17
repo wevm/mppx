@@ -4664,8 +4664,6 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      expect(challenge.request.methodDetails?.memo).toBeUndefined()
-
       const memo = Attribution.encode({
         challengeId: challenge.id,
         clientId: 'test-app',
@@ -5821,31 +5819,6 @@ describe('tempo', () => {
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
-
-      httpServer.close()
-    })
-
-    test('user-provided memo takes priority over attribution', async () => {
-      const userMemo =
-        '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '1', decimals: 6, memo: userMemo }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
-      expect(memo).toBe(userMemo)
-      expect(Attribution.isMppMemo(memo!)).toBe(false)
 
       httpServer.close()
     })

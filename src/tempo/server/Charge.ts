@@ -65,7 +65,6 @@ export function charge<const parameters extends charge.Parameters>(
     feeToken: configuredFeeToken,
     feePayerPolicy,
     html,
-    memo,
     relay,
     sponsorBudget,
     splits,
@@ -134,6 +133,12 @@ export function charge<const parameters extends charge.Parameters>(
     request: Method.VerifyContext<typeof Methods.charge>['request']
   }) {
     const { challenge, payload } = credential
+    const explicitMemo = request as { memo?: unknown; methodDetails?: { memo?: unknown } }
+    if (explicitMemo.memo != null || explicitMemo.methodDetails?.memo != null)
+      throw new MismatchError(
+        'Explicit memos are not supported for direct Tempo charge verification.',
+        {},
+      )
     const resolvedRequest = resolveRequest(request)
     const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
     const { amount, methodDetails } = resolvedRequest
@@ -142,7 +147,6 @@ export function charge<const parameters extends charge.Parameters>(
       | undefined
     const currency = resolvedRequest.currency as `0x${string}`
     const recipient = resolvedRequest.recipient as `0x${string}`
-    const memo = methodDetails?.memo as `0x${string}` | undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -157,7 +161,6 @@ export function charge<const parameters extends charge.Parameters>(
       client: await getClient({ chainId }),
       currency,
       isZeroAmount,
-      memo,
       methodDetails,
       payload,
       recipient,
@@ -184,7 +187,6 @@ export function charge<const parameters extends charge.Parameters>(
       challenge,
       client,
       currency,
-      memo,
       methodDetails,
       recipient,
       supportedModes,
@@ -196,7 +198,7 @@ export function charge<const parameters extends charge.Parameters>(
       chainId: chainId ?? client.chain?.id,
       source: credential.source,
     })
-    const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+    const transfers = getExpectedTransfers({ amount, methodDetails, recipient })
     const receipt = await getTransactionReceipt(client, {
       hash: payload.hash as `0x${string}`,
     })
@@ -208,11 +210,10 @@ export function charge<const parameters extends charge.Parameters>(
       transfers,
       validateSender,
     })
-    if (!memo)
-      assertChallengeBoundMemo(matchedLogs, {
-        challengeId: challenge.id,
-        realm: challenge.realm,
-      })
+    assertChallengeBoundMemo(matchedLogs, {
+      challengeId: challenge.id,
+      realm: challenge.realm,
+    })
     return { receipt: toReceipt(receipt), sender, transfers }
   }
 
@@ -271,7 +272,6 @@ export function charge<const parameters extends charge.Parameters>(
       challenge,
       client,
       currency,
-      memo,
       methodDetails,
       recipient,
       requestAllowsFeePayer,
@@ -295,17 +295,16 @@ export function charge<const parameters extends charge.Parameters>(
       methodDetails?.feePayer === true &&
       requestAllowsFeePayer &&
       !!(Account.is(request.feePayer) ? request.feePayer : feePayer || remoteFeePayer)
-    const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+    const transfers = getExpectedTransfers({ amount, methodDetails, recipient })
     const matchedCalls = assertTransferCalls(transaction.calls ?? [], {
       currency,
       exactCount: isFeePayerTx,
       transfers,
     })
-    if (!memo)
-      assertChallengeBoundCallMemo(matchedCalls, {
-        challengeId: challenge.id,
-        realm: challenge.realm,
-      })
+    assertChallengeBoundCallMemo(matchedCalls, {
+      challengeId: challenge.id,
+      realm: challenge.realm,
+    })
 
     if (isFeePayerTx) {
       FeePayer.validateCalls(
@@ -379,7 +378,6 @@ export function charge<const parameters extends charge.Parameters>(
       decimals,
       description,
       externalId,
-      memo,
       recipient,
       splits,
       supportedModes,
@@ -446,7 +444,6 @@ export function charge<const parameters extends charge.Parameters>(
         ...request,
         chainId,
         feePayer: resolvedFeePayer,
-        memo: request.memo || undefined,
       }
     },
 
@@ -473,7 +470,6 @@ export function charge<const parameters extends charge.Parameters>(
         challenge,
         client,
         currency,
-        memo,
         methodDetails,
         recipient,
         requestAllowsFeePayer,
@@ -675,11 +671,10 @@ export function charge<const parameters extends charge.Parameters>(
                 sender: transaction.from! as `0x${string}`,
                 transfers,
               })
-              if (!memo)
-                assertChallengeBoundMemo(matchedLogs, {
-                  challengeId: challenge.id,
-                  realm: challenge.realm,
-                })
+              assertChallengeBoundMemo(matchedLogs, {
+                challengeId: challenge.id,
+                realm: challenge.realm,
+              })
               if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
@@ -877,8 +872,7 @@ function chargeBinding(request: ChargeRequest) {
     request
   requestRest satisfies Record<string, never>
 
-  const { chainId, feePayer, memo, splits, supportedModes, ...methodDetailsRest } =
-    methodDetails ?? {}
+  const { chainId, feePayer, splits, supportedModes, ...methodDetailsRest } = methodDetails ?? {}
   methodDetailsRest satisfies Record<string, never>
   void feePayer
 
@@ -888,7 +882,6 @@ function chargeBinding(request: ChargeRequest) {
     currency,
     description,
     externalId,
-    memo,
     recipient,
     splits,
     supportedModes,
@@ -904,14 +897,12 @@ type ExpectedTransfer = {
 
 function getExpectedTransfers(parameters: {
   amount: string
-  memo: `0x${string}` | undefined
   methodDetails: { splits?: readonly Charge_internal.Split[] | undefined } | undefined
   recipient: `0x${string}`
 }): ExpectedTransfer[] {
   return Charge_internal.getTransfers({
     amount: parameters.amount,
     methodDetails: {
-      memo: parameters.memo,
       splits: parameters.methodDetails?.splits,
     },
     recipient: parameters.recipient,

@@ -131,7 +131,7 @@ export const charge = Method.from({
               z.transform((v): boolean => (typeof v === 'object' ? true : v)),
             ),
           ),
-          memo: z.optional(z.hash()),
+          memo: z.optional(z.never()),
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
           supportedModes: z.optional(z.array(z.enum(chargeModes)).check(z.minLength(1))),
@@ -153,19 +153,26 @@ export const charge = Method.from({
           }, 'Invalid splits'),
         ),
       z.transform(
-        ({ amount, chainId, decimals, feePayer, memo, splits, supportedModes, ...rest }) => ({
+        ({
+          amount,
+          chainId,
+          decimals,
+          feePayer,
+          memo: _memo,
+          splits,
+          supportedModes,
+          ...rest
+        }) => ({
           ...rest,
           amount: parseUnits(amount, decimals).toString(),
           ...(chainId !== undefined ||
           feePayer !== undefined ||
-          memo !== undefined ||
           splits !== undefined ||
           supportedModes !== undefined
             ? {
                 methodDetails: {
                   ...(chainId !== undefined && { chainId }),
                   ...(feePayer !== undefined && { feePayer }),
-                  ...(memo !== undefined && { memo }),
                   ...(splits !== undefined && {
                     splits: splits.map((split) => ({
                       ...split,

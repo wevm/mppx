@@ -66,7 +66,7 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 
-  test('schema: validates request with memo', () => {
+  test('schema: rejects request with memo', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',
       currency: '0x20c0000000000000000000000000000000000001',
@@ -75,7 +75,7 @@ describe('charge', () => {
       memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
       recipient: '0x1234567890abcdef1234567890abcdef12345678',
     })
-    expect(result.success).toBe(true)
+    expect(result.success).toBe(false)
   })
 
   test('schema: validates request with splits', () => {
