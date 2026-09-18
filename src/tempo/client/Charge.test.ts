@@ -58,26 +58,55 @@ function mockMachFeeSelection() {
 }
 
 describe('tempo.charge client', () => {
-  test('rejects MACH as a direct charge currency', async () => {
+  test('keeps legacy direct MACH challenges payable with a stablecoin fee token', async () => {
+    vi.resetModules()
+    mockMachFeeSelection()
     const chainId = 42431
-    const client = createClient({
-      account,
-      chain: { ...tempoLocalnet, id: chainId },
-      transport: http('http://127.0.0.1'),
-    })
-    const method = charge({ account, getClient: () => client })
+    const prepareTransactionRequest = vi.fn(async (_client: unknown, parameters: object) => ({
+      ...parameters,
+      gas: 100n,
+    }))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      sendTransactionSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
 
-    await expect(
-      method.createCredential({
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({ account, getClient: () => client })
+
+      await method.createCredential({
         challenge: createChallenge({
+          amount: '1',
           chainId,
           currency: defaults.machineToken[chainId].token,
+          supportedModes: ['pull'],
         }),
         context: {},
-      }),
-    ).rejects.toThrow(
-      'MACH cannot be used as a charge currency. Use a settlement-currency challenge with `machineTokenEnabled: true`.',
-    )
+      })
+
+      expect(prepareTransactionRequest).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feeToken: Addresses.pathUsd }),
+      )
+      expect(signTransaction).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feeToken: Addresses.pathUsd }),
+      )
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
   })
 
   test('uses client chain ID when the challenge omits chainId', async () => {

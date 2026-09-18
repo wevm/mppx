@@ -90,15 +90,6 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const { request } = challenge
       const { amount, methodDetails } = request
-      if (
-        MachineTokenCharge.isMachineToken({
-          chainId,
-          currency: request.currency as Address,
-        })
-      )
-        throw new Error(
-          'MACH cannot be used as a charge currency. Use a settlement-currency challenge with `machineTokenEnabled: true`.',
-        )
       const supportedModes = (methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
@@ -138,6 +129,7 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       const currency = request.currency as Address
+      const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency })
       const memo = Attribution.encode({
         challengeId: challenge.id,
         clientId,
@@ -218,15 +210,16 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
       const allowedFeeTokens = defaultFeeTokens(chainId)
-      const feeToken = machineTokenRoute
-        ? await resolveFeeToken({
-            account: account.address,
-            allowedTokens: allowedFeeTokens,
-            candidateTokens: allowedFeeTokens,
-            client,
-            prioritizeCandidates: true,
-          })
-        : undefined
+      const feeToken =
+        machineTokenRoute || isMachineTokenCurrency
+          ? await resolveFeeToken({
+              account: account.address,
+              allowedTokens: allowedFeeTokens,
+              candidateTokens: allowedFeeTokens,
+              client,
+              prioritizeCandidates: true,
+            })
+          : undefined
 
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
