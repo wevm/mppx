@@ -5,6 +5,35 @@ import { accounts } from '~test/tempo/viem.js'
 
 const recipient = '0x0000000000000000000000000000000000000001'
 
+describe('Tempo machine token', () => {
+  test('preserves the option on charge methods', () => {
+    const direct = tempo.charge({ machineTokenEnabled: true })
+    const [global] = tempo({ machineTokenEnabled: true })
+
+    expect((direct.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+    expect((global.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+  })
+
+  test('rejects MACH as a direct charge currency', async () => {
+    const method = tempo.charge({
+      getClient: () => ({ chain: { id: 42431 } }) as never,
+    })
+
+    await expect(
+      method.request!({
+        request: {
+          amount: '1',
+          chainId: 42431,
+          currency: '0x20c000000000000000000000f37de3740ADec032',
+          decimals: 6,
+        },
+      }),
+    ).rejects.toThrow(
+      'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
+    )
+  })
+})
+
 describe('composable method hooks', () => {
   test('all server method constructors forward canOffer', () => {
     const canOffer = vi.fn(() => true)

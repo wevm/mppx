@@ -119,6 +119,7 @@ export const charge = Method.from({
     request: z.pipe(
       z
         .object({
+          machineTokenEnabled: z.optional(z.boolean()),
           amount: z.amount(),
           chainId: z.optional(z.number()),
           currency: z.string(),
@@ -154,6 +155,7 @@ export const charge = Method.from({
         ),
       z.transform(
         ({
+          machineTokenEnabled,
           amount,
           chainId,
           decimals,
@@ -165,12 +167,14 @@ export const charge = Method.from({
         }) => ({
           ...rest,
           amount: parseUnits(amount, decimals).toString(),
-          ...(chainId !== undefined ||
+          ...(machineTokenEnabled !== undefined ||
+          chainId !== undefined ||
           feePayer !== undefined ||
           splits !== undefined ||
           supportedModes !== undefined
             ? {
                 methodDetails: {
+                  ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
                   ...(chainId !== undefined && { chainId }),
                   ...(feePayer !== undefined && { feePayer }),
                   ...(splits !== undefined && {
