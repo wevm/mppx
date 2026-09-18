@@ -5,6 +5,17 @@ import { accounts } from '~test/tempo/viem.js'
 
 const recipient = '0x0000000000000000000000000000000000000001'
 
+describe('Tempo machine token', () => {
+  test('preserves the option on charge and session methods', () => {
+    const direct = tempo.charge({ machineTokenEnabled: true })
+    const [global, session] = tempo({ machineTokenEnabled: true })
+
+    expect((direct.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+    expect((global.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+    expect((session.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+  })
+})
+
 describe('composable method hooks', () => {
   test('all server method constructors forward canOffer', () => {
     const canOffer = vi.fn(() => true)

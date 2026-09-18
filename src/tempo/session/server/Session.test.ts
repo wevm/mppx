@@ -28,6 +28,8 @@ import * as Http from '~test/Http.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
+import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenSession from '../../internal/machine-token-session.js'
 import * as Methods from '../../Methods.js'
 import * as ClientOps from '../client/ChannelOps.js'
 import { sessionManager as precompileSessionManager } from '../client/SessionManager.js'
@@ -282,6 +284,8 @@ async function createOpenPayload(
     operator?: Address | undefined
     authorizedSigner?: Address | undefined
     feeToken?: Address | undefined
+    payee?: Address | undefined
+    token?: Address | undefined
   } = {},
 ): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
   const account = parameters.account ?? payer
@@ -291,16 +295,18 @@ async function createOpenPayload(
   const salt = `0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex
   const operator = parameters.operator ?? zeroAddress
   const authorizedSigner = parameters.authorizedSigner ?? account.address
+  const channelPayee = parameters.payee ?? payee
+  const channelToken = parameters.token ?? token
   const data = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'open',
-    args: [payee, operator, token, deposit, salt, authorizedSigner],
+    args: [channelPayee, operator, channelToken, deposit, salt, authorizedSigner],
   })
   const signingClient = createSigningClient(account)
   const transaction = (await Transaction.serialize({
     chainId,
     calls: [{ to: escrow, data }],
-    feeToken: parameters.feeToken ?? token,
+    feeToken: parameters.feeToken ?? channelToken,
     nonce: 0,
   })) as Hex
   const expiringNonceHash = Channel.computeExpiringNonceHash(
@@ -311,9 +317,9 @@ async function createOpenPayload(
   )
   const descriptor = {
     payer: account.address,
-    payee,
+    payee: channelPayee,
     operator,
-    token,
+    token: channelToken,
     salt,
     authorizedSigner,
     expiringNonceHash,
@@ -522,8 +528,8 @@ async function persistPrecompileChannel(
     escrowContract: tip20ChannelEscrow,
     closeRequestedAt: 0n,
     payer: payload.descriptor.payer,
-    payee,
-    token,
+    payee: payload.descriptor.payee,
+    token: payload.descriptor.token,
     authorizedSigner: payload.descriptor.authorizedSigner,
     deposit: 1_000n,
     settledOnChain: 0n,
@@ -562,6 +568,38 @@ describe('precompile server session unit guardrails', () => {
 
     expect(challengeRequest.sessionProtocol).toBe(Constants.SessionProtocols.v2)
   })
+
+  test.each([
+    { chainId, escrowContract: tip20ChannelEscrow, enabled: true },
+    { chainId: 69_420, escrowContract: tip20ChannelEscrow, enabled: false },
+    {
+      chainId,
+      escrowContract: '0x9999999999999999999999999999999999999999' as Address,
+      enabled: false,
+    },
+  ])(
+    'advertises machine-token sessions only for configured canonical deployments',
+    async ({ chainId: requestChainId, escrowContract, enabled }) => {
+      const { method } = createServer({
+        chainId: requestChainId,
+        escrowContract: escrowContract as Address,
+        getClient: () => ({ chain: { id: requestChainId } }) as never,
+        machineTokenEnabled: true,
+      })
+      const resolved = await method.request!({
+        credential: null,
+        request: {
+          amount: '1',
+          currency: token,
+          decimals: 0,
+          machineTokenEnabled: true,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never)
+      expect(resolved.machineTokenEnabled).toBe(enabled ? true : undefined)
+    },
+  )
 
   test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {
     const { method } = createServer({ feePayer: wrongPayer })
@@ -678,6 +716,45 @@ describe('precompile server session unit guardrails', () => {
       units: 2,
     })
   })
+
+  test.each([
+    { configured: false, requested: true, reused: true },
+    { configured: true, requested: false, reused: false },
+  ])(
+    'machine snapshot reuse follows the resolved request capability',
+    async ({ configured, requested, reused }) => {
+      const deployment = defaults.machineToken[chainId]
+      const routePayee = '0x0000000000000000000000000000000000000006' as Address
+      const openPayload = await createOpenPayload({
+        operator: deployment.swap,
+        payee: routePayee,
+        token: deployment.token,
+      })
+      const { method, store } = createServer({ machineTokenEnabled: configured })
+      await persistPrecompileChannel(store, openPayload)
+      vi.spyOn(MachineTokenSession, 'matchRoute').mockResolvedValue({
+        operator: deployment.swap,
+        payee: routePayee,
+        token: deployment.token,
+      })
+
+      const request = await method.request!({
+        credential: null,
+        request: {
+          amount: '1',
+          channelId: openPayload.channelId,
+          currency: token,
+          decimals: 0,
+          machineTokenEnabled: requested,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never)
+
+      expect(request.sessionSnapshot?.channelId).toBe(reused ? openPayload.channelId : undefined)
+      expect(request.machineTokenEnabled).toBe(requested ? true : undefined)
+    },
+  )
 
   test('request can resolve a server session snapshot from request identity', async () => {
     const openPayload = await createOpenPayload({ initialAmount: 100n })
@@ -915,7 +992,7 @@ describe('precompile server session unit guardrails', () => {
   })
 
   test('advertises and accepts a configured fee token for sponsored credentials', async () => {
-    const feeToken = '0x0000000000000000000000000000000000000005' as Address
+    const feeToken = defaults.tokens.pathUsd
     const { method, rpcCalls } = createServer({ feePayer: payer, feeToken })
     const payload = await createSponsoredOpenPayload(feeToken)
     const request = Methods.session.schema.request.parse(
@@ -941,7 +1018,8 @@ describe('precompile server session unit guardrails', () => {
 
     expect(request.methodDetails.feeToken).toBe(feeToken)
 
-    // Older direct clients use the payment currency as the sponsored fee token.
+    // Clients released before the fee-token advertisement always pay sponsored
+    // open/top-up fees in the payment currency; both stay accepted.
     const legacyPayload = await createSponsoredOpenPayload(token)
     await method.validate!({
       credential: {
