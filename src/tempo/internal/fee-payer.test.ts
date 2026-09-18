@@ -4,7 +4,6 @@ import { encodeFunctionData, maxUint256, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
-import { mach } from '../Tokens.js'
 import * as defaults from './defaults.js'
 import {
   assertAllowedFeeToken,
@@ -481,7 +480,7 @@ describe('fee token allowlist', () => {
   test('error: rejects MACH as a fee token', () => {
     expect(() =>
       assertAllowedFeeToken(
-        { feeToken: mach(defaults.chainId.testnet).address },
+        { feeToken: defaults.machineToken[defaults.chainId.testnet].token },
         defaultAllowedFeeTokens(defaults.chainId.testnet),
       ),
     ).toThrow('feeToken is not allowed')

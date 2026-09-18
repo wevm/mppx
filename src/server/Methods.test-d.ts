@@ -3,6 +3,11 @@ import { expectTypeOf, test } from 'vp/test'
 
 import type { StripeClient } from '../stripe/internal/types.js'
 
+test('accepts machine-token funding on global Tempo and charge configuration', () => {
+  expectTypeOf(tempo.charge({ machineTokenEnabled: true })).toHaveProperty('verify')
+  expectTypeOf(tempo({ machineTokenEnabled: true })[0]).toHaveProperty('verify')
+})
+
 test('all server method constructors expose typed canOffer hooks', () => {
   tempo.charge({
     canOffer({ input, request }) {

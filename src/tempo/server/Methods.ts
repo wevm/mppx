@@ -29,8 +29,13 @@ function createChargeMethod<const parameters extends tempo.Parameters>(
 function createSessionMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
 ) {
-  // See `createChargeMethod()`: session receives the same shared parameter bag.
-  return sessionServer(parameters as NoExtraKeys<parameters, session_.Parameters> | undefined)
+  // Machine-token funding is configured at the Tempo family level, but only
+  // charge implements it today. Keep it out of session configuration until
+  // session routing has its own complete lifecycle support.
+  const { machineTokenEnabled: _machineTokenEnabled, ...sessionParameters } = parameters ?? {}
+  return sessionServer(
+    sessionParameters as NoExtraKeys<parameters, session_.Parameters> | undefined,
+  )
 }
 
 /**
@@ -54,7 +59,11 @@ export function tempo<const parameters extends tempo.Parameters>(parameters?: pa
 }
 
 export namespace tempo {
-  export type Parameters = charge_.Parameters & session_.Parameters
+  export type Parameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
+    session_.Parameters & {
+      /** Enables MACH funding for compatible Tempo methods. Currently applies to `charge`. */
+      machineTokenEnabled?: boolean | undefined
+    }
   /** Tempo API relay configuration for server-side charges. */
   export type RelayOptions = charge_.RelayOptions
   /** Stable failure codes returned by Tempo API's MPP relay. */
