@@ -64,12 +64,6 @@ export function charge(parameters: charge.Parameters = {}) {
     context: chargeContextSchema,
 
     async createCredential({ challenge, context }) {
-      const requestMemo = challenge.request as {
-        memo?: unknown
-        methodDetails?: { memo?: unknown }
-      }
-      if (requestMemo.memo != null || requestMemo.methodDetails?.memo != null)
-        throw new Error('Custom Tempo charge memos are not supported.')
       // Chain pinning: reject a challenge whose chain ID conflicts with the
       // pinned one, and sign on the pin when the challenge omits a chain ID.
       const challengeChainId = challenge.request.methodDetails?.chainId
