@@ -133,12 +133,6 @@ export function charge<const parameters extends charge.Parameters>(
     request: Method.VerifyContext<typeof Methods.charge>['request']
   }) {
     const { challenge, payload } = credential
-    const explicitMemo = request as { memo?: unknown; methodDetails?: { memo?: unknown } }
-    if (explicitMemo.memo != null || explicitMemo.methodDetails?.memo != null)
-      throw new MismatchError(
-        'Explicit memos are not supported for direct Tempo charge verification.',
-        {},
-      )
     const resolvedRequest = resolveRequest(request)
     const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
     const { amount, methodDetails } = resolvedRequest
