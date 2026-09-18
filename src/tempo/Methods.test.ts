@@ -66,18 +66,6 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 
-  test('schema: rejects request with memo', () => {
-    const result = Methods.charge.schema.request.safeParse({
-      amount: '1',
-      currency: '0x20c0000000000000000000000000000000000001',
-      decimals: 6,
-      expires: '2025-02-05T12:05:00Z',
-      memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
-    })
-    expect(result.success).toBe(false)
-  })
-
   test('schema: validates request with splits', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',

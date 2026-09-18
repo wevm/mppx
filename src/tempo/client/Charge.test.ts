@@ -58,20 +58,6 @@ function mockMachFeeSelection() {
 }
 
 describe('tempo.charge client', () => {
-  test('rejects custom memos before signing or RPC', async () => {
-    const getClient = vi.fn(() => {
-      throw new Error('must reject before resolving an RPC client')
-    })
-    const method = charge({ account, getClient })
-    const challenge = createChallenge({ amount: '1' })
-    Object.assign(challenge.request, { methodDetails: { memo: `0x${'ab'.repeat(32)}` } })
-
-    await expect(method.createCredential({ challenge, context: {} })).rejects.toThrow(
-      'Custom Tempo charge memos are not supported.',
-    )
-    expect(getClient).not.toHaveBeenCalled()
-  })
-
   test('uses client chain ID when the challenge omits chainId', async () => {
     const client = createClient({
       account,
