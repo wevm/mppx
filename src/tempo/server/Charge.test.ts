@@ -21,7 +21,7 @@ import {
 } from 'viem/actions'
 import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import type { token as viem_token } from 'viem/tempo/actions'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 
@@ -96,6 +96,199 @@ const server = Mppx_server.create({
 })
 
 describe('tempo', () => {
+  describe('split charge memo binding', () => {
+    describe.each(['hash', 'transaction', 'optimistic', 'sponsored'] as const)('%s', (mode) => {
+      test.each([
+        { memos: ['bound', 'plain'], accepted: true },
+        { memos: ['plain', 'bound'], accepted: true },
+        { memos: ['bound', 'bound'], accepted: true },
+        { memos: ['bound', 'other client'], accepted: true },
+        { memos: ['bound', 'uppercase'], accepted: true },
+        { memos: ['bound', 'custom'], accepted: true },
+        { memos: ['custom', 'bound'], accepted: true },
+        { memos: ['bound', 'other challenge'], accepted: false },
+        { memos: ['other challenge', 'bound'], accepted: false },
+        { memos: ['bound', 'other realm'], accepted: false },
+        { memos: ['other realm', 'bound'], accepted: false },
+        { memos: ['other challenge', 'plain'], accepted: false },
+        { memos: ['other realm', 'plain'], accepted: false },
+        { memos: ['plain', 'plain'], accepted: false },
+        { memos: ['custom', 'plain'], accepted: false },
+      ])('memos $memos: accepted=$accepted', async ({ memos, accepted }) => {
+        const rpcMethods: string[] = []
+        const tracedClient = createClient({
+          account: accounts[0],
+          chain,
+          transport: custom({
+            async request(args: any) {
+              rpcMethods.push(args.method)
+              return client.transport.request(args)
+            },
+          }),
+        })
+        const handler = Mppx_server.create({
+          methods: [
+            tempo_server.charge({
+              getClient: () => tracedClient,
+              currency: asset,
+              account: accounts[0],
+              feePayer: mode === 'sponsored' ? true : undefined,
+              waitForConfirmation: mode !== 'optimistic',
+              store: Store.memory(),
+            }),
+          ],
+          realm,
+          secretKey,
+        })
+        const result = await handler.charge({
+          amount: '1',
+          decimals: 6,
+          splits: [{ amount: '0.2', recipient: accounts[2].address }],
+        })(new Request('https://example.com'))
+        if (result.status !== 402) throw new Error('expected payment challenge')
+        const challenge = Challenge.fromResponse(result.challenge, {
+          methods: [tempo_client.charge()],
+        })
+        const memoValues: Record<string, Hex.Hex | undefined> = {
+          bound: Attribution.encode({ challengeId: challenge.id, serverId: realm }),
+          'other challenge': Attribution.encode({
+            challengeId: 'other-challenge',
+            serverId: realm,
+          }),
+          'other realm': Attribution.encode({
+            challengeId: challenge.id,
+            serverId: 'other.example.com',
+          }),
+          'other client': Attribution.encode({
+            challengeId: challenge.id,
+            serverId: realm,
+            clientId: 'another-client',
+          }),
+          uppercase: `0x${Attribution.encode({ challengeId: challenge.id, serverId: realm }).slice(2).toUpperCase()}`,
+          custom: `0x${'ab'.repeat(32)}`,
+          plain: undefined,
+        }
+        const prepared = await prepareTransactionRequest(client, {
+          account: accounts[1],
+          calls: [
+            tokenTransferCall({
+              amount: 800_000n,
+              to: accounts[0].address,
+              token: asset,
+              memo: memoValues[memos[0]!],
+            }),
+            tokenTransferCall({
+              amount: 200_000n,
+              to: accounts[2].address,
+              token: asset,
+              memo: memoValues[memos[1]!],
+            }),
+          ],
+          feePayer: mode === 'sponsored' ? true : undefined,
+          nonceKey: 'expiring',
+        } as never)
+        prepared.gas = prepared.gas! + 5_000n
+        const signature = await signTransaction(client, prepared as never)
+        const payload =
+          mode === 'hash'
+            ? {
+                type: 'hash' as const,
+                hash: (await sendRawTransactionSync(client, { serializedTransaction: signature }))
+                  .transactionHash,
+              }
+            : { type: 'transaction' as const, signature }
+        const credential = Credential.serialize(Credential.from({ challenge, payload }))
+        rpcMethods.length = 0
+
+        if (accepted) {
+          await expect(handler.validateCredential(credential)).resolves.toMatchObject({
+            intent: 'charge',
+          })
+          await expect(handler.verifyCredential(credential)).resolves.toMatchObject({
+            status: 'success',
+          })
+        } else {
+          await expect(handler.validateCredential(credential)).rejects.toThrow(
+            'memo is not bound to this challenge',
+          )
+          await expect(handler.verifyCredential(credential)).rejects.toThrow(
+            'memo is not bound to this challenge',
+          )
+          expect(rpcMethods).not.toContain('eth_sendRawTransaction')
+          expect(rpcMethods).not.toContain('eth_sendRawTransactionSync')
+          expect(rpcMethods).not.toContain('eth_call')
+        }
+      })
+    })
+
+    test('rejects a split payment for both challenges across replay-marker expiry', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const now = Date.now()
+      const challenges = await Promise.all(
+        [60_000, 120_000].map(async (duration) => {
+          const result = await handler.charge({
+            amount: '1',
+            decimals: 6,
+            expires: new Date(now + duration).toISOString(),
+            splits: [{ amount: '0.2', recipient: accounts[2].address }],
+          })(new Request('https://example.com'))
+          if (result.status !== 402) throw new Error('expected payment challenge')
+          return Challenge.fromResponse(result.challenge, { methods: [tempo_client.charge()] })
+        }),
+      )
+      expect(challenges[0]!.id).not.toBe(challenges[1]!.id)
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: challenges.map((challenge, index) =>
+          tokenTransferCall({
+            amount: index === 0 ? 800_000n : 200_000n,
+            to: index === 0 ? accounts[0].address : accounts[2].address,
+            token: asset,
+            memo: Attribution.encode({ challengeId: challenge.id, serverId: realm }),
+          }),
+        ),
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+      const { transactionHash } = await sendRawTransactionSync(client, {
+        serializedTransaction: signature,
+      })
+      const credentials = challenges.map((challenge) =>
+        Credential.serialize(
+          Credential.from({ challenge, payload: { type: 'hash' as const, hash: transactionHash } }),
+        ),
+      )
+
+      const first = await Promise.allSettled([handler.verifyCredential(credentials[0]!)])
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001)
+      try {
+        const second = await Promise.allSettled([handler.verifyCredential(credentials[1]!)])
+        expect([...first, ...second].map((result) => result.status)).toEqual([
+          'rejected',
+          'rejected',
+        ])
+        for (const result of [...first, ...second]) {
+          if (result.status === 'rejected')
+            expect(result.reason.message).toContain('memo is not bound to this challenge')
+        }
+      } finally {
+        clock.mockRestore()
+      }
+    })
+  })
+
   describe('sponsor budget configuration', () => {
     test('validates structured limits', () => {
       expect(() => tempo_server.charge({ sponsorBudget: { maxInFlightReservations: 0 } })).toThrow(
@@ -5636,9 +5829,15 @@ describe('tempo', () => {
     })
 
     test('server rejects hash with wrong challenge nonce (stolen tx)', async () => {
+      let challengeNonce = 0
+      const expiresAt = Date.now() + 300_000
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '1', decimals: 6 }),
+          server.charge({
+            amount: '1',
+            decimals: 6,
+            expires: new Date(expiresAt + challengeNonce++).toISOString(),
+          }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -5656,6 +5855,8 @@ describe('tempo', () => {
       const challenge2 = Challenge.fromResponse(response2, {
         methods: [tempo_client.charge()],
       })
+
+      expect(challenge1.id).not.toBe(challenge2.id)
 
       // Legitimate transfer bound to challenge1
       const memo = Attribution.encode({ challengeId: challenge1.id, serverId: realm })
@@ -5746,9 +5947,15 @@ describe('tempo', () => {
         secretKey,
       })
 
+      let challengeNonce = 0
+      const expiresAt = Date.now() + 300_000
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          chargeServer.charge({ amount: '1', decimals: 6 }),
+          chargeServer.charge({
+            amount: '1',
+            decimals: 6,
+            expires: new Date(expiresAt + challengeNonce++).toISOString(),
+          }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')

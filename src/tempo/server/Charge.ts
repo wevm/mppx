@@ -1309,38 +1309,50 @@ function toReceipt(receipt: TransactionReceipt) {
   } as const
 }
 
-/**
- * Asserts that at least one of the matched payment logs carries a
- * challenge-bound memo nonce (keccak256(challengeId)[0..6] in bytes 25–31).
- * Only checks logs that were matched by `assertTransferLogs`, not the
- * entire receipt — preventing unrelated dust transfers from satisfying
- * the binding.
- * @internal
- */
 function assertChallengeBoundMemo(
   matchedLogs: readonly TransferLog[],
   parameters: { challengeId: string; realm: string },
 ) {
-  const bound = matchedLogs.some((log) => {
-    if (log.kind !== 'memo') return false
-    if (!Attribution.verifyServer(log.args.memo, parameters.realm)) return false
-    return Attribution.verifyChallengeBinding(log.args.memo, parameters.challengeId)
-  })
-
-  if (!bound)
-    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
+  assertChallengeBoundMemos(
+    matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined)),
+    parameters,
+  )
 }
 
 function assertChallengeBoundCallMemo(
   matchedCalls: readonly Charge_internal.Transfer[],
   parameters: { challengeId: string; realm: string },
 ) {
-  const bound = matchedCalls.some((call) => {
-    if (!call.memo) return false
-    const memo = call.memo as `0x${string}`
-    if (!Attribution.verifyServer(memo, parameters.realm)) return false
-    return Attribution.verifyChallengeBinding(memo, parameters.challengeId)
-  })
+  assertChallengeBoundMemos(
+    matchedCalls.map((call) => call.memo as `0x${string}` | undefined),
+    parameters,
+  )
+}
+
+/**
+ * Requires a challenge-bound attribution memo and rejects conflicting attribution
+ * on matched payment transfers. Otherwise, a split payment could authorize another
+ * challenge after the first challenge's replay marker expires. Unmatched transfers
+ * cannot establish the binding; plain transfers and non-MPP memos remain allowed.
+ * @internal
+ */
+function assertChallengeBoundMemos(
+  memos: readonly (`0x${string}` | undefined)[],
+  parameters: { challengeId: string; realm: string },
+) {
+  let bound = false
+  for (const memo of memos) {
+    if (!memo || !Attribution.isMppMemo(memo)) continue
+    if (
+      !Attribution.verifyServer(memo, parameters.realm) ||
+      !Attribution.verifyChallengeBinding(memo, parameters.challengeId)
+    )
+      throw new MismatchError(
+        'Payment verification failed: memo is not bound to this challenge.',
+        {},
+      )
+    bound = true
+  }
 
   if (!bound)
     throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
