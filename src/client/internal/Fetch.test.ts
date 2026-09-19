@@ -881,23 +881,30 @@ describe('Fetch.from: 402 retry path', () => {
     expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
   })
 
-  test('signs a standard x402 EIP-3009 challenge without mppx extensions', async () => {
+  test.each([
+    'https://example.com/api',
+    'https://example.com/api?summary=hello',
+    'https://other.example.com/different-path',
+  ])('signs a standard x402 EIP-3009 challenge for %s without mppx extensions', async (url) => {
     const paymentRequired = {
       ...x402PaymentRequired,
       accepts: [x402Eip3009Accept],
     } satisfies PaymentRequired
     let callCount = 0
-    const calls: { init: RequestInit | undefined }[] = []
-    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
-      calls.push({ init })
+    const calls: { input: RequestInfo | URL; init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ input, init })
       callCount++
-      if (callCount === 1)
-        return new Response(null, {
+      if (callCount === 1) {
+        const response = new Response(null, {
           status: 402,
           headers: {
             [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired(paymentRequired),
           },
         })
+        Object.defineProperty(response, 'url', { value: url })
+        return response
+      }
       return new Response('OK', { status: 200 })
     }
 
@@ -913,9 +920,10 @@ describe('Fetch.from: 402 retry path', () => {
       ],
     })
 
-    const response = await fetch('https://example.com/api')
+    const response = await fetch(url)
 
     expect(response.status).toBe(200)
+    expect(calls.map(({ input }) => input)).toEqual([url, url])
     const retryHeaders = new Headers(calls[1]!.init?.headers)
     expect(retryHeaders.get('Authorization')).toBeNull()
     const paymentSignature = retryHeaders.get(x402_Types.paymentSignatureHeader)
