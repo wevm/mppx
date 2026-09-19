@@ -17,8 +17,15 @@ export function x402(): Protocol {
       const header = response.headers.get(x402_Types.paymentRequiredHeader)
       if (!header) return []
       const paymentRequired = x402_Header.decodePaymentRequiredEnvelope(header)
-      if (response.url && paymentRequired.resource.url !== response.url)
-        throw new Error('x402 payment-required resource does not match response URL.')
+      if (response.url) {
+        const resourceUrl = new URL(paymentRequired.resource.url)
+        const responseUrl = new URL(response.url)
+        if (
+          resourceUrl.origin !== responseUrl.origin ||
+          resourceUrl.pathname !== responseUrl.pathname
+        )
+          throw new Error('x402 payment-required resource does not match response URL.')
+      }
       return paymentRequired.accepts.flatMap((rawAccepted, index) => {
         const parsed = x402_Types.PaymentRequirementsSchema.safeParse(rawAccepted)
         if (!parsed.success) return []
