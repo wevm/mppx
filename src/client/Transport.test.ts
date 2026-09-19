@@ -166,6 +166,22 @@ describe('http', () => {
       { resourceUrl: 'https://api.example.com/x402', responseUrl: '' },
       {
         resourceUrl: 'https://api.example.com/x402',
+        responseUrl: 'http://api.example.com/x402',
+      },
+      {
+        resourceUrl: 'https://api.example.com/x402',
+        responseUrl: 'https://other.example.com/x402',
+      },
+      {
+        resourceUrl: 'https://api.example.com/x402',
+        responseUrl: 'https://api.example.com:8443/x402',
+      },
+      {
+        resourceUrl: 'https://api.example.com/x402',
+        responseUrl: 'https://api.example.com/other',
+      },
+      {
+        resourceUrl: 'https://api.example.com/x402',
         responseUrl: 'https://api.example.com/x402',
       },
       {
@@ -202,26 +218,6 @@ describe('http', () => {
         expect(x402_ChallengeBrand.is(challenges[0])).toBe(true)
       },
     )
-
-    test.each([
-      'http://api.example.com/x402?summary=hello',
-      'https://other.example.com/x402?summary=hello',
-      'https://api.example.com:8443/x402?summary=hello',
-      'https://api.example.com/other?summary=hello',
-      'https://api.example.com/x402/child?summary=hello',
-    ])('rejects x402 resource mismatches for response %s', (responseUrl) => {
-      const response = new Response(null, {
-        status: 402,
-        headers: {
-          'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
-        },
-      })
-      Object.defineProperty(response, 'url', { value: responseUrl })
-
-      expect(() => Transport.http().getChallenges(response)).toThrow(
-        'x402 payment-required resource does not match response URL.',
-      )
-    })
 
     test('returns Payment auth challenges when x402 accepts are unsupported', async () => {
       const transport = Transport.http()

@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Fixed x402 client resource URL validation to allow query parameters while still requiring the same origin and path.
+Removed the x402 client requirement that resource URLs match response URLs.
