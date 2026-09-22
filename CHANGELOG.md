@@ -1,5 +1,18 @@
 # mppx
 
+## 0.11.0
+
+### Minor Changes
+
+- 1851f0f: Removed custom Tempo charge memos and required challenge-bound attribution memos during direct verification. Remove `memo` from charge options; clients generate attribution memos automatically. Split transfer memos remain supported.
+
+### Patch Changes
+
+- ba6f7a2: Added opt-in MACH funding through global Tempo `machineTokenEnabled` configuration, currently applied to charges using canonical swapper routes and supported stablecoin fee tokens.
+- 4dc37a8: Removed the x402 client requirement that resource URLs match response URLs.
+- 83cef8f: Fixed Stripe crypto PaymentIntent amounts rounding up and failing transaction verification for fractional-cent payments.
+- a0a7d5b: Added automatic Stripe PaymentIntent recording for Tempo session settlements, using each transaction's newly settled amount rounded down to whole cents and recording the session intent in analytics metadata. Preserved optional settlement callbacks after recording; applications no longer need to create PaymentIntents in those callbacks.
+
 ## 0.10.1
 
 ### Patch Changes
