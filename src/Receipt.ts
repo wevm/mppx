@@ -4,6 +4,8 @@ import * as Constants from './Constants.js'
 import * as z from './zod.js'
 
 const shape = {
+  /** Currency actually debited to fund the payment, when known. */
+  fundingCurrency: z.optional(z.string()),
   /** Payment method used (e.g., "tempo", "stripe"). */
   method: z.string(),
   /** Method-specific reference (e.g., transaction hash). */
