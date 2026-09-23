@@ -817,8 +817,7 @@ async function voucher(
     resolved.chainId,
     resolved.escrow,
   )
-  entry.cumulativeAmount = cumulativeAmount
-  await storeChannelEntry(sink, entry)
+  await storeChannelEntry(sink, { ...entry, cumulativeAmount })
   return payload
 }
 

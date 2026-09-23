@@ -321,13 +321,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return state?.status === 'active' ? state.units : 0
   }
 
-  function commitDurableTopUp(entry: ChannelEntry) {
+  function commitDurableEntry(entry: ChannelEntry) {
     const use = channelUse
-    const baseline = use?.committed?.channel?.entry ?? use?.resumed
+    const baseline = use?.committed?.channel?.entry ?? use?.resumed ?? use?.previous.channel?.entry
     if (
       !use ||
       baseline?.channelId.toLowerCase() !== entry.channelId.toLowerCase() ||
-      entry.deposit <= baseline.deposit
+      (entry.deposit <= baseline.deposit && entry.cumulativeAmount <= baseline.cumulativeAmount)
     )
       return
     use.resumed = undefined
@@ -362,7 +362,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           units: activeUnits(),
         })
       }
-      commitDurableTopUp(entry)
+      commitDurableEntry(entry)
     },
   })
   MethodResponse.unregister(method)
@@ -621,7 +621,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         spent: runtime.spent.toString(),
         units: activeUnits(),
       })
-      commitDurableTopUp(applied.channel)
+      commitDurableEntry(applied.channel)
     }
     return receipt
   }
