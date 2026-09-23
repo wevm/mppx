@@ -1,0 +1,17 @@
+version: 3
+rules:
+  # These repositories publish no release tags. Keep exceptions limited to
+  # these exact workflow paths and immutable SHAs; reassess when updating them.
+  # pinact skips verification, including release-age checks, for these pins.
+  - ignore: true
+    conditions:
+      - expr: ActionName == "tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml" && ActionVersion == "802a943d2a14adb61c06919d059ae9e75b3d5acb"
+  - ignore: true
+    conditions:
+      - expr: ActionName == "tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml" && ActionVersion == "802a943d2a14adb61c06919d059ae9e75b3d5acb"
+  - ignore: true
+    conditions:
+      - expr: ActionName == "wevm/actions/.github/workflows/issue-labeled.yml" && ActionVersion == "f7ad7f00e16e73322562922c241f21f0c7ffbbec"
+  - ignore: true
+    conditions:
+      - expr: ActionName == "wevm/actions/.github/workflows/lock-issue.yml" && ActionVersion == "f7ad7f00e16e73322562922c241f21f0c7ffbbec"
