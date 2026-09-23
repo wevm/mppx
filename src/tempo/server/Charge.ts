@@ -14,7 +14,7 @@ import {
   verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
-import { Abis, Actions, Transaction } from 'viem/tempo'
+import { Abis, Actions, Addresses, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
@@ -28,6 +28,7 @@ import type * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
+import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
@@ -228,7 +229,17 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    return { receipt: toReceipt(receipt), sender, transfers }
+    const fundingCurrency = getReceiptFundingCurrency(receipt, matchedLogs, {
+      chainId: chainId ?? client.chain?.id,
+      currency,
+      machineTokenEnabled: context.machineTokenEnabled,
+      sender,
+    })
+    return {
+      receipt: toReceipt(receipt, { fundingCurrency }),
+      sender,
+      transfers,
+    }
   }
 
   async function validateProofCredential(
@@ -330,6 +341,13 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
+    const fundingCurrency = getFundingCurrency(transaction.calls ?? [], {
+      amount,
+      chainId,
+      currency,
+      machineTokenEnabled,
+      transfers,
+    })
 
     if (isFeePayerTx) {
       if (!machineTokenRoute)
@@ -348,6 +366,7 @@ export function charge<const parameters extends charge.Parameters>(
 
     return {
       isFeePayerTx,
+      fundingCurrency,
       serializedTransaction,
       settlementSenders: machineTokenRoute ? [machineTokenRoute.settlementSender] : [],
       transaction,
@@ -381,8 +400,14 @@ export function charge<const parameters extends charge.Parameters>(
       }
 
       case 'transaction': {
-        const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
-          await validateTransactionCredential(credential, context.payload, request, context)
+        const {
+          fundingCurrency,
+          isFeePayerTx,
+          serializedTransaction,
+          settlementSenders,
+          transaction,
+          transfers,
+        } = await validateTransactionCredential(credential, context.payload, request, context)
         return {
           details: {
             mode: 'pull' as const,
@@ -391,6 +416,7 @@ export function charge<const parameters extends charge.Parameters>(
             transfers,
           },
           isFeePayerTx,
+          fundingCurrency,
           serializedTransaction,
           settlementSenders,
           transaction,
@@ -559,8 +585,14 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
-            validated
+          const {
+            fundingCurrency,
+            isFeePayerTx,
+            serializedTransaction,
+            settlementSenders,
+            transaction,
+            transfers,
+          } = validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -728,7 +760,7 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
-              return toReceipt(receipt)
+              return toReceipt(receipt, { fundingCurrency })
             }
 
             // Optimistic path: broadcast without waiting for confirmation
@@ -749,6 +781,7 @@ export function charge<const parameters extends charge.Parameters>(
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
             return {
+              fundingCurrency,
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
@@ -1055,6 +1088,57 @@ function getTransferCalls(
   return transferCalls
 }
 
+type FundingCall = {
+  data?: `0x${string}` | undefined
+  to?: `0x${string}` | undefined
+  value?: bigint | undefined
+}
+
+type FundingCurrencyParameters = {
+  amount: string
+  chainId: number | undefined
+  currency: `0x${string}`
+  machineTokenEnabled: boolean
+  transfers: readonly ExpectedTransfer[]
+}
+
+/** Returns the currency debited by a recognized, verified charge route. */
+function getFundingCurrency(
+  calls: readonly FundingCall[],
+  parameters: FundingCurrencyParameters,
+): `0x${string}` | undefined {
+  const machineTokenRoute = parameters.machineTokenEnabled
+    ? MachineTokenCharge.matchRoute({
+        calls,
+        chainId: parameters.chainId,
+        currency: parameters.currency,
+        transfers: parameters.transfers,
+      })
+    : undefined
+  if (machineTokenRoute) return machineTokenRoute.fundingCurrency
+
+  const selectors = calls.map((call) => call.data?.slice(0, 10))
+  const hasAutoSwapPrefix =
+    selectors[0] === Selectors.approve && selectors[1] === Selectors.swapExactAmountOut
+  if (hasAutoSwapPrefix)
+    return AutoSwap.matchCalls({
+      amountOut: BigInt(parameters.amount),
+      calls,
+      tokenOut: parameters.currency,
+    })?.fundingCurrency
+
+  try {
+    assertTransferCalls(calls, {
+      currency: parameters.currency,
+      exactCount: false,
+      transfers: parameters.transfers,
+    })
+    return parameters.currency
+  } catch {
+    return undefined
+  }
+}
+
 function decodeTransferCall(
   call: { data?: `0x${string}` | undefined; to?: `0x${string}` | undefined },
   currency: `0x${string}`,
@@ -1231,6 +1315,48 @@ function getTransferLogEffects(receipt: TransactionReceipt): TransferLog[] {
   return effects
 }
 
+/** Returns the currency debited by a recognized settled charge route. */
+function getReceiptFundingCurrency(
+  receipt: TransactionReceipt,
+  matchedLogs: readonly TransferLog[],
+  parameters: {
+    chainId: number | undefined
+    currency: `0x${string}`
+    machineTokenEnabled: boolean
+    sender: `0x${string}`
+  },
+): `0x${string}` | undefined {
+  const settlementSender = matchedLogs[0]?.args.from
+  if (
+    !settlementSender ||
+    matchedLogs.some((log) => !TempoAddress.isEqual(log.args.from, settlementSender))
+  )
+    return undefined
+
+  const logs = getTransferLogEffects(receipt)
+  const machineTokenSwapper = parameters.machineTokenEnabled
+    ? MachineTokenCharge.getSettlementSender(parameters.chainId)
+    : undefined
+  if (machineTokenSwapper && TempoAddress.isEqual(settlementSender, machineTokenSwapper))
+    return logs.find(
+      (log) =>
+        TempoAddress.isEqual(log.args.from, parameters.sender) &&
+        TempoAddress.isEqual(log.args.to, machineTokenSwapper),
+    )?.address
+
+  if (!TempoAddress.isEqual(settlementSender, parameters.sender)) return undefined
+
+  const dexInput = logs.find(
+    (log) =>
+      !TempoAddress.isEqual(log.address, parameters.currency) &&
+      TempoAddress.isEqual(log.args.from, parameters.sender) &&
+      TempoAddress.isEqual(log.args.to, Addresses.stablecoinDex),
+  )
+  if (dexInput) return dexInput.address
+
+  return parameters.currency
+}
+
 function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean {
   return (
     TempoAddress.isEqual(a.address, b.address) &&
@@ -1377,12 +1503,16 @@ async function isActiveAccessKey(
 }
 
 /** @internal */
-function toReceipt(receipt: TransactionReceipt) {
+function toReceipt(
+  receipt: TransactionReceipt,
+  parameters: { fundingCurrency?: `0x${string}` | undefined } = {},
+) {
   const { status, transactionHash } = receipt
   if (status !== 'success') {
     throw new Error(`Transaction reverted: ${transactionHash}`)
   }
   return {
+    ...(parameters.fundingCurrency ? { fundingCurrency: parameters.fundingCurrency } : {}),
     method: 'tempo',
     status: 'success',
     timestamp: new Date().toISOString(),

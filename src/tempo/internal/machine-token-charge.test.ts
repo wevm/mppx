@@ -49,6 +49,7 @@ describe('Tempo machine-token charges', () => {
           transfers: [{ amount: transfers[0]!.amount, recipient }],
         })?.transfers,
       ).toEqual(transfers)
+      expect(route?.fundingCurrency).toBe(deployment.token)
       expect(route?.settlementSender).toBe(deployment.swap)
     } finally {
       vi.doUnmock('viem/actions')

@@ -156,11 +156,29 @@ function machineTokenReceipt(parameters: {
     gasUsed: '0x1',
     logs: [
       {
-        address: asset,
+        address: defaults.machineToken[defaults.chainId.testnet].token,
         blockHash,
         blockNumber: '0x1',
         data: encodeAbiParameters([{ type: 'uint256' }], [parameters.amount]),
         logIndex: '0x0',
+        removed: false,
+        topics: encodeEventTopics({
+          abi: Abis.tip20,
+          args: {
+            from: parameters.from,
+            to: settlementSender,
+          },
+          eventName: 'Transfer',
+        }),
+        transactionHash: parameters.hash,
+        transactionIndex: '0x0',
+      },
+      {
+        address: asset,
+        blockHash,
+        blockNumber: '0x1',
+        data: encodeAbiParameters([{ type: 'uint256' }], [parameters.amount]),
+        logIndex: '0x1',
         removed: false,
         topics: encodeEventTopics({
           abi: Abis.tip20,
@@ -447,10 +465,12 @@ describe('tempo', () => {
       const receipt = Receipt.fromResponse(response)
       expect({
         ...receipt,
+        fundingCurrency: '[fundingCurrency]',
         reference: '[reference]',
         timestamp: '[timestamp]',
       }).toMatchInlineSnapshot(`
             {
+              "fundingCurrency": "[fundingCurrency]",
               "method": "tempo",
               "reference": "[reference]",
               "status": "success",
@@ -495,6 +515,7 @@ describe('tempo', () => {
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
+      expect(receipt.fundingCurrency).toBe(overrideCurrency)
 
       httpServer.close()
     })
@@ -1485,6 +1506,7 @@ describe('tempo', () => {
       })
       const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
       expect(receipt.reference).toBe(hash)
+      expect(receipt.fundingCurrency).toBe(defaults.machineToken[defaults.chainId.testnet].token)
 
       httpServer.close()
     })
@@ -1610,6 +1632,7 @@ describe('tempo', () => {
       const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
 
       expect(receipt.status).toBe('success')
+      expect(receipt.fundingCurrency).toBe(defaults.machineToken[defaults.chainId.testnet].token)
       expect(feePayerMethods).toEqual(['eth_fillTransaction'])
 
       httpServer.close()
@@ -3731,6 +3754,7 @@ describe('tempo', () => {
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
       expect(receipt.method).toBe('tempo')
+      expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
       expect(receipt.reference).toBeDefined()
 
       httpServer.close()
@@ -6481,6 +6505,7 @@ describe('tempo', () => {
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
+      expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
       expect(receipt.method).toBe('tempo')
 
       httpServer.close()
@@ -6517,6 +6542,7 @@ describe('tempo', () => {
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
+      expect(receipt.fundingCurrency).toBe(asset)
 
       httpServer.close()
     })
@@ -6550,6 +6576,9 @@ describe('tempo', () => {
 
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
 
       httpServer.close()
     })

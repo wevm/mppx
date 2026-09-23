@@ -30,6 +30,7 @@ type RouteCall = {
 
 type Route = {
   calls: readonly [RouteCall, RouteCall]
+  fundingCurrency: Address
   settlementSender: Address
   transfers: readonly [{ amount: bigint; memo: Hex.Hex; recipient: Address }]
 }
@@ -94,6 +95,7 @@ export function getRoute(parameters: {
         to: deployment.swap,
       },
     ],
+    fundingCurrency: deployment.token,
     settlementSender: deployment.swap,
     transfers: [{ amount, memo, recipient: transfer.recipient }],
   }

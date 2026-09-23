@@ -1,7 +1,8 @@
-import type { Address } from 'viem'
+import { encodeFunctionData, type Address } from 'viem'
+import { Abis, Addresses } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
-import { defaultCurrencies, InsufficientFundsError, resolve } from './auto-swap.js'
+import { defaultCurrencies, InsufficientFundsError, matchCalls, resolve } from './auto-swap.js'
 
 describe('defaultCurrencies', () => {
   test('default', () => {
@@ -183,6 +184,39 @@ describe('findCalls', () => {
       vi.doUnmock('viem/tempo')
       vi.resetModules()
     }
+  })
+})
+
+describe('matchCalls', () => {
+  const amountOut = 1_000_000n
+  const maxAmountIn = 1_010_000n
+  const tokenIn = defaultCurrencies[0]!
+  const tokenOut = '0x2222222222222222222222222222222222222222' as Address
+  const calls = [
+    {
+      data: encodeFunctionData({
+        abi: Abis.tip20,
+        functionName: 'approve',
+        args: [Addresses.stablecoinDex, maxAmountIn],
+      }),
+      to: tokenIn,
+    },
+    {
+      data: encodeFunctionData({
+        abi: Abis.stablecoinDex,
+        functionName: 'swapExactAmountOut',
+        args: [tokenIn, tokenOut, amountOut, maxAmountIn],
+      }),
+      to: Addresses.stablecoinDex,
+    },
+  ] as const
+
+  test('returns the input token for the canonical auto-swap prefix', () => {
+    expect(matchCalls({ amountOut, calls, tokenOut })).toEqual({ fundingCurrency: tokenIn })
+  })
+
+  test('rejects a swap that does not fund the requested output', () => {
+    expect(matchCalls({ amountOut: amountOut + 1n, calls, tokenOut })).toBeUndefined()
   })
 })
 
