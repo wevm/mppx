@@ -115,6 +115,14 @@ describe('FeePayerResolution', () => {
     test('allows credential fee sponsorship only when method details and request permit it', () => {
       expect(
         resolveCredentialFeePayer({
+          feePayer: true,
+          methodDetails: { feePayer: true },
+          request: { feePayer: true },
+        }),
+      ).toBe(true)
+
+      expect(
+        resolveCredentialFeePayer({
           feePayer: defaultFeePayer,
           methodDetails: { feePayer: true },
           request: { feePayer: true },

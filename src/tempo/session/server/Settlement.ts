@@ -109,7 +109,7 @@ export function resolveCredentialFeePayer(
   if (methodDetails.feePayer !== true || !requestAllowsFeePayer) return undefined
   if (typeof requestFeePayer === 'object') return requestFeePayer
   if (typeof feePayer === 'object') return feePayer
-  return typeof feePayer === 'string' ? true : undefined
+  return feePayer === true || typeof feePayer === 'string' ? true : undefined
 }
 
 /** Declarative server-side settlement cadence for automatic session settlement. */
