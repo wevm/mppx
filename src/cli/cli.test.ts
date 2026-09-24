@@ -456,6 +456,24 @@ export default defineConfig({
   })
 })
 
+describe('agent attribution', () => {
+  test('appends the detected agent to the default User-Agent', async () => {
+    let userAgent: string | undefined
+    const httpServer = await Http.createServer((req, res) => {
+      userAgent = req.headers['user-agent']
+      res.end('ok')
+    })
+
+    try {
+      await serve([httpServer.url, '-s'], { env: { CLAUDECODE: '1' } })
+    } finally {
+      httpServer.close()
+    }
+
+    expect(userAgent).toMatch(/^mppx\/[^ ]+ AIAgent\/claude_code$/)
+  })
+})
+
 async function serve(
   argv: string[],
   options?: { env?: Record<string, string | undefined>; onOutput?: (chunk: string) => void },

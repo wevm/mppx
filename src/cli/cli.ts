@@ -22,6 +22,7 @@ import * as x402_Header from '../x402/Header.js'
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
+import { detectAgent } from './agent.js'
 import {
   assertSamePaymentRequest,
   flattenConfigMethods,
@@ -397,7 +398,7 @@ const cli = Cli.create('mppx', {
       .describe('Session selection: auto, new, or channel ID'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
     slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
-    userAgent: z.string().optional().default(`mppx/${version}`).describe('Set User-Agent header'),
+    userAgent: z.string().optional().describe('Set User-Agent header'),
     verbose: z
       .number()
       .default(0)
@@ -431,8 +432,9 @@ const cli = Cli.create('mppx', {
     if (loaded && c.options.verbose >= 1)
       info(`${pc.dim('Using config')} ${pc.blue(path.relative(process.cwd(), loaded.path))}\n`)
 
+    const agent = detectAgent()
     const headers: Record<string, string> = {
-      'User-Agent': c.options.userAgent,
+      'User-Agent': c.options.userAgent ?? `mppx/${version}${agent ? ` AIAgent/${agent}` : ''}`,
     }
     if (c.options.header) {
       for (const header of c.options.header) {
