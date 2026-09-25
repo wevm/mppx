@@ -1,5 +1,15 @@
 # mppx
 
+## 0.11.1
+
+### Patch Changes
+
+- 1d08567: Added AI agent attribution to the CLI User-Agent header when a recognized environment signal is present.
+- dcf1589: Fixed CLI agent attribution test isolation across agent environments.
+- 75cb219: Fixed hosted fee sponsorship for credential-triggered Tempo session settlement and close.
+- fe2e66e: Fixed split-charge verification to reject payment transfers with attribution memos bound to conflicting challenges or realms.
+- 8829293: Allowed `hostedFeePayer: true` in Stripe test mode by applying hosted fee sponsorship only in live mode.
+
 ## 0.11.0
 
 ### Minor Changes
