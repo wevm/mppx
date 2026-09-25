@@ -120,6 +120,16 @@ export function fromStore(
     return (await store.get(recordKey(subscriptionId))) as SubscriptionRecord | null
   }
 
+  async function ensureAccessKeyAddressIndex(
+    record: SubscriptionAccessKeyRecord,
+  ): Promise<SubscriptionAccessKeyRecord> {
+    await store.update(accessKeyAddressKey(record.accessKeyAddress), (current) => {
+      if (current) return { op: 'noop', result: undefined }
+      return { op: 'set', value: record, result: undefined }
+    })
+    return record
+  }
+
   async function clearRenewalState(subscriptionId: string, periodIndex: number, attempt: string) {
     await store.update(recordKey(subscriptionId), (current) => {
       const subscription = current as SubscriptionRecord | null
@@ -259,7 +269,7 @@ export function fromStore(
 
     async getOrCreateAccessKey(key) {
       const existing = (await store.get(accessKeyKey(key))) as SubscriptionAccessKeyRecord | null
-      if (existing) return existing
+      if (existing) return ensureAccessKeyAddressIndex(existing)
 
       const privateKey = Secp256k1.randomPrivateKey()
       const account = TempoAccount.fromSecp256k1(privateKey)
@@ -278,13 +288,7 @@ export function fromStore(
             return { op: 'set', value: candidate, result: candidate }
           },
         )
-        .then(async (record) => {
-          await store.update(accessKeyAddressKey(record.accessKeyAddress), (current) => {
-            if (current) return { op: 'noop', result: undefined }
-            return { op: 'set', value: record, result: undefined }
-          })
-          return record
-        })
+        .then(ensureAccessKeyAddressIndex)
     },
 
     async put(record) {

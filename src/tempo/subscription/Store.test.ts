@@ -81,6 +81,36 @@ describe('tempo subscription store', () => {
     expect(await rawStore.get(`record:${subscriptionId}`)).toBeNull()
   })
 
+  test('repairs a missing access-key address index for an existing record', async () => {
+    const rawStore = Store.memory()
+    const store = fromStore(rawStore)
+    const lookupKey = 'user-1:plan:pro'
+    const record = await store.getOrCreateAccessKey(lookupKey)
+    const addressIndexKey = `tempo:subscription:access-key:address:${record.accessKeyAddress}`
+
+    await rawStore.delete(addressIndexKey)
+    expect(await store.getAccessKeyByAddress(record.accessKeyAddress)).toBeNull()
+
+    expect(await store.getOrCreateAccessKey(lookupKey)).toEqual(record)
+    expect(await store.getAccessKeyByAddress(record.accessKeyAddress)).toEqual(record)
+  })
+
+  test('does not overwrite an existing access-key address index', async () => {
+    const rawStore = Store.memory()
+    const store = fromStore(rawStore)
+    const lookupKey = 'user-1:plan:pro'
+    const record = await store.getOrCreateAccessKey(lookupKey)
+    const indexedRecord = await store.getOrCreateAccessKey('user-2:plan:pro')
+
+    await rawStore.put(
+      `tempo:subscription:access-key:address:${record.accessKeyAddress}`,
+      indexedRecord,
+    )
+
+    expect(await store.getOrCreateAccessKey(lookupKey)).toEqual(record)
+    expect(await store.getAccessKeyByAddress(record.accessKeyAddress)).toEqual(indexedRecord)
+  })
+
   test('rejects a replayed activation challenge', async () => {
     const store = fromStore(Store.memory())
 
