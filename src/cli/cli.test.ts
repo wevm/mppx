@@ -465,12 +465,13 @@ describe('agent attribution', () => {
     })
 
     try {
-      await serve([httpServer.url, '-s'], { env: { CLAUDECODE: '1' } })
+      // Use the highest-priority signal so inherited agent variables cannot change the result.
+      await serve([httpServer.url, '-s'], { env: { ANTIGRAVITY_CLI_ALIAS: '1' } })
     } finally {
       httpServer.close()
     }
 
-    expect(userAgent).toMatch(/^mppx\/[^ ]+ AIAgent\/claude_code$/)
+    expect(userAgent).toMatch(/^mppx\/[^ ]+ AIAgent\/antigravity$/)
   })
 })
 
