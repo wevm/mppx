@@ -1,9 +1,15 @@
-import type { Address, Client } from 'viem'
+import { decodeFunctionData, type Address, type Client } from 'viem'
 import { readContract } from 'viem/actions'
-import { Actions, Addresses } from 'viem/tempo'
+import { Abis, Actions, Addresses } from 'viem/tempo'
 
 import * as TempoAddress from './address.js'
 import * as defaults from './defaults.js'
+
+type Call = {
+  data?: `0x${string}` | undefined
+  to?: Address | undefined
+  value?: bigint | undefined
+}
 
 /** Basis-point denominator (100% = 10 000 bps). */
 const bps = 10_000n
@@ -82,6 +88,52 @@ export async function findCalls(
   }
 
   throw new InsufficientFundsError({ currency: tokenOut })
+}
+
+/** Matches the canonical DEX auto-swap prefix and returns its input currency. */
+export function matchCalls(parameters: {
+  amountOut: bigint
+  calls: readonly Call[]
+  tokenOut: Address
+}): { fundingCurrency: Address } | undefined {
+  const [approveCall, buyCall] = parameters.calls
+  if (
+    !approveCall?.data ||
+    !approveCall.to ||
+    !buyCall?.data ||
+    !buyCall.to ||
+    (approveCall.value ?? 0n) !== 0n ||
+    (buyCall.value ?? 0n) !== 0n ||
+    !TempoAddress.isEqual(buyCall.to, Addresses.stablecoinDex)
+  )
+    return undefined
+
+  try {
+    const approve = decodeFunctionData({ abi: Abis.tip20, data: approveCall.data })
+    const buy = decodeFunctionData({ abi: Abis.stablecoinDex, data: buyCall.data })
+    if (approve.functionName !== 'approve' || buy.functionName !== 'swapExactAmountOut')
+      return undefined
+
+    const [spender, approvedAmount] = approve.args as [Address, bigint]
+    const [tokenIn, tokenOut, amountOut, maxAmountIn] = buy.args as [
+      Address,
+      Address,
+      bigint,
+      bigint,
+    ]
+    if (
+      !TempoAddress.isEqual(approveCall.to, tokenIn) ||
+      !TempoAddress.isEqual(spender, Addresses.stablecoinDex) ||
+      approvedAmount !== maxAmountIn ||
+      !TempoAddress.isEqual(tokenOut, parameters.tokenOut) ||
+      amountOut !== parameters.amountOut
+    )
+      return undefined
+
+    return { fundingCurrency: approveCall.to }
+  } catch {
+    return undefined
+  }
 }
 
 export declare namespace findCalls {

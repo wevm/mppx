@@ -20,6 +20,18 @@ describe('from', () => {
     `)
   })
 
+  test('behavior: creates receipt with a funding currency', () => {
+    const receipt = Receipt.from({
+      fundingCurrency: '0x20c000000000000000000000f37de3740ADec032',
+      method: 'tempo',
+      reference: '0x1234',
+      status: 'success',
+      timestamp: '2025-01-21T12:00:00.000Z',
+    })
+
+    expect(receipt.fundingCurrency).toBe('0x20c000000000000000000000f37de3740ADec032')
+  })
+
   test('error: rejects receipt with failed status', () => {
     expect(() =>
       Receipt.from({
