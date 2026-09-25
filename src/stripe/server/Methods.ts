@@ -203,14 +203,12 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
     parameters
   if (!client.rawRequest)
     throw new Error('stripe.create() requires a Stripe SDK client with rawRequest() (v15+)')
-  if (hostedFeePayer && !livemode)
-    throw new Error('Stripe hosted fee payer requires a live-mode integration.')
   if (hostedFeePayer && connect)
     throw new Error('Stripe hosted fee payer does not support Connect account routing.')
   const tempoCurrency = (
     livemode ? tempoDefaults.tokens.usdc : tempoDefaults.tokens.pathUsd
   ) as `0x${string}`
-  const hostedTempoFeePayer = hostedFeePayer ? HostedFeePayer.create(client) : undefined
+  const hostedTempoFeePayer = hostedFeePayer && livemode ? HostedFeePayer.create(client) : undefined
   const tempoPaymentHandler = createPaymentSuccessHandler(client, 'tempo', connect, metadata)
   const basePaymentHandler = createPaymentSuccessHandler(client, 'base', connect, metadata)
 

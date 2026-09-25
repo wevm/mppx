@@ -160,17 +160,26 @@ describe('stripe.create() defaultMethods', () => {
     expect(request.feePayer).toBeUndefined()
   })
 
-  test('rejects Stripe feepayer in test mode', () => {
-    const client = createHostedFeePayerStripeClient()
+  test('ignores hostedFeePayer in test mode', async () => {
+    const methods = stripe({
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+      hostedFeePayer: true,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    }).defaultMethods()
 
-    expect(() =>
-      stripe({
-        client,
-        networkId: 'test-profile',
-        livemode: false,
-        hostedFeePayer: true,
-      }),
-    ).toThrow('requires a live-mode integration')
+    const request = await findMethod(methods, 'tempo', 'charge').request!({
+      request: {
+        amount: '10000',
+        currency: 'test-currency',
+        decimals: 6,
+        recipient: 'test-recipient',
+      },
+    } as never)
+
+    expect(request.chainId).toBe(42431)
+    expect(request.feePayer).toBeUndefined()
   })
 
   test('rejects Stripe feepayer with Connect', () => {
