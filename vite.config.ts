@@ -3,6 +3,9 @@ import path from 'node:path'
 import { defineConfig } from 'vp'
 import { playwright } from 'vp/test/browser-playwright'
 
+import Sequencer from './test/runtime/Sequencer.js'
+import { tempoSuites } from './test/runtime/tempo-suites.js'
+
 // Shared aliases used by both projects
 const alias = {
   'next/server': path.resolve(import.meta.dirname, 'node_modules/next/server.js'),
@@ -37,9 +40,7 @@ const alias = {
   '~test': path.resolve(import.meta.dirname, 'test'),
 }
 
-const sharedTempoRpcTestOptions = {
-  fileParallelism: false,
-}
+const tempoTestFiles = Object.keys(tempoSuites)
 
 export default defineConfig({
   test: {
@@ -52,14 +53,16 @@ export default defineConfig({
         functions: 70,
       },
     },
-    globalSetup: ['./test/setup.global.ts'],
+    sequence: { sequencer: Sequencer },
     projects: [
       {
         test: {
           name: 'node',
           alias,
-          include: ['src/**/*.test.ts'],
+          include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
           exclude: [
+            ...tempoTestFiles,
+            'test/html/**',
             '**/node_modules/**',
             'src/**/*.browser.test.ts',
             'src/cli/**/*.test.ts',
@@ -72,7 +75,22 @@ export default defineConfig({
           server: {
             deps: { inline: ['@x402/next'] },
           },
-          ...sharedTempoRpcTestOptions,
+          fileParallelism: true,
+          maxWorkers: 4,
+          globals: true,
+          retry: 3,
+          testTimeout: 10_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'tempo',
+          alias,
+          include: tempoTestFiles,
+          globalSetup: ['./test/setup.global.ts'],
+          server: { deps: { inline: ['@x402/next'] } },
+          fileParallelism: false,
           globals: true,
           retry: 3,
           testTimeout: 10_000,
@@ -106,7 +124,9 @@ export default defineConfig({
           name: 'cli',
           alias,
           include: ['src/cli/**/*.test.ts'],
-          ...sharedTempoRpcTestOptions,
+          exclude: tempoTestFiles,
+          fileParallelism: true,
+          maxWorkers: 4,
           globals: true,
           retry: 3,
           testTimeout: 10_000,
