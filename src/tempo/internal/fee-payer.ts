@@ -1,6 +1,5 @@
-import { Secp256k1 } from 'ox'
-import type { TempoAddress } from 'ox/tempo'
-import { TxEnvelopeTempo } from 'ox/tempo'
+import { Address, Secp256k1 } from 'ox'
+import { TempoAddress, TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import type { Account } from 'viem'
 import { decodeFunctionData, encodeFunctionData, maxUint256, toHex } from 'viem'
@@ -108,17 +107,23 @@ export function defaultAllowedFeeTokens(chainId: number | undefined) {
   return defaultFeeTokens(chainId)
 }
 
-/** Rejects a sponsored fee token outside the server's allowlist. */
+/** Validates the fee-token address and, when supplied, the server's allowlist. */
 export function assertAllowedFeeToken(
   transaction: { feeToken?: unknown },
-  allowedFeeTokens: readonly TempoAddress.Address[],
+  allowedFeeTokens?: readonly TempoAddress.Address[] | undefined,
 ) {
   const { feeToken } = transaction
   if (feeToken === undefined) return
-  if (typeof feeToken !== 'string')
+  if (
+    typeof feeToken !== 'string' ||
+    !(Address.validate(feeToken, { strict: false }) || TempoAddress.validate(feeToken))
+  )
     throw new FeePayerValidationError('fee-sponsored transaction feeToken is invalid', {})
   const normalized = feeToken as TempoAddress.Address
-  if (!allowedFeeTokens.some((allowed) => TempoAddress_internal.isEqual(allowed, normalized)))
+  if (
+    allowedFeeTokens &&
+    !allowedFeeTokens.some((allowed) => TempoAddress_internal.isEqual(allowed, normalized))
+  )
     throw new FeePayerValidationError('fee-sponsored transaction feeToken is not allowed', {
       feeToken,
     })
@@ -170,7 +175,8 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
  *   simulate the exact transaction the sponsor broadcasts.
  */
 export async function fillHostedFeePayerTransaction(parameters: {
-  allowedFeeTokens: readonly TempoAddress.Address[]
+  /** Optional merchant restriction on the hosted sponsor's token choice. */
+  allowedFeeTokens?: readonly TempoAddress.Address[] | undefined
   challengeExpires?: string | undefined
   chainId: number
   details: Record<string, string>

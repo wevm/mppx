@@ -80,7 +80,11 @@ function tokenTransferCall(parameters: viem_token.transfer.Args) {
   return Actions.token.transfer.call(client, parameters)
 }
 
-async function fillHostedFeePayer(transaction: any, chainId: number) {
+async function fillHostedFeePayer(
+  transaction: any,
+  chainId: number,
+  feeToken: `0x${string}` = defaults.tokens.pathUsd,
+) {
   const quantity = (value: unknown) =>
     value === undefined ? undefined : BigInt(value as string | number | bigint | boolean)
   const envelope = TxEnvelopeTempo.from({
@@ -90,7 +94,7 @@ async function fillHostedFeePayer(transaction: any, chainId: number) {
       ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
     })),
     chainId,
-    feeToken: defaults.tokens.pathUsd,
+    feeToken,
     from: transaction.from,
     ...(quantity(transaction.gas) !== undefined ? { gas: quantity(transaction.gas) } : {}),
     ...(quantity(transaction.maxFeePerGas) !== undefined
@@ -111,8 +115,25 @@ async function fillHostedFeePayer(transaction: any, chainId: number) {
   const { r, s, yParity } = parseSignature(await accounts[0].sign!({ hash }))
   return {
     feePayerSignature: { r, s, yParity },
-    feeToken: defaults.tokens.pathUsd,
+    feeToken,
   }
+}
+
+function credentialWithFeeToken(credential: string, feeToken: `0x${string}`) {
+  const decoded = Credential.deserialize<{ signature: Hex.Hex; type: 'transaction' }>(credential)
+  return Credential.serialize({
+    ...decoded,
+    payload: {
+      ...decoded.payload,
+      signature: TxEnvelopeTempo.serialize(
+        {
+          ...TxEnvelopeTempo.deserialize(decoded.payload.signature as TxEnvelopeTempo.Serialized),
+          feeToken,
+        },
+        { format: 'feePayer', sender: accounts[1].address },
+      ),
+    },
+  })
 }
 
 function machineTokenReceipt(parameters: {
@@ -182,6 +203,14 @@ const server = Mppx_server.create({
 })
 
 describe('tempo', () => {
+  test('error: rejects an empty sponsored fee-token allowlist', () => {
+    expect(() => tempo_server.charge({ allowedFeeTokens: [] })).toThrow(
+      '`allowedFeeTokens` must contain at least one token.',
+    )
+    expect(() => tempo_server.common({ allowedFeeTokens: [] })).toThrow(
+      '`allowedFeeTokens` must contain at least one token.',
+    )
+  })
   describe('split charge memo binding', () => {
     describe.each(['hash', 'transaction', 'optimistic', 'sponsored'] as const)('%s', (mode) => {
       test.each([
@@ -2043,10 +2072,17 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: validates fee-payer pull credential before settlement', async () => {
+    test.each([
+      { allowedFeeTokens: undefined, feeToken: undefined, accepted: true },
+      { allowedFeeTokens: [asset], feeToken: asset, accepted: true },
+      { allowedFeeTokens: undefined, feeToken: asset, accepted: false },
+      { allowedFeeTokens: [asset], feeToken: defaults.tokens.pathUsd, accepted: false },
+    ])('behavior: credential fee-token policy %j', async (config) => {
+      const { allowedFeeTokens, feeToken, accepted } = config
       const chargeServer = Mppx_server.create({
         methods: [
           tempo_server.charge({
+            allowedFeeTokens,
             getClient() {
               return client
             },
@@ -2086,7 +2122,18 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mppx.createCredential(response)
+      let credential = await mppx.createCredential(response)
+      if (feeToken) credential = credentialWithFeeToken(credential, feeToken)
+      if (!accepted) {
+        await expect(chargeServer.validateCredential(credential)).rejects.toThrow(
+          'feeToken is not allowed',
+        )
+        await expect(chargeServer.verifyCredential(credential)).rejects.toThrow(
+          'feeToken is not allowed',
+        )
+        httpServer.close()
+        return
+      }
       const validation = await chargeServer.validateCredential(credential)
 
       expect(validation.details).toMatchObject({
@@ -2172,7 +2219,37 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: fee payer simulates the sender and final sponsored envelopes', async () => {
+    test.each([
+      { allowedFeeTokens: undefined, feeToken: undefined, expected: defaults.tokens.pathUsd },
+      { allowedFeeTokens: [asset], feeToken: undefined, expected: asset },
+      { allowedFeeTokens: [asset, defaults.tokens.pathUsd], feeToken: undefined, expected: asset },
+      { allowedFeeTokens: [asset], feeToken: defaults.tokens.pathUsd, expected: undefined },
+      {
+        allowedFeeTokens: [asset, defaults.tokens.pathUsd],
+        feeToken: defaults.tokens.pathUsd,
+        expected: defaults.tokens.pathUsd,
+      },
+      { allowedFeeTokens: undefined, feeToken: asset, expected: undefined },
+      {
+        allowedFeeTokens: undefined,
+        feeToken: undefined,
+        expected: defaults.tokens.pathUsd,
+        remoteConfigured: true,
+      },
+      { allowedFeeTokens: [asset], feeToken: undefined, expected: asset, remoteConfigured: true },
+      {
+        allowedFeeTokens: undefined,
+        feeToken: undefined,
+        expected: undefined,
+        remoteConfigured: true,
+        incomingFeeToken: asset,
+      },
+    ])('behavior: local fee-token configuration %j', async (config) => {
+      const { allowedFeeTokens, feeToken, expected } = config
+      const remoteConfigured = 'remoteConfigured' in config && config.remoteConfigured
+      const hostedFetch = vi.fn(() => {
+        throw new Error('must use the local payer')
+      })
       // First simulate execution as the sender with fee fields omitted. This
       // catches call-level reverts without requiring the sender to fund fees.
       // The second simulation must reflect the FINAL co-signed envelope
@@ -2193,6 +2270,11 @@ describe('tempo', () => {
       const serverWithTrace = Mppx_server.create({
         methods: [
           tempo_server.charge({
+            allowedFeeTokens,
+            feeToken,
+            feePayer: remoteConfigured
+              ? { url: 'https://fee-payer.example', fetch: hostedFetch }
+              : undefined,
             getClient() {
               return interceptingClient
             },
@@ -2230,12 +2312,21 @@ describe('tempo', () => {
       })
 
       const challengeResponse = await fetch(httpServer.url)
-      const credential = await mppx.createCredential(challengeResponse)
+      let credential = await mppx.createCredential(challengeResponse)
+      if ('incomingFeeToken' in config && config.incomingFeeToken)
+        credential = credentialWithFeeToken(credential, config.incomingFeeToken)
       callRequests.length = 0
 
       const authResponse = await fetch(httpServer.url, {
         headers: { Authorization: credential },
       })
+      expect(hostedFetch).not.toHaveBeenCalled()
+      if (!expected) {
+        expect(authResponse.status).toBe(500)
+        expect(callRequests.length).toBeLessThan(2)
+        httpServer.close()
+        return
+      }
       expect(authResponse.status).toBe(200)
 
       expect(callRequests).toHaveLength(2)
@@ -2247,7 +2338,7 @@ describe('tempo', () => {
       expect(simRequest.feePayer).not.toBe(true)
       expect(typeof simRequest.feePayer).toBe('string')
       expect((simRequest.feePayer as string).toLowerCase()).toBe(accounts[0].address.toLowerCase())
-      expect(simRequest.feeToken?.toLowerCase()).toBe(defaults.tokens.pathUsd.toLowerCase())
+      expect(simRequest.feeToken?.toLowerCase()).toBe(expected.toLowerCase())
       // Execution runs as the sender, not the sponsor.
       expect((simRequest.from as string).toLowerCase()).toBe(accounts[1].address.toLowerCase())
       expect(simRequest.calls?.length).toBeGreaterThan(0)
@@ -2859,7 +2950,28 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: hosted fee-payer configuration (withFeePayer transport)', async () => {
+    test.each([
+      { allowedFeeTokens: undefined, feeToken: defaults.tokens.pathUsd, accepted: true },
+      { allowedFeeTokens: [asset], feeToken: asset, accepted: true },
+      { allowedFeeTokens: undefined, feeToken: asset, accepted: true },
+      { allowedFeeTokens: [asset], feeToken: defaults.tokens.pathUsd, accepted: false },
+      { allowedFeeTokens: [defaults.tokens.pathUsd], feeToken: asset, accepted: false },
+      {
+        allowedFeeTokens: undefined,
+        feeToken: defaults.tokens.pathUsd,
+        incomingFeeToken: asset,
+        accepted: true,
+      },
+      { allowedFeeTokens: [asset], feeToken: asset, incomingFeeToken: asset, accepted: true },
+      {
+        allowedFeeTokens: [asset],
+        feeToken: asset,
+        incomingFeeToken: defaults.tokens.pathUsd,
+        accepted: false,
+      },
+    ])('behavior: hosted fee-payer configuration %j', async (config) => {
+      const { allowedFeeTokens, feeToken, accepted } = config
+      const incomingFeeToken = 'incomingFeeToken' in config ? config.incomingFeeToken : undefined
       const feePayerRequests: any[] = []
       const feePayerAuthorizations: (string | undefined)[] = []
       const feePayerHeaders = { Authorization: 'Bearer test' }
@@ -2904,7 +3016,7 @@ describe('tempo', () => {
             id: request.id,
             jsonrpc: '2.0',
             result: {
-              tx: await fillHostedFeePayer(request.params[0], chain.id),
+              tx: await fillHostedFeePayer(request.params[0], chain.id, feeToken),
             },
           }),
         )
@@ -2913,6 +3025,7 @@ describe('tempo', () => {
       const serverWithFeePayer = Mppx_server.create({
         methods: [
           tempo_server.charge({
+            allowedFeeTokens,
             feePayer: { url: feePayerServer.url, headers: feePayerHeaders },
             getClient: () => interceptingClient,
             currency: asset,
@@ -2952,7 +3065,35 @@ describe('tempo', () => {
       expect(JSON.stringify(challenge)).not.toContain(feePayerServer.url)
       expect(JSON.stringify(challenge)).not.toContain('Bearer test')
 
-      const response = await mppx.fetch(httpServer.url)
+      let credential = await mppx.createCredential(challengeResponse)
+      if (incomingFeeToken) credential = credentialWithFeeToken(credential, incomingFeeToken)
+      const rejectedIncoming =
+        incomingFeeToken &&
+        allowedFeeTokens &&
+        !allowedFeeTokens.some((token) => token === incomingFeeToken)
+      if (rejectedIncoming) {
+        await expect(serverWithFeePayer.validateCredential(credential)).rejects.toThrow(
+          'feeToken is not allowed',
+        )
+        await expect(serverWithFeePayer.verifyCredential(credential)).rejects.toThrow(
+          'feeToken is not allowed',
+        )
+        expect(sequence).toEqual([])
+        expect(feePayerRequests).toEqual([])
+        httpServer.close()
+        feePayerServer.close()
+        return
+      }
+      await serverWithFeePayer.validateCredential(credential)
+      const response = await fetch(httpServer.url, { headers: { Authorization: credential } })
+      if (!accepted) {
+        expect(response.status).toBe(500)
+        expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
+        expect(sequence).toEqual(['simulate', 'complete'])
+        httpServer.close()
+        feePayerServer.close()
+        return
+      }
       expect(response.status).toBe(200)
       expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
       expect(feePayerAuthorizations).toEqual(['Bearer test'])
@@ -2966,6 +3107,7 @@ describe('tempo', () => {
         hash: receipt.reference as Hex.Hex,
       })
       expect((txReceipt as any).feePayer).toBe(accounts[0].address.toLowerCase())
+      expect((txReceipt as any).feeToken.toLowerCase()).toBe(feeToken.toLowerCase())
 
       sequence.length = 0
       simulations = 0

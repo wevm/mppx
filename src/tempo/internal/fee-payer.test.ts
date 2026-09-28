@@ -462,6 +462,28 @@ describe('fee token allowlist', () => {
     ).not.toThrow()
   })
 
+  test('accepts arbitrary valid addresses only when the allowlist is omitted', () => {
+    expect(() => assertAllowedFeeToken({ feeToken: swapTokenIn })).not.toThrow()
+    expect(() => assertAllowedFeeToken({ feeToken: swapTokenIn }, [])).toThrow(
+      'feeToken is not allowed',
+    )
+  })
+
+  test.each(['', 'pathUSD', '0x1234', `0x${'g'.repeat(40)}`, `0x${'0'.repeat(42)}`, null, 1n])(
+    'rejects malformed fee tokens without an allowlist: %s',
+    (feeToken) => {
+      expect(() => assertAllowedFeeToken({ feeToken })).toThrow('feeToken is invalid')
+    },
+  )
+
+  test('compares valid addresses case-insensitively', () => {
+    expect(() =>
+      assertAllowedFeeToken({ feeToken: defaults.tokens.usdc.toLowerCase() }, [
+        defaults.tokens.usdc,
+      ]),
+    ).not.toThrow()
+  })
+
   test('error: rejects non-string fee tokens', () => {
     expect(() =>
       assertAllowedFeeToken({ feeToken: 1n }, defaultAllowedFeeTokens(defaults.chainId.mainnet)),
@@ -515,7 +537,12 @@ describe('fillHostedFeePayerTransaction', () => {
     details,
   } as const
 
-  test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
+  test.each([
+    { allowedFeeTokens: [defaults.tokens.pathUsd], feeToken: defaults.tokens.pathUsd },
+    { allowedFeeTokens: undefined, feeToken: swapTokenIn },
+    { allowedFeeTokens: [swapTokenIn], feeToken: swapTokenIn },
+  ])('preserves sender-committed fields with hosted token policy %j', async (config) => {
+    const { allowedFeeTokens, feeToken } = config
     // Sign over the payload built from the actual RPC request body so this
     // verifies recovery parity with the real request shape.
     const sponsorPrivateKey =
@@ -538,7 +565,7 @@ describe('fillHostedFeePayerTransaction', () => {
               ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
             })),
             chainId: hostedTransaction.chainId,
-            feeToken: defaults.tokens.pathUsd,
+            feeToken,
             from: rpc.from,
             ...(quantity(rpc.gas) !== undefined ? { gas: quantity(rpc.gas) } : {}),
             ...(rpc.keyAuthorization !== undefined
@@ -565,20 +592,23 @@ describe('fillHostedFeePayerTransaction', () => {
       return {
         tx: {
           feePayerSignature: realFeePayerSignature,
-          feeToken: defaults.tokens.pathUsd,
+          feeToken,
           gas: '0x1',
           maxFeePerGas: '0x2',
+          calls: [{ to: swapTokenOut, data: '0x' }],
+          chainId: '0x1',
+          nonce: '0x99',
         },
       }
     })
     const result = await fillHostedFeePayerTransaction({
-      allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+      allowedFeeTokens,
       ...hostedContext,
       request,
       transaction: hostedTransaction as any,
     })
 
-    expect(result.feeToken).toBe(defaults.tokens.pathUsd)
+    expect(result.feeToken).toBe(feeToken)
     expect(result.feePayer.toLowerCase()).toBe(sponsorAddress.toLowerCase())
     const serialized = result.serializedTransaction
 
@@ -610,7 +640,10 @@ describe('fillHostedFeePayerTransaction', () => {
     expect(transaction.gas).toBe(hostedTransaction.gas)
     expect(transaction.maxFeePerGas).toBe(hostedTransaction.maxFeePerGas)
     expect(transaction.calls).toEqual(hostedTransaction.calls)
-    expect(transaction.feeToken).toBe(defaults.tokens.pathUsd)
+    expect(transaction.feeToken).toBe(feeToken)
+    expect(transaction.chainId).toBe(hostedTransaction.chainId)
+    expect(BigInt(transaction.nonce!)).toBe(hostedTransaction.nonce)
+    expect(transaction.validBefore).toBe(hostedTransaction.validBefore)
     expect(BigInt(transaction.feePayerSignature!.r)).toBe(realFeePayerSignature!.r)
     expect(BigInt(transaction.feePayerSignature!.s)).toBe(realFeePayerSignature!.s)
   })
@@ -618,12 +651,49 @@ describe('fillHostedFeePayerTransaction', () => {
   test('error: requires hosted fee payer to return a feeToken', async () => {
     await expect(
       fillHostedFeePayerTransaction({
-        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         request: vi.fn(async () => ({ tx: { feePayerSignature } })),
         transaction: hostedTransaction as any,
       }),
     ).rejects.toThrow('did not return a feeToken')
+  })
+
+  test.each(['not-an-address', '0x1234', `0x${'g'.repeat(40)}`])(
+    'error: rejects malformed hosted feeToken without an allowlist: %s',
+    async (feeToken) => {
+      await expect(
+        fillHostedFeePayerTransaction({
+          ...hostedContext,
+          request: vi.fn(async () => ({ tx: { feePayerSignature, feeToken } })),
+          transaction: hostedTransaction as any,
+        }),
+      ).rejects.toThrow('feeToken is invalid')
+    },
+  )
+
+  test.each([undefined, null, { tx: {} }, { tx: { feeToken: swapTokenIn } }])(
+    'error: requires a hosted sponsor signature without an allowlist: %j',
+    async (result) => {
+      await expect(
+        fillHostedFeePayerTransaction({
+          ...hostedContext,
+          request: vi.fn(async () => result),
+          transaction: hostedTransaction as any,
+        }),
+      ).rejects.toThrow('failed to sponsor transaction')
+    },
+  )
+
+  test('error: rejects an invalid hosted signature without an allowlist', async () => {
+    await expect(
+      fillHostedFeePayerTransaction({
+        ...hostedContext,
+        request: vi.fn(async () => ({
+          tx: { feePayerSignature: { r: '0x0', s: '0x0', yParity: 0 }, feeToken: swapTokenIn },
+        })),
+        transaction: hostedTransaction as any,
+      }),
+    ).rejects.toThrow('invalid feePayerSignature')
   })
 
   test('error: rejects hosted feeToken outside the allowlist', async () => {
@@ -642,7 +712,6 @@ describe('fillHostedFeePayerTransaction', () => {
   test('error: surfaces hosted fee payer errors', async () => {
     await expect(
       fillHostedFeePayerTransaction({
-        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         request: vi.fn(async () => {
           throw new Error('Invalid or revoked API key')
@@ -657,7 +726,6 @@ describe('fillHostedFeePayerTransaction', () => {
 
     await expect(
       fillHostedFeePayerTransaction({
-        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         policy: { maxGas: hostedTransaction.gas - 1n },
         request,
@@ -672,7 +740,6 @@ describe('fillHostedFeePayerTransaction', () => {
 
     await expect(
       fillHostedFeePayerTransaction({
-        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         request,
         transaction: {
@@ -689,7 +756,6 @@ describe('fillHostedFeePayerTransaction', () => {
 
     await expect(
       fillHostedFeePayerTransaction({
-        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
         ...hostedContext,
         request,
         transaction: {

@@ -29,10 +29,12 @@ function createChargeMethod<const parameters extends tempo.Parameters>(
 function createSessionMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
 ) {
-  // Machine-token funding is configured at the Tempo family level, but only
-  // charge implements it today. Keep it out of session configuration until
-  // session routing has its own complete lifecycle support.
-  const { machineTokenEnabled: _machineTokenEnabled, ...sessionParameters } = parameters ?? {}
+  // These options apply only to charge, even when configured at the family level.
+  const {
+    allowedFeeTokens: _allowedFeeTokens,
+    machineTokenEnabled: _machineTokenEnabled,
+    ...sessionParameters
+  } = parameters ?? {}
   return sessionServer(
     sessionParameters as NoExtraKeys<parameters, session_.Parameters> | undefined,
   )
