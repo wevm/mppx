@@ -72,16 +72,19 @@ function createSigningClient(account = payer) {
   return createClient({
     account,
     chain: testChain,
-    transport: custom({
-      async request(args) {
-        if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-        if (args.method === 'eth_getTransactionCount') return '0x0'
-        if (args.method === 'eth_estimateGas') return '0x5208'
-        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-        throw new Error(`unexpected signing rpc request: ${args.method}`)
+    transport: custom(
+      {
+        async request(args) {
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          if (args.method === 'eth_getTransactionCount') return '0x0'
+          if (args.method === 'eth_estimateGas') return '0x5208'
+          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+          throw new Error(`unexpected signing rpc request: ${args.method}`)
+        },
       },
-    }),
+      { retryCount: 0 },
+    ),
   })
 }
 
@@ -104,55 +107,58 @@ function createServerClient(
   return createClient({
     ...(account ? { account } : {}),
     chain: testChain,
-    transport: custom({
-      async request(args) {
-        calls.push(args)
-        if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-        if (args.method === 'eth_getTransactionCount') return '0x0'
-        if (args.method === 'eth_estimateGas') return '0x5208'
-        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-        if (args.method === 'eth_sendRawTransaction') {
-          sentTransaction = true
-          return `0x${'aa'.repeat(32)}`
-        }
-        if (args.method === 'eth_getTransactionReceipt') {
-          const receipt = sentTransaction
-            ? (options.sentReceipt ?? options.receipt)
-            : options.receipt
-          return typeof receipt === 'function' ? receipt() : (receipt ?? null)
-        }
-        if (args.method === 'eth_sendTransaction') {
-          sentTransaction = true
-          return `0x${'bb'.repeat(32)}`
-        }
-        if (args.method === 'eth_call') {
-          const configuredState =
-            typeof options.state === 'function' ? await options.state() : options.state
-          const state = configuredState ?? { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }
-          const data = (args.params as [{ data?: Hex }])[0].data
-          const getChannelSelector = options.descriptor
-            ? encodeFunctionData({
+    transport: custom(
+      {
+        async request(args) {
+          calls.push(args)
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          if (args.method === 'eth_getTransactionCount') return '0x0'
+          if (args.method === 'eth_estimateGas') return '0x5208'
+          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+          if (args.method === 'eth_sendRawTransaction') {
+            sentTransaction = true
+            return `0x${'aa'.repeat(32)}`
+          }
+          if (args.method === 'eth_getTransactionReceipt') {
+            const receipt = sentTransaction
+              ? (options.sentReceipt ?? options.receipt)
+              : options.receipt
+            return typeof receipt === 'function' ? receipt() : (receipt ?? null)
+          }
+          if (args.method === 'eth_sendTransaction') {
+            sentTransaction = true
+            return `0x${'bb'.repeat(32)}`
+          }
+          if (args.method === 'eth_call') {
+            const configuredState =
+              typeof options.state === 'function' ? await options.state() : options.state
+            const state = configuredState ?? { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }
+            const data = (args.params as [{ data?: Hex }])[0].data
+            const getChannelSelector = options.descriptor
+              ? encodeFunctionData({
+                  abi: escrowAbi,
+                  functionName: 'getChannel',
+                  args: [options.descriptor],
+                }).slice(0, 10)
+              : undefined
+            if (data && getChannelSelector && data.slice(0, 10) === getChannelSelector)
+              return encodeFunctionResult({
                 abi: escrowAbi,
                 functionName: 'getChannel',
-                args: [options.descriptor],
-              }).slice(0, 10)
-            : undefined
-          if (data && getChannelSelector && data.slice(0, 10) === getChannelSelector)
+                result: { descriptor: options.descriptor!, state },
+              })
             return encodeFunctionResult({
               abi: escrowAbi,
-              functionName: 'getChannel',
-              result: { descriptor: options.descriptor!, state },
+              functionName: 'getChannelState',
+              result: state,
             })
-          return encodeFunctionResult({
-            abi: escrowAbi,
-            functionName: 'getChannelState',
-            result: state,
-          })
-        }
-        throw new Error(`unexpected rpc request: ${args.method}`)
+          }
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
       },
-    }),
+      { retryCount: 0 },
+    ),
   })
 }
 
@@ -167,22 +173,25 @@ function createStateClient(
   return createClient({
     ...(account ? { account } : {}),
     chain: testChain,
-    transport: custom({
-      async request(args) {
-        if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-        if (args.method === 'eth_call')
-          return encodeFunctionResult({
-            abi: escrowAbi,
-            functionName: 'getChannelState',
-            result: state,
-          })
-        if (args.method === 'eth_getTransactionCount') return '0x0'
-        if (args.method === 'eth_estimateGas') return '0x5208'
-        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-        throw new Error(`unexpected rpc request: ${args.method}`)
+    transport: custom(
+      {
+        async request(args) {
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          if (args.method === 'eth_call')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'getChannelState',
+              result: state,
+            })
+          if (args.method === 'eth_getTransactionCount') return '0x0'
+          if (args.method === 'eth_estimateGas') return '0x5208'
+          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
       },
-    }),
+      { retryCount: 0 },
+    ),
   })
 }
 
@@ -1129,12 +1138,15 @@ describe('precompile server session unit guardrails', () => {
     const client = createClient({
       account: wrongPayer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
     await expect(settle(store, client, openPayload.channelId)).rejects.toThrow(
       /eth_getTransactionCount/,
@@ -1163,13 +1175,16 @@ describe('precompile server session unit guardrails', () => {
     const client = createClient({
       account: payer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          if (args.method === 'eth_sendTransaction') throw new Error('sent fee-token settle')
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_sendTransaction') throw new Error('sent fee-token settle')
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
 
     const { settle } = await import('./Session.js')
@@ -1189,13 +1204,16 @@ describe('precompile server session unit guardrails', () => {
     const client = createClient({
       account: payer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_sendTransaction') throw new Error('sent settle transaction')
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_sendTransaction') throw new Error('sent settle transaction')
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
 
     const { settle } = await import('./Session.js')
@@ -3555,26 +3573,29 @@ describe('precompile server session unit guardrails', () => {
         createClient({
           account: payer,
           chain: testChain,
-          transport: custom({
-            async request(args) {
-              if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-              if (args.method === 'eth_call')
-                return encodeFunctionResult({
-                  abi: escrowAbi,
-                  functionName: 'getChannelState',
-                  result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
-                })
-              if (args.method === 'eth_sendRawTransaction') {
-                observedPending =
-                  (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
-                throw new Error('broadcast failed')
-              }
-              if (args.method === 'eth_estimateGas') return '0x5208'
-              if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-              if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-              throw new Error(`unexpected rpc request: ${args.method}`)
+          transport: custom(
+            {
+              async request(args) {
+                if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+                if (args.method === 'eth_call')
+                  return encodeFunctionResult({
+                    abi: escrowAbi,
+                    functionName: 'getChannelState',
+                    result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+                  })
+                if (args.method === 'eth_sendRawTransaction') {
+                  observedPending =
+                    (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
+                  throw new Error('broadcast failed')
+                }
+                if (args.method === 'eth_estimateGas') return '0x5208'
+                if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+                if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+                throw new Error(`unexpected rpc request: ${args.method}`)
+              },
             },
-          }),
+            { retryCount: 0 },
+          ),
         }),
     })
     const payload = await ClientOps.createClosePayload(
@@ -4056,27 +4077,30 @@ describe('onSessionSettlement', () => {
     return createClient({
       account: payer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          if (args.method === 'eth_getTransactionCount') return '0x0'
-          if (args.method === 'eth_estimateGas') return '0x5208'
-          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-          if (args.method === 'eth_sendRawTransaction') return `0x${'cc'.repeat(32)}`
-          if (args.method === 'eth_sendTransaction') return `0x${'cc'.repeat(32)}`
-          if (args.method === 'eth_getTransactionReceipt')
-            return transactionReceipt([settledLog(channelId, settledAmount)])
-          if (args.method === 'eth_call') {
-            return encodeFunctionResult({
-              abi: escrowAbi,
-              functionName: 'getChannelState',
-              result: { settled: settledAmount, deposit: 1_000n, closeRequestedAt: 0 },
-            })
-          }
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas') return '0x5208'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (args.method === 'eth_sendRawTransaction') return `0x${'cc'.repeat(32)}`
+            if (args.method === 'eth_sendTransaction') return `0x${'cc'.repeat(32)}`
+            if (args.method === 'eth_getTransactionReceipt')
+              return transactionReceipt([settledLog(channelId, settledAmount)])
+            if (args.method === 'eth_call') {
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: settledAmount, deposit: 1_000n, closeRequestedAt: 0 },
+              })
+            }
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
   }
 
@@ -4214,29 +4238,32 @@ describe('onSessionSettlement', () => {
     const closeClient = createClient({
       account: payer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          if (args.method === 'eth_getTransactionCount') return '0x0'
-          if (args.method === 'eth_estimateGas') return '0x5208'
-          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-          if (args.method === 'eth_sendRawTransaction') return `0x${'dd'.repeat(32)}`
-          if (args.method === 'eth_sendTransaction') return `0x${'dd'.repeat(32)}`
-          if (args.method === 'eth_getTransactionReceipt')
-            return transactionReceipt([
-              closedLog(openPayload.channelId, closedAmount, refundedAmount),
-            ])
-          if (args.method === 'eth_call') {
-            return encodeFunctionResult({
-              abi: escrowAbi,
-              functionName: 'getChannelState',
-              result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
-            })
-          }
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas') return '0x5208'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (args.method === 'eth_sendRawTransaction') return `0x${'dd'.repeat(32)}`
+            if (args.method === 'eth_sendTransaction') return `0x${'dd'.repeat(32)}`
+            if (args.method === 'eth_getTransactionReceipt')
+              return transactionReceipt([
+                closedLog(openPayload.channelId, closedAmount, refundedAmount),
+              ])
+            if (args.method === 'eth_call') {
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+              })
+            }
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
 
     const method = session({
@@ -4343,29 +4370,32 @@ describe('onSessionSettlement', () => {
     const closeClient = createClient({
       account: payer,
       chain: testChain,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          if (args.method === 'eth_getTransactionCount') return '0x0'
-          if (args.method === 'eth_estimateGas') return '0x5208'
-          if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-          if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-          if (args.method === 'eth_sendRawTransaction') return `0x${'dd'.repeat(32)}`
-          if (args.method === 'eth_sendTransaction') return `0x${'dd'.repeat(32)}`
-          if (args.method === 'eth_getTransactionReceipt')
-            return transactionReceipt([
-              closedLog(openPayload.channelId, closedAmount, refundedAmount),
-            ])
-          if (args.method === 'eth_call') {
-            return encodeFunctionResult({
-              abi: escrowAbi,
-              functionName: 'getChannelState',
-              result: { settled: priorSettled, deposit: 1_000n, closeRequestedAt: 0 },
-            })
-          }
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas') return '0x5208'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (args.method === 'eth_sendRawTransaction') return `0x${'dd'.repeat(32)}`
+            if (args.method === 'eth_sendTransaction') return `0x${'dd'.repeat(32)}`
+            if (args.method === 'eth_getTransactionReceipt')
+              return transactionReceipt([
+                closedLog(openPayload.channelId, closedAmount, refundedAmount),
+              ])
+            if (args.method === 'eth_call') {
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: priorSettled, deposit: 1_000n, closeRequestedAt: 0 },
+              })
+            }
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
 
     const method = session({

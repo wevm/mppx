@@ -26,22 +26,25 @@ const chainId = 42431
 const client = createClient({
   account,
   chain: { id: chainId } as never,
-  transport: custom({
-    async request(args) {
-      if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-      if (args.method === 'eth_getTransactionCount') return '0x0'
-      if (args.method === 'eth_estimateGas') return '0x5208'
-      if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-      if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-      if (args.method === 'eth_call')
-        return encodeFunctionResult({
-          abi: escrowAbi,
-          functionName: 'getChannelState',
-          result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
-        })
-      throw new Error(`unexpected rpc request: ${args.method}`)
+  transport: custom(
+    {
+      async request(args) {
+        if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+        if (args.method === 'eth_getTransactionCount') return '0x0'
+        if (args.method === 'eth_estimateGas') return '0x5208'
+        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+        if (args.method === 'eth_call')
+          return encodeFunctionResult({
+            abi: escrowAbi,
+            functionName: 'getChannelState',
+            result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          })
+        throw new Error(`unexpected rpc request: ${args.method}`)
+      },
     },
-  }),
+    { retryCount: 0 },
+  ),
 })
 
 const descriptor = {
@@ -1238,18 +1241,21 @@ describe('precompile client session', () => {
     const closedClient = createClient({
       account,
       chain: { id: chainId } as never,
-      transport: custom({
-        async request(args) {
-          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
-          if (args.method === 'eth_call')
-            return encodeFunctionResult({
-              abi: escrowAbi,
-              functionName: 'getChannelState',
-              result: { settled: 0n, deposit: 0n, closeRequestedAt: 0 },
-            })
-          throw new Error(`unexpected rpc request: ${args.method}`)
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_call')
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: 0n, deposit: 0n, closeRequestedAt: 0 },
+              })
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
         },
-      }),
+        { retryCount: 0 },
+      ),
     })
     const method = session({
       account,

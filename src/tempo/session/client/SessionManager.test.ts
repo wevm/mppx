@@ -31,39 +31,45 @@ const account = privateKeyToAccount(
 const client = createClient({
   account,
   chain: { id: 4217 } as never,
-  transport: custom({
-    async request(args) {
-      if (args.method === 'eth_chainId') return '0x1079'
-      if (args.method === 'eth_getTransactionCount') return '0x0'
-      if (args.method === 'eth_estimateGas') return '0x5208'
-      if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-      if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-      if (args.method === 'eth_call')
-        return encodeFunctionResult({
-          abi: escrowAbi,
-          functionName: 'getChannelState',
-          result: { settled: 0n, deposit: 10_000_000n, closeRequestedAt: 0 },
-        })
-      throw new Error(`unexpected rpc request: ${args.method}`)
+  transport: custom(
+    {
+      async request(args) {
+        if (args.method === 'eth_chainId') return '0x1079'
+        if (args.method === 'eth_getTransactionCount') return '0x0'
+        if (args.method === 'eth_estimateGas') return '0x5208'
+        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+        if (args.method === 'eth_call')
+          return encodeFunctionResult({
+            abi: escrowAbi,
+            functionName: 'getChannelState',
+            result: { settled: 0n, deposit: 10_000_000n, closeRequestedAt: 0 },
+          })
+        throw new Error(`unexpected rpc request: ${args.method}`)
+      },
     },
-  }),
+    { retryCount: 0 },
+  ),
 })
 
 function channelStateClient(state: { closeRequestedAt: number; deposit: bigint; settled: bigint }) {
   return createClient({
     account,
     chain: { id: 4217 } as never,
-    transport: custom({
-      async request(args) {
-        if (args.method === 'eth_call')
-          return encodeFunctionResult({
-            abi: escrowAbi,
-            functionName: 'getChannelState',
-            result: state,
-          })
-        throw new Error(`unexpected rpc request: ${args.method}`)
+    transport: custom(
+      {
+        async request(args) {
+          if (args.method === 'eth_call')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'getChannelState',
+              result: state,
+            })
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
       },
-    }),
+      { retryCount: 0 },
+    ),
   })
 }
 
@@ -981,16 +987,19 @@ describe('Session', () => {
       const failingClient = createClient({
         account,
         chain: { id: 4217 } as never,
-        transport: custom({
-          async request(args) {
-            if (args.method === 'eth_chainId') return '0x1079'
-            if (args.method === 'eth_getTransactionCount') return '0x0'
-            if (args.method === 'eth_estimateGas') throw new Error('insufficient balance')
-            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-            throw new Error(`unexpected rpc request: ${args.method}`)
+        transport: custom(
+          {
+            async request(args) {
+              if (args.method === 'eth_chainId') return '0x1079'
+              if (args.method === 'eth_getTransactionCount') return '0x0'
+              if (args.method === 'eth_estimateGas') throw new Error('insufficient balance')
+              if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+              if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+              throw new Error(`unexpected rpc request: ${args.method}`)
+            },
           },
-        }),
+          { retryCount: 0 },
+        ),
       })
       const mockFetch = vi.fn().mockResolvedValue(make402Response())
       const s = sessionManager({

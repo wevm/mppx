@@ -5,7 +5,7 @@ import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
-import { afterEach, describe, expect, test, vi } from 'vp/test'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 import * as Challenge from '../Challenge.js'
@@ -15,6 +15,15 @@ import { missingDiscoverySuggestion } from './validate/messages.js'
 
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
 const isAgentEnvironmentMock = vi.fn(() => false)
+const getBalanceMock = vi.fn(async () => ({ amount: 1_000_000n }))
+
+// Installed CLI skills must not append host-specific notices to captured JSON.
+const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-validate-'))
+beforeAll(() => vi.stubEnv('XDG_DATA_HOME', dataHome))
+afterAll(() => {
+  vi.unstubAllEnvs()
+  fs.rmSync(dataHome, { recursive: true, force: true })
+})
 
 // Keep CLI orchestration tests independent of the public Tempo RPC and faucet.
 vi.doMock('viem/tempo', async () => {
@@ -24,6 +33,7 @@ vi.doMock('viem/tempo', async () => {
     Actions: {
       ...actual.Actions,
       faucet: { ...actual.Actions.faucet, fund: vi.fn(async () => []) },
+      token: { ...actual.Actions.token, getBalance: getBalanceMock },
     },
   }
 })
@@ -51,6 +61,8 @@ afterEach(() => {
   servers.forEach((s) => s.close())
   servers.length = 0
   isAgentEnvironmentMock.mockReturnValue(false)
+  getBalanceMock.mockReset()
+  getBalanceMock.mockResolvedValue({ amount: 1_000_000n })
 })
 
 async function testServer(handler: http.RequestListener) {
@@ -281,6 +293,26 @@ describe('validate: discovery', () => {
     const { output } = await serve(['validate', server.url])
     expect(output).toContain('Paid endpoints found')
     expect(output).toContain('Challenge parseable')
+  })
+})
+
+describe('validate: faucet balance polling', () => {
+  test.each([1, 3, 10])('waits for %i balance polls without real delays', async (attempts) => {
+    for (let attempt = 1; attempt < attempts; attempt++)
+      getBalanceMock.mockResolvedValueOnce({ amount: 0n })
+    const server = await mppServer(makeChallenge())
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const result = serve(['validate', server.url])
+    try {
+      await vi.waitFor(() => expect(getBalanceMock).toHaveBeenCalled())
+      await vi.advanceTimersByTimeAsync((attempts - 1) * 500)
+      expect(getBalanceMock).toHaveBeenCalledTimes(attempts)
+    } finally {
+      vi.useRealTimers()
+    }
+    const { exitCode } = await result
+    expect(exitCode ?? 0).toBe(0)
   })
 })
 
