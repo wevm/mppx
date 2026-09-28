@@ -260,6 +260,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
       recipient,
       ...(!livemode && { testnet: true }),
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
+      canOffer: cryptoCanOffer,
       ...rest,
       async onSessionSettlement(context) {
         await tempoPaymentHandler({

@@ -316,6 +316,32 @@ describe('stripe.create() canOffer minimum amount', () => {
     ).toBe(true)
   })
 
+  test.each([
+    { amount: '1', expected: false },
+    { amount: '9999', expected: false },
+    { amount: '10000', expected: true },
+    { amount: '10001', expected: true },
+  ])('tempo session checks the 1-cent minimum for $amount raw units', ({ amount, expected }) => {
+    const client = createMockStripeClient()
+    const recipient = '0x1111111111111111111111111111111111111111' as stripe.DepositAddress<'tempo'>
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: { tempo: recipient },
+    })
+    const methods = mp.defaultMethods().additional({ tempo: { session: {} } })
+
+    for (const method of [
+      mp.tempo.session({ recipient }),
+      findMethod(methods, 'tempo', 'session'),
+    ]) {
+      expect(method.canOffer!({ input: new Request('http://x'), request: { amount } })).toBe(
+        expected,
+      )
+    }
+  })
+
   test('custom rail inherits minimum amount check', () => {
     const client = createMockStripeClient()
     const mp = stripe({
