@@ -2,18 +2,21 @@ import { globSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import fc from 'fast-check'
-import { describe, expect, test } from 'vp/test'
-import type { TestSpecification, Vitest } from 'vp/test/node'
+import { describe, expect, test, vi } from 'vp/test'
+import { BaseSequencer, type TestSpecification, type Vitest } from 'vp/test/node'
 
 import Sequencer from './Sequencer.js'
 import { tempoSuites } from './tempo-suites.js'
 
 const root = resolve(import.meta.dirname, '../..')
 
-function shard(files: string[], index: number, count: number) {
+function shard(files: string[], index: number, count: number, project = 'tempo') {
   const sequencer = new Sequencer({ config: { root, shard: { index, count } } } as Vitest)
   return sequencer.shard(
-    files.map((file) => ({ moduleId: resolve(root, file) }) as TestSpecification),
+    files.map(
+      (file) =>
+        ({ moduleId: resolve(root, file), project: { name: project } }) as TestSpecification,
+    ),
   )
 }
 
@@ -27,7 +30,19 @@ describe('runtime sharding', () => {
         0,
       ),
     )
-    expect(Math.abs(durations[0]! - durations[1]!)).toBeLessThan(2_000)
+    // A single large suite can make equal shard durations impossible.
+    const longestSuite = Math.max(...Object.values(tempoSuites)) + 1_000
+    expect(Math.abs(durations[0]! - durations[1]!)).toBeLessThanOrEqual(longestSuite)
+  })
+
+  test.each(['node', 'cli', 'browser'])('preserves default sharding for %s', async (project) => {
+    const defaultShard = vi.spyOn(BaseSequencer.prototype, 'shard').mockResolvedValue([])
+    try {
+      await shard(['unit.test.ts'], 1, 2, project)
+      expect(defaultShard).toHaveBeenCalledOnce()
+    } finally {
+      defaultShard.mockRestore()
+    }
   })
 
   test('assigns every file exactly once, independently of discovery order', async () => {
@@ -62,10 +77,10 @@ describe('runtime sharding', () => {
       cwd: resolve(root, 'src'),
       exclude: ['**/node_modules/**'],
     })
-    for (const file of files.filter((file) => file.endsWith('.test.ts'))) {
+    for (const file of files) {
       const source = readFileSync(resolve(root, 'src', file), 'utf8')
       if (/from ['"]~test\/tempo\//.test(source))
-        expect(Object.keys(tempoSuites)).toContain(`src/${file}`)
+        expect(tempoSuites).toHaveProperty([`src/${file.replaceAll('\\', '/')}`])
     }
   })
 })

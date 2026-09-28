@@ -7,6 +7,8 @@ import { tempoSuites } from './tempo-suites.js'
 /** Balances serial integration shards by recorded duration, with stable tie-breaking. */
 export default class Sequencer extends BaseSequencer {
   override async shard(files: TestSpecification[]) {
+    if (files.some((file) => file.project.name !== 'tempo')) return super.shard(files)
+
     const { index, count } = this.ctx.config.shard!
     const shards = Array.from({ length: count }, () => ({
       files: [] as TestSpecification[],

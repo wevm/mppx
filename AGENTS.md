@@ -2,6 +2,10 @@
 
 TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Protocol).
 
+## Code Simplicity
+
+All code should be as simple as possible. Prefer existing patterns and avoid unnecessary abstractions.
+
 ## Friction Logging
 
 - Log papercuts and friction (tooling, docs, APIs, tests, conventions) as you hit them with `pnpx frog log`.
