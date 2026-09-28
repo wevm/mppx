@@ -1,0 +1,75 @@
+name: Rebalance Test Shards
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: rebalance-test-shards
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'wevm/mppx' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+    secrets:
+      VITE_STRIPE_SECRET_KEY: ${{ secrets.VITE_STRIPE_SECRET_KEY }}
+      VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+
+  rebalance:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Download this run's Tempo timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh run download "$RUN_ID" --pattern 'runtime-test-log-tempo-*' --dir "$RUNNER_TEMP/tempo-timings"
+
+      - name: Refresh shard weights
+        run: |
+          pnpm exec tsx scripts/update-test-timings.ts "$RUNNER_TEMP"/tempo-timings/runtime-test-log-tempo-*/runtime-tests-tempo-*.json
+          pnpm exec vp fmt --write test/runtime/tempo-suites.ts
+
+      - name: Open rebalance pull request
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          branch: chore/rebalance-test-shards
+          base: main
+          add-paths: test/runtime/tempo-suites.ts
+          sign-commits: true
+          commit-message: 'test: refresh Tempo shard weights'
+          title: 'test: refresh Tempo shard weights'
+          labels: skip-changeset
+          body: |
+            ## Motivation
+
+            Keep Tempo integration shards balanced as suite runtimes change.
+
+            ## Summary
+
+            - Refreshed weights from a successful weekly CI run on main.
+
+            ## Key design considerations
+
+            - Preserved suite membership and weights for skipped suites.

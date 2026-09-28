@@ -1,8 +1,8 @@
 /**
  * Suites sharing the funded Tempo accounts. Keep these serial within each shard.
- * Values are summed test durations (ms) from CI run 36450981124, used to balance
- * shards rather than splitting by file count. Refresh from verbose test logs
- * when the integration suite changes substantially.
+ * Values are summed test durations (ms), refreshed weekly by the Rebalance Test
+ * Shards workflow from successful main CI reports. Membership is maintained
+ * manually because it determines which suites need shared chain fixtures.
  */
 export const tempoSuites: Record<string, number> = {
   'src/cli/cli.test.ts': 5431,
