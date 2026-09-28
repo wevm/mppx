@@ -310,6 +310,7 @@ describe('validate: faucet balance polling', () => {
       expect(getBalanceMock).toHaveBeenCalledTimes(attempts)
     } finally {
       vi.useRealTimers()
+      await result
     }
     const { exitCode } = await result
     expect(exitCode ?? 0).toBe(0)
