@@ -7,7 +7,6 @@ import {
   type TransactionReceipt,
 } from 'viem'
 import {
-  getTransaction,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -15,7 +14,7 @@ import {
   verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
-import { Abis, Actions, Transaction } from 'viem/tempo'
+import { Abis, Actions, Addresses, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
@@ -29,7 +28,6 @@ import type * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
-import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
@@ -230,25 +228,7 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    // Receipt logs prove settlement, but unrelated transfers cannot prove its funding route.
-    const transaction = await getTransaction(client, { hash: receipt.transactionHash }).catch(
-      () => undefined,
-    )
-    const fundingCurrency =
-      transaction && TempoAddress.isEqual(transaction.from, sender)
-        ? getFundingCurrency((transaction as { calls?: readonly FundingCall[] }).calls ?? [], {
-            amount,
-            chainId: chainId ?? client.chain?.id,
-            currency,
-            machineTokenEnabled: context.machineTokenEnabled,
-            transfers,
-          })
-        : undefined
-    return {
-      receipt: toReceipt(receipt, { fundingCurrency }),
-      sender,
-      transfers,
-    }
+    return { receipt: toReceipt(receipt, sender), sender, transfers }
   }
 
   async function validateProofCredential(
@@ -350,13 +330,6 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    const fundingCurrency = getFundingCurrency(transaction.calls ?? [], {
-      amount,
-      chainId,
-      currency,
-      machineTokenEnabled,
-      transfers,
-    })
 
     if (isFeePayerTx) {
       if (!machineTokenRoute)
@@ -375,7 +348,6 @@ export function charge<const parameters extends charge.Parameters>(
 
     return {
       isFeePayerTx,
-      fundingCurrency,
       serializedTransaction,
       settlementSenders: machineTokenRoute ? [machineTokenRoute.settlementSender] : [],
       transaction,
@@ -409,14 +381,8 @@ export function charge<const parameters extends charge.Parameters>(
       }
 
       case 'transaction': {
-        const {
-          fundingCurrency,
-          isFeePayerTx,
-          serializedTransaction,
-          settlementSenders,
-          transaction,
-          transfers,
-        } = await validateTransactionCredential(credential, context.payload, request, context)
+        const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
+          await validateTransactionCredential(credential, context.payload, request, context)
         return {
           details: {
             mode: 'pull' as const,
@@ -425,7 +391,6 @@ export function charge<const parameters extends charge.Parameters>(
             transfers,
           },
           isFeePayerTx,
-          fundingCurrency,
           serializedTransaction,
           settlementSenders,
           transaction,
@@ -594,14 +559,8 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const {
-            fundingCurrency,
-            isFeePayerTx,
-            serializedTransaction,
-            settlementSenders,
-            transaction,
-            transfers,
-          } = validated
+          const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
+            validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -769,7 +728,7 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
-              return toReceipt(receipt, { fundingCurrency })
+              return toReceipt(receipt)
             }
 
             // Optimistic path: broadcast without waiting for confirmation
@@ -790,7 +749,6 @@ export function charge<const parameters extends charge.Parameters>(
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
             return {
-              fundingCurrency,
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
@@ -1095,54 +1053,6 @@ function getTransferCalls(
   }
 
   return transferCalls
-}
-
-type FundingCall = {
-  data?: `0x${string}` | undefined
-  to?: `0x${string}` | undefined
-  value?: bigint | undefined
-}
-
-type FundingCurrencyParameters = {
-  amount: string
-  chainId: number | undefined
-  currency: `0x${string}`
-  machineTokenEnabled: boolean
-  transfers: readonly ExpectedTransfer[]
-}
-
-/** Returns the currency debited by a recognized, verified charge route. */
-function getFundingCurrency(
-  calls: readonly FundingCall[],
-  parameters: FundingCurrencyParameters,
-): `0x${string}` | undefined {
-  const machineTokenRoute = parameters.machineTokenEnabled
-    ? MachineTokenCharge.matchRoute({
-        calls,
-        chainId: parameters.chainId,
-        currency: parameters.currency,
-        transfers: parameters.transfers,
-      })
-    : undefined
-  if (machineTokenRoute) return machineTokenRoute.fundingCurrency
-
-  try {
-    assertTransferCalls(calls, {
-      currency: parameters.currency,
-      exactCount: true,
-      transfers: parameters.transfers,
-    })
-    const hasAutoSwapPrefix = calls[0]?.data?.slice(0, 10) === Selectors.approve
-    if (hasAutoSwapPrefix)
-      return AutoSwap.matchCalls({
-        amountOut: BigInt(parameters.amount),
-        calls,
-        tokenOut: parameters.currency,
-      })?.fundingCurrency
-    return parameters.currency
-  } catch {
-    return undefined
-  }
 }
 
 function decodeTransferCall(
@@ -1467,16 +1377,32 @@ async function isActiveAccessKey(
 }
 
 /** @internal */
-function toReceipt(
-  receipt: TransactionReceipt,
-  parameters: { fundingCurrency?: `0x${string}` | undefined } = {},
-) {
+function toReceipt(receipt: TransactionReceipt, sender = receipt.from) {
   const { status, transactionHash } = receipt
   if (status !== 'success') {
     throw new Error(`Transaction reverted: ${transactionHash}`)
   }
+  // Funding is the payer's net token debit, excluding network fees. Multiple
+  // debited currencies are ambiguous, so leave the optional field unset.
+  const debits = new Map<string, { currency: `0x${string}`; amount: bigint }>()
+  for (const { address, args } of getTransferLogEffects(receipt)) {
+    if (
+      TempoAddress.isEqual(args.from, Addresses.feeManager) ||
+      TempoAddress.isEqual(args.to, Addresses.feeManager)
+    )
+      continue
+    const amount =
+      (TempoAddress.isEqual(args.from, sender) ? args.amount : 0n) -
+      (TempoAddress.isEqual(args.to, sender) ? args.amount : 0n)
+    const key = address.toLowerCase()
+    const debit = debits.get(key) ?? { currency: address, amount: 0n }
+    debit.amount += amount
+    debits.set(key, debit)
+  }
+  const currencies = [...debits.values()].filter(({ amount }) => amount > 0n)
+  const fundingCurrency = currencies.length === 1 ? currencies[0]!.currency : undefined
   return {
-    ...(parameters.fundingCurrency ? { fundingCurrency: parameters.fundingCurrency } : {}),
+    ...(fundingCurrency ? { fundingCurrency } : {}),
     method: 'tempo',
     status: 'success',
     timestamp: new Date().toISOString(),
