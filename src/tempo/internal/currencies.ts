@@ -20,7 +20,8 @@ export function resolve(parameters: {
     (chainId === defaults.chainId.mainnet
       ? [defaults.tokens.ousd, defaults.tokens.usdc]
       : chainId === defaults.chainId.testnet
-        ? [defaults.tokens.ousd, defaults.tokens.pathUsd]
+        ? // TODO: Use viem's chain-specific OUSD definition once it includes Moderato (42431).
+          [defaults.tokens.ousd, defaults.tokens.pathUsd]
         : [defaults.resolveCurrency({ chainId })])
 
   const seen = new Set<string>()
