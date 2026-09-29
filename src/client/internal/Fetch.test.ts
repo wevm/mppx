@@ -20,6 +20,7 @@ const secretKey = 'test-secret-key-test-secret-key-32'
 const server = Mppx_server.create({
   methods: [
     tempo_server({
+      chainId: client.chain.id,
       getClient: () => client,
       account: accounts[0],
     }),

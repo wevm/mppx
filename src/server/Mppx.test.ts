@@ -21,6 +21,7 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 const method = tempo({
+  chainId: client.chain.id,
   getClient: () => client,
   account: accounts[0],
 })

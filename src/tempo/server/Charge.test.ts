@@ -5077,10 +5077,14 @@ describe('tempo', () => {
     })
 
     test('challenge contains pathUSD currency (unknown chain)', async () => {
+      const unknownChainClient = createClient({
+        chain: { ...chain, id: 69420 },
+        transport: http(),
+      })
       const handler = Mppx_server.create({
         methods: [
           tempo_server.charge({
-            getClient: () => client,
+            getClient: () => unknownChainClient,
             account: accounts[0].address,
             chainId: 69420,
           }),
@@ -5099,6 +5103,7 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
       expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+      expect(challenge.request.methodDetails?.chainId).toBe(69420)
     })
 
     test('explicit currency in challenge overrides testnet default', async () => {
