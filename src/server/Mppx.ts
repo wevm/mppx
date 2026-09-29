@@ -537,6 +537,26 @@ export function create<
   const methodHandlers = new Map<Method.AnyServer, AnyMethodFn>()
   const intentCount: Record<string, number> = {}
 
+  function composeConfigured(configured: ConfiguredHandler[]) {
+    if (transport.name === 'mcp' || transport.name === 'mcp-sdk')
+      return composeMcpHandlers(
+        configured as unknown as ConfiguredHandler<Transport.Mcp | Transport.McpSdk>[],
+        transport as Transport.Mcp | Transport.McpSdk,
+      )
+    return composeHandlers(
+      configured,
+      undefined,
+      selectOffers as SelectOffers<readonly Method.AnyServer[]> | undefined,
+    )
+  }
+
+  function createGroupedHandler(group: readonly Method.AnyServer[]) {
+    return (options: Record<string, unknown>) =>
+      composeConfigured(
+        group.map((method) => methodHandlers.get(method)!(options)) as ConfiguredHandler[],
+      )
+  }
+
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
   }
@@ -583,18 +603,17 @@ export function create<
       const intentMethods = (methods as readonly Method.AnyServer[]).filter(
         (m) => m.intent === mi.intent,
       )
-      handlers[mi.intent] = (options: Record<string, unknown>) => {
-        const configured = intentMethods.map((m) => {
-          const handlerFn = methodHandlers.get(m)!
-          return handlerFn(options)
-        })
-        return composeHandlers(
-          configured as ConfiguredHandler[],
-          undefined,
-          selectOffers as SelectOffers<readonly Method.AnyServer[]> | undefined,
-        )
-      }
+      handlers[mi.intent] = createGroupedHandler(intentMethods)
     }
+  }
+
+  // Preserve distinct configured offers sharing a wire method, including nested handlers.
+  for (const key of new Set(methods.filter((m) => !m.alias).map((m) => `${m.name}/${m.intent}`))) {
+    const matching = methods.filter((m) => !m.alias && `${m.name}/${m.intent}` === key)
+    if (matching.length < 2) continue
+    const composed = createGroupedHandler(matching)
+    Object.assign(composed, matching[0]!.extensions)
+    handlers[key] = composed
   }
 
   // Build nested handlers: mppx.tempo.charge(...)
@@ -602,6 +621,7 @@ export function create<
     if (!handlers[mi.name]) handlers[mi.name] = {}
     const key = mi.alias ? `${mi.name}/${mi.alias}` : `${mi.name}/${mi.intent}`
     const fn = handlers[key] as AnyMethodFn & { _method?: Method.AnyServer }
+    fn._method ??= mi
     ;(handlers[mi.name] as Record<string, unknown>)[mi.alias ?? mi.intent] = fn
   }
 
@@ -609,6 +629,7 @@ export function create<
   const challengeHandlers: Record<string, Record<string, unknown>> = {}
   for (const mi of methods) {
     if (!challengeHandlers[mi.name]) challengeHandlers[mi.name] = {}
+    if (challengeHandlers[mi.name]![mi.alias ?? mi.intent]) continue
     challengeHandlers[mi.name]![mi.alias ?? mi.intent] = createChallengeFn({
       credentialHeader,
       defaults: mi.defaults,
@@ -933,9 +954,12 @@ export function create<
         typeof methodOrKey === 'string'
           ? methodOrKey
           : `${method!.name}/${method!.alias ?? method!.intent}`
-      const handlerFn = method
-        ? methodHandlers.get(method)
-        : (handlers[key] as AnyMethodFn | undefined)
+      const handlerFn =
+        typeof methodOrKey === 'function' && handlers[key] === methodOrKey
+          ? methodOrKey
+          : method
+            ? methodHandlers.get(method)
+            : (handlers[key] as AnyMethodFn | undefined)
       if (!handlerFn)
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
       const configuredMethod = (handlerFn as AnyMethodFnWithMethod)._method
@@ -2505,6 +2529,8 @@ type ComposedHandler<transport extends Transport.AnyTransport = Transport.Http> 
 ) => Promise<MethodFn.Response<transport>>) & {
   _internal?: {
     offers: readonly ConfiguredHandler['_internal'][]
+    handlers?: readonly ConfiguredHandler<transport>[]
+    selectOffers?: SelectOffers<readonly Method.AnyServer[]> | undefined
   }
 }
 
@@ -2616,6 +2642,11 @@ function composeHandlers(
   composeOptions?: Html.Options,
   selectOffers?: SelectOffers<readonly Method.AnyServer[]>,
 ): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
+  // Flatten only shared policies; a static wrapper must retain a nested server's selector.
+  handlers = handlers.flatMap<(typeof handlers)[number]>((handler) => {
+    const internal = (handler as ComposedHandler)._internal
+    return internal?.selectOffers === selectOffers ? (internal?.handlers ?? [handler]) : [handler]
+  })
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   const offerSelector = selectOffers
@@ -2714,6 +2745,7 @@ function composeHandlers(
     for (const handler of selectedHandlers) {
       const result = await handler(input)
       if (result.status === 200) return result
+      if (result.challenge.status !== 402) return result
       results.push(result)
     }
 
@@ -2862,7 +2894,8 @@ function composeHandlers(
   }
 
   const offers = handlers.flatMap(getConfiguredOffers)
-  if (offers.length > 0) composed._internal = { offers }
+  if (offers.length > 0)
+    composed._internal = { offers, handlers: handlers as ConfiguredHandler[], selectOffers }
   return composed
 }
 
@@ -2881,7 +2914,7 @@ function composeMcpHandlers(
   handlers: readonly ConfiguredHandler<Transport.Mcp | Transport.McpSdk>[],
   transport: Transport.Mcp | Transport.McpSdk,
 ): ComposedHandler<Transport.Mcp | Transport.McpSdk> {
-  return async (input) => {
+  const composed: ComposedHandler<Transport.Mcp | Transport.McpSdk> = async (input) => {
     let credential: Credential.Credential | null
     try {
       const parsed = transport.getCredential(input as never)
@@ -2891,30 +2924,31 @@ function composeMcpHandlers(
       return handlers[0]!(input)
     }
     if (credential) {
-      const candidates = handlers.filter((handler) => {
-        const internal = handler._internal
-        return (
-          internal.name === credential.challenge.method &&
-          internal.intent === credential.challenge.intent
-        )
-      })
-      const match = candidates.find((handler) => {
-        const internal = handler._internal
-        try {
-          const mismatch = internal._stableBinding
-            ? getRequestBindingMismatch(
-                getStableBinding(internal._canonicalRequest, internal._stableBinding),
-                getStableBinding(credential.challenge.request, internal._stableBinding),
-              )
-            : getPinnedRequestBindingMismatch(
-                internal._canonicalRequest,
-                credential.challenge.request,
-              )
-          return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
-        } catch {
-          return false
-        }
-      })
+      const candidates = handlers.filter((handler) =>
+        getConfiguredOffers(handler as never).some(
+          (internal) =>
+            internal.name === credential.challenge.method &&
+            internal.intent === credential.challenge.intent,
+        ),
+      )
+      const match = candidates.find((handler) =>
+        getConfiguredOffers(handler as never).some((internal) => {
+          try {
+            const mismatch = internal._stableBinding
+              ? getRequestBindingMismatch(
+                  getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                  getStableBinding(credential.challenge.request, internal._stableBinding),
+                )
+              : getPinnedRequestBindingMismatch(
+                  internal._canonicalRequest,
+                  credential.challenge.request,
+                )
+            return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+          } catch {
+            return false
+          }
+        }),
+      )
       // Verification and settlement belong to exactly one handler, including failures.
       return (match ?? candidates[0] ?? handlers[0])!(input)
     }
@@ -2953,6 +2987,10 @@ function composeMcpHandlers(
       },
     }
   }
+  composed._internal = {
+    offers: handlers.flatMap((handler) => getConfiguredOffers(handler as never)),
+  }
+  return composed
 }
 
 function isComposedHandlerMetadata(
