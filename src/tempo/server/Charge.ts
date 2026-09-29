@@ -453,6 +453,7 @@ export function charge<const parameters extends charge.Parameters>(
     async request({ credential, request }) {
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
+        if (parameters.chainId !== undefined) return parameters.chainId
         if (parameters.testnet) return defaults.chainId.testnet
         return (await getClient({})).chain?.id
       })()

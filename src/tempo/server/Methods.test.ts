@@ -208,22 +208,31 @@ describe('common currency offers', () => {
     expect(rpc).not.toHaveBeenCalled()
   })
 
-  test('testnet defaults advertise only pathUSD on Moderato', async () => {
-    const mppx = Mppx.create({ methods: [tempo.common({ recipient, testnet: true })], secretKey })
-    for (const handler of [
-      mppx.charge({ amount: '1' }),
-      mppx.session({ amount: '1', unitType: 'request' }),
-    ]) {
-      const result = await handler(new Request('https://example.com/paid'))
-      if (result.status !== 402) throw new Error('Expected payment offers')
-      const challenges = Challenge.fromResponseList(result.challenge)
-      expect(challenges).toHaveLength(1)
-      expect(challenges[0]!.request).toMatchObject({
-        currency: tokens.pathUsd,
-        methodDetails: { chainId: 42431 },
-      })
-    }
-  })
+  test.each([{ testnet: true }, { chainId: 42431 }])(
+    'testnet defaults advertise OUSD then pathUSD for %s',
+    async (parameters) => {
+      const mppx = Mppx.create({ methods: [tempo.common({ recipient, ...parameters })], secretKey })
+      for (const handler of [
+        mppx.charge({ amount: '1' }),
+        mppx.session({ amount: '1', unitType: 'request' }),
+      ]) {
+        const result = await handler(new Request('https://example.com/paid'))
+        if (result.status !== 402) throw new Error('Expected payment offers')
+        const challenges = Challenge.fromResponseList(result.challenge)
+        expect(challenges.map(({ request }) => request.currency)).toEqual([
+          tokens.ousd,
+          tokens.pathUsd,
+        ])
+        expect(new Set(challenges.map(({ id }) => id)).size).toBe(2)
+        for (const { request } of challenges)
+          expect(request).toMatchObject({
+            amount: '1000000',
+            recipient,
+            methodDetails: { chainId: 42431 },
+          })
+      }
+    },
+  )
 
   test('resolves callable token definitions and normalizes amounts per token', async () => {
     const token = defineToken({ addresses: { 4217: tokens.ousd }, currency: 'USD', decimals: 8 })

@@ -19,7 +19,9 @@ export function resolve(parameters: {
     parameters.currencies ??
     (chainId === defaults.chainId.mainnet
       ? [defaults.tokens.ousd, defaults.tokens.usdc]
-      : [defaults.resolveCurrency({ chainId })])
+      : chainId === defaults.chainId.testnet
+        ? [defaults.tokens.ousd, defaults.tokens.pathUsd]
+        : [defaults.resolveCurrency({ chainId })])
 
   const seen = new Set<string>()
   const resolved: { currency: string; decimals: number; chainId: number }[] = []

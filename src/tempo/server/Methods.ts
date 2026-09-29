@@ -46,7 +46,8 @@ function createSessionMethod<const parameters extends SharedParameters>(
 /**
  * Creates the common Tempo `charge` and `session` methods from shared parameters.
  *
- * Mainnet accepts OUSD first, then USDC.e. Testnet accepts pathUSD. Use `currencies`
+ * Mainnet accepts OUSD first, then USDC.e. Testnet accepts OUSD first, then pathUSD.
+ * Use `currencies`
  * for an ordered list of addresses/token definitions, including a one-element
  * list for a single asset. Each currency creates charge and session offers; list
  * order is presentation order, not a requirement on the client's choice.

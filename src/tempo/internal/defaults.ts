@@ -11,7 +11,7 @@ export type ChainId = ValueOf<typeof chainId>
 
 /** Token addresses. */
 export const tokens = {
-  /** OpenUSD (OUSD) on Tempo mainnet. */
+  /** OpenUSD (OUSD), deployed at the same address on Tempo mainnet and Moderato. */
   ousd: ousd(chainId.mainnet).address,
   /** USDC (USDC.e) token address. */
   usdc: getAddress(usdce(chainId.mainnet).address),

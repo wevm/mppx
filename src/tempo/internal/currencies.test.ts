@@ -7,8 +7,8 @@ import { tokens } from './defaults.js'
 describe('resolve', () => {
   test.each([
     { parameters: {}, expected: [tokens.ousd, tokens.usdc], chain: 4217 },
-    { parameters: { testnet: true }, expected: [tokens.pathUsd], chain: 42431 },
-    { parameters: { chainId: 42431 }, expected: [tokens.pathUsd], chain: 42431 },
+    { parameters: { testnet: true }, expected: [tokens.ousd, tokens.pathUsd], chain: 42431 },
+    { parameters: { chainId: 42431 }, expected: [tokens.ousd, tokens.pathUsd], chain: 42431 },
     {
       parameters: { chainId: 4217, testnet: true },
       expected: [tokens.ousd, tokens.usdc],
@@ -19,6 +19,11 @@ describe('resolve', () => {
       parameters: { currencies: [tokens.usdc, tokens.ousd] },
       expected: [tokens.usdc, tokens.ousd],
       chain: 4217,
+    },
+    {
+      parameters: { testnet: true, currencies: [tokens.pathUsd] },
+      expected: [tokens.pathUsd],
+      chain: 42431,
     },
     { parameters: { currencies: [ousd] }, expected: [tokens.ousd], chain: 4217 },
   ])('resolves $parameters', ({ parameters, expected, chain }) => {
