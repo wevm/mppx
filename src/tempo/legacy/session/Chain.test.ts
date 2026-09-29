@@ -373,6 +373,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       const unsigned = await Transaction.serialize({
         ...deserialized,
         signature: undefined,
+        signatures: undefined,
         from: undefined,
       })
 
@@ -953,6 +954,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       const unsigned = await Transaction.serialize({
         ...deserialized,
         signature: undefined,
+        signatures: undefined,
         from: undefined,
       })
 

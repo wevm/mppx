@@ -31,7 +31,7 @@ const formatBundleSize = (bytes: number) =>
 
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
   const bundleBytes = Buffer.byteLength(code)
-  const content = `// Generated — do not edit.\nexport const tabScript = ${JSON.stringify(`<script>${code}</script>`)}\n`
+  const content = `// Generated — do not edit.\nexport const tabScript: string = ${JSON.stringify(`<script>${code}</script>`)}\n`
 
   fs.writeFileSync(outFile, content)
   fs.rmSync(outDir, { recursive: true })
@@ -84,7 +84,8 @@ for (const { entry, mode, outFile } of htmlEntries) {
 
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
   const bundleBytes = Buffer.byteLength(code)
-  const content = `// Generated — do not edit.\nexport const html = ${JSON.stringify(`<script>${code}</script>`)}\n`
+  // Avoid duplicating the entire bundle as a string literal in published declarations.
+  const content = `// Generated — do not edit.\nexport const html: string = ${JSON.stringify(`<script>${code}</script>`)}\n`
 
   // Confirm test-only dead code was eliminated for non-test builds
   if (mode !== 'test') {
@@ -121,7 +122,7 @@ for (const { entry, mode, outFile } of htmlEntries) {
 
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
   const bundleBytes = Buffer.byteLength(code)
-  const content = `// Generated — do not edit.\nexport const serviceWorker = ${JSON.stringify(code)}\n`
+  const content = `// Generated — do not edit.\nexport const serviceWorker: string = ${JSON.stringify(code)}\n`
 
   fs.writeFileSync(outFile, content)
   fs.rmSync(outDir, { recursive: true })

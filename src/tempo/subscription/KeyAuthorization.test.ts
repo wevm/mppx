@@ -86,6 +86,12 @@ function serializeCompositeSignature(
         }
       : {
           account: rootAccount.address,
+          config: {
+            owners: [{ owner: accessAccount.address, weight: 1 }],
+            salt: `0x${'00'.repeat(32)}`,
+            threshold: 1,
+            version: 1n,
+          },
           signatures: [inner],
           type,
         },
@@ -143,6 +149,9 @@ describe('tempo subscription key authorization', () => {
       const payload = await createPayload(request)
       const authorization = KeyAuthorization.deserialize(payload.signature)
       const [authorizationTuple] = KeyAuthorization.toTuple(authorization)
+      if (!authorization.signature || authorization.signature.type === 'multisig')
+        throw new Error('Expected a primitive authorization signature')
+      const signature = authorization.signature
 
       expect(() =>
         verifySubscriptionKeyAuthorization({
@@ -153,12 +162,16 @@ describe('tempo subscription key authorization', () => {
             ...payload,
             signature: Rlp.fromHex([
               authorizationTuple,
-              serializeCompositeSignature(type, authorization.signature!),
+              serializeCompositeSignature(type, signature),
             ]),
           },
           request,
         }),
-      ).toThrow('keyAuthorization must use a primitive signature')
+      ).toThrow(
+        type === 'multisig'
+          ? 'keyAuthorization signature is invalid'
+          : 'keyAuthorization must use a primitive signature',
+      )
     },
   )
 
