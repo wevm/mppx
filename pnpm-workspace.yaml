@@ -13,14 +13,13 @@ catalog:
   file-type: '22.0.1'
   ox: '0.14.45'
   typescript: '~7.0.2'
-  viem: '2.57.1'
 
 overrides:
   mppx: 'workspace:*'
   vitest@<4.1.11: '4.1.11'
   typescript: 'catalog:'
   ox: 'catalog:'
-  viem: 'catalog:'
+  viem: '2.57.1'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'

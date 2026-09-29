@@ -68,7 +68,7 @@
     "testcontainers": "^12.1.0",
     "tsx": "^4.23.12",
     "typescript": "catalog:",
-    "viem": "catalog:",
+    "viem": "2.57.1",
     "vite": "^8.2.1",
     "vp": "npm:vite-plus@0.3.0",
     "ws": "^8.21.3",
