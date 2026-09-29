@@ -139,7 +139,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
       },
     },
     {
-      name: 'session intent accepts replayed vouchers without advancing cumulative state',
+      name: 'session intent rejects replayed vouchers without advancing cumulative state',
       async run(harness: Harness) {
         const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
         const openCredential = await harness.sessionMethod.createCredential({
@@ -178,14 +178,18 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
         )
 
         const firstReceipt = firstVoucher.receipt as SessionReceipt | undefined
-        const replayReceipt = replayedVoucher.receipt as SessionReceipt | undefined
 
         expect(firstVoucher.content).toEqual([{ type: 'text', text: 'session tool executed' }])
-        expect(replayedVoucher.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(replayedVoucher.isError).toBe(true)
+        expect(replayedVoucher.content).toEqual([
+          {
+            type: 'text',
+            text: expect.stringContaining('voucher does not add new funds for this request'),
+          },
+        ])
         expect(firstReceipt?.channelId).toBe(openReceipt?.channelId)
-        expect(replayReceipt?.channelId).toBe(openReceipt?.channelId)
         expect(firstReceipt?.acceptedCumulative).toBe(replayedCumulativeRaw)
-        expect(replayReceipt?.acceptedCumulative).toBe(replayedCumulativeRaw)
+        expect(replayedVoucher.receipt).toBeUndefined()
 
         const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
         expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 3n)
