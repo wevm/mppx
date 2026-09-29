@@ -35,6 +35,23 @@ function fixture() {
 }
 
 describe('MCP composition', () => {
+  test('preserves defaults for distinct methods sharing a wire key', async () => {
+    const { method } = fixture()
+    const first = { ...method, defaults: { currency: 'A' } } as const
+    const second = { ...method, defaults: { currency: 'B' } } as const
+    const server = Mppx.create({
+      methods: [first, second],
+      realm,
+      secretKey,
+      transport: Transport.mcpSdk(),
+    })
+    const offered = await server.compose([first, { amount: '1' }], [second, { amount: '1' }])({})
+    expect(offered.status).toBe(402)
+    if (offered.status !== 402) throw new Error()
+    const data = offered.challenge.data as NonNullable<Mcp.ErrorObject['data']>
+    expect(data.challenges.map((challenge) => challenge.request.currency)).toEqual(['A', 'B'])
+  })
+
   test('SDK gathers all offers and settles only the chosen currency', async () => {
     const { method, payments } = fixture()
     const server = Mppx.create({
