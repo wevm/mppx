@@ -258,7 +258,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
     return tempoSession({
       currency: tempoCurrency,
       recipient,
-      ...(!livemode && { testnet: true }),
+      ...(!livemode && { chainId: tempoDefaults.chainId.testnet }),
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
       async onSessionSettlement(context) {

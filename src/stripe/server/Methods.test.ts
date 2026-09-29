@@ -166,20 +166,24 @@ describe('stripe.create() defaultMethods', () => {
       networkId: 'test-profile',
       livemode: false,
       hostedFeePayer: true,
-      depositAddresses: { tempo: '0xtempoaddr' },
-    }).defaultMethods()
+      depositAddresses: { tempo: '0x1111111111111111111111111111111111111111' },
+    })
+      .defaultMethods()
+      .additional({ tempo: { session: {} } })
 
-    const request = await findMethod(methods, 'tempo', 'charge').request!({
-      request: {
-        amount: '10000',
-        currency: 'test-currency',
-        decimals: 6,
-        recipient: 'test-recipient',
-      },
-    } as never)
+    for (const intent of ['charge', 'session']) {
+      const request = await findMethod(methods, 'tempo', intent).request!({
+        request: {
+          amount: '10000',
+          currency: '0x1111111111111111111111111111111111111111',
+          decimals: 6,
+          recipient: '0x1111111111111111111111111111111111111111',
+        },
+      } as never)
 
-    expect(request.chainId).toBe(42431)
-    expect(request.feePayer).toBeUndefined()
+      expect(request.chainId).toBe(42431)
+      expect(request.feePayer).toBeUndefined()
+    }
   })
 
   test('rejects Stripe feepayer with Connect', () => {
