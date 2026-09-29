@@ -19,6 +19,7 @@ import {
   getTransactionReceipt,
   prepareTransactionRequest,
   sendRawTransactionSync,
+  sendTransactionSync,
   signTypedData,
   signTransaction,
 } from 'viem/actions'
@@ -1445,71 +1446,102 @@ describe('tempo', () => {
       },
     )
 
-    test('behavior: accepts a pushed machine-token settlement', async () => {
-      const hash = `0x${'12'.repeat(32)}` as Hex.Hex
-      let challenge: Challenge.Challenge | undefined
-      const machineTokenClient = createClient({
-        chain: { ...chain, id: defaults.chainId.testnet },
-        transport: custom({
-          async request({ method }) {
-            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
-            if (method === 'eth_getTransactionReceipt' && challenge)
-              return machineTokenReceipt({
-                amount: BigInt(String(challenge.request.amount)),
-                from: accounts[1].address,
-                hash,
-                memo: Attribution.encode({
-                  challengeId: challenge.id,
-                  serverId: challenge.realm,
-                }),
-                recipient: accounts[0].address,
-              })
-            throw new Error(`Unexpected machine-token test RPC method: ${method}`)
-          },
-        }),
-      })
-      const [method] = tempoOffers({
-        machineTokenEnabled: true,
-        account: accounts[0],
-        currency: asset,
-        getClient: () => machineTokenClient,
-        supportedModes: ['push'],
-        testnet: true,
-      })
-      const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
-      const relayServer = Mppx_server.create({
-        methods: [tempo_server.charge({ getClient: () => machineTokenClient })],
-        realm,
-        secretKey,
-      })
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
+    test.each(['canonical', 'unrecognized', 'unavailable'] as const)(
+      'behavior: accepts a pushed machine-token settlement (%s funding route)',
+      async (route) => {
+        const hash = `0x${'12'.repeat(32)}` as Hex.Hex
+        let challenge: Challenge.Challenge | undefined
+        const machineTokenClient = createClient({
+          chain: { ...chain, id: defaults.chainId.testnet },
+          transport: custom({
+            async request({ method }) {
+              if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+              if (method === 'eth_getTransactionByHash' && challenge)
+                return route === 'unavailable'
+                  ? null
+                  : {
+                      hash,
+                      from: accounts[1].address,
+                      type: '0x76',
+                      calls:
+                        route === 'unrecognized'
+                          ? []
+                          : MachineTokenCharge.getRoute({
+                              chainId: defaults.chainId.testnet,
+                              currency: asset,
+                              transfers: [
+                                {
+                                  amount: String(challenge.request.amount),
+                                  recipient: accounts[0].address,
+                                  memo: Attribution.encode({
+                                    challengeId: challenge.id,
+                                    serverId: challenge.realm,
+                                  }),
+                                },
+                              ],
+                            })!.calls,
+                    }
+              if (method === 'eth_getTransactionReceipt' && challenge)
+                return machineTokenReceipt({
+                  amount: BigInt(String(challenge.request.amount)),
+                  from: accounts[1].address,
+                  hash,
+                  memo: Attribution.encode({
+                    challengeId: challenge.id,
+                    serverId: challenge.realm,
+                  }),
+                  recipient: accounts[0].address,
+                })
+              throw new Error(`Unexpected machine-token test RPC method: ${method}`)
+            },
+          }),
+        })
+        const [method] = tempoOffers({
+          machineTokenEnabled: true,
+          account: accounts[0],
+          currency: asset,
+          getClient: () => machineTokenClient,
+          supportedModes: ['push'],
+          testnet: true,
+        })
+        const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
+        const relayServer = Mppx_server.create({
+          methods: [tempo_server.charge({ getClient: () => machineTokenClient })],
+          realm,
+          secretKey,
+        })
+        const httpServer = await Http.createServer(async (req, res) => {
+          const result = await Mppx_server.toNodeListener(
+            machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
+          )(req, res)
+          if (result.status === 402) return
+          res.end('OK')
+        })
 
-      const response = await fetch(httpServer.url)
-      challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      expect(challenge.request.currency).toBe(asset)
-      expect(challenge.request.recipient).toBe(accounts[0].address)
-      expect(
-        (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
-      ).toBe(true)
-      const credential = Credential.from({
-        challenge,
-        payload: { hash, type: 'hash' as const },
-        source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
-      })
-      const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
-      expect(receipt.reference).toBe(hash)
-      expect(receipt.fundingCurrency).toBe(defaults.machineToken[defaults.chainId.testnet].token)
+        const response = await fetch(httpServer.url)
+        challenge = Challenge.fromResponse(response, {
+          methods: [tempo_client.charge()],
+        })
+        expect(challenge.request.currency).toBe(asset)
+        expect(challenge.request.recipient).toBe(accounts[0].address)
+        expect(
+          (challenge.request.methodDetails as { machineTokenEnabled?: boolean })
+            ?.machineTokenEnabled,
+        ).toBe(true)
+        const credential = Credential.from({
+          challenge,
+          payload: { hash, type: 'hash' as const },
+          source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+        })
+        const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
+        expect(receipt.reference).toBe(hash)
+        expect(receipt.fundingCurrency).toBe(
+          route === 'canonical' ? defaults.machineToken[defaults.chainId.testnet].token : undefined,
+        )
 
-      httpServer.close()
-    })
+        httpServer.close()
+      },
+    )
 
     test('behavior: broadcasts a hosted fee-sponsored machine-token settlement', async () => {
       let challenge: Challenge.Challenge | undefined
@@ -1981,13 +2013,14 @@ describe('tempo', () => {
           reference: '[reference]',
           timestamp: '[timestamp]',
         }).toMatchInlineSnapshot(`
-            {
-              "method": "tempo",
-              "reference": "[reference]",
-              "status": "success",
-              "timestamp": "[timestamp]",
-            }
-          `)
+          {
+            "fundingCurrency": "0x20c0000000000000000000000000000000000001",
+            "method": "tempo",
+            "reference": "[reference]",
+            "status": "success",
+            "timestamp": "[timestamp]",
+          }
+        `)
       }
 
       httpServer.close()
@@ -2084,13 +2117,14 @@ describe('tempo', () => {
           reference: '[reference]',
           timestamp: '[timestamp]',
         }).toMatchInlineSnapshot(`
-            {
-              "method": "tempo",
-              "reference": "[reference]",
-              "status": "success",
-              "timestamp": "[timestamp]",
-            }
-          `)
+          {
+            "fundingCurrency": "0x20c0000000000000000000000000000000000001",
+            "method": "tempo",
+            "reference": "[reference]",
+            "status": "success",
+            "timestamp": "[timestamp]",
+          }
+        `)
       }
 
       httpServer.close()
@@ -2962,13 +2996,14 @@ describe('tempo', () => {
           reference: '[reference]',
           timestamp: '[timestamp]',
         }).toMatchInlineSnapshot(`
-            {
-              "method": "tempo",
-              "reference": "[reference]",
-              "status": "success",
-              "timestamp": "[timestamp]",
-            }
-          `)
+          {
+            "fundingCurrency": "0x20c0000000000000000000000000000000000001",
+            "method": "tempo",
+            "reference": "[reference]",
+            "status": "success",
+            "timestamp": "[timestamp]",
+          }
+        `)
       }
 
       httpServer.close()
@@ -3201,13 +3236,14 @@ describe('tempo', () => {
         reference: '[reference]',
         timestamp: '[timestamp]',
       }).toMatchInlineSnapshot(`
-          {
-            "method": "tempo",
-            "reference": "[reference]",
-            "status": "success",
-            "timestamp": "[timestamp]",
-          }
-        `)
+        {
+          "fundingCurrency": "0x20c0000000000000000000000000000000000001",
+          "method": "tempo",
+          "reference": "[reference]",
+          "status": "success",
+          "timestamp": "[timestamp]",
+        }
+      `)
 
       httpServer.close()
     })
@@ -3272,13 +3308,14 @@ describe('tempo', () => {
         reference: '[reference]',
         timestamp: '[timestamp]',
       }).toMatchInlineSnapshot(`
-          {
-            "method": "tempo",
-            "reference": "[reference]",
-            "status": "success",
-            "timestamp": "[timestamp]",
-          }
-        `)
+        {
+          "fundingCurrency": "0x20c0000000000000000000000000000000000001",
+          "method": "tempo",
+          "reference": "[reference]",
+          "status": "success",
+          "timestamp": "[timestamp]",
+        }
+      `)
 
       httpServer.close()
     })
@@ -3754,7 +3791,7 @@ describe('tempo', () => {
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
       expect(receipt.method).toBe('tempo')
-      expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
+      expect(receipt.fundingCurrency).toBeUndefined()
       expect(receipt.reference).toBeDefined()
 
       httpServer.close()
@@ -5251,6 +5288,35 @@ describe('tempo', () => {
   })
 
   describe('attribution memo', () => {
+    test('omits funding currency for a direct payment with an unrelated DEX transfer', async () => {
+      const result = await server.charge({ amount: '1', decimals: 6 })(
+        new Request('https://example.com'),
+      )
+      if (result.status !== 402) throw new Error('Expected challenge')
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      const receipt = await sendTransactionSync(client, {
+        account: accounts[1],
+        calls: [
+          tokenTransferCall({ amount: 1n, to: Addresses.stablecoinDex, token: Addresses.pathUsd }),
+          tokenTransferCall({
+            amount: BigInt(challenge.request.amount),
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+            memo: Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm }),
+          }),
+        ],
+      })
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+      const paymentReceipt = await server.verifyCredential(Credential.serialize(credential))
+      expect(paymentReceipt.status).toBe('success')
+      expect(paymentReceipt.fundingCurrency).toBeUndefined()
+    })
+
     test('client always generates attribution memo (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
@@ -6474,42 +6540,46 @@ describe('tempo', () => {
       })
     })
 
-    test('swaps via DEX when user lacks target currency', async () => {
-      const mppx = Mppx_client.create({
-        polyfill: false,
-        methods: [
-          tempo_client({
-            account: swapPayer,
-            autoSwap: true,
-            getClient() {
-              return client
-            },
-          }),
-        ],
-      })
+    test.each(['pull', 'push'] as const)(
+      'swaps via DEX when user lacks target currency (%s)',
+      async (mode) => {
+        const mppx = Mppx_client.create({
+          polyfill: false,
+          methods: [
+            tempo_client({
+              account: swapPayer,
+              autoSwap: true,
+              mode,
+              getClient() {
+                return client
+              },
+            }),
+          ],
+        })
 
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({
-            amount: '1',
-            currency: asset,
-            recipient: accounts[0]!.address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
+        const httpServer = await Http.createServer(async (req, res) => {
+          const result = await Mppx_server.toNodeListener(
+            server.charge({
+              amount: '1',
+              currency: asset,
+              recipient: accounts[0]!.address,
+            }),
+          )(req, res)
+          if (result.status === 402) return
+          res.end('OK')
+        })
 
-      const response = await mppx.fetch(httpServer.url)
-      expect(response.status).toBe(200)
+        const response = await mppx.fetch(httpServer.url)
+        expect(response.status).toBe(200)
 
-      const receipt = Receipt.fromResponse(response)
-      expect(receipt.status).toBe('success')
-      expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
-      expect(receipt.method).toBe('tempo')
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.fundingCurrency).toBe(Addresses.pathUsd)
+        expect(receipt.method).toBe('tempo')
 
-      httpServer.close()
-    })
+        httpServer.close()
+      },
+    )
 
     test('direct transfer when user has target currency', async () => {
       const mppx = Mppx_client.create({

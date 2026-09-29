@@ -7,6 +7,7 @@ import {
   type TransactionReceipt,
 } from 'viem'
 import {
+  getTransaction,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -14,7 +15,7 @@ import {
   verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
-import { Abis, Actions, Addresses, Transaction } from 'viem/tempo'
+import { Abis, Actions, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
@@ -229,12 +230,20 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    const fundingCurrency = getReceiptFundingCurrency(receipt, matchedLogs, {
-      chainId: chainId ?? client.chain?.id,
-      currency,
-      machineTokenEnabled: context.machineTokenEnabled,
-      sender,
-    })
+    // Receipt logs prove settlement, but unrelated transfers cannot prove its funding route.
+    const transaction = await getTransaction(client, { hash: receipt.transactionHash }).catch(
+      () => undefined,
+    )
+    const fundingCurrency =
+      transaction && TempoAddress.isEqual(transaction.from, sender)
+        ? getFundingCurrency((transaction as { calls?: readonly FundingCall[] }).calls ?? [], {
+            amount,
+            chainId: chainId ?? client.chain?.id,
+            currency,
+            machineTokenEnabled: context.machineTokenEnabled,
+            transfers,
+          })
+        : undefined
     return {
       receipt: toReceipt(receipt, { fundingCurrency }),
       sender,
@@ -1117,22 +1126,19 @@ function getFundingCurrency(
     : undefined
   if (machineTokenRoute) return machineTokenRoute.fundingCurrency
 
-  const selectors = calls.map((call) => call.data?.slice(0, 10))
-  const hasAutoSwapPrefix =
-    selectors[0] === Selectors.approve && selectors[1] === Selectors.swapExactAmountOut
-  if (hasAutoSwapPrefix)
-    return AutoSwap.matchCalls({
-      amountOut: BigInt(parameters.amount),
-      calls,
-      tokenOut: parameters.currency,
-    })?.fundingCurrency
-
   try {
     assertTransferCalls(calls, {
       currency: parameters.currency,
-      exactCount: false,
+      exactCount: true,
       transfers: parameters.transfers,
     })
+    const hasAutoSwapPrefix = calls[0]?.data?.slice(0, 10) === Selectors.approve
+    if (hasAutoSwapPrefix)
+      return AutoSwap.matchCalls({
+        amountOut: BigInt(parameters.amount),
+        calls,
+        tokenOut: parameters.currency,
+      })?.fundingCurrency
     return parameters.currency
   } catch {
     return undefined
@@ -1313,48 +1319,6 @@ function getTransferLogEffects(receipt: TransactionReceipt): TransferLog[] {
   }
 
   return effects
-}
-
-/** Returns the currency debited by a recognized settled charge route. */
-function getReceiptFundingCurrency(
-  receipt: TransactionReceipt,
-  matchedLogs: readonly TransferLog[],
-  parameters: {
-    chainId: number | undefined
-    currency: `0x${string}`
-    machineTokenEnabled: boolean
-    sender: `0x${string}`
-  },
-): `0x${string}` | undefined {
-  const settlementSender = matchedLogs[0]?.args.from
-  if (
-    !settlementSender ||
-    matchedLogs.some((log) => !TempoAddress.isEqual(log.args.from, settlementSender))
-  )
-    return undefined
-
-  const logs = getTransferLogEffects(receipt)
-  const machineTokenSwapper = parameters.machineTokenEnabled
-    ? MachineTokenCharge.getSettlementSender(parameters.chainId)
-    : undefined
-  if (machineTokenSwapper && TempoAddress.isEqual(settlementSender, machineTokenSwapper))
-    return logs.find(
-      (log) =>
-        TempoAddress.isEqual(log.args.from, parameters.sender) &&
-        TempoAddress.isEqual(log.args.to, machineTokenSwapper),
-    )?.address
-
-  if (!TempoAddress.isEqual(settlementSender, parameters.sender)) return undefined
-
-  const dexInput = logs.find(
-    (log) =>
-      !TempoAddress.isEqual(log.address, parameters.currency) &&
-      TempoAddress.isEqual(log.args.from, parameters.sender) &&
-      TempoAddress.isEqual(log.args.to, Addresses.stablecoinDex),
-  )
-  if (dexInput) return dexInput.address
-
-  return parameters.currency
 }
 
 function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean {
