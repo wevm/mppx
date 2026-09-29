@@ -40,6 +40,137 @@ test('unregistered method reference is rejected even with a matching wire key', 
   expect(() => mppx.compose([b, { amount: '1' }])).toThrow('No handler')
 })
 
+test.each(['broadcastCredential', 'verifyCredential', 'validateCredential'] as const)(
+  '%s selects the later configured currency before dispatch',
+  async (operation) => {
+    const receipt = {
+      method: 'tempo',
+      status: 'success',
+      reference: 'mock',
+      timestamp: '2026-09-29T00:00:00Z',
+    } as const
+    const firstSuccess = vi.fn()
+    const secondSuccess = vi.fn()
+    const firstVerify = vi.fn(async () => receipt)
+    const secondVerify = vi.fn(async () => receipt)
+    const firstValidate = vi.fn(async () => ({}))
+    const secondValidate = vi.fn(async () => ({}))
+    const first = {
+      ...makeCharge(currencies[0]),
+      verify: firstVerify,
+      broadcast: firstVerify,
+      validate: firstValidate,
+      onPaymentSuccess: firstSuccess,
+    }
+    const second = {
+      ...makeCharge(currencies[1]),
+      verify: secondVerify,
+      broadcast: secondVerify,
+      validate: secondValidate,
+      onPaymentSuccess: secondSuccess,
+    }
+    const mppx = Mppx.create({ ...config, methods: [first, second] })
+    const offered = await mppx.compose(
+      [first, { amount: '1' }],
+      [second, { amount: '1' }],
+    )(new Request('https://example.test'))
+    if (offered.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponseList(offered.challenge)[1]!
+    const credential = Credential.from({
+      challenge,
+      payload: { type: 'hash', hash: `0x${'1'.repeat(64)}` },
+    })
+    await mppx[operation](credential)
+    expect(firstVerify).not.toHaveBeenCalled()
+    expect(firstValidate).not.toHaveBeenCalled()
+    expect(firstSuccess).not.toHaveBeenCalled()
+    if (operation === 'validateCredential') {
+      expect(secondValidate).toHaveBeenCalledTimes(1)
+      expect(secondVerify).not.toHaveBeenCalled()
+      expect(secondSuccess).not.toHaveBeenCalled()
+    } else {
+      expect(secondVerify).toHaveBeenCalledTimes(1)
+      expect(secondSuccess).toHaveBeenCalledTimes(1)
+    }
+  },
+)
+
+test('standalone dispatch rejects indistinguishable configured methods before callbacks', async () => {
+  const verify = vi.fn()
+  const onPaymentSuccess = vi.fn()
+  const first = { ...makeCharge(currencies[0]), verify, onPaymentSuccess }
+  const second = { ...makeCharge(currencies[0]), verify, onPaymentSuccess }
+  const mppx = Mppx.create({ ...config, methods: [first, second] })
+  const offered = await mppx.compose([second, { amount: '1' }])(new Request('https://example.test'))
+  if (offered.status !== 402) throw new Error()
+  const credential = Credential.from({
+    challenge: Challenge.fromResponse(offered.challenge),
+    payload: { type: 'hash', hash: `0x${'1'.repeat(64)}` },
+  })
+  await expect(mppx.broadcastCredential(credential)).rejects.toThrow('multiple configured methods')
+  expect(verify).not.toHaveBeenCalled()
+  expect(onPaymentSuccess).not.toHaveBeenCalled()
+})
+
+test.each([false, true])(
+  'standalone selection uses transformed stable bindings (route input: %s)',
+  async (routeInput) => {
+    const definition = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.pipe(
+          z.object({ amount: z.string(), plan: z.string() }),
+          z.transform(({ amount, plan }) => ({
+            amount: String(Number(amount) * 100),
+            methodDetails: { plan },
+          })),
+        ),
+      },
+    })
+    const receipt = {
+      method: 'mock',
+      status: 'success',
+      reference: 'second',
+      timestamp: '2026-09-29T00:00:00Z',
+    } as const
+    const firstVerify = vi.fn(async () => receipt)
+    const secondVerify = vi.fn(async () => receipt)
+    const firstSuccess = vi.fn()
+    const secondSuccess = vi.fn()
+    const first = Method.toServer(definition, {
+      defaults: { ...(routeInput ? {} : { amount: '1' }), plan: 'first' },
+      stableBinding: (request) => ({ amount: request.amount, plan: request.methodDetails.plan }),
+      verify: firstVerify,
+      onPaymentSuccess: firstSuccess,
+    })
+    const second = Method.toServer(definition, {
+      defaults: { ...(routeInput ? {} : { amount: '1' }), plan: 'second' },
+      stableBinding: (request) => ({ amount: request.amount, plan: request.methodDetails.plan }),
+      verify: secondVerify,
+      onPaymentSuccess: secondSuccess,
+    })
+    const mppx = Mppx.create({ ...config, methods: [first, second] })
+    const offered = await mppx.compose([second, { amount: '1', plan: 'second' }])(
+      new Request('https://example.test'),
+    )
+    if (offered.status !== 402) throw new Error()
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(offered.challenge),
+      payload: { token: 'valid' },
+    })
+    await mppx.broadcastCredential(
+      credential,
+      routeInput ? { request: { amount: '1' } } : undefined,
+    )
+    expect(firstVerify).not.toHaveBeenCalled()
+    expect(firstSuccess).not.toHaveBeenCalled()
+    expect(secondVerify).toHaveBeenCalledTimes(1)
+    expect(secondSuccess).toHaveBeenCalledTimes(1)
+  },
+)
+
 test.each([
   { flow: 'authorize', alias: false },
   { flow: 'authorize', alias: true },
@@ -54,7 +185,7 @@ test.each([
     intent: 'charge',
     schema: {
       credential: { payload: z.object({ token: z.string() }) },
-      request: z.object({ amount: z.string() }),
+      request: z.object({ amount: z.string(), currency: z.string() }),
     },
   })
   const receipt = {
@@ -69,6 +200,7 @@ test.each([
   const bSuccess = vi.fn()
   const a = Method.toServer(definition, {
     ...(alias ? ({ alias: 'a' } as const) : {}),
+    defaults: { currency: 'A' },
     authorize: async () =>
       flow === 'authorize' || flow === 'throwing hook' ? { receipt } : undefined,
     verify: async () => receipt,
@@ -76,6 +208,7 @@ test.each([
   })
   const b = Method.toServer(definition, {
     ...(alias ? ({ alias: 'b' } as const) : {}),
+    defaults: { currency: 'B' },
     verify: async () => receipt,
     onPaymentSuccess: bSuccess,
   })
@@ -84,7 +217,7 @@ test.each([
   const allEvents = vi.fn()
   mppx.onPaymentSuccess(globalSuccess)
   mppx.on('*', allEvents)
-  const handler = mppx.compose([a, { amount: '1' }])
+  const handler = mppx.compose([a, { amount: '1', currency: 'A' }])
   const initial = await handler(new Request('https://example.test'))
   if (flow === 'verify' || flow === 'standalone') {
     expect(initial.status).toBe(402)

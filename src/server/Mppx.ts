@@ -193,6 +193,7 @@ export type VerifyCredentialOptions = {
   capturedRequest?: Method.CapturedRequest | undefined
   meta?: Record<string, string> | undefined
   realm?: string | undefined
+  /** Route input used for binding checks and disambiguating configured methods before schema transforms. */
   request?: Record<string, unknown> | undefined
   /** Optional expected route/resource scope bound via challenge `opaque`. */
   scope?: string | undefined
@@ -632,7 +633,7 @@ export function create<
     const methodCandidates = (methods as readonly Method.AnyServer[]).filter(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
-    const mi = methodCandidates[0]
+    let mi = methodCandidates[0]
     const eventMethod =
       mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
@@ -686,14 +687,6 @@ export function create<
       )
     }
 
-    if (parameters.requireValidate && !mi.validate)
-      await fail(
-        new Errors.VerificationFailedError({
-          details: { intent: credIntent, method: credMethod },
-          reason: `${credMethod}/${credIntent} does not support non-mutating credential validation`,
-        }),
-      )
-
     if (!Challenge.verify(credential.challenge, { secretKey: secretKey! })) {
       await fail(
         new Errors.InvalidChallengeError({
@@ -709,6 +702,35 @@ export function create<
       if (e instanceof Errors.PaymentError) await fail(e)
       throw e
     }
+
+    if (methodCandidates.length > 1) {
+      const matches = [
+        ...new Set(
+          methodCandidates.filter((candidate) =>
+            matchesStandaloneMethod(candidate, credential.challenge.request, options?.request),
+          ),
+        ),
+      ]
+      if (matches.length !== 1)
+        await fail(
+          new Errors.InvalidChallengeError({
+            id: credential.challenge.id,
+            reason:
+              matches.length === 0
+                ? 'no configured method matches the challenge request'
+                : 'multiple configured methods match the challenge request; use a configured route handler',
+          }),
+        )
+      mi = matches[0]!
+    }
+
+    if (parameters.requireValidate && !mi.validate)
+      await fail(
+        new Errors.VerificationFailedError({
+          details: { intent: credIntent, method: credMethod },
+          reason: `${credMethod}/${credIntent} does not support non-mutating credential validation`,
+        }),
+      )
 
     let parsedCredential!: Credential.Credential
     try {
@@ -2241,6 +2263,36 @@ function getPinnedChallengeMismatch(
     expectedChallenge.request as Record<string, unknown>,
     actualChallenge.request as Record<string, unknown>,
   )
+}
+
+/** Matches standalone credentials against the configured portion of a method's stable binding. */
+function matchesStandaloneMethod(
+  method: Method.AnyServer,
+  request: Record<string, unknown>,
+  routeRequest?: Record<string, unknown>,
+): boolean {
+  try {
+    const configured = { ...method.defaults, ...routeRequest }
+    const parsed = method.schema.request.safeParse(configured)
+    // Standalone callers may omit route-only inputs such as amount. In that
+    // case, constrain selection by the defaults we have rather than parsing
+    // the echoed wire request as input and applying its transforms twice.
+    const expectedRequest = parsed.success ? parsed.data : configured
+    const binding = (value: Record<string, unknown>) => {
+      if (method.stableBinding) return getStableBinding(value, method.stableBinding as never)
+      const { coreBinding, methodBinding } = getPinnedRequestBinding(value)
+      return { ...coreBinding, ...methodBinding }
+    }
+    const expected = binding(expectedRequest)
+    const actual = binding(request)
+    return Object.entries(expected).every(
+      ([key, value]) =>
+        value === undefined ||
+        isDeepStrictEqual(normalizeComparable(value), normalizeComparable(actual[key])),
+    )
+  } catch {
+    return false
+  }
 }
 
 function getPinnedRequestBindingMismatch(
