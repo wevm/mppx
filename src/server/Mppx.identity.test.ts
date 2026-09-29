@@ -1,6 +1,8 @@
 import { Challenge, Credential, Method, z } from 'mppx'
-import { Mppx, tempo } from 'mppx/server'
+import { Mppx } from 'mppx/server'
 import { expect, test, vi } from 'vp/test'
+
+import { charge } from '../tempo/server/Charge.js'
 
 const config = { realm: 'example.test', secretKey: 'test-secret-key-test-secret-key-32' }
 const currencies = [
@@ -8,7 +10,7 @@ const currencies = [
   '0x20c0000000000000000000000000000000000002',
 ] as const
 const makeCharge = (currency: (typeof currencies)[number]) =>
-  tempo.charge({
+  charge({
     currency,
     chainId: 42431,
     recipient: '0x0000000000000000000000000000000000000001',

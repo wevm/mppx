@@ -16,11 +16,13 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../Store.js'
+import { tokens } from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 import { signSubscriptionKeyAuthorization } from '../subscription/KeyAuthorization.js'
 import * as SubscriptionStore from '../subscription/Store.js'
 import type { SubscriptionAccessKey } from '../subscription/Types.js'
 import type { SubscriptionRecord } from '../subscription/Types.js'
+import { tempo } from './Methods.js'
 import { renew, subscription } from './Subscription.js'
 
 const realm = 'api.example.com'
@@ -1943,3 +1945,99 @@ describe('tempo.subscription', () => {
     expect(renewed?.reference).toBe(hashBackground)
   })
 })
+
+test.each([tokens.ousd, tokens.usdc])(
+  'grouped subscriptions renew the authorized currency %s',
+  async (currency) => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        currency,
+        billingAnchor: new Date(
+          Math.floor(Date.now() / 1000) * 1000 - 3 * subscriptionPeriodMilliseconds,
+        ).toISOString(),
+      }),
+    )
+    const renewedCurrencies: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        tempo.subscription({
+          amount: subscriptionAmount,
+          chainId,
+          periodCount: subscriptionPeriodCount,
+          periodUnit: subscriptionPeriodUnit,
+          recipient: subscriptionRecipient,
+          resolve: async () => ({ accessKey, key: subscriptionKey }),
+          renew: async ({ periodIndex, subscription }) => {
+            renewedCurrencies.push(subscription.currency)
+            return {
+              receipt: createReceipt(subscription.subscriptionId, hashRenewed),
+              subscription: {
+                ...subscription,
+                lastChargedPeriod: periodIndex,
+                reference: hashRenewed,
+              },
+            }
+          },
+          store,
+          subscriptionExpires: activeSubscriptionExpires,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const response = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+    expect(response.status).toBe(200)
+    expect(renewedCurrencies).toEqual([currency])
+    expect((await subscriptions.getByKey(subscriptionKey))?.currency).toBe(currency)
+  },
+)
+
+test.each([tokens.ousd, tokens.usdc])(
+  'grouped subscriptions activate the selected currency %s',
+  async (currency) => {
+    const store = Store.memory()
+    const activatedCurrencies: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        tempo.subscription({
+          amount: subscriptionAmount,
+          chainId,
+          periodCount: subscriptionPeriodCount,
+          periodUnit: subscriptionPeriodUnit,
+          recipient: subscriptionRecipient,
+          resolve: async () => ({ accessKey, key: subscriptionKey }),
+          activate: async ({ request }) => {
+            activatedCurrencies.push(request.currency)
+            return {
+              receipt: createReceipt('sub_123'),
+              subscription: createRecord({ currency: request.currency, accessKey }),
+            }
+          },
+          store,
+          subscriptionExpires: activeSubscriptionExpires,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const handler = mppx.tempo.subscription({})
+    const initial = await handler(new Request('https://example.com/resource'))
+    if (initial.status !== 402) throw new Error('Expected activation offers')
+    const challenge = Challenge.fromResponseList(initial.challenge).find(
+      ({ request }) => String(request.currency).toLowerCase() === currency.toLowerCase(),
+    )!
+    const credential = await createCredential(challenge)
+    const activated = await handler(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(activated.status).toBe(200)
+    expect(activatedCurrencies).toEqual([currency.toLowerCase()])
+    const record = await SubscriptionStore.fromStore(store).getByKey(subscriptionKey)
+    expect(record?.currency).toBe(currency.toLowerCase())
+  },
+)

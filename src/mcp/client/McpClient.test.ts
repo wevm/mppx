@@ -198,17 +198,20 @@ describe('McpClient.wrap', () => {
   })
 
   test('error: throws when method not found', async () => {
-    const challenge = Challenge.fromMethod(tempo_server.charge({ getClient: () => testClient }), {
-      realm,
-      secretKey,
-      expires: new Date(Date.now() + 60_000).toISOString(),
-      request: {
-        amount: '1',
-        currency: asset,
-        decimals: 6,
-        recipient: accounts[0].address,
+    const challenge = Challenge.fromMethod(
+      tempo_server.charge({ getClient: () => testClient })[0],
+      {
+        realm,
+        secretKey,
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        request: {
+          amount: '1',
+          currency: asset,
+          decimals: 6,
+          recipient: accounts[0].address,
+        },
       },
-    })
+    )
 
     server.registerTool('tool_unknown_method', { description: 'Tool' }, async () => {
       throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {

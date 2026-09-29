@@ -26,7 +26,7 @@ function createChargeMethod<const parameters extends SharedParameters>(
   // `tempo()` accepts the intersection of charge/session parameters, then
   // forwards only the fields each method understands. Preserve the inferred
   // parameter type so configured request defaults remain visible to handlers.
-  return tempo.charge(parameters as NoExtraKeys<parameters, charge_.Parameters> | undefined)
+  return charge_(parameters as NoExtraKeys<parameters, charge_.Parameters> | undefined)
 }
 
 function createSessionMethod<const parameters extends SharedParameters>(
@@ -81,40 +81,21 @@ export function tempo<const parameters extends tempo.Parameters>(
   }
   const { currencies: _currencies, ...shared } = parameters ?? {}
   const [first, ...rest] = Currencies.resolve(parameters ?? {})
-  const store = parameters?.store ?? Store.memory()
-  const settlements = new Map<string, session_.Extensions['settleScheduled']>()
-  const settlementKey = (chainId: number, currency: string) =>
-    `${chainId}:${currency.toLowerCase()}`
-  // Named session helpers share a store but retain each token's raw-unit schedule.
-  const settleScheduled: session_.Extensions['settleScheduled'] = (channel) => {
-    const settle = settlements.get(settlementKey(channel.chainId, channel.token))
-    if (!settle) throw new Error('Channel currency is not configured for this session handler.')
-    return settle(channel)
-  }
-  const extensions: session_.Extensions = {
-    settleScheduled,
-    serveWebSocket: (options) =>
-      Ws_.serve({
-        ...options,
-        store: ChannelStore.fromStore(store),
-        onChargeCommitted: settleScheduled,
-      }),
-  }
-  function createMethods(currency: typeof first) {
+  const sessions = sessionOffers(
+    parameters as NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>> | undefined,
+  )
+  function createMethods(currency: typeof first, index: number) {
     const configured = { ...shared, ...currency } as unknown as Omit<
       parameters,
       'currency' | 'currencies' | 'decimals' | 'chainId'
     > &
       typeof currency
-    const session = createSessionMethod({ ...configured, store })
-    settlements.set(
-      settlementKey(currency.chainId, currency.currency),
-      session.extensions!.settleScheduled,
-    )
-    const configuredSession: typeof session = { ...session, extensions }
-    return [createChargeMethod(configured), configuredSession] as const
+    return [createChargeMethod(configured), sessions[index]!] as const
   }
-  return [...createMethods(first), ...rest.flatMap(createMethods)] as const
+  return [
+    ...createMethods(first, 0),
+    ...rest.flatMap((currency, index) => createMethods(currency, index + 1)),
+  ] as const
 }
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
@@ -147,14 +128,18 @@ export namespace tempo {
   /** Safe relay failure details exposed by the Tempo API relay. */
   export type RelayErrorDetails = Relay_.configure.ErrorDetails
 
-  /** Creates a Tempo `charge` method for one-time TIP-20 token transfers. */
-  export const charge = charge_
+  /** Creates ordered Tempo charge offers: OUSD first, then the network fallback. */
+  export const charge = chargeOffers
   /** Creates the common Tempo `charge` and `session` methods from shared parameters. */
   export const common = tempo
-  /** Creates a TIP-1034 Tempo `session` method for session-based TIP-20 token payments. */
-  export const session = sessionServer
-  /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
-  export const subscription = subscription_
+  /** Creates ordered TIP-1034 session offers with shared storage and settlement helpers. */
+  export const session = Object.assign(sessionOffers, {
+    charge: sessionCharge_,
+    settle: settle_,
+    settleBatch: settleBatch_,
+  })
+  /** Creates ordered subscription offers. Existing subscriptions retain their authorized currency. */
+  export const subscription = subscriptionOffers
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */
   export const renewSubscription = renewSubscription_
   /** One-shot settle: reads highest voucher from storage and submits on-chain. */
@@ -168,4 +153,107 @@ export namespace tempo {
   }
   /** Experimental websocket helpers for Tempo sessions. */
   export const Ws = Ws_
+}
+
+/** Currency selection shared by the public Tempo intent factories. */
+type CurrencyParameters<parameters> = Omit<parameters, 'currency'> &
+  (
+    | {
+        /** @deprecated Use `currencies: [currency]` instead. */
+        currency?: string | undefined
+        currencies?: undefined
+      }
+    | { currency?: undefined; currencies: readonly Currencies.Currency[] }
+  )
+
+/** Resolves the public factory configuration while preserving explicit legacy currencies. */
+function resolveCurrencies(parameters: {
+  currency?: string | undefined
+  currencies?: readonly Currencies.Currency[] | undefined
+  chainId?: number | undefined
+  testnet?: boolean | undefined
+  decimals?: number | undefined
+}) {
+  if (parameters.currency !== undefined && parameters.currencies !== undefined)
+    throw new Error('Specify either `currency` or `currencies`, not both.')
+  return Currencies.resolve({
+    ...parameters,
+    ...(parameters.currency === undefined ? {} : { currencies: [parameters.currency] }),
+  })
+}
+
+/** Creates OUSD-first charge offers, with explicit currency lists replacing the defaults. */
+function chargeOffers<const parameters extends CurrencyParameters<charge_.Parameters>>(
+  parameters?: NoExtraKeys<parameters, CurrencyParameters<charge_.Parameters>>,
+) {
+  const { currencies: _currencies, ...shared } = parameters ?? {}
+  const [first, ...rest] = resolveCurrencies(parameters ?? {})
+  function create(currency: typeof first) {
+    const configured = { ...shared, ...currency } as unknown as Omit<
+      parameters,
+      'currencies' | 'currency' | 'decimals' | 'chainId'
+    > &
+      typeof currency
+    return charge_(configured as NoExtraKeys<typeof configured, charge_.Parameters>)
+  }
+  return [create(first), ...rest.map(create)] as const
+}
+
+/** Creates OUSD-first session offers with shared storage and currency-aware settlement helpers. */
+function sessionOffers<const parameters extends CurrencyParameters<session_.Parameters>>(
+  parameters?: NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>>,
+) {
+  const { currencies: _currencies, ...shared } = parameters ?? {}
+  const [first, ...rest] = resolveCurrencies(parameters ?? {})
+  const store = parameters?.store ?? Store.memory()
+  const settlements = new Map<string, session_.Extensions['settleScheduled']>()
+  const key = (chainId: number, currency: string) => `${chainId}:${currency.toLowerCase()}`
+  const settleScheduled: session_.Extensions['settleScheduled'] = (channel) => {
+    const settle = settlements.get(key(channel.chainId, channel.token))
+    if (!settle) throw new Error('Channel currency is not configured for this session handler.')
+    return settle(channel)
+  }
+  const extensions: session_.Extensions = {
+    settleScheduled,
+    serveWebSocket: (options) =>
+      Ws_.serve({
+        ...options,
+        store: ChannelStore.fromStore(store),
+        onChargeCommitted: settleScheduled,
+      }),
+  }
+  function create(currency: typeof first) {
+    const configured = { ...shared, ...currency, store } as unknown as Omit<
+      parameters,
+      'currencies' | 'currency' | 'decimals' | 'chainId'
+    > &
+      typeof currency & { store: typeof store }
+    const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
+    settlements.set(key(currency.chainId, currency.currency), method.extensions!.settleScheduled)
+    return { ...method, extensions }
+  }
+  return [create(first), ...rest.map(create)] as const
+}
+
+/** Offers currencies for new subscriptions; stored subscriptions retain their authorized currency. */
+function subscriptionOffers<const parameters extends CurrencyParameters<subscription_.Parameters>>(
+  parameters: NoExtraKeys<parameters, CurrencyParameters<subscription_.Parameters>>,
+) {
+  const { currencies: _currencies, ...shared } = parameters
+  const [first, ...rest] = resolveCurrencies(parameters)
+  const store = parameters.store ?? Store.memory()
+  function create(currency: typeof first) {
+    const configured = { ...shared, ...currency, store } as unknown as Omit<
+      parameters,
+      'currencies' | 'currency' | 'decimals' | 'chainId'
+    > &
+      typeof currency & { store: typeof store }
+    return subscription_(
+      configured as NoExtraKeys<
+        typeof configured & subscription_.Parameters,
+        subscription_.Parameters
+      >,
+    )
+  }
+  return [create(first), ...rest.map(create)] as const
 }

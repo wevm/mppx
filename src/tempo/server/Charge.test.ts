@@ -1,6 +1,6 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
-import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { Mppx as Mppx_server, tempo as tempoOffers } from 'mppx/server'
 import { P256, type Hex, WebAuthnP256 } from 'ox'
 import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
@@ -33,6 +33,7 @@ import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as tempo_server from './index.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -207,7 +208,7 @@ describe('tempo', () => {
     expect(() => tempo_server.charge({ allowedFeeTokens: [] })).toThrow(
       '`allowedFeeTokens` must contain at least one token.',
     )
-    expect(() => tempo_server.common({ allowedFeeTokens: [] })).toThrow(
+    expect(() => tempoOffers.common({ allowedFeeTokens: [] })).toThrow(
       '`allowedFeeTokens` must contain at least one token.',
     )
   })
@@ -1446,7 +1447,7 @@ describe('tempo', () => {
           },
         }),
       })
-      const [method] = tempo_server({
+      const [method] = tempoOffers({
         machineTokenEnabled: true,
         account: accounts[0],
         currency: asset,
@@ -3214,7 +3215,7 @@ describe('tempo', () => {
 
       const server = Mppx_server.create({
         methods: [
-          tempo_server({
+          tempoOffers({
             getClient() {
               return client
             },

@@ -73,16 +73,18 @@ test.each([false, true])('proof replay preserves explicit store policy: %s', asy
   }
 })
 
-test.each([
-  { decimals: 6, order: [6, 8] },
-  { decimals: 8, order: [6, 8] },
-  { decimals: 6, order: [8, 6] },
-  { decimals: 8, order: [8, 6] },
-  { decimals: 6, order: [6] },
-  { decimals: 8, order: [8] },
-])(
+test.each(
+  [
+    { decimals: 6, order: [6, 8] },
+    { decimals: 8, order: [6, 8] },
+    { decimals: 6, order: [8, 6] },
+    { decimals: 8, order: [8, 6] },
+    { decimals: 6, order: [6] },
+    { decimals: 8, order: [8] },
+  ].flatMap((scenario) => [false, true].map((individual) => ({ ...scenario, individual }))),
+)(
   'session helpers use $decimals decimals with token order $order',
-  async ({ decimals, order }) => {
+  async ({ decimals, order, individual }) => {
     const token = decimals === 6 ? tokens.usdc : tokens.ousd
     const currencies = order.map((precision) =>
       defineToken({
@@ -95,7 +97,11 @@ test.each([
     const serve = vi.spyOn(Ws, 'serve').mockResolvedValue()
     try {
       const server = Mppx.create({
-        methods: [tempo({ ...config, currencies, settlementSchedule: { amount: '1' } })],
+        methods: [
+          individual
+            ? tempo.session({ ...config, currencies, settlementSchedule: { amount: '1' } })
+            : tempo({ ...config, currencies, settlementSchedule: { amount: '1' } }),
+        ],
         secretKey,
       })
       const threshold = 10n ** BigInt(decimals)
@@ -135,7 +141,9 @@ test.each([
       expect(await settlementStore.getChannel(channelId)).toMatchObject({ token: channel.token })
 
       const independent = Mppx.create({
-        methods: [tempo({ ...config, currencies })],
+        methods: [
+          individual ? tempo.session({ ...config, currencies }) : tempo({ ...config, currencies }),
+        ],
         secretKey,
       })
       await independent.tempo.session.serveWebSocket({} as never)
@@ -253,14 +261,12 @@ describe('common currency offers', () => {
     ])
   })
 
-  test('keeps explicit single-currency and individual method defaults', () => {
+  test('keeps explicit single-currency configuration', () => {
     const [charge, session] = tempo.common({ ...config, currency: tokens.usdc })
     expect(charge.intent).toBe('charge')
     expect(session.intent).toBe('session')
     expect(charge.defaults?.currency).toBe(tokens.usdc)
     expect(session.defaults?.currency).toBe(tokens.usdc)
-    expect(tempo.charge().defaults?.currency).toBe(tokens.usdc)
-    expect(tempo.session({}).defaults?.currency).toBe(tokens.usdc)
   })
 
   test('preserves session management extensions on composed named handlers', () => {
@@ -274,4 +280,107 @@ describe('common currency offers', () => {
       tempo.common({ ...config, currency: tokens.usdc, currencies: [tokens.ousd] } as never),
     ).toThrow('Specify either `currency` or `currencies`, not both.')
   })
+})
+
+describe('individual intent currency offers', () => {
+  test.each([
+    { intent: 'charge', parameters: {}, expected: [tokens.ousd, tokens.usdc], chainId: 4217 },
+    { intent: 'session', parameters: {}, expected: [tokens.ousd, tokens.usdc], chainId: 4217 },
+    { intent: 'subscription', parameters: {}, expected: [tokens.ousd, tokens.usdc], chainId: 4217 },
+    ...(['charge', 'session', 'subscription'] as const).flatMap((intent) => [
+      {
+        intent,
+        parameters: { testnet: true },
+        expected: [tokens.ousd, tokens.pathUsd],
+        chainId: 42431,
+      },
+      {
+        intent,
+        parameters: { chainId: 42431 },
+        expected: [tokens.ousd, tokens.pathUsd],
+        chainId: 42431,
+      },
+      {
+        intent,
+        parameters: { currencies: [tokens.usdc, tokens.ousd] },
+        expected: [tokens.usdc, tokens.ousd],
+        chainId: 4217,
+      },
+      { intent, parameters: { currency: tokens.usdc }, expected: [tokens.usdc], chainId: 4217 },
+      { intent, parameters: { currencies: [tokens.ousd] }, expected: [tokens.ousd], chainId: 4217 },
+    ]),
+  ])(
+    '$intent offers $expected for $parameters',
+    async ({ intent, parameters, expected, chainId }) => {
+      const accessKey = {
+        accessKeyAddress: '0x1234567890123456789012345678901234567890',
+        keyType: 'secp256k1',
+      } as const
+      const config = {
+        recipient,
+        getClient: () =>
+          createClient({
+            chain: { ...tempoChain, id: chainId },
+            transport: custom({ request: rpc }),
+          }),
+      } as const
+      const methods =
+        intent === 'charge'
+          ? tempo.charge({ ...config, ...parameters })
+          : intent === 'session'
+            ? tempo.session({ ...config, ...parameters })
+            : tempo.subscription({
+                ...config,
+                ...parameters,
+                resolve: async () => ({ key: 'user:plan', accessKey }),
+              })
+      const offers = [methods].flat()
+      expect(offers.map((method) => method.intent)).toEqual(expected.map(() => intent))
+      const server = Mppx.create({ methods: [methods], secretKey })
+      const options = {
+        amount: '1.25',
+        unitType: 'request',
+        periodCount: 1,
+        periodUnit: 'day',
+        subscriptionExpires: new Date(
+          Math.floor(Date.now() / 1000) * 1000 + 86400_000 * 30,
+        ).toISOString(),
+      } as const
+      const handler =
+        intent === 'charge'
+          ? server.charge(options)
+          : intent === 'session'
+            ? server.session(options)
+            : server.subscription(options)
+      const response = await handler(new Request('https://example.com/paid'))
+      if (response.status !== 402) throw new Error('Expected currency offers')
+      const challenges = Challenge.fromResponseList(response.challenge)
+      expect(challenges.map(({ request }) => String(request.currency).toLowerCase())).toEqual(
+        expected.map((currency) => currency.toLowerCase()),
+      )
+      expect(new Set(challenges.map(({ id }) => id)).size).toBe(expected.length)
+      for (const { request } of challenges) {
+        expect(request.amount).toBe('1250000')
+        expect(request.methodDetails).toMatchObject({ chainId })
+      }
+    },
+  )
+
+  test.each(['charge', 'session', 'subscription'] as const)(
+    '%s rejects conflicting or empty lists',
+    (intent) => {
+      const create = (parameters: object) => {
+        const factory = tempo[intent] as (parameters: never) => unknown
+        return factory({
+          ...config,
+          resolve: async () => ({ key: 'user:plan' }),
+          ...parameters,
+        } as never)
+      }
+      expect(() => create({ currency: tokens.usdc, currencies: [tokens.ousd] })).toThrow(
+        'Specify either',
+      )
+      expect(() => create({ currencies: [] })).toThrow('No accepted USD currencies')
+    },
+  )
 })

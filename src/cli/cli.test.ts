@@ -956,7 +956,7 @@ describe('basic charge (examples/basic)', () => {
         amount: parseUnits('100', 6),
       })
 
-      const tempoMethod = tempo.charge({ getClient: () => client })
+      const [tempoMethod] = tempo.charge({ chainId: client.chain.id, getClient: () => client })
       const server = Mppx_server.create({
         methods: [tempoMethod],
         realm: 'cli-test-balance-aware-offers',
@@ -1032,7 +1032,7 @@ describe('basic charge (examples/basic)', () => {
       amount: parseUnits('100', 6),
     })
 
-    const tempoMethod = tempo.charge({ getClient: () => client })
+    const [tempoMethod] = tempo.charge({ chainId: client.chain.id, getClient: () => client })
     const server = Mppx_server.create({
       methods: [tempoMethod],
       realm: 'cli-test-currency-option',
@@ -1090,7 +1090,7 @@ describe('basic charge (examples/basic)', () => {
   })
 
   test('currency option rejects currencies the server did not offer', async () => {
-    const tempoMethod = tempo.charge({ getClient: () => client })
+    const [tempoMethod] = tempo.charge({ chainId: client.chain.id, getClient: () => client })
     const server = Mppx_server.create({
       methods: [tempoMethod],
       realm: 'cli-test-currency-unavailable',
@@ -1138,7 +1138,7 @@ describe('basic charge (examples/basic)', () => {
         }
       },
     })
-    const tempoMethod = tempo.charge({ getClient: () => client })
+    const [tempoMethod] = tempo.charge({ chainId: client.chain.id, getClient: () => client })
 
     const server = Mppx_server.create({
       methods: [unsupportedMethod, tempoMethod],

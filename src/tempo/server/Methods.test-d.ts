@@ -40,3 +40,31 @@ test('accepts readonly addresses, requires missing handler parameters, rejects c
   // @ts-expect-error No separate preference setting.
   tempo.common({ currencies: [defaults.ousd], preferredCurrency: defaults.ousd })
 })
+
+test('individual factories preserve handler defaults and intent-specific helpers', () => {
+  const charge = tempo.charge({ amount: '1', currencies: tokens.tempo })
+  const sessionMethods = tempo.session({ amount: '1', currencies: tokens.tempo })
+  const subscriptions = tempo.subscription({
+    amount: '1',
+    currencies: tokens.tempo,
+    periodCount: 1,
+    periodUnit: 'day',
+    recipient: '0x1234567890123456789012345678901234567890',
+    resolve: async () => null,
+    subscriptionExpires: '2027-01-01T00:00:00Z',
+  })
+  const mppx = Mppx.create({ methods: [charge, sessionMethods, subscriptions] })
+  expectTypeOf(charge[0].intent).toEqualTypeOf<'charge'>()
+  expectTypeOf(sessionMethods[0].intent).toEqualTypeOf<'session'>()
+  expectTypeOf(subscriptions[0].intent).toEqualTypeOf<'subscription'>()
+  expectTypeOf(mppx.charge({})).toBeFunction()
+  expectTypeOf(mppx.session({ unitType: 'request' })).toBeFunction()
+  expectTypeOf(mppx.subscription({})).toBeFunction()
+  expectTypeOf(mppx.tempo.session.settleScheduled).toEqualTypeOf<
+    session.Extensions['settleScheduled']
+  >()
+  expectTypeOf(mppx.tempo.subscription.renew).toBeFunction()
+  expectTypeOf(tempo.session.charge).toBeFunction()
+  // @ts-expect-error Single and multiple currency options are mutually exclusive.
+  tempo.charge({ currency: defaults.usdc, currencies: [defaults.ousd] })
+})

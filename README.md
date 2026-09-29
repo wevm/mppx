@@ -225,3 +225,25 @@ Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org
 ## License
 
 MIT
+
+### Accepted Tempo currencies
+
+`tempo()`, `tempo.charge()`, `tempo.session()`, and `tempo.subscription()` offer OUSD first, followed by USDC.e on mainnet or pathUSD on Moderato (`testnet: true`). Each factory returns a group accepted directly by `Mppx.create`. Clients choose one offer; ordering does not trigger an automatic swap.
+
+```ts
+import { Mppx, tempo } from 'mppx/server'
+import { ousd, usdce } from 'viem/tokens'
+
+const mppx = Mppx.create({
+  methods: [
+    tempo.charge({
+      currencies: [ousd, usdce],
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
+  ],
+})
+```
+
+Omit `currencies` for the network defaults, or use `currencies: [ousd]` to accept only OUSD on mainnet. Explicit lists replace the defaults. The deprecated `currency` option also restricts acceptance to one token. Wire requests and handler overrides continue to use singular `currency`.
+
+Use configured handlers such as `mppx.tempo.charge` when composing payments. Code that directly inspects a Method can destructure the group: `const [charge] = tempo.charge({ currencies: [ousd] })`. Existing sessions and subscriptions continue using their originally authorized currency.
