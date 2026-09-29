@@ -738,7 +738,53 @@ describe('precompile server session unit guardrails', () => {
     expect(request.sessionSnapshot).toMatchObject({
       channelId: openPayload.channelId,
       descriptor: openPayload.descriptor,
-      requiredCumulative: '201',
+      requiredCumulative: '251',
+      spent: '200',
+    })
+  })
+
+  test('request advances reusable content hints by the configured minimum voucher delta', async () => {
+    const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const highestVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(250n),
+      chainId,
+    )
+    if (highestVoucher.action !== 'voucher') throw new Error('expected voucher payload')
+    const { method, store } = createServer({ minVoucherDelta: '5' })
+    await persistPrecompileChannel(store, openPayload, {
+      highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 250n,
+        signature: highestVoucher.signature,
+      },
+      spent: 200n,
+    })
+
+    const request = await method.request!({
+      capturedRequest: {
+        hasBody: false,
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://api.example.com/resource'),
+      },
+      credential: null,
+      request: {
+        amount: '1',
+        channelId: openPayload.channelId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        unitType: 'request',
+      },
+    } as never)
+
+    expect(request.sessionSnapshot).toMatchObject({
+      acceptedCumulative: '250',
+      requiredCumulative: '255',
       spent: '200',
     })
   })

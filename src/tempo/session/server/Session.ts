@@ -537,11 +537,13 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
+        minVoucherDelta: parameters.minVoucherDelta,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
         parameterFeePayer: configuredFeePayer,
         request,
         resolveChannelId: parameters.resolveChannelId,
+        sseEnabled: Boolean(parameters.sse),
         store,
       })
       return {

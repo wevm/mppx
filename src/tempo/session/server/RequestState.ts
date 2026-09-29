@@ -38,6 +38,10 @@ export type ResolveSessionSnapshotParameters = {
   channelId: Hex | undefined
   /** Payment fields the reusable channel must match before it is advertised. */
   expected?: SessionSnapshotPaymentFields | undefined
+  /** Minimum raw-unit increase required when the next voucher must advance. */
+  minimumVoucherAdvance?: bigint | undefined
+  /** Whether the next voucher must advance beyond the accepted cumulative amount. */
+  requireVoucherAdvance?: boolean | undefined
   /** Server channel store. */
   store: ChannelStore.ChannelStore
 }
@@ -138,7 +142,14 @@ export async function resolveSessionChannelId(parameters: {
 export async function resolveSessionSnapshot(
   parameters: ResolveSessionSnapshotParameters,
 ): Promise<SessionSnapshot | undefined> {
-  const { amount, channelId, expected, store } = parameters
+  const {
+    amount,
+    channelId,
+    expected,
+    minimumVoucherAdvance = 0n,
+    requireVoucherAdvance = false,
+    store,
+  } = parameters
   if (!channelId) return undefined
   const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
@@ -147,7 +158,11 @@ export async function resolveSessionSnapshot(
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
   if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
-  const requiredCumulative = channel.spent + amount
+  const spendBoundary = channel.spent + amount
+  const advanceBoundary = requireVoucherAdvance
+    ? channel.highestVoucherAmount + (minimumVoucherAdvance > 0n ? minimumVoucherAdvance : 1n)
+    : 0n
+  const requiredCumulative = spendBoundary > advanceBoundary ? spendBoundary : advanceBoundary
   return {
     acceptedCumulative: channel.highestVoucherAmount.toString(),
     chainId: channel.chainId,
@@ -266,12 +281,14 @@ export type ResolveSessionPaymentRequestParameters = {
   decimals: number
   defaultFeePayer?: viem_Account | undefined
   getClient: ResolveRequestChainIdParameters['getClient']
+  minVoucherDelta?: string | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   parameterFeePayer?: ParameterFeePayer
   request: SessionPaymentRequestInput
   resolveChannelId?: ResolveSessionChannelId | undefined
   source?: string | undefined
+  sseEnabled?: boolean | undefined
   store: ChannelStore.ChannelStore
 }
 
@@ -388,12 +405,14 @@ export async function resolveSessionPaymentRequest(
     decimals,
     defaultFeePayer,
     getClient,
+    minVoucherDelta,
     parameterChainId,
     parameterEscrowContract,
     parameterFeePayer,
     request,
     resolveChannelId,
     source,
+    sseEnabled,
     store,
   } = parameters
 
@@ -414,6 +433,7 @@ export async function resolveSessionPaymentRequest(
   )
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
+  const isContentRequest = capturedRequest ? isSessionContentRequest(capturedRequest) : false
   const channelId = await resolveSessionChannelId({
     capturedRequest,
     credential,
@@ -423,7 +443,7 @@ export async function resolveSessionPaymentRequest(
     store,
   })
   const sessionSnapshot = await resolveSessionSnapshot({
-    amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
+    amount: capturedRequest && !isContentRequest ? 0n : requestAmount,
     channelId,
     expected: {
       chainId,
@@ -431,6 +451,8 @@ export async function resolveSessionPaymentRequest(
       escrowContract,
       recipient: readChallengeAddress(request.recipient, 'recipient'),
     },
+    minimumVoucherAdvance: parseUnits(minVoucherDelta ?? '0', decimals),
+    requireVoucherAdvance: Boolean(capturedRequest) && !sseEnabled && isContentRequest,
     store,
   })
   const { operator: _operator, ...requestWithoutOperator } = request
