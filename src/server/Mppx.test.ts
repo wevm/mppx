@@ -6719,7 +6719,7 @@ describe('verifyCredential', () => {
     httpServer.close()
   })
 
-  test('verifyCredential charges repeated session voucher content requests when capturedRequest is provided', async () => {
+  test('verifyCredential rejects repeated session voucher content requests when capturedRequest is provided', async () => {
     const server = Mppx.create({
       methods: [
         tempo.session({
@@ -6773,15 +6773,15 @@ describe('verifyCredential', () => {
       capturedRequest: contentRequest,
       request: routeRequest,
     })) as SessionReceipt
-    const secondReceipt = (await server.verifyCredential(serializedVoucherCredential, {
-      capturedRequest: contentRequest,
-      request: routeRequest,
-    })) as SessionReceipt
+    await expect(
+      server.verifyCredential(serializedVoucherCredential, {
+        capturedRequest: contentRequest,
+        request: routeRequest,
+      }),
+    ).rejects.toThrow('voucher does not add new funds for this request')
 
     expect(BigInt(firstReceipt.spent)).toBeGreaterThan(0n)
     expect(firstReceipt.units).toBe(1)
-    expect(BigInt(secondReceipt.spent)).toBeGreaterThan(BigInt(firstReceipt.spent))
-    expect(secondReceipt.units).toBe(2)
   })
 
   test('verifies a sponsored tempo credential created by the real client', async () => {
