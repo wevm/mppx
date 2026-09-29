@@ -532,6 +532,7 @@ export function create<
     : undefined
 
   const handlers: Record<string, unknown> = {}
+  const methodHandlers = new Map<Method.AnyServer, AnyMethodFn>()
   const intentCount: Record<string, number> = {}
 
   for (const mi of methods) {
@@ -574,6 +575,7 @@ export function create<
     const wireKey = `${mi.name}/${mi.intent}`
     const aliasKey = mi.alias ? `${mi.name}/${mi.alias}` : undefined
     if (mi.extensions) Object.assign(fn, mi.extensions)
+    methodHandlers.set(mi, fn as AnyMethodFn)
     if (!aliasKey || !handlers[wireKey]) handlers[wireKey] = fn
     if (aliasKey) handlers[aliasKey] = fn
   }
@@ -593,8 +595,7 @@ export function create<
       )
       handlers[mi.intent] = (options: Record<string, unknown>) => {
         const configured = intentMethods.map((m) => {
-          const key = `${m.name}/${m.intent}`
-          const handlerFn = handlers[key] as AnyMethodFn
+          const handlerFn = methodHandlers.get(m)!
           return handlerFn(options)
         })
         return composeHandlers(

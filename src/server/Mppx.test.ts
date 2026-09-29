@@ -2137,6 +2137,37 @@ describe('server events', () => {
 })
 
 describe('compose', () => {
+  test.each([
+    ['0x20c0000000000000000000000000000000000001', '0x20c0000000000000000000000000000000000002'],
+    ['0x20c0000000000000000000000000000000000002', '0x20c0000000000000000000000000000000000001'],
+  ] as const)(
+    'implicit composition preserves currency defaults in order: %s, %s',
+    async (first, second) => {
+      const currencies = [first, second]
+      const mppx = Mppx.create({
+        methods: [
+          tempo.charge({ currency: first, recipient: accounts[0].address, chainId: 42431 }),
+          tempo.charge({ currency: second, recipient: accounts[0].address, chainId: 42431 }),
+        ],
+        realm,
+        secretKey,
+        selectOffers(offers) {
+          expect(offers.map((offer) => offer.request.currency)).toEqual(currencies)
+          return offers
+        },
+      })
+
+      const handler = mppx.charge({ amount: '1' })
+      const result = await handler(new Request('https://example.com/resource'))
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      const challenges = Challenge.fromResponseList(result.challenge)
+      expect(challenges.map((challenge) => challenge.request.currency)).toEqual(currencies)
+      expect(new Set(challenges.map((challenge) => challenge.id)).size).toBe(2)
+    },
+  )
+
   const mockChargeA = Method.from({
     name: 'alpha',
     intent: 'charge',
