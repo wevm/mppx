@@ -9,7 +9,6 @@ const mppx = Mppx.create({
   methods: [
     tempo({
       account,
-      currency: '0x20c0000000000000000000000000000000000000',
       testnet: true,
     }),
   ],

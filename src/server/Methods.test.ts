@@ -64,7 +64,7 @@ describe('composable method hooks', () => {
     const methods = tempo({ account: accounts[0], canOffer })
 
     expect(tempo.common).toBe(tempo)
-    expect(methods).toHaveLength(2)
+    expect(methods).toHaveLength(4)
     for (const method of methods) expect(method.canOffer).toBe(canOffer)
   })
 

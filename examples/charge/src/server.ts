@@ -4,7 +4,6 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Actions, Chain } from 'viem/tempo'
 
 const account = privateKeyToAccount(generatePrivateKey())
-const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD
 
 // `Mppx.create()` requires a secret key so challenge IDs can be verified
 // statelessly. The example ships with a default demo key so it works
@@ -16,7 +15,6 @@ const mppx = Mppx.create({
   methods: [
     tempo({
       account,
-      currency,
       feePayer: true,
       html: true,
       recipient: account.address,

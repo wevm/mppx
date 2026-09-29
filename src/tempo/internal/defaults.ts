@@ -1,3 +1,6 @@
+import { getAddress } from 'viem'
+import { ousd, pathusd, usdce } from 'viem/tokens'
+
 import type { ValueOf } from '../../internal/types.js'
 
 export const chainId = {
@@ -8,10 +11,12 @@ export type ChainId = ValueOf<typeof chainId>
 
 /** Token addresses. */
 export const tokens = {
+  /** OpenUSD (OUSD) on Tempo mainnet. */
+  ousd: ousd(chainId.mainnet).address,
   /** USDC (USDC.e) token address. */
-  usdc: '0x20C000000000000000000000b9537d11c60E8b50',
+  usdc: getAddress(usdce(chainId.mainnet).address),
   /** pathUSD token address. */
-  pathUsd: '0x20c0000000000000000000000000000000000000',
+  pathUsd: pathusd(chainId.mainnet).address,
 } as const
 
 /** Chain ID → default currency. */

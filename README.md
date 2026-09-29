@@ -51,7 +51,6 @@ import { Mppx, tempo } from 'mppx/server'
 const mppx = Mppx.create({
   methods: [
     tempo({
-      currency: '0x20c0000000000000000000000000000000000000',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
   ],
