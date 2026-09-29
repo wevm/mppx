@@ -63,6 +63,7 @@ describe('Fetch.from', () => {
       timestamp: '[timestamp]',
     }).toMatchInlineSnapshot(`
       {
+        "fundingCurrency": "0x20c0000000000000000000000000000000000001",
         "method": "tempo",
         "reference": "[reference]",
         "status": "success",
@@ -233,6 +234,7 @@ describe('Fetch.from', () => {
       timestamp: '[timestamp]',
     }).toMatchInlineSnapshot(`
       {
+        "fundingCurrency": "0x20c0000000000000000000000000000000000001",
         "method": "tempo",
         "reference": "[reference]",
         "status": "success",
@@ -2389,6 +2391,7 @@ describe('Fetch.polyfill', () => {
       timestamp: '[timestamp]',
     }).toMatchInlineSnapshot(`
       {
+        "fundingCurrency": "0x20c0000000000000000000000000000000000001",
         "method": "tempo",
         "reference": "[reference]",
         "status": "success",
