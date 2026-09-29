@@ -193,6 +193,7 @@ describe('session', () => {
     const mppx = Mppx.create({
       methods: [
         tempo_server.session({
+          chainId: client.chain.id,
           getClient: () => client,
           account: accounts[0],
           currency: asset,

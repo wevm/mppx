@@ -6603,6 +6603,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo.charge({
           account: accounts[0],
+          chainId: client.chain.id,
           currency: asset,
           getClient: () => client,
         }),
@@ -6646,6 +6647,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo.charge({
           account: accounts[0],
+          chainId: client.chain.id,
           currency: asset,
           feePayer: true,
           getClient: () => client,
@@ -6821,6 +6823,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo.charge({
           account: accounts[0],
+          chainId: client.chain.id,
           currency: asset,
           feePayer: true,
           getClient: () => client,
@@ -6856,6 +6859,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo.charge({
           account: accounts[0],
+          chainId: client.chain.id,
           currency: asset,
           feePayer: true,
           getClient: () => client,

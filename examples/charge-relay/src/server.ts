@@ -4,19 +4,15 @@ import { Errors, Receipt } from 'mppx'
 import { Mppx } from 'mppx/hono'
 import { tempo } from 'mppx/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { Chain } from 'viem/tempo'
-import { pathusd } from 'viem/tokens'
 
 const apiKey = process.env.TEMPO_API_KEY
 if (!apiKey) throw new Error('Set TEMPO_API_KEY to a Tempo API key with the mpp:write scope.')
 const tempoApiKey = apiKey
 
 const apiUrl = process.env.TEMPO_API_URL ?? 'https://api.tempo.xyz'
-const currency = pathusd(Chain.testnet.id).address
 const account = privateKeyToAccount(generatePrivateKey())
-const method = tempo.charge({
+const methods = tempo.charge({
   account,
-  currency,
   recipient: account.address,
   // To replace the local `relay` implementation below with the built-in adapter:
   // relay: { apiBaseUrl: apiUrl, apiKey },
@@ -25,7 +21,7 @@ const method = tempo.charge({
 })
 const payments = Mppx.create({
   methods: [
-    {
+    methods.map((method) => ({
       ...method,
       async validate(parameters: Parameters<NonNullable<typeof method.validate>>[0]) {
         const { credential, request } = parameters
@@ -47,7 +43,7 @@ const payments = Mppx.create({
         })
         return Receipt.from({ ...receipt, status: 'success' })
       },
-    },
+    })),
   ],
   secretKey: process.env.MPP_SECRET_KEY ?? 'mppx-demo-tempo-api-relay-secret-key',
 })

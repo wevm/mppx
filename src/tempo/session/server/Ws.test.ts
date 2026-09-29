@@ -247,16 +247,16 @@ describe('isows', () => {
       ),
     )
 
-    await sleep(10)
-
-    const applicationFrame = socket.sent
-      .map((message) => Ws.parseMessage(message))
-      .find((message) => message?.mpp === 'message')
-
-    expect(applicationFrame).toEqual({
-      mpp: 'message',
-      data: '{"mpp":"payment-need-voucher","data":{"requiredCumulative":"9"}}',
-    })
+    await expect
+      .poll(() =>
+        socket.sent
+          .map((message) => Ws.parseMessage(message))
+          .find((message) => message?.mpp === 'message'),
+      )
+      .toEqual({
+        mpp: 'message',
+        data: '{"mpp":"payment-need-voucher","data":{"requiredCumulative":"9"}}',
+      })
   })
 
   test('caps queued payment work and closes noisy sockets', async () => {

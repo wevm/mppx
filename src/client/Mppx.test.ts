@@ -1330,6 +1330,7 @@ describe('createCredential', () => {
 const server = Mppx_server.create({
   methods: [
     tempo_server.charge({
+      chainId: client.chain.id,
       currency: asset,
       getClient: () => client,
       recipient: accounts[0].address,

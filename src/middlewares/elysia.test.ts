@@ -92,6 +92,7 @@ function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
     methods: [
       tempo_server.charge({
+        chainId: client.chain.id,
         getClient: () => client,
         currency: asset,
         recipient: accounts[0].address,
@@ -199,6 +200,7 @@ describe('session', () => {
     const mppx = Mppx.create({
       methods: [
         tempo_server.session({
+          chainId: client.chain.id,
           getClient: () => client,
           account: accounts[0],
           currency: asset,

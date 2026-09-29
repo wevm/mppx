@@ -6,6 +6,8 @@ import { mpp } from 'mppx/x402/mcp'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
+import { tokens } from '../tempo/internal/defaults.js'
+
 const network = 'eip155:84532' as const
 const recipient = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as const
 const transaction = `0x${'1'.repeat(64)}`
@@ -77,7 +79,13 @@ describe('x402 MCP compatibility', () => {
       code: -32042,
       data: {
         challenges: [
-          expect.objectContaining({ intent: 'charge', method: 'tempo' }),
+          ...[tokens.ousd, tokens.usdc].map((currency) =>
+            expect.objectContaining({
+              intent: 'charge',
+              method: 'tempo',
+              request: expect.objectContaining({ currency }),
+            }),
+          ),
           expect.objectContaining({ intent: 'charge', method: 'evm' }),
         ],
         httpStatus: 402,

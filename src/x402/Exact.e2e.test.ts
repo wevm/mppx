@@ -19,6 +19,7 @@ describe('x402 exact e2e', () => {
         tempo.charge({
           account: accounts[0],
           currency: asset,
+          chainId: client.chain.id,
           getClient: () => client,
           recipient: accounts[0].address,
         }),
@@ -387,6 +388,7 @@ describe('x402 exact e2e', () => {
         tempo.charge({
           account: accounts[0],
           currency: asset,
+          chainId: client.chain.id,
           getClient: () => client,
           recipient: accounts[0].address,
         }),

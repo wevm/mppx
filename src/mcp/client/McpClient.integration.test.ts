@@ -454,11 +454,13 @@ async function createHarness(options?: {
       tempo_server.charge({
         account: accounts[0],
         currency: asset,
+        chainId: testClient.chain.id,
         getClient: () => testClient,
       }),
       tempo_server.session({
         account: accounts[0],
         currency: asset,
+        chainId: testClient.chain.id,
         getClient: () => testClient,
         store: sessionBackingStore,
         ...(options?.sessionFeePayer ? { feePayer: accounts[4] } : {}),

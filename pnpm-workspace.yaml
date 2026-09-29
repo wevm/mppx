@@ -13,14 +13,14 @@ catalog:
   file-type: '22.0.1'
   ox: '0.14.45'
   typescript: '~7.0.2'
-  viem: 'https://pkg.pr.new/viem@bd6e5a4e0d0ed8e2f0873609e4e956a4bdb8eee9'
+  viem: '2.57.1'
 
 overrides:
   mppx: 'workspace:*'
   vitest@<4.1.11: '4.1.11'
   typescript: 'catalog:'
   ox: 'catalog:'
-  viem@<2.56.0: '2.55.13'
+  viem: 'catalog:'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'
@@ -86,7 +86,7 @@ minimumReleaseAgeExclude:
   - tmp@0.2.7
   - socket.io-parser@4.2.7
   - undici@8.10.2
-  - viem@2.55.13
+  - viem@2.57.1
   - vite@8.0.16
   - vite-plus@0.3.0
   - ws@8.21.0

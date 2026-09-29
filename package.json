@@ -278,7 +278,7 @@
     "express": ">=5",
     "hono": ">=4.12.25",
     "next": ">=16.2.6",
-    "viem": ">=2.57.1-0"
+    "viem": ">=2.57.1"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {

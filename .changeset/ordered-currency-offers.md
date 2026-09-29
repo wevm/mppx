@@ -13,3 +13,5 @@ Preserved nested server offer-selection policies when wrapping configured handle
 Simplified grouped handler construction and initialized session extensions without mutating previously created methods.
 
 Fixed charge offers to honor an explicitly configured chain ID.
+
+Replaced the viem preview dependency with the public `2.57.1` release and required `viem >=2.57.1`.

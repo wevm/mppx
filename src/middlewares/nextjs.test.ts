@@ -9,6 +9,8 @@ import { beforeAll, describe, expect, test } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
+import { tokens } from '../tempo/internal/defaults.js'
+
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
   return new Promise<TestHttp.TestServer>((resolve) => {
     const server = http.createServer(async (req, res) => {
@@ -85,6 +87,7 @@ function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
     methods: [
       tempo_server.charge({
+        chainId: client.chain.id,
         getClient: () => client,
         currency: asset,
         account: accounts[0],
@@ -225,7 +228,7 @@ describe('charge', () => {
     const challenge = Challenge.fromResponse(challengeResponse, {
       methods: [tempo_client.charge()],
     })
-    expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+    expect(challenge.request.currency).toBe(tokens.ousd)
 
     const response = await fetch(server.url)
     expect(response.status).toBe(200)
@@ -233,7 +236,7 @@ describe('charge', () => {
     const body = (await response.json()) as { payer: string }
     const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(body.payer)
     expect(credential.challenge.request.amount).toBe('0')
-    expect(credential.challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+    expect(credential.challenge.request.currency).toBe(tokens.ousd)
     expect(credential.payload.type).toBe('proof')
     expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${accounts[1].address}`)
 
@@ -276,6 +279,7 @@ describe('session', () => {
     const mppx = Mppx.create({
       methods: [
         tempo_server.session({
+          chainId: client.chain.id,
           getClient: () => client,
           account: accounts[0],
           currency: asset,

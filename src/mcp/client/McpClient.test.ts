@@ -49,6 +49,7 @@ describe('McpClient.wrap', () => {
   const mppxServer = Mppx_server.create({
     methods: [
       tempo_server.charge({
+        chainId: testClient.chain.id,
         getClient: () => testClient,
       }),
     ],
@@ -199,7 +200,7 @@ describe('McpClient.wrap', () => {
 
   test('error: throws when method not found', async () => {
     const challenge = Challenge.fromMethod(
-      tempo_server.charge({ getClient: () => testClient })[0],
+      tempo_server.charge({ chainId: testClient.chain.id, getClient: () => testClient })[0],
       {
         realm,
         secretKey,

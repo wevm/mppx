@@ -10,6 +10,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
 import * as PaymentRequest from '../../PaymentRequest.js'
+import { tokens } from '../../tempo/internal/defaults.js'
 import * as ChallengeBrand from '../internal/ChallengeBrand.js'
 import * as Types from '../Types.js'
 
@@ -83,8 +84,12 @@ describe.each(['hono', 'next'] as const)('x402 %s compatibility', (framework) =>
     expect(
       challenges
         .filter((challenge) => !ChallengeBrand.is(challenge))
-        .map((challenge) => challenge.method),
-    ).toEqual(['tempo', 'evm'])
+        .map((challenge) => [challenge.method, challenge.request.currency]),
+    ).toEqual([
+      ['tempo', tokens.ousd],
+      ['tempo', tokens.usdc],
+      ['evm', '0x036CbD53842c5426634e7929541eC2318f3dCF7e'],
+    ])
     const challenge = challenges[0]!
     const timeout = new Date(challenge.expires!).getTime() - Date.now()
     expect(timeout).toBeGreaterThan(14_000)
@@ -139,9 +144,11 @@ describe('MPP compatibility challenges', () => {
     const scopeB = PaymentRequest.serialize({ _mppx_scope: 'https://example.com/b' })
     await expect(challengeScopes('/a')).resolves.toEqual([
       { method: 'tempo', opaque: scopeA },
+      { method: 'tempo', opaque: scopeA },
       { method: 'evm', opaque: scopeA },
     ])
     await expect(challengeScopes('/b')).resolves.toEqual([
+      { method: 'tempo', opaque: scopeB },
       { method: 'tempo', opaque: scopeB },
       { method: 'evm', opaque: scopeB },
     ])

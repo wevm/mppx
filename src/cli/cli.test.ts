@@ -22,6 +22,7 @@ import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import { stripePreviewVersion } from '../stripe/internal/constants.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
+import { tokens } from '../tempo/internal/defaults.js'
 import { tempo } from '../tempo/server/Methods.js'
 import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
@@ -906,7 +907,7 @@ describe('basic charge (examples/basic)', () => {
     })
 
     const server = Mppx_server.create({
-      methods: [tempo.charge({ getClient: () => client })],
+      methods: [tempo.charge({ chainId: client.chain.id, getClient: () => client })],
       realm: 'cli-test-basic',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
@@ -1324,7 +1325,7 @@ export default defineConfig({
     { timeout: 120_000 },
     async () => {
       const server = Mppx_server.create({
-        methods: [tempo.charge({ getClient: () => client })],
+        methods: [tempo.charge({ chainId: client.chain.id, getClient: () => client })],
         realm: 'localhost',
         secretKey: 'cli-test-secret-cli-test-secret-32',
       })
@@ -1409,9 +1410,7 @@ export default defineConfig({
           authorization!,
         )
         expect(credential.challenge.request.amount).toBe('0')
-        expect(credential.challenge.request.currency).toBe(
-          '0x20c0000000000000000000000000000000000000',
-        )
+        expect(credential.challenge.request.currency).toBe(tokens.ousd)
         expect(credential.payload.type).toBe('proof')
         expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
       } finally {
@@ -1422,7 +1421,7 @@ export default defineConfig({
 
   test('error: no account found', { timeout: 60_000 }, async () => {
     const server = Mppx_server.create({
-      methods: [tempo.charge({ getClient: () => client })],
+      methods: [tempo.charge({ chainId: client.chain.id, getClient: () => client })],
       realm: 'cli-test-no-account',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
@@ -2554,7 +2553,7 @@ export default defineConfig({
     { timeout: 120_000 },
     async () => {
       const server = Mppx_server.create({
-        methods: [tempo.charge({ getClient: () => client })],
+        methods: [tempo.charge({ chainId: client.chain.id, getClient: () => client })],
         realm: 'cli-sign-zero',
         secretKey: 'cli-test-secret-cli-test-secret-32',
       })
@@ -2655,9 +2654,7 @@ export default defineConfig({
           authorization,
         )
         expect(credential.challenge.request.amount).toBe('0')
-        expect(credential.challenge.request.currency).toBe(
-          '0x20c0000000000000000000000000000000000000',
-        )
+        expect(credential.challenge.request.currency).toBe(tokens.ousd)
         expect(credential.payload.type).toBe('proof')
         expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
 

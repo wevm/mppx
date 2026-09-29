@@ -192,6 +192,7 @@ describe('Fetch.from', () => {
     const serverWithFeePayer = Mppx_server.create({
       methods: [
         tempo_server.charge({
+          chainId: chain.id,
           feePayer: accounts[0],
           getClient: () => client,
         }),
@@ -258,6 +259,7 @@ describe('Fetch.from', () => {
     const serverWithFeePayer = Mppx_server.create({
       methods: [
         tempo_server.charge({
+          chainId: chain.id,
           feePayer: accounts[0],
           getClient: () => client,
         }),
