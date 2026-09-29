@@ -238,31 +238,25 @@ export async function validatePaymentFlow(
   if (tempoTestnetChallenge) {
     const provisioned = await provisionAndPayTestnet(tempoTestnetChallenge, verbose, options.silent)
     if (provisioned) {
-      const fakeResp = new Response(null, {
-        status: 402,
-        headers: {
-          [Constants.Headers.wwwAuthenticate]: Challenge.serialize(tempoTestnetChallenge),
-        },
-      })
       try {
-        const mppx = Mppx.create({ methods: provisioned.methods, polyfill: false })
-        const credentialContext = await preparePayment(
-          tempoTestnetChallenge,
-          loaded?.config.extensions,
-        )
-        const cred = await mppx.createCredential(fakeResp, credentialContext as never)
-        results.push(check('Payment: submitted', 'ephemeral testnet wallet'))
-        await sendAndValidateResponse(
-          results,
-          url,
-          endpoint,
-          cred,
-          fetchHeaders,
-          fetchBody,
-          verbose,
-          tempoModerato,
-          Challenge.credentialHeader(tempoTestnetChallenge),
-        )
+        const mppx = Mppx.create({
+          methods: provisioned.methods,
+          polyfill: false,
+          async onChallenge(challenge, { createCredential }) {
+            assertSamePaymentRequest(tempoTestnetChallenge, challenge)
+            const context = await preparePayment(challenge, loaded?.config.extensions)
+            const credential = await createCredential(context as never)
+            results.push(check('Payment: submitted', 'ephemeral testnet wallet'))
+            return credential
+          },
+          fetch: (input, init) => fetchWithTimeout(input, init ?? {}, 30_000),
+        })
+        const response = await mppx.fetch(url, {
+          method: endpoint.method,
+          headers: fetchHeaders,
+          body: fetchBody ?? null,
+        })
+        await validatePaymentResponse(results, response, verbose, tempoModerato)
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
       }

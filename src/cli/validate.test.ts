@@ -296,22 +296,50 @@ describe('validate: discovery', () => {
   })
 })
 
-test('funds the advertised operator for a testnet session', async () => {
+test('funds the operator and handles the testnet session response', async () => {
   const { Actions } = await import('viem/tempo')
+  const { Credential, Method, z } = await import('../index.js')
+  const MethodResponse = await import('../client/internal/MethodResponse.js')
+  const Tempo = await import('../tempo/client/index.js')
   const fund = vi.mocked(Actions.faucet.fund)
   fund.mockClear()
+
+  const method = Method.toClient(
+    Method.from({
+      name: 'tempo',
+      intent: 'session',
+      schema: {
+        credential: { payload: z.object({}) },
+        request: z.object({ amount: z.string() }),
+      },
+    }),
+    {
+      async createCredential({ challenge }) {
+        return Credential.serialize({ challenge, payload: {} })
+      },
+    },
+  )
+  const handleResponse = vi.fn(({ response }: { response: Response }) => response)
+  MethodResponse.register(method, handleResponse)
+  const methods = vi.spyOn(Tempo, 'tempo').mockReturnValue([method] as never)
 
   const operator = '0x1234567890123456789012345678901234567890'
   const challenge = makeChallenge({ intent: 'session' })
   challenge.request.methodDetails = { chainId: tempoModerato.id, operator }
   const server = await mppServer(challenge)
 
-  await serve(['validate', server.url])
+  try {
+    const { output } = await serve(['validate', server.url])
 
-  expect(fund).toHaveBeenCalledTimes(2)
-  expect(fund).toHaveBeenCalledWith(expect.objectContaining({ chain: tempoModerato }), {
-    account: operator,
-  })
+    expect(fund).toHaveBeenCalledTimes(2)
+    expect(fund).toHaveBeenCalledWith(expect.objectContaining({ chain: tempoModerato }), {
+      account: operator,
+    })
+    expect(handleResponse).toHaveBeenCalledOnce()
+    expect(output).toContain('Payment: successful')
+  } finally {
+    methods.mockRestore()
+  }
 })
 
 describe('validate: faucet balance polling', () => {
