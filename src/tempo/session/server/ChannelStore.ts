@@ -234,6 +234,8 @@ export type VerifyAndAcceptVoucherParameters = {
   methodDetails: SessionMethodDetails
   /** Minimum allowed voucher delta in raw units. */
   minVoucherDelta: bigint
+  /** Whether this presentation must advance the accepted voucher. */
+  requireAdvance?: boolean | undefined
   /** Server channel store. */
   store: ChannelStore
   /** Signed cumulative voucher to verify and accept. */
@@ -570,9 +572,11 @@ export async function validateVoucher(
 export async function verifyAndAcceptVoucher(
   parameters: VerifyAndAcceptVoucherParameters,
 ): Promise<SessionReceipt> {
-  const { store, challenge, channel, voucher, channelState } = parameters
+  const { store, challenge, channel, voucher, channelState, requireAdvance } = parameters
   const validation = await validateVoucher(parameters)
-  if (validation.alreadyAccepted)
+  if (validation.alreadyAccepted) {
+    if (requireAdvance)
+      throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
     return createSessionReceipt({
       challengeId: challenge.id,
       channelId: voucher.channelId,
@@ -580,9 +584,16 @@ export async function verifyAndAcceptVoucher(
       spent: channel.spent,
       units: channel.units,
     })
-  const updated = await store.updateChannel(voucher.channelId, (current) =>
-    acceptVoucherStateUpdate({ channelState, current, voucher }),
-  )
+  }
+  const updated = await store.updateChannel(voucher.channelId, (current) => {
+    if (
+      requireAdvance &&
+      current !== null &&
+      voucher.cumulativeAmount <= current.highestVoucherAmount
+    )
+      throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
+    return acceptVoucherStateUpdate({ channelState, current, voucher })
+  })
   if (!updated) throw new ChannelNotFoundError({ reason: 'channel not found' })
   return createSessionReceipt({
     challengeId: challenge.id,

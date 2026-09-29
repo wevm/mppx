@@ -2110,7 +2110,8 @@ describe('precompile server session unit guardrails', () => {
       const store = channelStore(rawStore)
       const openPayload = await createOpenPayload({ initialAmount: 1n })
       await persistPrecompileChannel(store, openPayload, {
-        highestVoucherAmount: 1n,
+        highestVoucherAmount: 0n,
+        highestVoucher: null,
         spent: 0n,
         units: 0,
       })
@@ -2170,11 +2171,100 @@ describe('precompile server session unit guardrails', () => {
       expect(replay.headers.get('Payment-Receipt')).toBeNull()
     })
 
+    test('an overfunded voucher authorizes only the request that advances it', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload, {
+        spent: 0n,
+        units: 0,
+      })
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(10n),
+        chainId,
+      )
+
+      for (let request = 1; request <= 3; request++) {
+        const challenge = await route(new Request('https://api.example.com/resource'))
+        expect(challenge.status).toBe(402)
+        if (challenge.status !== 402) throw new Error('expected challenge')
+
+        const paid = await route(
+          new Request('https://api.example.com/resource', {
+            headers: {
+              Authorization: Credential.serialize({
+                challenge: Challenge.fromResponse(challenge.challenge),
+                payload: voucher,
+                source: sourceFor(),
+              }),
+            },
+          }),
+        )
+        expect(paid.status).toBe(request === 1 ? 200 : 402)
+      }
+
+      expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+        highestVoucherAmount: 10n,
+        spent: 1n,
+        units: 1,
+      })
+    })
+
+    test.each([undefined, 'reused-request'])(
+      'rejects exact copied authorization replays with idempotency key %s',
+      async (idempotencyKey) => {
+        const rawStore = Store.memory()
+        const store = channelStore(rawStore)
+        const openPayload = await createOpenPayload({ initialAmount: 1n })
+        await persistPrecompileChannel(store, openPayload, {
+          spent: 0n,
+          units: 0,
+        })
+        const route = createRoute(rawStore)
+        const voucher = await ClientOps.createVoucherPayload(
+          createSigningClient(),
+          payer,
+          openPayload.descriptor,
+          Types.uint96(10n),
+          chainId,
+        )
+        const challenge = await route(new Request('https://api.example.com/resource'))
+        expect(challenge.status).toBe(402)
+        if (challenge.status !== 402) throw new Error('expected challenge')
+        const authorization = Credential.serialize({
+          challenge: Challenge.fromResponse(challenge.challenge),
+          payload: voucher,
+          source: sourceFor(),
+        })
+
+        for (let request = 1; request <= 3; request++) {
+          const paid = await route(
+            new Request('https://api.example.com/resource', {
+              headers: {
+                Authorization: authorization,
+                ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+              },
+            }),
+          )
+          expect(paid.status).toBe(request === 1 ? 200 : 402)
+        }
+
+        expect(await store.getChannel(openPayload.channelId)).toMatchObject({ spent: 1n, units: 1 })
+      },
+    )
+
     test('POST content flow charges once and rejects same-voucher replay', async () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)
       const openPayload = await createOpenPayload({ initialAmount: 1n })
-      await persistPrecompileChannel(store, openPayload)
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 0n,
+        highestVoucher: null,
+      })
       const route = createRoute(rawStore)
       const voucher = await ClientOps.createVoucherPayload(
         createSigningClient(),

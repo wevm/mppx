@@ -280,15 +280,26 @@ export type ApplyVerifiedHttpAccountingParameters = {
   settleCharged: SettleChargedSessionChannel
 }
 
+/** Returns whether an accepted credential will authorize and charge an HTTP content response. */
+export function shouldApplyVerifiedHttpAccounting(
+  parameters: Pick<
+    ApplyVerifiedHttpAccountingParameters,
+    'capturedRequest' | 'payloadAction' | 'sseEnabled'
+  >,
+): boolean {
+  const { capturedRequest, payloadAction, sseEnabled } = parameters
+  if (!capturedRequest) return false
+  if (payloadAction !== 'open' && payloadAction !== 'voucher') return false
+  if (sseEnabled && capturedRequest.method === 'POST') return false
+  return isSessionContentRequest(capturedRequest)
+}
+
 /** Applies the default HTTP content charge after a session credential has been accepted. */
 export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
 ): Promise<SessionReceipt> {
-  const { capturedRequest, payloadAction, receipt, sseEnabled } = parameters
-  if (!capturedRequest) return receipt
-  if (payloadAction !== 'open' && payloadAction !== 'voucher') return receipt
-  if (sseEnabled && capturedRequest.method === 'POST') return receipt
-  if (!isSessionContentRequest(capturedRequest)) return receipt
+  const { receipt, sseEnabled } = parameters
+  if (!shouldApplyVerifiedHttpAccounting(parameters)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
   const charged = await parameters.charge(receipt.channelId, requestAmount)

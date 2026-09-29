@@ -559,6 +559,46 @@ describe('ChannelStore voucher acceptance', () => {
     expect((await store.getChannel(stateUpdateChannelId))?.highestVoucherAmount).toBe(50n)
   })
 
+  test('rejects an already accepted voucher when advancement is required', async () => {
+    vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+    const stored = voucherAcceptanceChannel({ highestVoucherAmount: 50n, spent: 30n, units: 4 })
+
+    await expect(
+      ChannelStore.verifyAndAcceptVoucher({
+        challenge: voucherAcceptanceChallenge,
+        channel: stored,
+        channelState: { deposit: 100n, settled: 10n, closeRequestedAt: 0 },
+        methodDetails: { chainId: 4217, escrowContract: voucherAcceptanceEscrow },
+        minVoucherDelta: 5n,
+        requireAdvance: true,
+        store: memoryChannelStore(stored),
+        voucher: voucherAcceptanceVoucher(50n),
+      }),
+    ).rejects.toThrow(DeltaTooSmallError)
+  })
+
+  test('atomically rejects a voucher that loses an advancement race', async () => {
+    vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+    const initial = voucherAcceptanceChannel({ highestVoucherAmount: 50n })
+    const concurrentlyAdvanced = voucherAcceptanceChannel({ highestVoucherAmount: 70n })
+    const store = memoryChannelStore(concurrentlyAdvanced)
+
+    await expect(
+      ChannelStore.verifyAndAcceptVoucher({
+        challenge: voucherAcceptanceChallenge,
+        channel: initial,
+        channelState: { deposit: 100n, settled: 10n, closeRequestedAt: 0 },
+        methodDetails: { chainId: 4217, escrowContract: voucherAcceptanceEscrow },
+        minVoucherDelta: 5n,
+        requireAdvance: true,
+        store,
+        voucher: voucherAcceptanceVoucher(70n),
+      }),
+    ).rejects.toThrow(DeltaTooSmallError)
+
+    expect((await store.getChannel(stateUpdateChannelId))?.highestVoucherAmount).toBe(70n)
+  })
+
   test('rejects an already accepted voucher when it has settled on-chain', async () => {
     vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
     const stored = voucherAcceptanceChannel({ highestVoucherAmount: 50n })

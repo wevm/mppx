@@ -12,6 +12,7 @@ import {
   AmountExceedsDepositError,
   ChannelClosedError,
   ChannelNotFoundError,
+  DeltaTooSmallError,
   InsufficientBalanceError,
   InvalidSignatureError,
   VerificationFailedError,
@@ -354,6 +355,8 @@ export type BroadcastCredentialPayloadParameters = {
   onSessionSettlement?: OnSessionSettlement | undefined
   /** Discriminated session credential payload to verify. */
   payload: SessionCredentialPayload
+  /** Whether an open or voucher credential must add new funds for this request. */
+  requireVoucherAdvance?: boolean | undefined
   /** Server-side channel store. */
   store: ChannelStore.ChannelStore
 }
@@ -796,8 +799,16 @@ async function handleOpenCredential(
   assertSameDescriptor(descriptor, payload.descriptor)
   validateChannelState(state, request.amount)
 
-  const updated = await store.updateChannel(channelId, (current) =>
-    ChannelStore.openChannelState({
+  const updated = await store.updateChannel(channelId, (current) => {
+    if (
+      parameters.requireVoucherAdvance &&
+      current !== null &&
+      cumulativeAmount <= current.highestVoucherAmount
+    )
+      throw new DeltaTooSmallError({
+        reason: 'voucher does not add new funds for this request',
+      })
+    return ChannelStore.openChannelState({
       authorizedSigner: authorizedSigner(descriptor),
       chainId,
       channelId,
@@ -808,8 +819,8 @@ async function handleOpenCredential(
       cumulativeAmount,
       signature: payload.signature,
       state,
-    }),
-  )
+    })
+  })
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
   return createSessionReceipt({
     challengeId: challenge.id,
@@ -944,6 +955,7 @@ async function handleVoucherCredential(
   return ChannelStore.verifyAndAcceptVoucher({
     store,
     minVoucherDelta,
+    requireAdvance: parameters.requireVoucherAdvance,
     challenge,
     channel,
     voucher,

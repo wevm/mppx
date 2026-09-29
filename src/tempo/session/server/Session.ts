@@ -45,6 +45,7 @@ import { respondToSessionCredential } from './RequestState.js'
 import {
   applyVerifiedHttpAccounting,
   chargeSessionChannel,
+  shouldApplyVerifiedHttpAccounting,
   type SettleChargedSessionChannel,
 } from './Settlement.js'
 import { isSettlementDue, maybeSettleScheduled } from './Settlement.js'
@@ -451,6 +452,11 @@ export function session<const parameters extends session.Parameters>(
       minVoucherDelta: context.minVoucherDelta,
       onSessionSettlement,
       payload,
+      requireVoucherAdvance: shouldApplyVerifiedHttpAccounting({
+        capturedRequest: envelope?.capturedRequest,
+        payloadAction: payload.action,
+        sseEnabled: Boolean(parameters.sse),
+      }),
       store,
     })
 
