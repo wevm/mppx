@@ -15,6 +15,6 @@
     "tsx": "latest",
     "typescript": "catalog:",
     "viem": "catalog:",
-    "vite": "^8.2.1"
+    "vite": "^8.3.0"
   }
 }
