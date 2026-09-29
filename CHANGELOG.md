@@ -1,5 +1,33 @@
 # mppx
 
+## 0.12.0
+
+### Minor Changes
+
+- e4f0e02: Added ordered `currencies` configuration to the Tempo and EVM server factories, with OUSD followed by USDC.e on Tempo mainnet and OUSD followed by pathUSD on Moderato. Added chain-aware viem token-set support and deprecated the factories' singular `currency` option. Explicit currency configuration continued to restrict acceptance to that currency.
+
+  Changed `tempo.charge()`, `tempo.session()`, and `tempo.subscription()` to return ordered method groups. Existing `methods: [tempo.charge(options)]` configuration remained supported. Code inspecting a single method directly must now destructure the returned group; explicit composition should use configured handlers such as `mppx.tempo.charge`. Wire Challenges and per-handler currency overrides remained singular.
+
+  Preserved offer selection, callbacks, and error responses through nested composition. Preserved proof replay policy without a configured store and honored explicit charge chain IDs. Shared session storage and settlement dispatch across accepted currencies, applied settlement thresholds using each channel's currency, and initialized session extensions without mutating previously created methods. Preserved each existing subscription's authorized currency during reuse and renewal, and defaulted new subscription offers to mainnet, with `testnet: true` selecting Moderato.
+
+  Reduced package size by removing duplicated HTML bundle literals from generated type declarations.
+
+  Pinned workspace viem dependencies to the public `2.57.1` release and required `viem >=2.57.1` as a peer dependency.
+
+### Patch Changes
+
+- 1d08567: Added AI agent attribution to the CLI User-Agent header when a recognized environment signal is present.
+- 869885e: Added `allowedFeeTokens` for sponsored Tempo charges. Preserved local token defaults and allowed hosted sponsors to choose their fee token unless explicitly restricted.
+- 3a23894: Fixed implicit and explicit composition to preserve each configured method's identity, currency defaults, and offer order. Resolved standalone credentials against configured request bindings, rejected ambiguous method matches, and limited per-method payment success hooks to the selected method.
+- dcf1589: Fixed CLI agent attribution test isolation across agent environments.
+- 75cb219: Fixed hosted fee sponsorship for credential-triggered Tempo session settlement and close.
+- fe2e66e: Fixed split-charge verification to reject payment transfers with attribution memos bound to conflicting challenges or realms.
+- 8d2fb06: Fixed Tempo session content requests to require a voucher advance before charging, preventing an accepted cumulative voucher from authorizing multiple responses while preserving idempotent management updates.
+- 8829293: Allowed `hostedFeePayer: true` in Stripe test mode by applying hosted fee sponsorship only in live mode.
+- 8405b23: Fixed Stripe sandbox sessions to use Tempo testnet.
+- 7159693: Fixed testnet validation of streaming Tempo sessions.
+- 420b99b: Added automatic testnet faucet funding for session operators in `mppx validate`.
+
 ## 0.11.0
 
 ### Minor Changes
