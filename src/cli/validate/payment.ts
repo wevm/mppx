@@ -1,6 +1,14 @@
 import * as childProcess from 'node:child_process'
 
-import { type Address, type Chain, createClient, erc20Abi, http } from 'viem'
+import {
+  type Address,
+  type Chain,
+  createClient,
+  erc20Abi,
+  http,
+  isAddress,
+  zeroAddress,
+} from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { readContract, waitForTransactionReceipt } from 'viem/actions'
 import * as viemChains from 'viem/chains'
@@ -50,6 +58,18 @@ async function provisionAndPayTestnet(
     const account = privateKeyToAccount(key)
 
     const client = createClient({ chain: tempoModerato, transport: http() })
+    if (isTempoSessionChallenge(challenge)) {
+      const { chainId, operator } = challenge.request.methodDetails ?? {}
+      if (
+        chainId === tempoModerato.id &&
+        typeof operator === 'string' &&
+        isAddress(operator) &&
+        operator !== zeroAddress
+      ) {
+        const hashes = await Actions.faucet.fund(client, { account: operator })
+        await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
+      }
+    }
     const hashes = await Actions.faucet.fund(client, { account })
     await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
     if (!silent) console.log(pc.dim(`    Using wallet: ${account.address}`))

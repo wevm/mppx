@@ -296,6 +296,24 @@ describe('validate: discovery', () => {
   })
 })
 
+test('funds the advertised operator for a testnet session', async () => {
+  const { Actions } = await import('viem/tempo')
+  const fund = vi.mocked(Actions.faucet.fund)
+  fund.mockClear()
+
+  const operator = '0x1234567890123456789012345678901234567890'
+  const challenge = makeChallenge({ intent: 'session' })
+  challenge.request.methodDetails = { chainId: tempoModerato.id, operator }
+  const server = await mppServer(challenge)
+
+  await serve(['validate', server.url])
+
+  expect(fund).toHaveBeenCalledTimes(2)
+  expect(fund).toHaveBeenCalledWith(expect.objectContaining({ chain: tempoModerato }), {
+    account: operator,
+  })
+})
+
 describe('validate: faucet balance polling', () => {
   test.each([1, 3, 10])('waits for %i balance polls without real delays', async (attempts) => {
     for (let attempt = 1; attempt < attempts; attempt++)
