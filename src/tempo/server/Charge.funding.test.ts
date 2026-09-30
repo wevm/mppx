@@ -13,7 +13,7 @@ import { expect, test } from 'vp/test'
 
 import * as Attribution from '../Attribution.js'
 
-test.each(['direct', 'single', 'unrelated', 'unavailable', 'different sender'] as const)(
+test.each(['direct', 'single', 'unrelated', 'missing', 'sender', 'reverted'] as const)(
   'push funding attribution: %s',
   async (scenario) => {
     const payer = '0x1111111111111111111111111111111111111111'
@@ -29,7 +29,7 @@ test.each(['direct', 'single', 'unrelated', 'unavailable', 'different sender'] a
         async request({ method }) {
           rpcMethods.push(method)
           if (method === 'eth_getTransactionByHash') {
-            if (scenario === 'unavailable') return null
+            if (scenario === 'missing') return null
             if (scenario === 'single')
               return {
                 hash,
@@ -44,7 +44,7 @@ test.each(['direct', 'single', 'unrelated', 'unavailable', 'different sender'] a
               }
             return {
               hash,
-              from: scenario === 'different sender' ? donor : payer,
+              from: scenario === 'sender' ? donor : payer,
               type: '0x76',
               calls: [
                 {
@@ -110,7 +110,7 @@ test.each(['direct', 'single', 'unrelated', 'unavailable', 'different sender'] a
             transactionIndex: '0x0',
             from: payer,
             to: currency,
-            status: '0x1',
+            status: scenario === 'reverted' ? '0x0' : '0x1',
             type: '0x76',
             gasUsed: '0x1',
             cumulativeGasUsed: '0x1',
@@ -147,6 +147,11 @@ test.each(['direct', 'single', 'unrelated', 'unavailable', 'different sender'] a
     const credential = Credential.serialize(
       Credential.from({ challenge, payload: { type: 'hash', hash } }),
     )
+    if (scenario === 'reverted') {
+      await expect(server.validateCredential(credential)).rejects.toThrow('Transaction reverted')
+      expect(rpcMethods).toEqual(['eth_getTransactionReceipt'])
+      return
+    }
     await server.validateCredential(credential)
     expect(rpcMethods).toEqual(['eth_getTransactionReceipt'])
     rpcMethods.length = 0
