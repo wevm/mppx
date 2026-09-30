@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added the funding currency to confirmed Tempo charge receipts when transfer logs show a single net debited token, excluding network fees.
+Added optional funding currency metadata to Tempo charge receipts for verified direct, MACH, and DEX auto-swap payment routes.

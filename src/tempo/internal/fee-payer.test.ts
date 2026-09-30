@@ -142,7 +142,7 @@ describe('validateCalls', () => {
   })
 
   test('accepts approve + buy + exact expected split transfers', () => {
-    expect(() =>
+    expect(
       validateCalls(
         [
           {
@@ -191,7 +191,7 @@ describe('validateCalls', () => {
           ],
         },
       ),
-    ).not.toThrow()
+    ).toBe(swapTokenIn)
   })
 
   test('error: rejects extra transfers when expected payments are supplied', () => {

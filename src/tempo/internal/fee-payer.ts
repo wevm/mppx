@@ -438,7 +438,10 @@ function assertCanonicalSponsoredTransaction(
   }
 }
 
-/** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
+/**
+ * Validates an allowed fee-payer pattern. Returns the funding currency when the
+ * calls are bound to the expected payment transfers.
+ */
 export function validateCalls(
   calls: readonly { data?: `0x${string}` | undefined; to?: TempoAddress.Address | undefined }[],
   details: Record<string, string>,
@@ -562,6 +565,7 @@ export function validateCalls(
 
     used.add(matchIndex)
   }
+  return approveCall?.to ?? currency
 }
 
 /** Validates sponsor fee policy limits for a fee-payer transaction. */

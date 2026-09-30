@@ -339,9 +339,13 @@ describe('tempo', () => {
           await expect(handler.validateCredential(credential)).resolves.toMatchObject({
             intent: 'charge',
           })
+          expect(rpcMethods).not.toContain('eth_getTransactionByHash')
           await expect(handler.verifyCredential(credential)).resolves.toMatchObject({
             status: 'success',
           })
+          expect(rpcMethods.filter((method) => method === 'eth_getTransactionByHash')).toHaveLength(
+            mode === 'hash' ? 1 : 0,
+          )
         } else {
           await expect(handler.validateCredential(credential)).rejects.toThrow(
             'memo is not bound to this challenge',
@@ -1453,6 +1457,26 @@ describe('tempo', () => {
         transport: custom({
           async request({ method }) {
             if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+            if (method === 'eth_getTransactionByHash' && challenge)
+              return {
+                hash,
+                from: accounts[1].address,
+                type: '0x76',
+                calls: MachineTokenCharge.getRoute({
+                  chainId: defaults.chainId.testnet,
+                  currency: asset,
+                  transfers: [
+                    {
+                      amount: String(challenge.request.amount),
+                      recipient: accounts[0].address,
+                      memo: Attribution.encode({
+                        challengeId: challenge.id,
+                        serverId: challenge.realm,
+                      }),
+                    },
+                  ],
+                })!.calls,
+              }
             if (method === 'eth_getTransactionReceipt' && challenge)
               return machineTokenReceipt({
                 amount: BigInt(String(challenge.request.amount)),
@@ -3660,7 +3684,7 @@ describe('tempo', () => {
 
         const receipt = Receipt.fromResponse(response)
         expect(receipt.status).toBe('success')
-        expect(receipt.fundingCurrency).toBeUndefined()
+        expect(receipt.fundingCurrency).toBe(asset)
         expect(receipt.method).toBe('tempo')
         expect(receipt.reference).toBeDefined()
       }
@@ -5258,7 +5282,7 @@ describe('tempo', () => {
 
   describe('attribution memo', () => {
     test.each([false, true])(
-      'funding currency excludes fees and ambiguous debits (extra transfer: %s)',
+      'funding currency requires a complete payment route (extra transfer: %s)',
       async (extraTransfer) => {
         const result = await server.charge({ amount: '1', decimals: 6 })(
           new Request('https://example.com'),

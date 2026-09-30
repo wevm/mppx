@@ -7,6 +7,7 @@ import {
   type TransactionReceipt,
 } from 'viem'
 import {
+  getTransaction,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -14,7 +15,7 @@ import {
   verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
-import { Abis, Actions, Addresses, Transaction } from 'viem/tempo'
+import { Abis, Actions, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
@@ -188,6 +189,31 @@ export function charge<const parameters extends charge.Parameters>(
   type ProofPayload = Extract<Credential['payload'], { type: 'proof' }>
   type TransactionPayload = Extract<Credential['payload'], { type: 'transaction' }>
 
+  /** Reads funding only from a complete, challenge-bound payment route. */
+  function getFundingCurrency(
+    calls: Parameters<typeof MachineTokenCharge.matchRoute>[0]['calls'],
+    context: CredentialContext,
+    transfers: readonly ExpectedTransfer[],
+  ) {
+    const { currency, machineTokenEnabled } = context
+    const machineRoute = machineTokenEnabled
+      ? MachineTokenCharge.matchRoute({
+          calls,
+          chainId: context.chainId ?? context.client.chain?.id,
+          currency,
+          transfers,
+        })
+      : undefined
+    if (machineRoute) return machineRoute.calls[0].to
+
+    try {
+      return FeePayer.validateCalls(calls, { currency }, { currency, expectedTransfers: transfers })
+    } catch {
+      // Extra or unrecognized calls do not invalidate an otherwise verified payment.
+      return undefined
+    }
+  }
+
   async function validateHashCredential(
     credential: Credential,
     payload: HashPayload,
@@ -228,7 +254,7 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    return { receipt: toReceipt(receipt, sender), sender, transfers }
+    return { receipt: toReceipt(receipt), sender, transfers }
   }
 
   async function validateProofCredential(
@@ -540,7 +566,17 @@ export function charge<const parameters extends charge.Parameters>(
               reason: 'Transaction hash has already been used',
             })
           }
-          return receipt
+          // Only final hash receipts need this lookup; validation stays receipt-only.
+          const transaction = await getTransaction(client, { hash }).catch(() => undefined)
+          const fundingCurrency =
+            transaction && TempoAddress.isEqual(transaction.from, validated.details.sender)
+              ? getFundingCurrency(
+                  (transaction as Transaction.Transaction).calls ?? [],
+                  context,
+                  validated.details.transfers,
+                )
+              : undefined
+          return { ...receipt, ...(fundingCurrency ? { fundingCurrency } : {}) }
         }
 
         case 'proof': {
@@ -561,6 +597,7 @@ export function charge<const parameters extends charge.Parameters>(
         case 'transaction': {
           const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
             validated
+          const fundingCurrency = getFundingCurrency(transaction.calls ?? [], context, transfers)
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -728,7 +765,7 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
-              return toReceipt(receipt)
+              return toReceipt(receipt, fundingCurrency)
             }
 
             // Optimistic path: broadcast without waiting for confirmation
@@ -749,6 +786,7 @@ export function charge<const parameters extends charge.Parameters>(
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
             return {
+              ...(fundingCurrency ? { fundingCurrency } : {}),
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
@@ -1377,30 +1415,11 @@ async function isActiveAccessKey(
 }
 
 /** @internal */
-function toReceipt(receipt: TransactionReceipt, sender = receipt.from) {
+function toReceipt(receipt: TransactionReceipt, fundingCurrency?: string) {
   const { status, transactionHash } = receipt
   if (status !== 'success') {
     throw new Error(`Transaction reverted: ${transactionHash}`)
   }
-  // Funding is the payer's net token debit, excluding network fees. Multiple
-  // debited currencies are ambiguous, so leave the optional field unset.
-  const debits = new Map<string, { currency: `0x${string}`; amount: bigint }>()
-  for (const { address, args } of getTransferLogEffects(receipt)) {
-    if (
-      TempoAddress.isEqual(args.from, Addresses.feeManager) ||
-      TempoAddress.isEqual(args.to, Addresses.feeManager)
-    )
-      continue
-    const amount =
-      (TempoAddress.isEqual(args.from, sender) ? args.amount : 0n) -
-      (TempoAddress.isEqual(args.to, sender) ? args.amount : 0n)
-    const key = address.toLowerCase()
-    const debit = debits.get(key) ?? { currency: address, amount: 0n }
-    debit.amount += amount
-    debits.set(key, debit)
-  }
-  const currencies = [...debits.values()].filter(({ amount }) => amount > 0n)
-  const fundingCurrency = currencies.length === 1 ? currencies[0]!.currency : undefined
   return {
     ...(fundingCurrency ? { fundingCurrency } : {}),
     method: 'tempo',
