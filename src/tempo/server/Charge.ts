@@ -571,7 +571,8 @@ export function charge<const parameters extends charge.Parameters>(
           const fundingCurrency =
             transaction && TempoAddress.isEqual(transaction.from, validated.details.sender)
               ? getFundingCurrency(
-                  (transaction as Transaction.Transaction).calls ?? [],
+                  (transaction as Transaction.Transaction).calls ??
+                    (transaction.to ? [{ to: transaction.to, data: transaction.input }] : []),
                   context,
                   validated.details.transfers,
                 )
