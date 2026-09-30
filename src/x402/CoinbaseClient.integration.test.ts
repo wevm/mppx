@@ -96,7 +96,12 @@ describeLocalnet('Coinbase x402 client interoperability', () => {
         const challenge = await proxy.fetch(new Request(url))
         expect(challenge.status).toBe(402)
 
-        const client = new x402Client().register(network, new ExactEvmClient(payer))
+        const client = x402Client.fromConfig({
+          schemes: [{ network, client: new ExactEvmClient(payer) }],
+          spendControls: {
+            allowedAssets: [{ network, asset: harness.token }],
+          },
+        })
         const httpClient = new x402HTTPClient(client)
         const paymentRequired = httpClient.getPaymentRequiredResponse((name) =>
           challenge.headers.get(name),
