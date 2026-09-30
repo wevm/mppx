@@ -8,7 +8,7 @@ overrides:
   mppx: workspace:*
   vitest@<4.1.11: 4.1.11
   typescript: ~7.0.2
-  ox: 1.8.1
+  ox: 0.14.45
   viem: 2.57.1
   path-to-regexp@<8.4.0: 8.4.0
   tar@<=7.5.20: 7.5.21
@@ -58,8 +58,8 @@ importers:
         specifier: 4.1.1
         version: 4.1.1
       ox:
-        specifier: 1.8.1
-        version: 1.8.1(typescript@7.0.2)
+        specifier: 0.14.45
+        version: 0.14.45(typescript@7.0.2)(zod@4.6.5)
       structured-headers:
         specifier: 2.1.0
         version: 2.1.0
@@ -107,14 +107,14 @@ importers:
         specifier: 2.27.0
         version: 2.27.0(bufferutil@4.1.0)(express@5.2.1)(typescript@7.0.2)(utf-8-validate@5.0.10)
       '@x402/hono':
-        specifier: 2.22.0
-        version: 2.22.0(bufferutil@4.1.0)(hono@4.13.8)(typescript@7.0.2)(utf-8-validate@5.0.10)
+        specifier: 2.27.0
+        version: 2.27.0(bufferutil@4.1.0)(hono@4.13.8)(typescript@7.0.2)(utf-8-validate@5.0.10)
       '@x402/mcp':
-        specifier: 2.22.0
-        version: 2.22.0(@cfworker/json-schema@4.1.1)
+        specifier: 2.27.0
+        version: 2.27.0(@cfworker/json-schema@4.1.1)
       '@x402/next':
-        specifier: 2.22.0
-        version: 2.22.0(bufferutil@4.1.0)(next@16.3.4(@playwright/test@1.62.1)(@types/node@26.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)(utf-8-validate@5.0.10)
+        specifier: 2.27.0
+        version: 2.27.0(bufferutil@4.1.0)(next@16.3.4(@playwright/test@1.62.1)(@types/node@26.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)(utf-8-validate@5.0.10)
       browserslist:
         specifier: ^4.28.8
         version: 4.28.8
@@ -162,7 +162,7 @@ importers:
         version: 1.2.4
       tempo.ts:
         specifier: ^0.14.2
-        version: 0.14.2(typescript@7.0.2)(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))
+        version: 0.14.2(typescript@7.0.2)(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))(zod@4.6.5)
       testcontainers:
         specifier: ^12.1.0
         version: 12.1.0
@@ -1259,10 +1259,6 @@ packages:
     resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/ciphers@2.2.0':
-    resolution: {integrity: sha512-Z6pjIZ/8IJcCGzb2S/0Px5J81yij85xASuk1teLNeg75bfT07MV3a/O2Mtn1I2se43k3lkVEcFaR10N4cgQcZA==}
-    engines: {node: '>= 20.19.0'}
-
   '@noble/ciphers@2.4.0':
     resolution: {integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==}
     engines: {node: '>= 20.19.0'}
@@ -1278,14 +1274,6 @@ packages:
     resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/curves@2.2.0':
-    resolution: {integrity: sha512-T/BoHgFXirb0ENSPBquzX0rcjXeM6Lo892a2jlYJkqk83LqZx0l1Of7DzlKJ6jkpvMrkHSnAcgb5JegL8SeIkQ==}
-    engines: {node: '>= 20.19.0'}
-
-  '@noble/curves@2.4.0':
-    resolution: {integrity: sha512-P4/62zrgfH33CneE3Dn4WhJVA22YUU0eR51wKIan4NVRvwsA0YnPTwWGpNbpuacSujmSFLvyzpyuR30+fbq2Ew==}
-    engines: {node: '>= 20.19.0'}
-
   '@noble/hashes@1.4.0':
     resolution: {integrity: sha512-V1JJ1WTRUqHHrOSh597hURcMqVKVGL/ea3kv0gSnEdsEZ0/+VyPghM1lMNGc00z7CIQorSvbKpuJkxvuHbvdbg==}
     engines: {node: '>= 16'}
@@ -1294,16 +1282,8 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/hashes@2.2.0':
-    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
-    engines: {node: '>= 20.19.0'}
-
   '@noble/hashes@2.4.0':
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
-    engines: {node: '>= 20.19.0'}
-
-  '@noble/post-quantum@0.6.1':
-    resolution: {integrity: sha512-+pormrDZwjRw05U8ADK4JpHejo87+gBd+muRBB/ozztH5yhDLMDF4jHQWN3NQQAsu1zBNPWTG0ZwVI0CR29H0A==}
     engines: {node: '>= 20.19.0'}
 
   '@octokit/auth-token@6.0.0':
@@ -2102,17 +2082,11 @@ packages:
   '@scure/base@1.2.6':
     resolution: {integrity: sha512-g/nm5FgUa//MCj1gV09zTJTaM6KBAHqLN907YVQqf7zC49+DcO4B1so4ZX07Ef10Twr6nuqYEH9GEggFXA4Fmg==}
 
-  '@scure/base@2.4.0':
-    resolution: {integrity: sha512-thZ1TuJwFwBblOhgsjDKvvGirBxNp+wSvY/DR6tJBJOTDhdAAcHJ8Vbr2eFnqaxeca4+t0i9KBf+uHYGWwZORg==}
-
   '@scure/bip32@1.4.0':
     resolution: {integrity: sha512-sVUpc0Vq3tXCkDGYVWGIZTRfnvu8LoTDaev7vbwh0omSvVORONr960MQWdKqJDCReIEmTj3PAr73O3aoxz7OPg==}
 
   '@scure/bip32@1.7.0':
     resolution: {integrity: sha512-E4FFX/N3f4B80AKWp5dP6ow+flD1LQZo/w8UnLGYZO674jS6YnYeepycOOksv+vLPSpgN35wgKgy+ybfTb2SMw==}
-
-  '@scure/bip32@2.4.0':
-    resolution: {integrity: sha512-i3DS0CptAocyvqE4n3SUkpzeQK4vJMFwWLofTwRiiKo2aWojBOfyMCgfKw9HVpO6fSY5AK86sHS/Uzn8kK9Few==}
 
   '@scure/bip39@1.3.0':
     resolution: {integrity: sha512-disdg7gHuTDZtY+ZdkmLpPCk7fxZSu3gBiEGuoC1XYxv9cGx3Z6cpTggCgW6odSOOIXCiDjuGejW+aJKCY/pIQ==}
@@ -2120,28 +2094,11 @@ packages:
   '@scure/bip39@1.6.0':
     resolution: {integrity: sha512-+lF0BbLiJNwVlev4eKelw1WWLaiKXw7sSl8T6FvBlWkdX+94aGJ4o8XjUdlyhTCjd8c+B3KT3JfS8P0bLRNU6A==}
 
-  '@scure/bip39@2.4.0':
-    resolution: {integrity: sha512-82dxFbZUYboyOf0AXiydsQrFQ5Q4h9mX+O2UkE91ROYmsc0BKMGZLwDmy96Jpa2+vrtoxomjUhy1RPIgH/r2nA==}
-
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
-  '@signinwithethereum/siwe-parser@4.2.0':
-    resolution: {integrity: sha512-e3edh8XpZrEjbzVYc0BZ4ySFOa8RKTZOQTafSf1E6ejCB5XcBH93jEpYmjzry1EEocgMNq4KlB3YunsFNCXakQ==}
-
   '@signinwithethereum/siwe-parser@4.2.1':
     resolution: {integrity: sha512-GAdwNiBaRpUMTiFfPrbQ3e/RBhPbEhRRN1sZmDMLgLEZuKqKwO7V0ksVzCerE9l8HFKTNw5R/q3kPDCWJRz4zA==}
-
-  '@signinwithethereum/siwe@4.2.0':
-    resolution: {integrity: sha512-6W+oyKgMFUZRJI4o9P9mTMzrokkXfu3tq1/CfOJj9QrMqyPqujJqv1xnxUAqDQwWVyCA8TMg0Fxk/+gXrDg2Nw==}
-    peerDependencies:
-      ethers: ^5.7.0 || ^6.13.0
-      viem: 2.57.1
-    peerDependenciesMeta:
-      ethers:
-        optional: true
-      viem:
-        optional: true
 
   '@signinwithethereum/siwe@4.2.1':
     resolution: {integrity: sha512-CQEQhCIgN9blil1YpaGR+wvGPdsBVK6zed5DBu03s1IdbSO3kA/n7Zp+SAkZGiHy3HY6OJm1Su0/Bd33vKK6nQ==}
@@ -2674,9 +2631,6 @@ packages:
       typescript:
         optional: true
 
-  '@x402/core@2.22.0':
-    resolution: {integrity: sha512-hYySs/PvukqRipC2mKqrsn/jx2U/p5EGnN3clQ2CIcApwtoFuG77CqpC3Wy7Fdp/juW8t8quiPVnqGuIkfix1Q==}
-
   '@x402/core@2.27.0':
     resolution: {integrity: sha512-UbxCKnoTsg5nQX9fYER3g9tt5l80jHm1IZOmDczQRqE0cwskls5r+VAAj0iUQfHVshnpv0qo/rLFI7UntqL96g==}
 
@@ -2692,28 +2646,25 @@ packages:
       '@x402/paywall':
         optional: true
 
-  '@x402/extensions@2.22.0':
-    resolution: {integrity: sha512-E5Ma1Fs1GwO/ET7KtGUI7dPuVFoINR+mwTWVoGdNi3DsJBJKDWSA7Ta7bDgSANzV3XCAMK9gvz/VSItZliApMA==}
-
   '@x402/extensions@2.27.0':
     resolution: {integrity: sha512-eGBZZCTNtJsbzYoOe72Mfo/HN7Ir4i8+gmBUQ3ScrTiO91Q0bscO6LjGg2d3oJiFQ6g+YVXn+5fLxCEwoqgFsA==}
 
-  '@x402/hono@2.22.0':
-    resolution: {integrity: sha512-ztfv8Ke2L25uR/ww32RWgE3okfkTuRFeafVOHiXC0r3rMc+rtEfOexc1aqagjivy6CaiUli1WNoCCVRPkU87xg==}
+  '@x402/hono@2.27.0':
+    resolution: {integrity: sha512-ySXqPl32IcctPBbDIuX3+sjJfwNpCE3lsEt4F0PE30VyIYrnmQ/VrSCkMp456AzR9WagV+gqna3cwxEr70/s0g==}
     peerDependencies:
-      '@x402/paywall': ^2.22.0
+      '@x402/paywall': ^2.27.0
       hono: 4.13.7
     peerDependenciesMeta:
       '@x402/paywall':
         optional: true
 
-  '@x402/mcp@2.22.0':
-    resolution: {integrity: sha512-kEbbdeLdbbCjVdRcVIE8TncjvRD0Cf9glKkEoquxz3chUhdnx6NgYq1gll1mmf0cfrVogMHu0KhXxzfTrlmOmw==}
+  '@x402/mcp@2.27.0':
+    resolution: {integrity: sha512-tCSRu/Li9pX1CPvXHiX42bavKwKVXL0Asz5whjTAy9YOdAOxdLNXsXK0e2fpc/4V1sj9d609glj6cZkgb+18yA==}
 
-  '@x402/next@2.22.0':
-    resolution: {integrity: sha512-CTEkPiLJZZ1PkN4FQ3gA7zvqbXgUIHkRFbrT0dqsD8ToeJNA8YsTFyXWTnUTttWJUUszuNwK/GzGsjlYlx0DOg==}
+  '@x402/next@2.27.0':
+    resolution: {integrity: sha512-IXq6PtVtj9ffu3mSblgC5Li2XRZ2oYntlGk/DTpYleI0DtWvPlIGkWUfMLhfOpgHVfxeoyQKe316n3z0aCJhew==}
     peerDependencies:
-      '@x402/paywall': ^2.22.0
+      '@x402/paywall': ^2.27.0
       next: '>=16.2.6'
     peerDependenciesMeta:
       '@x402/paywall':
@@ -4145,8 +4096,8 @@ packages:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
 
-  ox@1.8.1:
-    resolution: {integrity: sha512-nL0n0fm9hhlozVdx49nRHNr14OgSZAv1FZ120aR6mSRjSMIrhcFx18FMYK8Fiit8UdA/N35drEPcPlLGI6Dfzg==}
+  ox@0.14.45:
+    resolution: {integrity: sha512-jpsQ+p0JZh9mKCxxzxz0d5qFHZZg2/O9xW18IpEC/dNXXPVqmDJ0c//9RMz0CILkbSGPA42+cbU0fC/ghwJ03w==}
     peerDependencies:
       typescript: ~7.0.2
     peerDependenciesMeta:
@@ -5707,7 +5658,7 @@ snapshots:
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
       hono: 4.13.7
-      jose: 6.2.8
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -5776,8 +5727,6 @@ snapshots:
 
   '@noble/ciphers@1.3.0': {}
 
-  '@noble/ciphers@2.2.0': {}
-
   '@noble/ciphers@2.4.0': {}
 
   '@noble/curves@1.4.2':
@@ -5792,27 +5741,11 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
 
-  '@noble/curves@2.2.0':
-    dependencies:
-      '@noble/hashes': 2.2.0
-
-  '@noble/curves@2.4.0':
-    dependencies:
-      '@noble/hashes': 2.4.0
-
   '@noble/hashes@1.4.0': {}
 
   '@noble/hashes@1.8.0': {}
 
-  '@noble/hashes@2.2.0': {}
-
   '@noble/hashes@2.4.0': {}
-
-  '@noble/post-quantum@0.6.1':
-    dependencies:
-      '@noble/ciphers': 2.2.0
-      '@noble/curves': 2.2.0
-      '@noble/hashes': 2.2.0
 
   '@octokit/auth-token@6.0.0': {}
 
@@ -6259,8 +6192,6 @@ snapshots:
 
   '@scure/base@1.2.6': {}
 
-  '@scure/base@2.4.0': {}
-
   '@scure/bip32@1.4.0':
     dependencies:
       '@noble/curves': 1.4.2
@@ -6273,12 +6204,6 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
 
-  '@scure/bip32@2.4.0':
-    dependencies:
-      '@noble/curves': 2.4.0
-      '@noble/hashes': 2.4.0
-      '@scure/base': 2.4.0
-
   '@scure/bip39@1.3.0':
     dependencies:
       '@noble/hashes': 1.4.0
@@ -6289,27 +6214,12 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
 
-  '@scure/bip39@2.4.0':
-    dependencies:
-      '@noble/hashes': 2.4.0
-
   '@sec-ant/readable-stream@0.4.1': {}
-
-  '@signinwithethereum/siwe-parser@4.2.0':
-    dependencies:
-      '@noble/hashes': 1.8.0
-      apg-js: 4.4.0
 
   '@signinwithethereum/siwe-parser@4.2.1':
     dependencies:
       '@noble/hashes': 1.8.0
       apg-js: 4.4.0
-
-  '@signinwithethereum/siwe@4.2.0(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))':
-    dependencies:
-      '@signinwithethereum/siwe-parser': 4.2.0
-    optionalDependencies:
-      viem: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5)
 
   '@signinwithethereum/siwe@4.2.1(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))':
     dependencies:
@@ -6733,10 +6643,6 @@ snapshots:
       - react
       - use-sync-external-store
 
-  '@x402/core@2.22.0':
-    dependencies:
-      zod: 3.25.76
-
   '@x402/core@2.27.0':
     dependencies:
       zod: 3.25.76
@@ -6762,23 +6668,6 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/extensions@2.22.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)':
-    dependencies:
-      '@noble/curves': 1.9.7
-      '@scure/base': 1.2.6
-      '@signinwithethereum/siwe': 4.2.0(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))
-      '@x402/core': 2.22.0
-      ajv: 8.18.0
-      jose: 5.10.0
-      tweetnacl: 1.0.3
-      viem: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - bufferutil
-      - ethers
-      - typescript
-      - utf-8-validate
-
   '@x402/extensions@2.27.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)':
     dependencies:
       '@noble/curves': 1.9.7
@@ -6796,10 +6685,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/hono@2.22.0(bufferutil@4.1.0)(hono@4.13.8)(typescript@7.0.2)(utf-8-validate@5.0.10)':
+  '@x402/hono@2.27.0(bufferutil@4.1.0)(hono@4.13.8)(typescript@7.0.2)(utf-8-validate@5.0.10)':
     dependencies:
-      '@x402/core': 2.22.0
-      '@x402/extensions': 2.22.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)
+      '@x402/core': 2.27.0
+      '@x402/extensions': 2.27.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)
       hono: 4.13.8
     transitivePeerDependencies:
       - bufferutil
@@ -6807,19 +6696,19 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/mcp@2.22.0(@cfworker/json-schema@4.1.1)':
+  '@x402/mcp@2.27.0(@cfworker/json-schema@4.1.1)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.26.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
-      '@x402/core': 2.22.0
+      '@x402/core': 2.27.0
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
 
-  '@x402/next@2.22.0(bufferutil@4.1.0)(next@16.3.4(@playwright/test@1.62.1)(@types/node@26.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)(utf-8-validate@5.0.10)':
+  '@x402/next@2.27.0(bufferutil@4.1.0)(next@16.3.4(@playwright/test@1.62.1)(@types/node@26.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)(utf-8-validate@5.0.10)':
     dependencies:
-      '@x402/core': 2.22.0
-      '@x402/extensions': 2.22.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)
+      '@x402/core': 2.27.0
+      '@x402/extensions': 2.27.0(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)
       next: 16.3.4(@playwright/test@1.62.1)(@types/node@26.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     transitivePeerDependencies:
       - bufferutil
@@ -6905,6 +6794,11 @@ snapshots:
       typescript: 7.0.2
       zod: 4.6.5
 
+  abitype@1.3.0(typescript@7.0.2)(zod@3.25.76):
+    optionalDependencies:
+      typescript: 7.0.2
+      zod: 3.25.76
+
   abitype@1.3.0(typescript@7.0.2)(zod@4.6.5):
     optionalDependencies:
       typescript: 7.0.2
@@ -6926,9 +6820,9 @@ snapshots:
       jose: 6.2.12
       mipd: 0.0.7(typescript@7.0.2)
       mppx: 'link:'
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@4.6.5)
       wata: 0.4.1(react@19.3.0)(typescript@7.0.2)
-      webauthx: 0.1.2(typescript@7.0.2)
+      webauthx: 0.1.2(typescript@7.0.2)(zod@4.6.5)
       zod: 4.6.5
       zustand: 5.0.15(@types/react@19.3.0)(react@19.3.0)(use-sync-external-store@1.4.0(react@19.3.0))
     optionalDependencies:
@@ -8160,20 +8054,35 @@ snapshots:
       type-check: 0.4.0
       word-wrap: 1.2.5
 
-  ox@1.8.1(typescript@7.0.2):
+  ox@0.14.45(typescript@7.0.2)(zod@3.25.76):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
-      '@noble/ciphers': 2.4.0
-      '@noble/curves': 2.4.0
-      '@noble/hashes': 2.4.0
-      '@noble/post-quantum': 0.6.1
-      '@scure/bip32': 2.4.0
-      '@scure/bip39': 2.4.0
-      abitype: 1.3.0(typescript@7.0.2)(zod@4.6.5)
+      '@noble/ciphers': 1.3.0
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.3.0(typescript@7.0.2)(zod@3.25.76)
       eventemitter3: 5.0.1
-      zod: 4.6.5
     optionalDependencies:
       typescript: 7.0.2
+    transitivePeerDependencies:
+      - zod
+
+  ox@0.14.45(typescript@7.0.2)(zod@4.6.5):
+    dependencies:
+      '@adraffy/ens-normalize': 1.11.1
+      '@noble/ciphers': 1.3.0
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.3.0(typescript@7.0.2)(zod@4.6.5)
+      eventemitter3: 5.0.1
+    optionalDependencies:
+      typescript: 7.0.2
+    transitivePeerDependencies:
+      - zod
 
   oxfmt@0.51.0:
     dependencies:
@@ -8796,14 +8705,15 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tempo.ts@0.14.2(typescript@7.0.2)(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5)):
+  tempo.ts@0.14.2(typescript@7.0.2)(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5))(zod@4.6.5):
     dependencies:
       '@remix-run/fetch-router': 0.17.0
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@4.6.5)
     optionalDependencies:
       viem: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5)
     transitivePeerDependencies:
       - typescript
+      - zod
 
   testcontainers@12.1.0:
     dependencies:
@@ -8972,7 +8882,7 @@ snapshots:
       '@scure/bip39': 1.6.0
       abitype: 1.2.3(typescript@7.0.2)(zod@3.25.76)
       isows: 1.0.7(ws@8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@3.25.76)
       ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       typescript: 7.0.2
@@ -8989,7 +8899,7 @@ snapshots:
       '@scure/bip39': 1.6.0
       abitype: 1.2.3(typescript@7.0.2)(zod@4.6.5)
       isows: 1.0.7(ws@8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@4.6.5)
       ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       typescript: 7.0.2
@@ -9129,18 +9039,19 @@ snapshots:
       '@noble/ciphers': 2.4.0
       '@noble/hashes': 2.4.0
       hono: 4.13.7
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@4.6.5)
       zod: 4.6.5
     optionalDependencies:
       react: 19.3.0
     transitivePeerDependencies:
       - typescript
 
-  webauthx@0.1.2(typescript@7.0.2):
+  webauthx@0.1.2(typescript@7.0.2)(zod@4.6.5):
     dependencies:
-      ox: 1.8.1(typescript@7.0.2)
+      ox: 0.14.45(typescript@7.0.2)(zod@4.6.5)
     transitivePeerDependencies:
       - typescript
+      - zod
 
   webextension-polyfill@0.10.0: {}
 
