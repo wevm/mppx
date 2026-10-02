@@ -72,8 +72,10 @@ export type ResolvedOptions = {
 }
 
 export type Path = {
+  credentialHeaders: readonly string[]
   bindCredential: NonNullable<ServerTransport.Http['bindCredential']>
   getCredential: ServerTransport.Http['getCredential']
+  matchCredential: NonNullable<ServerTransport.Http['matchCredential']>
   respondChallenge: (
     options: Parameters<ServerTransport.Http['respondChallenge']>[0],
     response?: Response | undefined,
@@ -108,6 +110,7 @@ export function resolveOptions(parameters: {
 /** Creates the x402 wire path for an EVM charge method. */
 export function createPath(config: ResolvedOptions): Path {
   return {
+    credentialHeaders: [x402_Types.paymentSignatureHeader],
     getCredential(request) {
       const paymentSignature = request.headers.get(x402_Types.paymentSignatureHeader)
       if (!paymentSignature) return null
@@ -119,6 +122,20 @@ export function createPath(config: ResolvedOptions): Path {
           payload: paymentPayload,
         }),
       )
+    },
+
+    matchCredential({ input, request }) {
+      const paymentSignature = input.headers.get(x402_Types.paymentSignatureHeader)
+      if (!paymentSignature) return false
+      try {
+        const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
+        return isDeepStrictEqual(
+          paymentPayload.accepted,
+          toPaymentRequirements(request as Types.ChargeRequest, config),
+        )
+      } catch {
+        return false
+      }
     },
 
     async bindCredential({ challenge, credential, input }) {

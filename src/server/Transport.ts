@@ -26,6 +26,8 @@ export type Transport<
 > = {
   /** Transport name for identification. */
   name: string
+  /** HTTP header names from which this transport can read credentials. */
+  credentialHeaders?: readonly string[] | undefined
   /** Captures the transport request into an immutable verification snapshot. */
   captureRequest?: ((input: input) => MaybePromise<Method.CapturedRequest>) | undefined
   /**
@@ -45,6 +47,10 @@ export type Transport<
    * Returns `null` if no credential was provided, or throws if malformed.
    */
   getCredential: (input: input) => Credential.Credential | null
+  /** Returns whether a transport-native credential targets a configured request. */
+  matchCredential?:
+    | ((options: { input: input; request: Record<string, unknown> }) => MaybePromise<boolean>)
+    | undefined
   /** Creates a transport response for a payment challenge. */
   respondChallenge: (options: {
     challenge: Challenge.Challenge
@@ -139,6 +145,7 @@ export function http(options: http.Options = {}): Http {
     : Constants.Headers.authorization
   return from<Request, Response>({
     name: 'http',
+    credentialHeaders: [credentialHeader],
 
     captureRequest(request) {
       return {

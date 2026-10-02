@@ -205,9 +205,11 @@ type ResolvedConfig = {
 }
 
 type HttpPath = {
+  credentialHeaders: readonly string[]
   bindCredential: NonNullable<ServerTransport.Http['bindCredential']>
   captureRequest?: ServerTransport.Http['captureRequest'] | undefined
   getCredential: ServerTransport.Http['getCredential']
+  matchCredential?: ServerTransport.Http['matchCredential'] | undefined
   respondChallenge: (
     options: Parameters<ServerTransport.Http['respondChallenge']>[0],
     response?: Response | undefined,
@@ -287,6 +289,7 @@ function createPaths(config: ResolvedConfig): HttpPaths {
 function createMppPath(): HttpPath {
   const transport = ServerTransport.http()
   return {
+    credentialHeaders: transport.credentialHeaders ?? [],
     bindCredential: (options) => transport.bindCredential?.(options) ?? options.credential,
     captureRequest: transport.captureRequest,
     getCredential: transport.getCredential,
@@ -298,12 +301,17 @@ function createMppPath(): HttpPath {
 function httpTransport(paths: HttpPaths): ServerTransport.Http {
   return ServerTransport.from<Request, Response>({
     name: 'evm-http',
+    credentialHeaders: [
+      ...new Set([...paths.mpp.credentialHeaders, ...paths.x402.credentialHeaders]),
+    ],
 
     captureRequest: paths.mpp.captureRequest,
 
     getCredential(input) {
       return paths.mpp.getCredential(input) ?? paths.x402.getCredential(input)
     },
+
+    matchCredential: paths.x402.matchCredential,
 
     bindCredential(options) {
       if (X402.isPendingCredential(options.credential)) return paths.x402.bindCredential(options)

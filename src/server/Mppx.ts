@@ -1082,8 +1082,15 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       name: method.name,
       intent: method.intent,
       html: method.html,
+      credentialHeaders: [
+        ...new Set([
+          credentialHeader ?? Constants.Headers.authorization,
+          ...(transport.credentialHeaders ?? []),
+        ]),
+      ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _stableBinding: stableBinding as never,
+      _transport: transport,
     } as unknown as ConfiguredHandler['_internal']
     Object.defineProperty(internal, '_method', { value: method })
 
@@ -2517,10 +2524,12 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     name: string
     intent: string
     html: Html.Options | undefined
+    credentialHeaders?: readonly string[] | undefined
     meta?: Record<string, string> | undefined
     scope?: string | undefined
     _canonicalRequest: Record<string, unknown>
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
+    _transport: Transport.AnyTransport
   }
 }
 
@@ -2680,7 +2689,14 @@ function composeHandlers(
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
-    const paymentHeader = Array.from(input.headers.values())
+    const credentialHeaders = new Set(
+      handlers.flatMap((handler) =>
+        getConfiguredOffers(handler).flatMap((internal) => internal.credentialHeaders ?? []),
+      ),
+    )
+    const paymentHeader = Array.from(credentialHeaders)
+      .map((header) => input.headers.get(header))
+      .filter((value): value is string => value !== null)
       .map((value) => Credential.extractPaymentScheme(value))
       .find((value): value is string => value !== null)
 
@@ -2731,6 +2747,22 @@ function composeHandlers(
       // offer set before the first handler issues its rejection challenge.
     }
 
+    const transportResults = new Map<(typeof handlers)[number], MethodFn.Response<Transport.Http>>()
+    for (const handler of handlers) {
+      for (const internal of getConfiguredOffers(handler)) {
+        const matchCredential = internal._transport.matchCredential
+        if (!matchCredential) continue
+        try {
+          if (await matchCredential({ input, request: internal._canonicalRequest })) {
+            const result = await handler(input)
+            transportResults.set(handler, result)
+            if (result.status === 200) return result
+            break
+          }
+        } catch {}
+      }
+    }
+
     const selectedHandlers = hasOfferPolicy
       ? await selectOfferHandlers({
           entries: offerEntries,
@@ -2739,11 +2771,25 @@ function composeHandlers(
         })
       : handlers
 
+    const transportCredentialHandler = selectedHandlers.find((handler) =>
+      getConfiguredOffers(handler).some((internal) =>
+        internal.credentialHeaders?.some((header) => {
+          const value = input.headers.get(header)
+          return (
+            header.toLowerCase() !== Constants.Headers.authorization.toLowerCase() &&
+            value !== null &&
+            Credential.extractPaymentScheme(value) === null
+          )
+        }),
+      ),
+    )
+    if (transportCredentialHandler) return transportCredentialHandler(input)
+
     // No credential — evaluate handlers sequentially so authorize()/renewal hooks
     // can safely claim the request without racing each other.
     const results: MethodFn.Response<Transport.Http>[] = []
     for (const handler of selectedHandlers) {
-      const result = await handler(input)
+      const result = transportResults.get(handler) ?? (await handler(input))
       if (result.status === 200) return result
       if (result.challenge.status !== 402) return result
       results.push(result)

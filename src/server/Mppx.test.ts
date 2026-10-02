@@ -3036,6 +3036,39 @@ describe('compose', () => {
     expect(paymentRequired.accepts.map((accepted) => accepted.amount)).toEqual(['10000'])
   })
 
+  test('dispatches only from the configured credential header', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      requiresAuth: true,
+      secretKey,
+    })
+    const handle = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const [alphaChallenge, betaChallenge] = Challenge.fromResponseList(challengeResult.challenge)
+    const alphaCredential = Credential.serialize(
+      Credential.from({ challenge: alphaChallenge!, payload: { token: 'valid' } }),
+    )
+    const betaCredential = Credential.serialize(
+      Credential.from({ challenge: betaChallenge!, payload: { token: 'valid' } }),
+    )
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          'A-Untrusted': alphaCredential,
+          [Constants.Headers.paymentAuthorization]: betaCredential,
+        },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+    expect(Receipt.fromResponse(result.withReceipt(new Response())).method).toBe('beta')
+  })
+
   test('selectOffers filters x402 challenge headers', async () => {
     const mppx = Mppx.create({
       methods: [alphaMethod, x402Method],
@@ -3135,6 +3168,33 @@ describe('compose', () => {
     expect(paymentRequired.accepts.map((accepted) => accepted.amount)).toEqual(['10000', '20000'])
   })
 
+  test('dispatches an x402 credential to its matching composed offer', async () => {
+    const mppx = Mppx.create({ methods: [x402Method], realm, secretKey })
+    const handle = mppx.compose(
+      ['evm/charge', { amount: '0.01' }],
+      ['evm/charge', { amount: '0.02' }],
+    )
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const paymentRequired = x402_Header.decodePaymentRequired(
+      challengeResult.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
+    )
+    const credential = await x402PaymentSignature(
+      paymentRequired.accepts[1]!,
+      paymentRequired.resource,
+      paymentRequired.extensions,
+    )
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { [x402_Types.paymentSignatureHeader]: credential },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
   test('dispatches x402 credentials through compose()', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, x402Method], realm, secretKey })
     const handle = mppx.compose([alphaMethod, challengeOpts], ['evm/charge', { amount: '0.01' }])
@@ -3163,6 +3223,113 @@ describe('compose', () => {
     const response = result.withReceipt(new Response('paid'))
     expect(response.headers.get(x402_Types.paymentResponseHeader)).toBeTruthy()
     expect(await response.text()).toBe('paid')
+  })
+
+  test('dispatches x402 credentials even when offer selection excludes x402', async () => {
+    let selectionCount = 0
+    const challenger = Mppx.create({ methods: [x402Method], realm, secretKey })
+    const challengeResult = await challenger['evm/charge']({ amount: '0.01' })(
+      new Request('https://example.com/resource'),
+    )
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const paymentRequired = x402_Header.decodePaymentRequired(
+      challengeResult.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
+    )
+    const credential = await x402PaymentSignature(
+      paymentRequired.accepts[0]!,
+      paymentRequired.resource,
+      paymentRequired.extensions,
+    )
+
+    const filtered = Mppx.create({
+      methods: [alphaMethod, x402Method],
+      realm,
+      secretKey,
+      selectOffers(offers) {
+        selectionCount++
+        return offers.filter((offer) => offer.method.name !== 'evm')
+      },
+    })
+    const result = await filtered.compose(
+      [alphaMethod, challengeOpts],
+      ['evm/charge', { amount: '0.01' }],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { [x402_Types.paymentSignatureHeader]: credential },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    expect(selectionCount).toBe(0)
+  })
+
+  test('does not let forged x402 credentials bypass offer selection', async () => {
+    const challenger = Mppx.create({ methods: [x402Method], realm, secretKey })
+    const challengeResult = await challenger['evm/charge']({ amount: '0.01' })(
+      new Request('https://example.com/resource'),
+    )
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const paymentRequired = x402_Header.decodePaymentRequired(
+      challengeResult.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
+    )
+    const credential = x402_Header.decodePaymentSignature(
+      await x402PaymentSignature(
+        paymentRequired.accepts[0]!,
+        paymentRequired.resource,
+        paymentRequired.extensions,
+      ),
+    )
+    const forged = x402_Header.encodePaymentSignature({
+      ...credential,
+      payload: { ...credential.payload, signature: '0x00' },
+    })
+
+    const filtered = Mppx.create({
+      methods: [alphaMethod, x402Method],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'evm'),
+    })
+    const result = await filtered.compose(
+      [alphaMethod, challengeOpts],
+      ['evm/charge', { amount: '0.01' }],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { [x402_Types.paymentSignatureHeader]: forged },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
+  })
+
+  test('does not let malformed x402 credentials bypass offer selection', async () => {
+    const filtered = Mppx.create({
+      methods: [alphaMethod, x402Method],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'evm'),
+    })
+    const handle = filtered.compose(
+      [alphaMethod, challengeOpts],
+      ['evm/charge', { amount: '0.01' }],
+    )
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { [x402_Types.paymentSignatureHeader]: 'malformed' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
   })
 
   test('filters compose challenges using Accept-Payment', async () => {
