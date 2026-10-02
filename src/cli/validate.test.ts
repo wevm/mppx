@@ -11,6 +11,7 @@ import * as Http from '~test/Http.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Receipt from '../Receipt.js'
+import { validateRealmMatchesHost } from './validate/challenge.js'
 import { missingDiscoverySuggestion } from './validate/messages.js'
 
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
@@ -382,13 +383,101 @@ describe('validate: challenge', () => {
     expect(output).toContain('The expires timestamp must be in the future')
   })
 
-  test('warns on realm mismatch', { timeout: 15_000 }, async () => {
+  test('fails on realm mismatch without attempting payment', { timeout: 15_000 }, async () => {
     const server = await mppServer(makeChallenge({ realm: 'other.example.com' }))
-    const { output } = await serve(['validate', server.url])
-    expect(output).toContain(
-      'Realm matches server hostname (realm="other.example.com" vs host="localhost")',
+    const { output, exitCode } = await serve(['validate', server.url, '--outputJson'])
+    const result = JSON.parse(output.slice(output.indexOf('{'), output.lastIndexOf('}') + 1))
+
+    expect(exitCode).toBe(1)
+    expect(result.endpoints[0].challenge).toContainEqual(
+      expect.objectContaining({
+        detail: 'realm="other.example.com" vs host="localhost"',
+        label: 'Realm matches server hostname',
+        severity: 'fail',
+      }),
     )
-    expect(output).toContain('Set the realm to your production hostname')
+    expect(result.endpoints[0].payment).toEqual([])
+  })
+
+  test('accepts hostname realms with different casing', () => {
+    const results: Parameters<typeof validateRealmMatchesHost>[2] = []
+    validateRealmMatchesHost([makeChallenge({ realm: 'LOCALHOST' })], 'localhost', results)
+
+    expect(results).toContainEqual(
+      expect.objectContaining({ label: 'Realm matches server hostname', severity: 'pass' }),
+    )
+  })
+
+  test('rejects an empty realm', () => {
+    const results: Parameters<typeof validateRealmMatchesHost>[2] = []
+    validateRealmMatchesHost([makeChallenge({ realm: '' })], 'localhost', results)
+
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        detail: 'realm="" vs host="localhost"',
+        label: 'Realm matches server hostname',
+        severity: 'fail',
+      }),
+    )
+  })
+
+  test('rejects a changed realm on the fresh payment challenge', { timeout: 15_000 }, async () => {
+    const initial = makeChallenge()
+    const changed = makeChallenge({ id: 'changed-id', realm: 'other.example.com' })
+    let challengeRequests = 0
+    let paymentAttempted = false
+    const server = await testServer((req, res) => {
+      const url = new URL(req.url!, 'http://localhost')
+      if (url.pathname === '/llms.txt') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' })
+        res.end('# Test API')
+        return
+      }
+      if (url.pathname === '/openapi.json') {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(makeDiscoveryDoc({ '/api/test': {} }))
+        return
+      }
+      const authorization = req.headers.authorization
+      if (authorization && authorization !== `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`)
+        paymentAttempted = true
+      const challenge = challengeRequests++ === 0 ? initial : changed
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+      res.end()
+    })
+
+    const { output } = await serve(['validate', server.url, '--outputJson'])
+    const result = JSON.parse(output.slice(output.indexOf('{'), output.lastIndexOf('}') + 1))
+
+    expect(result.endpoints[0].payment).toContainEqual(
+      expect.objectContaining({ label: 'Realm matches server hostname', severity: 'fail' }),
+    )
+    expect(paymentAttempted).toBe(false)
+  })
+
+  test('reports a changed fresh realm through the result callback', async () => {
+    const changed = makeChallenge({ realm: 'other.example.com' })
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, {
+        status: 402,
+        headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(changed) },
+      }),
+    )
+    const onResults = vi.fn()
+    const { validatePaymentFlow } = await import('./validate/payment.js')
+
+    try {
+      await validatePaymentFlow('https://localhost', { path: '/', method: 'GET' }, false, {
+        onResults,
+        silent: true,
+      })
+
+      expect(onResults).toHaveBeenCalledWith([
+        expect.objectContaining({ label: 'Realm matches server hostname', severity: 'fail' }),
+      ])
+    } finally {
+      fetch.mockRestore()
+    }
   })
 
   test('fails on invalid recipient address', { timeout: 15_000 }, async () => {
@@ -840,7 +929,19 @@ describe('validate: payment methods coverage', () => {
         realm: 'localhost',
         method,
         intent: 'charge',
-        request: { amount: '100', currency: 'usd', methodDetails: {} },
+        request:
+          method === Constants.Methods.stripe
+            ? {
+                amount: '100',
+                currency: 'usd',
+                methodDetails: { networkId: 'test', paymentMethodTypes: ['card'] },
+              }
+            : {
+                amount: '100',
+                currency: '0x20c0000000000000000000000000000000000000',
+                recipient: '0x1234567890123456789012345678901234567890',
+                methodDetails: method === Constants.Methods.evm ? { chainId: 1 } : {},
+              },
         expires: new Date(Date.now() + 300_000).toISOString(),
       })) as Challenge.Challenge[]
 

@@ -34,6 +34,7 @@ import {
   resolvePlugin,
 } from '../internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
+import { validateRealmMatchesHost } from './challenge.js'
 import { buildUrl } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
 import {
@@ -216,6 +217,15 @@ export async function validatePaymentFlow(
   }
   if (challenges.length === 0) {
     results.push(fail('Payment: parse challenge', 'No Payment challenges in response'))
+    return results
+  }
+
+  const realmResults: CheckResult[] = []
+  validateRealmMatchesHost(challenges, new URL(url).hostname, realmResults)
+  const realmFailures = realmResults.filter((result) => result.severity === 'fail')
+  if (realmFailures.length > 0) {
+    results.push(...realmFailures)
+    options.onResults?.(realmFailures)
     return results
   }
 

@@ -261,16 +261,26 @@ function validateExpiration(challenges: Challenge.Challenge[], results: CheckRes
   results.push(check('Challenge expires in the future', `${Math.round(soonest / 60000)}m from now`))
 }
 
-function validateRealmMatchesHost(
+/** Validates that challenge realms cover the server hostname. */
+export function validateRealmMatchesHost(
   challenges: Challenge.Challenge[],
   serverHost: string,
   results: CheckResult[],
 ): void {
+  const normalizeHostname = (value: string) => value.toLowerCase().replace(/\.$/, '')
+  const normalizedServerHost = normalizeHostname(serverHost)
   const realms = [...new Set(challenges.map((ch) => ch.realm ?? ''))]
-  const badRealms = realms.filter((r) => r && r !== serverHost && !serverHost.endsWith(`.${r}`))
+  const badRealms = realms.filter((realm) => {
+    const normalizedRealm = normalizeHostname(realm)
+    return (
+      !normalizedRealm ||
+      (normalizedRealm !== normalizedServerHost &&
+        !normalizedServerHost.endsWith(`.${normalizedRealm}`))
+    )
+  })
   if (badRealms.length > 0) {
     results.push(
-      warn(
+      fail(
         'Realm matches server hostname',
         `realm="${badRealms[0]}" vs host="${serverHost}"`,
         'Set the realm to your production hostname (or base domain) in the challenge.',

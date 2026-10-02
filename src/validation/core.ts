@@ -121,6 +121,7 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
     const isMpp = challengeResults.some(
       (r) => r.severity === 'pass' && r.label === 'Challenge parseable',
     )
+    const challengeIsValid = !challengeResults.some((result) => result.severity === 'fail')
     const chainIds = (parsedChallenges ?? [])
       .filter((ch) => ch.method !== 'stripe')
       .map((ch) => ((ch.request as Record<string, unknown>).methodDetails as any)?.chainId)
@@ -158,7 +159,7 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
       })
       yield { phase: 'errorHandling', endpoint, results: errorResults }
 
-      if (!options.skipPayment) {
+      if (!options.skipPayment && challengeIsValid) {
         const onResults = options.onPaymentResults
         const paymentResults = await validatePaymentFlow(baseUrl, endpoint, verbose, {
           body: effectiveBody,
