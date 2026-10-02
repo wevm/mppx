@@ -305,10 +305,21 @@ export function isTestnet(chain: Chain) {
   return chain.id !== tempoMainnet.id
 }
 
+/**
+ * Fetches a Tempo token balance and display metadata.
+ *
+ * By default, unavailable decimals fall back to six for display compatibility.
+ * Set `requireDecimals` to throw instead when trusted on-chain decimals cannot
+ * be resolved.
+ */
 export async function fetchTokenInfo(
   client: ReturnType<typeof createClient>,
   token: Address,
   account: Address,
+  options: {
+    /** Throws instead of using six decimals when token metadata is unavailable. */
+    requireDecimals?: boolean
+  } = {},
 ): Promise<{
   balance: bigint
   decimals: number
@@ -321,7 +332,10 @@ export async function fetchTokenInfo(
       .getBalance(client, { account, token })
       .then(toBaseUnitAmount)
       .catch(() => 0n),
-    Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
+    Actions.token.getMetadata(client, { token }).catch((error) => {
+      if (options.requireDecimals) throw error
+      return { symbol: token as string }
+    }),
   ])
   const knownSymbols: Record<string, string> = {
     [pathUsd]: 'PathUSD',
@@ -330,6 +344,8 @@ export async function fetchTokenInfo(
   const symbol = knownSymbols[token] ?? metadata.symbol
   const decimals =
     'decimals' in metadata && typeof metadata.decimals === 'number' ? metadata.decimals : 6
+  if (options.requireDecimals && !('decimals' in metadata && typeof metadata.decimals === 'number'))
+    throw new Error('Token decimals are unavailable.')
   return { balance, symbol, decimals, token }
 }
 

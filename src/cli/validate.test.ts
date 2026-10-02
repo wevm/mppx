@@ -17,6 +17,13 @@ import { missingDiscoverySuggestion } from './validate/messages.js'
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
 const isAgentEnvironmentMock = vi.fn(() => false)
 const getBalanceMock = vi.fn(async () => ({ amount: 1_000_000n }))
+const getMetadataMock = vi.fn(async () => ({ decimals: 6, symbol: 'PathUSD' }))
+const readContractMock = vi.fn(async (_client: unknown, parameters: { functionName: string }) => {
+  if (parameters.functionName === 'balanceOf') return 1_000_000n
+  if (parameters.functionName === 'decimals') return 6
+  if (parameters.functionName === 'symbol') return 'USDC'
+  throw new Error(`unexpected contract read: ${parameters.functionName}`)
+})
 
 // Installed CLI skills must not append host-specific notices to captured JSON.
 const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-validate-'))
@@ -34,7 +41,11 @@ vi.doMock('viem/tempo', async () => {
     Actions: {
       ...actual.Actions,
       faucet: { ...actual.Actions.faucet, fund: vi.fn(async () => []) },
-      token: { ...actual.Actions.token, getBalance: getBalanceMock },
+      token: {
+        ...actual.Actions.token,
+        getBalance: getBalanceMock,
+        getMetadata: getMetadataMock,
+      },
     },
   }
 })
@@ -44,6 +55,7 @@ vi.doMock('viem/actions', async () => {
   return {
     ...actual,
     prepareTransactionRequest: vi.fn(async () => ({})),
+    readContract: readContractMock,
     signTransaction: vi.fn(async () => '0xdeadbeef'),
   }
 })
@@ -64,6 +76,9 @@ afterEach(() => {
   isAgentEnvironmentMock.mockReturnValue(false)
   getBalanceMock.mockReset()
   getBalanceMock.mockResolvedValue({ amount: 1_000_000n })
+  getMetadataMock.mockReset()
+  getMetadataMock.mockResolvedValue({ decimals: 6, symbol: 'PathUSD' })
+  readContractMock.mockClear()
 })
 
 async function testServer(handler: http.RequestListener) {
@@ -1211,16 +1226,26 @@ test.each([
     const server = await mppServer(challenge)
     try {
       const { output } = await serve(['validate', server.url, '--outputJson', '--yes'])
+      if (chainId === undefined) {
+        expect(output).toContain('unable to resolve payment chain and verify token decimals')
+        expect(output).not.toContain(`Payment [${method}]: submitted`)
+        expect(output).not.toContain('Payment: successful')
+        return
+      }
       expect(output).toContain(`Payment [${method}]: submitted`)
-      if (method === 'tempo' && chainId !== undefined) {
+      if (method === 'tempo') {
         const chain = chainId === tempoModerato.id ? tempoModerato : tempoMainnet
         expect(output).toContain(`${chain.blockExplorers.default.url}/receipt/`)
       }
       expect(output).toContain('Payment: successful')
-      if (chainId === undefined) expect(output).not.toContain('/receipt/')
       expect(output).not.toContain('no wallet configured')
       expect(output).not.toContain('insufficient balance')
       expect(output).not.toContain('ephemeral testnet wallet')
+      if (method === 'evm')
+        expect(readContractMock).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ functionName: 'balanceOf' }),
+        )
     } finally {
       if (previousConfig === undefined) delete process.env.MPPX_CONFIG
       else process.env.MPPX_CONFIG = previousConfig

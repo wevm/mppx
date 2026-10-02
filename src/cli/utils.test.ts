@@ -153,4 +153,21 @@ describe('fetchTokenInfo', () => {
       token,
     })
   })
+
+  test('rejects missing decimals when trusted metadata is required', async () => {
+    const token = '0x1111111111111111111111111111111111111111'
+    const account = '0x2222222222222222222222222222222222222222'
+    vi.doMock('viem/tempo', () => ({
+      Actions: {
+        token: {
+          getBalance: vi.fn(async () => ({ amount: 123n })),
+          getMetadata: vi.fn(async () => ({ decimals: undefined, symbol: 'TEST' })),
+        },
+      },
+    }))
+
+    await expect(
+      fetchTokenInfo({} as never, token, account, { requireDecimals: true }),
+    ).rejects.toThrow('Token decimals are unavailable.')
+  })
 })

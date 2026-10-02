@@ -130,21 +130,24 @@ function resolveStripeKey(verbose: boolean): string | undefined {
 async function fetchEvmTokenInfo(
   chain: Chain,
   token: Address,
-  account: Address,
-): Promise<{ balance: bigint; symbol: string | undefined }> {
+  account?: Address | undefined,
+): Promise<{ balance: bigint; decimals: number; symbol: string | undefined }> {
   const client = createClient({ chain, transport: http() })
-  const [balance, symbol] = await Promise.all([
-    readContract(client, {
-      address: token,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [account],
-    }),
+  const [balance, decimals, symbol] = await Promise.all([
+    account
+      ? readContract(client, {
+          address: token,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [account],
+        })
+      : 0n,
+    readContract(client, { address: token, abi: erc20Abi, functionName: 'decimals' }),
     readContract(client, { address: token, abi: erc20Abi, functionName: 'symbol' }).catch(
       () => undefined,
     ),
   ])
-  return { balance, symbol: symbol ?? undefined }
+  return { balance, decimals, symbol: symbol ?? undefined }
 }
 
 function resolveEvmChain(chainId: number): Chain | undefined {
@@ -372,7 +375,7 @@ async function attemptCryptoPayment(
   const requiredAmount = isValidIntegerAmount(request.amount)
     ? BigInt(request.amount as string)
     : undefined
-  const decimals =
+  let decimals =
     (methodDetails?.decimals as number | undefined) ?? (request.decimals as number | undefined) ?? 6
   const currency = request.currency as string | undefined
 
@@ -407,25 +410,39 @@ async function attemptCryptoPayment(
     if (chainId) paymentChain = resolveEvmChain(chainId)
   }
 
+  if (requiredAmount && currency && !paymentChain) {
+    results.push(skip(tag, 'unable to resolve payment chain and verify token decimals'))
+    return
+  }
+
   let tokenSymbol: string | undefined
-  if (walletAddress && requiredAmount && currency && paymentChain) {
+  if (requiredAmount && currency && paymentChain) {
     try {
       let balance: bigint
       if (challenge.method === Constants.Methods.tempo) {
         const client = createClient({ chain: paymentChain, transport: http() })
-        const info = await fetchTokenInfo(client, currency as Address, walletAddress as Address)
+        const info = await fetchTokenInfo(
+          client,
+          currency as Address,
+          (walletAddress ?? zeroAddress) as Address,
+          {
+            requireDecimals: true,
+          },
+        )
         balance = info.balance
+        decimals = info.decimals
         tokenSymbol = info.symbol
       } else {
         const info = await fetchEvmTokenInfo(
           paymentChain,
           currency as Address,
-          walletAddress as Address,
+          walletAddress as Address | undefined,
         )
         balance = info.balance
+        decimals = info.decimals
         tokenSymbol = info.symbol
       }
-      if (balance < requiredAmount) {
+      if (walletAddress && balance < requiredAmount) {
         const requiredDisplay = formatAmount(requiredAmount, decimals)
         const balanceDisplay = formatAmount(balance, decimals)
         const symbol = tokenSymbol ?? 'tokens'
@@ -440,6 +457,8 @@ async function attemptCryptoPayment(
       }
     } catch (e) {
       if (verbose) console.log(pc.dim(`    Balance check skipped: ${(e as Error).message}`))
+      results.push(skip(tag, 'unable to verify token balance and decimals from the payment chain'))
+      return
     }
   }
 
