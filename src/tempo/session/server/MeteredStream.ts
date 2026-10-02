@@ -3,23 +3,16 @@ import type { Hex } from 'viem'
 import type { MaybePromise } from '../../../internal/types.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
-import {
-  commitReservedCharges,
-  releaseReservedCharges,
-  renewReservedCharges,
-  reserveChargeOrWait,
-  streamReservationLeaseMs,
-} from './Transports.js'
+import { commitReservedCharges, releaseReservedCharges, reserveChargeOrWait } from './Transports.js'
 
 /** Controller passed to manual-charge streaming generators. */
 export type SessionController = {
   /**
-   * Reserve voucher coverage for the next emitted chunk.
+   * Commit a charge before performing billable work.
    *
-   * The reservation blocks until sufficient voucher headroom exists, but the
-   * charge is committed when a chunk is emitted or when the generator finishes
-   * successfully. A reservation is only dropped when the stream aborts or the
-   * generator fails before the charge can be committed.
+   * Waits for sufficient voucher coverage and commits the charge before resolving.
+   * Once resolved, the charge is retained even if the stream is canceled or the
+   * generator fails. Await this method before starting the corresponding work.
    *
    * Pass an explicit raw-unit `amount` for request-aware or otherwise dynamic
    * pricing. When omitted, the session challenge's configured tick cost is
@@ -61,29 +54,16 @@ export type MeteredStreamOptions = {
 
 /** Applies voucher reservation and spend commits to an async session stream. */
 export async function* meterIterable(options: MeteredStreamOptions): AsyncGenerator<string> {
+  const manual = typeof options.generate === 'function'
   let prepaidUnits = options.prepaidUnits ?? 0
-  const controller = new AbortController()
-  const signal = controller.signal
+  const signal = options.signal ?? new AbortController().signal
   const reservation = {
     store: options.store,
     channelId: options.channelId,
     reservationId: globalThis.crypto.randomUUID(),
   }
   let pending = false
-  let cancelled = false
-  const onAbort = () => {
-    if (signal.aborted) return
-    cancelled = true
-    controller.abort(options.signal?.reason)
-  }
-  options.signal?.addEventListener('abort', onAbort, { once: true })
-  if (options.signal?.aborted) onAbort()
-  const renewal = setInterval(() => {
-    if (pending) void renewReservedCharges(reservation).catch((error) => controller.abort(error))
-  }, streamReservationLeaseMs / 3)
-  ;(renewal as unknown as { unref?: () => void }).unref?.()
   const releaseOnAbort = () => {
-    clearInterval(renewal)
     void releaseReservedCharges(reservation).catch(() => {})
   }
   signal.addEventListener('abort', releaseOnAbort, { once: true })
@@ -105,6 +85,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
       signal,
     })
     pending = true
+    if (manual) await commit()
     signal.throwIfAborted()
   }
   const commit = async () => {
@@ -116,7 +97,6 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     await options.onChargeCommitted?.(channel)
   }
   try {
-    const manual = typeof options.generate === 'function'
     const iterable =
       typeof options.generate === 'function'
         ? options.generate({ charge, signal })
@@ -134,15 +114,11 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
         await commit()
         yield value
       }
-      if (!cancelled) signal.throwIfAborted()
     } finally {
-      clearInterval(renewal)
       await releaseReservedCharges(reservation)
       await iterator.return?.()
     }
   } finally {
-    clearInterval(renewal)
-    options.signal?.removeEventListener('abort', onAbort)
     signal.removeEventListener('abort', releaseOnAbort)
     await releaseReservedCharges(reservation)
   }

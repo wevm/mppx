@@ -9,7 +9,6 @@ import {
   reserveChargeOrWait,
   releaseReservedCharges,
   renewReservedCharges,
-  streamReservationLeaseMs,
   send,
   subscribe,
   toText,
@@ -330,7 +329,7 @@ describe('MeteredStream', () => {
       ).rejects.toThrow('reservation was lost')
     })
 
-    test('releases on cancellation even while generation is still pending', async () => {
+    test('retains a committed manual charge when canceled during generation', async () => {
       const store = memoryStore(channel())
       const controller = new AbortController()
       let finish!: () => void
@@ -352,72 +351,48 @@ describe('MeteredStream', () => {
         },
       })
       const next = iterator.next()
-      await vi.waitFor(async () =>
-        expect(ChannelStore.reservedStreamAmount((await store.getChannel(channelId))!)).toBe(10n),
-      )
+      await vi.waitFor(async () => expect((await store.getChannel(channelId))?.spent).toBe(30n))
       controller.abort()
       await vi.waitFor(async () =>
         expect(ChannelStore.reservedStreamAmount((await store.getChannel(channelId))!)).toBe(0n),
       )
       finish()
       expect(await next).toMatchObject({ done: true })
-      expect((await store.getChannel(channelId))?.spent).toBe(20n)
+      expect((await store.getChannel(channelId))?.spent).toBe(30n)
     })
 
-    test.each(['yield', 'complete', 'cancel after failure'] as const)(
-      'propagates renewal failure when the generator resumes with %s',
-      async (outcome) => {
-        vi.useFakeTimers()
-        try {
-          const store = memoryStore(channel())
-          const controller = new AbortController()
-          const failure = new Error('reservation renewal failed')
-          let finish!: () => void
-          const gate = new Promise<void>((resolve) => {
-            finish = resolve
-          })
-          let reserved!: () => void
-          const ready = new Promise<void>((resolve) => {
-            reserved = resolve
-          })
-          const iterator = meterIterable({
-            store,
-            channelId,
-            tickCost: 10n,
-            pollIntervalMs: 1,
-            signal: controller.signal,
-            emitNeedVoucher() {},
-            formatNeedVoucher,
-            async *generate(stream) {
-              await stream.charge()
-              reserved()
-              await gate
-              if (outcome !== 'complete') yield 'late value'
-            },
-          })
-          const next = iterator.next()
-          await ready
-          vi.spyOn(store, 'updateChannel').mockRejectedValueOnce(failure)
-          await vi.advanceTimersByTimeAsync(streamReservationLeaseMs / 3)
-          expect(controller.signal.aborted).toBe(false)
-          if (outcome === 'cancel after failure') controller.abort()
-          const rejected = expect(next).rejects.toBe(failure)
-          finish()
-          await rejected
-          expect(await store.getChannel(channelId)).toMatchObject({
-            spent: 20n,
-            streamReservations: {},
-          })
-          expect(vi.getTimerCount()).toBe(0)
-        } finally {
-          vi.useRealTimers()
-          vi.restoreAllMocks()
-        }
-      },
-    )
+    test('does not start manual work before a failed charge commits', async () => {
+      const store = memoryStore(channel())
+      const update = store.updateChannel.bind(store)
+      let attempts = 0
+      vi.spyOn(store, 'updateChannel').mockImplementation(async (id, fn) => {
+        if (++attempts === 2) throw new Error('commit failed')
+        return update(id, fn)
+      })
+      const work = vi.fn()
+      const iterator = meterIterable({
+        store,
+        channelId,
+        tickCost: 10n,
+        pollIntervalMs: 1,
+        emitNeedVoucher() {},
+        formatNeedVoucher,
+        async *generate(stream) {
+          await stream.charge()
+          work()
+          yield 'value'
+        },
+      })
+      await expect(iterator.next()).rejects.toThrow('commit failed')
+      expect(work).not.toHaveBeenCalled()
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 20n,
+        streamReservations: {},
+      })
+    })
 
     test.each(['complete', 'throw', 'abort'] as const)(
-      'releases or commits manual reservations on %s',
+      'retains manual charges on %s',
       async (outcome) => {
         const store = memoryStore(channel())
         const controller = new AbortController()
@@ -439,7 +414,7 @@ describe('MeteredStream', () => {
         if (outcome === 'throw') await expect(iterator.next()).rejects.toThrow('generator failed')
         else await iterator.next()
         expect(await store.getChannel(channelId)).toMatchObject({
-          spent: outcome === 'complete' ? 30n : 20n,
+          spent: 30n,
           streamReservations: {},
         })
       },

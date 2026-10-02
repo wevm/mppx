@@ -532,7 +532,7 @@ describe('isows', () => {
     expect(commits).toBe(1)
   })
 
-  test('aborts a blocked application generator before sending close-ready', async () => {
+  test('retains manual charges when aborting before close-ready', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
     await seedChannel(store, 1n)
@@ -561,6 +561,7 @@ describe('isows', () => {
         },
       }),
       generate: async function* (stream) {
+        await stream.charge(1n)
         await new Promise<void>((resolve) => {
           stream.signal.addEventListener('abort', () => resolve(), { once: true })
         })
@@ -586,6 +587,7 @@ describe('isows', () => {
     await sleep(10)
 
     expect(generatorAborted).toBe(true)
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
     expect(
       socket.sent
         .map((message) => Ws.parseMessage(message))
