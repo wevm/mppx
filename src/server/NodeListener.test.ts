@@ -67,6 +67,99 @@ function createMockRequest(options: {
 }
 
 describe('sendResponse', () => {
+  test('cancels a response body when the connection already closed', async () => {
+    const [_, res] = createMockRequest({})
+    const cancel = vi.fn()
+    const response = new Response(new ReadableStream({ cancel }))
+    Object.assign(res, { destroyed: true })
+
+    await expect(NodeListener.sendResponse(res, response)).resolves.toBeUndefined()
+    expect(cancel).toHaveBeenCalledWith('response connection closed')
+  })
+
+  test('ignores cancellation errors when the connection already closed', async () => {
+    const [_, res] = createMockRequest({})
+    Object.assign(res, { destroyed: true })
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          throw new Error('cancel failed')
+        },
+      }),
+    )
+
+    await expect(NodeListener.sendResponse(res, response)).resolves.toBeUndefined()
+  })
+
+  test('stops waiting for drain when the connection closes', async () => {
+    const [_, res] = createMockRequest({})
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('chunk'))
+          controller.close()
+        },
+      }),
+    )
+    res.write = () => false
+
+    const sending = NodeListener.sendResponse(res, response)
+    await new Promise((resolve) => setImmediate(resolve))
+    res.emit('close')
+
+    await expect(sending).resolves.toBeUndefined()
+  })
+
+  test('cancels a pending response body when the connection closes', async () => {
+    const [_, res] = createMockRequest({})
+    const cancel = vi.fn()
+    const response = new Response(new ReadableStream({ cancel }))
+
+    const sending = NodeListener.sendResponse(res, response)
+    await new Promise((resolve) => setImmediate(resolve))
+    res.emit('close')
+
+    await expect(sending).resolves.toBeUndefined()
+    expect(cancel).toHaveBeenCalledWith('response connection closed')
+  })
+
+  test('cancels a response body when an HTTP/2 stream is already closed', async () => {
+    const cancel = vi.fn()
+    const response = new Response(new ReadableStream({ cancel }))
+    const writeHead = vi.fn()
+    const res = Object.assign(new EventEmitter(), {
+      stream: { closed: true, destroyed: false },
+      writeHead,
+    })
+
+    await NodeListener.sendResponse(res as never, response)
+
+    expect(cancel).toHaveBeenCalledWith('response connection closed')
+    expect(writeHead).not.toHaveBeenCalled()
+  })
+
+  test('cancels a response body when waiting for drain errors', async () => {
+    const [_, res] = createMockRequest({})
+    const cancel = vi.fn()
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('chunk'))
+        },
+        cancel,
+      }),
+    )
+    res.write = () => false
+    const error = new Error('write failed')
+
+    const sending = NodeListener.sendResponse(res, response)
+    await new Promise((resolve) => setImmediate(resolve))
+    res.emit('error', error)
+
+    await expect(sending).rejects.toBe(error)
+    expect(cancel).toHaveBeenCalledWith(error)
+  })
+
   test('writes status and headers', async () => {
     server = await Http.createServer(async (_, res) => {
       const response = new Response(null, {
