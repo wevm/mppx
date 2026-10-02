@@ -302,7 +302,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
       throw new Error(
         'stripe.create() Tempo sessions must use the factory-level shared atomic `store`.',
       )
-    const { recipient, onSessionSettlement, ...rest } = params
+    const { recipient, canOffer, onSessionSettlement, ...rest } = params
     return tempoSession({
       currency: tempoCurrency,
       recipient,
@@ -310,6 +310,9 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
       store,
+      canOffer: canOffer
+        ? async (context) => cryptoCanOffer(context) && (await canOffer(context))
+        : cryptoCanOffer,
       async onSessionSettlement(context) {
         await tempoPaymentHandler({
           intent: 'session',

@@ -340,6 +340,46 @@ describe('stripe.create() canOffer minimum amount', () => {
     ).toBe(true)
   })
 
+  test.each(['0', '1', '9999', '10000', '20000'])(
+    'session minimum cannot be overridden by an offer policy: %s',
+    async (amount) => {
+      const canOffer = vi.fn(async () => true)
+      const mp = createStripe({
+        client: createMockStripeClient(),
+        networkId: 'test-profile',
+        livemode: false,
+      })
+      const method = mp.tempo.session({
+        recipient: '0x0000000000000000000000000000000000000001' as stripe.DepositAddress<'tempo'>,
+        canOffer,
+      })
+      const context = { input: new Request('http://x'), request: { amount } }
+      const allowed = BigInt(amount) >= 10000n
+      expect(await method.canOffer!(context)).toBe(allowed)
+      expect(canOffer).toHaveBeenCalledTimes(allowed ? 1 : 0)
+    },
+  )
+
+  test('session minimum preserves application denials', async () => {
+    const mp = createStripe({
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+    })
+    for (const canOffer of [undefined, async () => false]) {
+      const method = mp.tempo.session({
+        recipient: '0x0000000000000000000000000000000000000001' as stripe.DepositAddress<'tempo'>,
+        canOffer,
+      })
+      expect(
+        await method.canOffer!({ input: new Request('http://x'), request: { amount: '9999' } }),
+      ).toBe(false)
+      expect(
+        await method.canOffer!({ input: new Request('http://x'), request: { amount: '10000' } }),
+      ).toBe(canOffer === undefined)
+    }
+  })
+
   test('custom rail inherits minimum amount check', () => {
     const client = createMockStripeClient()
     const mp = createStripe({
