@@ -4,6 +4,7 @@ import type * as Method from '../../Method.js'
 import * as tempoDefaults from '../../tempo/internal/defaults.js'
 import { charge as tempoCharge } from '../../tempo/server/Charge.js'
 import { session as tempoSession } from '../../tempo/session/server/Session.js'
+import { resolveSettlementSchedule } from '../../tempo/session/server/Settlement.js'
 import * as z from '../../zod.js'
 import * as PaymentIntent from '../internal/payment-intent.js'
 import type { StripeClient } from '../internal/types.js'
@@ -254,13 +255,30 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
   function makeTempoSession(
     params: { recipient: `0x${string}` } & Omit<tempoSession.Parameters, 'currency' | 'recipient'>,
   ): Method.AnyServer {
-    const { recipient, onSessionSettlement, ...rest } = params
+    const { recipient, canOffer, onSessionSettlement, ...rest } = params
+    const settlementSchedule = resolveSettlementSchedule(params.settlementSchedule, 6)
+    const sessionCanOffer = (context: { request: { amount: string } }) => {
+      if (cryptoCanOffer(context)) return true
+      if (!settlementSchedule) return false
+      const amount = BigInt(context.request.amount)
+      const thresholds = [
+        settlementSchedule.amount,
+        settlementSchedule.units !== undefined
+          ? amount * BigInt(settlementSchedule.units)
+          : undefined,
+        settlementSchedule.intervalMs !== undefined ? 0n : undefined,
+      ].filter((threshold): threshold is bigint => threshold !== undefined)
+      return thresholds.length > 0 && thresholds.every((threshold) => threshold >= 10_000n)
+    }
     return tempoSession({
       currency: tempoCurrency,
       recipient,
       ...(!livemode && { chainId: tempoDefaults.chainId.testnet }),
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
+      canOffer: canOffer
+        ? async (context) => sessionCanOffer(context) && (await canOffer(context))
+        : sessionCanOffer,
       async onSessionSettlement(context) {
         await tempoPaymentHandler({
           intent: 'session',

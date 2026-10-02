@@ -320,6 +320,74 @@ describe('stripe.create() canOffer minimum amount', () => {
     ).toBe(true)
   })
 
+  test('tempo sessions reject amounts below 1 cent', async () => {
+    const client = createMockStripeClient()
+    const userCanOffer = vi.fn(() => true)
+    const methods = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    })
+      .defaultMethods()
+      .additional({ tempo: { session: { canOffer: userCanOffer } } })
+    const sessionMethod = findMethod(methods, 'tempo', 'session')
+    const input = new Request('http://x')
+
+    await expect(sessionMethod.canOffer!({ input, request: { amount: '9999' } })).resolves.toBe(
+      false,
+    )
+    expect(userCanOffer).not.toHaveBeenCalled()
+    await expect(sessionMethod.canOffer!({ input, request: { amount: '10000' } })).resolves.toBe(
+      true,
+    )
+    expect(userCanOffer).toHaveBeenCalledOnce()
+  })
+
+  test('tempo sessions allow sub-cent units when every settlement threshold reaches one cent', async () => {
+    const client = createMockStripeClient()
+    const userCanOffer = vi.fn(() => true)
+    const methods = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    })
+      .defaultMethods()
+      .additional({
+        tempo: {
+          session: { canOffer: userCanOffer, settlementSchedule: { units: 10 } },
+        },
+      })
+    const sessionMethod = findMethod(methods, 'tempo', 'session')
+
+    await expect(
+      sessionMethod.canOffer!({ input: new Request('http://x'), request: { amount: '1000' } }),
+    ).resolves.toBe(true)
+    expect(userCanOffer).toHaveBeenCalledOnce()
+  })
+
+  test('tempo sessions reject sub-cent units when any settlement trigger can fire early', async () => {
+    const client = createMockStripeClient()
+    const methods = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: { tempo: '0xtempoaddr' },
+    })
+      .defaultMethods()
+      .additional({
+        tempo: {
+          session: { settlementSchedule: { intervalMs: 1_000, units: 10 } },
+        },
+      })
+    const sessionMethod = findMethod(methods, 'tempo', 'session')
+
+    await expect(
+      sessionMethod.canOffer!({ input: new Request('http://x'), request: { amount: '1000' } }),
+    ).toBe(false)
+  })
+
   test('custom rail inherits minimum amount check', () => {
     const client = createMockStripeClient()
     const mp = stripe({
