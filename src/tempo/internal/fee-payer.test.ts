@@ -4,6 +4,8 @@ import { encodeFunctionData, maxUint256, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import { escrowAbi as legacyEscrowAbi } from '../legacy/session/escrow.abi.js'
+import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as defaults from './defaults.js'
 import {
   assertAllowedFeeToken,
@@ -28,6 +30,49 @@ const swapData = encodeFunctionData({
   functionName: 'swapExactAmountOut',
   args: [swapTokenIn, swapTokenOut, 100n, 100n],
 })
+const sessionDescriptor = {
+  payer: bogus,
+  payee: bogus,
+  operator: bogus,
+  token: bogus,
+  salt: `0x${'1'.repeat(64)}` as const,
+  authorizedSigner: bogus,
+  expiringNonceHash: `0x${'2'.repeat(64)}` as const,
+}
+const sessionCallData = [
+  {
+    name: 'open',
+    data: encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'open',
+      args: [bogus, bogus, bogus, 100n, sessionDescriptor.salt, bogus],
+    }),
+  },
+  {
+    name: 'topUp',
+    data: encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'topUp',
+      args: [sessionDescriptor, 100n],
+    }),
+  },
+  {
+    name: 'legacy open',
+    data: encodeFunctionData({
+      abi: legacyEscrowAbi,
+      functionName: 'open',
+      args: [bogus, bogus, 100n, sessionDescriptor.salt, bogus],
+    }),
+  },
+  {
+    name: 'legacy topUp',
+    data: encodeFunctionData({
+      abi: legacyEscrowAbi,
+      functionName: 'topUp',
+      args: [sessionDescriptor.expiringNonceHash, 100n],
+    }),
+  },
+] as const
 const feePayerSignature = {
   r: '0x0000000000000000000000000000000000000000000000000000000000000002',
   s: '0x0000000000000000000000000000000000000000000000000000000000000003',
@@ -771,6 +816,22 @@ describe('fillHostedFeePayerTransaction', () => {
     ).rejects.toThrow('calldata is not canonical')
     expect(request).not.toHaveBeenCalled()
   })
+
+  test('error: rejects unknown calldata before requesting hosted fill', async () => {
+    const request = vi.fn()
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        ...hostedContext,
+        request,
+        transaction: {
+          ...hostedTransaction,
+          calls: [{ ...hostedTransaction.calls[0], data: '0xdeadbeef' }],
+        } as any,
+      }),
+    ).rejects.toThrow('call calldata is invalid')
+    expect(request).not.toHaveBeenCalled()
+  })
 })
 
 describe('simulationTransaction', () => {
@@ -1178,6 +1239,71 @@ describe('prepareSponsoredTransaction', () => {
         } as any,
       }),
     ).toThrow('accessList is not allowed')
+  })
+
+  test.each(sessionCallData)('accepts canonical session $name calldata', ({ data }) => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [{ ...baseTransaction.calls[0], data }],
+        } as any,
+      }),
+    ).not.toThrow()
+  })
+
+  test.each(sessionCallData)('error: rejects padded session $name calldata', ({ data }) => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [{ ...baseTransaction.calls[0], data: `${data}00` }],
+        } as any,
+      }),
+    ).toThrow('calldata is not canonical')
+  })
+
+  test('error: rejects unknown call calldata', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [{ ...baseTransaction.calls[0], data: '0xdeadbeef' }],
+        } as any,
+      }),
+    ).toThrow('call calldata is invalid')
+  })
+
+  test('error: rejects known but unsupported call calldata', () => {
+    const data = encodeFunctionData({
+      abi: Abis.tip20,
+      functionName: 'balanceOf',
+      args: [bogus],
+    })
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [{ ...baseTransaction.calls[0], data }],
+        } as any,
+      }),
+    ).toThrow('call calldata is invalid')
   })
 
   test('error: rejects padded calldata', () => {

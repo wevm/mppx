@@ -2,12 +2,15 @@ import { Address, Secp256k1 } from 'ox'
 import { TempoAddress, TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import type { Account } from 'viem'
-import { decodeFunctionData, encodeFunctionData, maxUint256, toHex } from 'viem'
+import { decodeFunctionData, encodeFunctionData, maxUint256, toFunctionSelector, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
+import { escrowAbi as legacyEscrowAbi } from '../legacy/session/escrow.abi.js'
+import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as TempoAddress_internal from './address.js'
 import * as defaults from './defaults.js'
 import { defaultFeeTokens } from './fee-token.js'
+import { machineTokenSwapperAbi } from './machine-token-charge.js'
 import * as Selectors from './selectors.js'
 
 /** Returns true if the serialized transaction has a Tempo envelope prefix. */
@@ -370,12 +373,22 @@ function isExpiringNonceKey(nonceKey: SponsoredTransaction['nonceKey']): boolean
   return nonceKey === 'expiring' || nonceKey === maxUint256
 }
 
-const sponsoredCallAbi = [...Abis.tip20, ...Abis.stablecoinDex] as const
+const sponsoredCallAbi = [
+  ...Abis.tip20,
+  ...Abis.stablecoinDex,
+  ...machineTokenSwapperAbi,
+  ...legacyEscrowAbi,
+  ...escrowAbi,
+] as const
 const sponsoredCallSelectors = new Set([
   Selectors.approve,
   Selectors.transfer,
   Selectors.transferWithMemo,
   Selectors.swapExactAmountOut,
+  ...machineTokenSwapperAbi.map((item) => toFunctionSelector(item)),
+  ...[...legacyEscrowAbi, ...escrowAbi]
+    .filter((item) => item.type === 'function' && item.stateMutability === 'nonpayable')
+    .map((item) => toFunctionSelector(item)),
 ])
 
 function canonicalSponsoredCallData(
@@ -383,7 +396,8 @@ function canonicalSponsoredCallData(
   call: string,
   fail: (reason: string, extra?: Record<string, string>) => never,
 ) {
-  if (!sponsoredCallSelectors.has(data.slice(0, 10) as Hex)) return undefined
+  if (!sponsoredCallSelectors.has(data.slice(0, 10) as Hex))
+    fail('fee-sponsored transaction call calldata is invalid', { call })
 
   let decoded: ReturnType<typeof decodeFunctionData<typeof sponsoredCallAbi>>
   try {
@@ -431,7 +445,7 @@ function assertCanonicalSponsoredTransaction(
       })
 
     const canonical = canonicalSponsoredCallData(data, callIndex, fail)
-    if (canonical && data.toLowerCase() !== canonical.toLowerCase())
+    if (data.toLowerCase() !== canonical.toLowerCase())
       fail('fee-sponsored transaction call calldata is not canonical', {
         call: callIndex,
       })

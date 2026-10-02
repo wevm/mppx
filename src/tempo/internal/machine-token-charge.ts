@@ -13,7 +13,8 @@ import { Abis, Actions } from 'viem/tempo'
 
 import * as defaults from './defaults.js'
 
-const machineTokenSwapperAbi = parseAbi([
+/** ABI for the first-party machine-token settlement swapper. */
+export const machineTokenSwapperAbi = parseAbi([
   'function swapTo(address inputToken,uint256 amount,address targetToken,address recipient,bytes32 memo)',
 ])
 
