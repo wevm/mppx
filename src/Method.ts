@@ -120,7 +120,10 @@ export type VerifyContext<method extends Method> = {
 }
 
 /** Validation hook parameters for a single method. */
-export type ValidateContext<method extends Method> = VerifyContext<method>
+export type ValidateContext<method extends Method> = VerifyContext<method> & {
+  /** Whether validation is standalone or immediately precedes terminal broadcast. */
+  operation?: 'broadcast' | 'validate' | undefined
+}
 
 /** Response hook parameters for a single method. */
 export type RespondContext<method extends Method> = VerifyContext<method> & {
@@ -384,6 +387,7 @@ export async function validateCredential<const methods extends readonly AnyServe
     })
   return prepared.method.validate({
     credential: prepared.credential,
+    operation: 'validate',
     request: prepared.request,
   } as never) as Promise<Validation<methods[number]>>
 }
@@ -402,7 +406,11 @@ export async function broadcastCredential<const methods extends readonly AnyServ
   const { method } = prepared
 
   if (method.broadcast && method.validate)
-    await method.validate({ credential: prepared.credential, request: prepared.request } as never)
+    await method.validate({
+      credential: prepared.credential,
+      operation: 'broadcast',
+      request: prepared.request,
+    } as never)
 
   const broadcast = method.broadcast ?? method.verify
   return broadcast({ credential: prepared.credential, request: prepared.request } as never)
@@ -577,7 +585,7 @@ export function toServer<
   const effectiveVerify =
     verify ??
     (async (parameters: VerifyContext<method>) => {
-      if (validate) await validate(parameters)
+      if (validate) await validate({ ...parameters, operation: 'broadcast' })
       if (!broadcast)
         throw new Errors.VerificationFailedError({
           reason: `${method.name}/${method.intent} does not support credential broadcast`,

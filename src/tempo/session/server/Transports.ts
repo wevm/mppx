@@ -98,6 +98,7 @@ export async function commitReservedCharges(
     if (!current) return null
     if (current.finalized) return current
     if (current.closeRequestedAt !== 0n) return current
+    if (ChannelStore.hasActiveCloseClaim(current)) return current
     if (current.highestVoucherAmount - current.spent < amount) return current
     committed = true
     return {
@@ -118,6 +119,8 @@ export function throwIfChannelClosed(channel: ChannelStore.State): void {
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
   if (channel.closeRequestedAt !== 0n)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (ChannelStore.hasActiveCloseClaim(channel))
+    throw new ChannelClosedError({ reason: 'channel close is already in progress' })
 }
 
 async function waitForUpdate(

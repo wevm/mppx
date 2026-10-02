@@ -327,9 +327,21 @@ describe('ChannelStore state updates', () => {
     expect(next.settledOnChain).toBe(25n)
   })
 
+  test('acceptVoucherStateUpdate rejects vouchers during a cooperative close', () => {
+    expect(() =>
+      ChannelStore.acceptVoucherStateUpdate({
+        current: stateUpdateChannel({
+          pendingCloseClaim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
+        }),
+        voucher: stateUpdateVoucher(70n),
+        channelState: { deposit: 120n, settled: 25n, closeRequestedAt: 0 },
+      }),
+    ).toThrow(/close is already in progress/)
+  })
+
   test('markPendingClose returns max(spent, on-chain settled) as capture amount', () => {
     const next = ChannelStore.markPendingClose({
-      closeRequestedAt: 11n,
+      claim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
       cumulativeAmount: 50n,
       current: stateUpdateChannel({ spent: 20n }),
       onChainDeposit: 100n,
@@ -337,13 +349,13 @@ describe('ChannelStore state updates', () => {
     })
 
     expect(next.captureAmount).toBe(30n)
-    expect(next.state?.closeRequestedAt).toBe(11n)
+    expect(next.state?.pendingCloseClaim?.id).toBe('close-1')
   })
 
   test('markPendingClose rejects close voucher below capture amount', () => {
     expect(() =>
       ChannelStore.markPendingClose({
-        closeRequestedAt: 11n,
+        claim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
         cumulativeAmount: 25n,
         current: stateUpdateChannel({ spent: 20n }),
         onChainDeposit: 100n,
@@ -352,16 +364,48 @@ describe('ChannelStore state updates', () => {
     ).toThrow(VerificationFailedError)
   })
 
+  test('markPendingClose rejects an active top-up lease', () => {
+    expect(() =>
+      ChannelStore.markPendingClose({
+        claim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
+        cumulativeAmount: 50n,
+        current: stateUpdateChannel({
+          pendingTopUpClaim: { expiresAt: Date.now() + 60_000, id: 'top-up-1' },
+        }),
+        onChainDeposit: 100n,
+        onChainSettled: 0n,
+      }),
+    ).toThrow(/top-up is already in progress/)
+  })
+
   test('markPendingClose rejects capture above on-chain deposit', () => {
     expect(() =>
       ChannelStore.markPendingClose({
-        closeRequestedAt: 11n,
+        claim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
         cumulativeAmount: 50n,
         current: stateUpdateChannel({ spent: 40n }),
         onChainDeposit: 30n,
         onChainSettled: 0n,
       }),
     ).toThrow(AmountExceedsDepositError)
+  })
+
+  test('markPendingClose rejects while settlement is in progress', () => {
+    expect(() =>
+      ChannelStore.markPendingClose({
+        claim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
+        cumulativeAmount: 50n,
+        current: stateUpdateChannel({
+          pendingSettlementClaim: {
+            amount: 30n,
+            expiresAt: Date.now() + 60_000,
+            id: 'settle-1',
+          },
+        }),
+        onChainDeposit: 100n,
+        onChainSettled: 30n,
+      }),
+    ).toThrow(/settlement is already in progress/)
   })
 
   test('resolveCloseCaptureAmount captures max(local spent, on-chain settled)', () => {
@@ -906,6 +950,20 @@ describe('ChannelStore.deductFromChannel', () => {
     const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(result.ok).toBe(false)
     expect(result.channel.closeRequestedAt).toBe(1n)
+    expect(result.channel.spent).toBe(0n)
+    expect(result.channel.units).toBe(0)
+  })
+
+  test('rejects deduction during a cooperative close', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, {
+      highestVoucherAmount: 10_000_000n,
+      pendingCloseClaim: { expiresAt: Date.now() + 60_000, id: 'close-1' },
+      spent: 0n,
+    })
+
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
+    expect(result.ok).toBe(false)
     expect(result.channel.spent).toBe(0n)
     expect(result.channel.units).toBe(0)
   })

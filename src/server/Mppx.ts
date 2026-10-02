@@ -855,6 +855,7 @@ export function create<
     return prepared.method.validate!({
       credential: prepared.parsedCredential,
       envelope: prepared.envelope,
+      operation: 'validate',
       request: prepared.request,
     } as never)
   }
@@ -898,7 +899,12 @@ export function create<
     let receipt: Receipt.Receipt
     try {
       if (mi.broadcast && mi.validate)
-        await mi.validate({ credential: parsedCredential, envelope, request } as never)
+        await mi.validate({
+          credential: parsedCredential,
+          envelope,
+          operation: 'broadcast',
+          request,
+        } as never)
       const broadcast = mi.broadcast ?? mi.verify
       receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
@@ -1541,7 +1547,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       let receiptData: Receipt.Receipt
       try {
         if (broadcast && validate)
-          await validate({ credential: parsedCredential, envelope, request } as never)
+          await validate({
+            credential: parsedCredential,
+            envelope,
+            operation: 'broadcast',
+            request,
+          } as never)
         const broadcastCredential = broadcast ?? verify
         receiptData = await broadcastCredential({
           credential: parsedCredential,
