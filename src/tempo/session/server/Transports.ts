@@ -16,33 +16,27 @@ export type ReserveChargeParameters = {
   formatNeedVoucher(parameters: NeedVoucherEvent): string
   /** Store polling interval when `waitForUpdate` is unavailable. */
   pollIntervalMs: number
-  /** Amount already reserved but not yet committed by this stream loop. */
-  reservedAmount: bigint
+  /** Identifier owned by this stream across reserve, commit, and release. */
+  reservationId: string
+  /** Requires a previous uncommitted charge to retain its lease. */
+  requireExisting?: boolean | undefined
   /** Optional abort signal for long waits. */
   signal?: AbortSignal | undefined
   /** Channel store used for state reads and waits. */
   store: ChannelStore.ChannelStore
 }
 
-/** Parameters for committing previously reserved stream charges. */
+/** Inputs for updating the reservation owned by one stream. */
 export type CommitReservedChargesParameters = {
-  /** Reserved amount to commit. */
-  amount: bigint
-  /** Channel being metered. */
   channelId: Hex
-  /** Channel store used for atomic updates. */
+  reservationId: string
   store: ChannelStore.ChannelStore
-  /** Number of charge units to add. */
-  units: number
 }
 
-/**
- * Reserves voucher headroom for a future stream emission.
- *
- * If the channel lacks headroom, emits one need-voucher frame, then waits for
- * a store update or polling interval until the accepted voucher covers both
- * already-reserved charges and the next requested amount.
- */
+/** Lease duration for abandoned stream reservations. Active generators renew it. */
+export const streamReservationLeaseMs = 30_000
+
+/** Atomically reserves shared voucher coverage before billable stream work begins. */
 export async function reserveChargeOrWait(options: ReserveChargeParameters): Promise<void> {
   const {
     amount,
@@ -50,67 +44,142 @@ export async function reserveChargeOrWait(options: ReserveChargeParameters): Pro
     emit,
     formatNeedVoucher,
     pollIntervalMs,
-    reservedAmount,
+    reservationId,
     signal,
     store,
   } = options
-
-  let channel = await store.getChannel(channelId)
-  if (!channel) throw new Error('channel not found')
-  throwIfChannelClosed(channel)
-
-  const hasHeadroom = (state: ChannelStore.State) =>
-    state.highestVoucherAmount - state.spent - reservedAmount >= amount
-
-  if (hasHeadroom(channel)) return
-
-  await Promise.resolve(
-    emit(
-      formatNeedVoucher({
-        channelId,
-        requiredCumulative: (channel.spent + reservedAmount + amount).toString(),
-        acceptedCumulative: channel.highestVoucherAmount.toString(),
-        deposit: channel.deposit.toString(),
-      }),
-    ),
-  )
-
-  while (!hasHeadroom(channel)) {
-    await waitForUpdate(store, channelId, pollIntervalMs, signal)
-    channel = await store.getChannel(channelId)
+  if (amount < 0n) throw new Error('stream charge must be non-negative')
+  if (store.atomic === false) throw new Error('stream reservations require an atomic store')
+  let lastRequired: bigint | undefined
+  while (true) {
+    throwIfAborted(signal)
+    let channel = await store.getChannel(channelId)
     if (!channel) throw new Error('channel not found')
     throwIfChannelClosed(channel)
+    if (
+      options.requireExisting &&
+      (channel.streamReservations?.[reservationId]?.expiresAt ?? 0) <= Date.now()
+    )
+      throw new Error('stream reservation was lost')
+    if (
+      channel.highestVoucherAmount - channel.spent - ChannelStore.reservedStreamAmount(channel) >=
+      amount
+    ) {
+      let reserved = false
+      channel = await store.updateChannel(channelId, (current) => {
+        reserved = false
+        if (!current) return current
+        throwIfChannelClosed(current)
+        throwIfAborted(signal)
+        const now = Date.now()
+        const previous = current.streamReservations?.[reservationId]
+        if (options.requireExisting && !previous) throw new Error('stream reservation was lost')
+        if (previous && previous.expiresAt <= now) throw new Error('stream reservation expired')
+        if (
+          current.highestVoucherAmount -
+            current.spent -
+            ChannelStore.reservedStreamAmount(current) <
+          amount
+        )
+          return current
+        const reservations = Object.fromEntries(
+          Object.entries(current.streamReservations ?? {}).filter(
+            ([, item]) => item.expiresAt > now,
+          ),
+        )
+        reserved = true
+        return {
+          ...current,
+          streamReservations: {
+            ...reservations,
+            [reservationId]: {
+              amount: (previous?.amount ?? 0n) + amount,
+              units: (previous?.units ?? 0) + 1,
+              expiresAt: now + streamReservationLeaseMs,
+            },
+          },
+        }
+      })
+      if (reserved) return
+      if (!channel) throw new Error('channel not found')
+    }
+    const required = channel.spent + ChannelStore.reservedStreamAmount(channel) + amount
+    if (required !== lastRequired) {
+      lastRequired = required
+      await emit(
+        formatNeedVoucher({
+          channelId,
+          requiredCumulative: required.toString(),
+          acceptedCumulative: channel.highestVoucherAmount.toString(),
+          deposit: channel.deposit.toString(),
+        }),
+      )
+    }
+    await waitForUpdate(store, channelId, pollIntervalMs, signal)
   }
 }
 
-/** Atomically commits previously reserved stream charges to channel spend and unit counters. */
+/** Commits only this stream's live reservation, removing it in the same atomic update. */
 export async function commitReservedCharges(
   options: CommitReservedChargesParameters,
 ): Promise<ChannelStore.State | undefined> {
-  const { amount, channelId, store, units } = options
-  if (amount === 0n || units === 0) return
-
+  const { channelId, reservationId, store } = options
   let committed = false
   const channel = await store.updateChannel(channelId, (current) => {
-    // Store adapters may retry this callback. Only the final attempt determines
-    // whether the returned state includes this charge.
     committed = false
-    if (!current) return null
-    if (current.finalized) return current
-    if (current.closeRequestedAt !== 0n) return current
-    if (current.highestVoucherAmount - current.spent < amount) return current
+    if (!current) return current
+    throwIfChannelClosed(current)
+    const reservation = current.streamReservations?.[reservationId]
+    if (!reservation) return current
+    if (reservation.expiresAt <= Date.now()) throw new Error('stream reservation expired')
+    if (current.highestVoucherAmount - current.spent < reservation.amount)
+      throw new Error('reserved voucher coverage is no longer available')
+    const { [reservationId]: _, ...remaining } = current.streamReservations!
     committed = true
     return {
       ...current,
-      spent: current.spent + amount,
-      units: current.units + units,
+      streamReservations: remaining,
+      spent: current.spent + reservation.amount,
+      units: current.units + reservation.units,
     }
   })
-
   if (!channel) throw new Error('channel not found')
-  throwIfChannelClosed(channel)
-  if (!committed) throw new Error('reserved voucher coverage is no longer available')
-  return channel
+  return committed ? channel : undefined
+}
+
+/** Releases only the unused reservation owned by this stream. */
+export async function releaseReservedCharges({
+  store,
+  channelId,
+  reservationId,
+}: CommitReservedChargesParameters): Promise<void> {
+  await store.updateChannel(channelId, (current) => {
+    if (!current?.streamReservations?.[reservationId]) return current
+    const { [reservationId]: _, ...remaining } = current.streamReservations!
+    return { ...current, streamReservations: remaining }
+  })
+}
+
+/** Renews a live reservation without reviving an expired or released lease. */
+export async function renewReservedCharges({
+  store,
+  channelId,
+  reservationId,
+}: CommitReservedChargesParameters): Promise<void> {
+  await store.updateChannel(channelId, (current) => {
+    if (!current) throw new Error('channel not found')
+    throwIfChannelClosed(current)
+    const reservation = current.streamReservations?.[reservationId]
+    if (!reservation) return current
+    if (reservation.expiresAt <= Date.now()) throw new Error('stream reservation expired')
+    return {
+      ...current,
+      streamReservations: {
+        ...current.streamReservations,
+        [reservationId]: { ...reservation, expiresAt: Date.now() + streamReservationLeaseMs },
+      },
+    }
+  })
 }
 
 /** Throws when a channel can no longer be used for streaming charges. */

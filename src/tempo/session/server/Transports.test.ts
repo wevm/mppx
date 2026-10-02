@@ -1,12 +1,15 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
-import { ChannelClosedError } from '../../../Errors.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
+import { meterIterable } from './MeteredStream.js'
 import {
   commitReservedCharges,
   reserveChargeOrWait,
+  releaseReservedCharges,
+  renewReservedCharges,
+  streamReservationLeaseMs,
   send,
   subscribe,
   toText,
@@ -96,7 +99,7 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'test',
         store: memoryStore(channel()),
       })
 
@@ -114,11 +117,11 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'test',
         store,
       })
 
-      await Promise.resolve()
+      await vi.waitFor(() => expect(emitted).toHaveLength(1))
       expect(emitted.map((item) => JSON.parse(item))).toEqual([
         {
           channelId,
@@ -151,7 +154,7 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'test',
         store,
       })
 
@@ -166,8 +169,8 @@ describe('MeteredStream', () => {
           reads += 1
           return channel({ highestVoucherAmount: reads === 1 ? 25n : 30n, spent: 20n })
         },
-        async updateChannel() {
-          throw new Error('unexpected update')
+        async updateChannel(_, fn) {
+          return fn(await this.getChannel(channelId))
         },
         waitForUpdate(_channelId, signal) {
           return new Promise<void>((_resolve, reject) => {
@@ -189,7 +192,7 @@ describe('MeteredStream', () => {
         emit() {},
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'test',
         store,
       })
 
@@ -211,58 +214,236 @@ describe('MeteredStream', () => {
         emit() {},
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'test',
         store,
       })
     })
 
-    test('commitReservedCharges increments spend and units', async () => {
-      const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
+    function reservationStore(overrides: Partial<ChannelStore.State> = {}) {
+      return memoryStore(
+        channel({
+          streamReservations: { test: { amount: 10n, units: 1, expiresAt: Date.now() + 30_000 } },
+          ...overrides,
+        }),
+      )
+    }
 
-      await commitReservedCharges({ amount: 10n, channelId, store, units: 1 })
-
+    test('commits only the owned reservation exactly once', async () => {
+      const store = reservationStore()
+      await commitReservedCharges({ channelId, store, reservationId: 'test' })
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 30n,
+        units: 3,
+        streamReservations: {},
+      })
+      expect(
+        await commitReservedCharges({ channelId, store, reservationId: 'test' }),
+      ).toBeUndefined()
       expect(await store.getChannel(channelId)).toMatchObject({ spent: 30n, units: 3 })
     })
 
-    test('commitReservedCharges rejects when reserved coverage is no longer available', async () => {
+    test.each([
+      [{ spent: 50n }, 'reserved voucher coverage'],
+      [{ finalized: true }, 'finalized'],
+      [{ closeRequestedAt: 1n }, 'pending close'],
+      [{ streamReservations: { test: { amount: 10n, units: 1, expiresAt: 0 } } }, 'expired'],
+    ] as const)('rejects unavailable reservations: %#', async (overrides, error) => {
+      const store = reservationStore(overrides)
       await expect(
-        commitReservedCharges({
-          amount: 40n,
-          channelId,
-          store: memoryStore(channel({ spent: 20n, highestVoucherAmount: 50n })),
-          units: 1,
-        }),
-      ).rejects.toThrow('reserved voucher coverage is no longer available')
+        commitReservedCharges({ channelId, store, reservationId: 'test' }),
+      ).rejects.toThrow(error)
     })
 
     test('uses the final store retry to determine whether a charge committed', async () => {
-      const available = channel({ spent: 20n, highestVoucherAmount: 50n })
-      const unavailable = channel({ spent: 50n, highestVoucherAmount: 50n })
+      const available = await reservationStore().getChannel(channelId)
       const store: ChannelStore.ChannelStore = {
         async getChannel() {
-          return unavailable
+          return channel()
         },
-        async updateChannel(_channelId, fn) {
+        async updateChannel(_, fn) {
           fn(available)
-          return fn(unavailable)
+          return fn(channel())
         },
       }
-
-      await expect(
-        commitReservedCharges({ amount: 10n, channelId, store, units: 1 }),
-      ).rejects.toThrow('reserved voucher coverage is no longer available')
+      expect(
+        await commitReservedCharges({ channelId, store, reservationId: 'test' }),
+      ).toBeUndefined()
     })
 
-    test('commitReservedCharges rejects closed channels', async () => {
+    test('shares reservations across workers and excludes them from ordinary deductions', async () => {
+      const store = memoryStore(channel({ spent: 40n }))
+      const options = {
+        channelId,
+        amount: 10n,
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        emit: vi.fn(),
+        store,
+      }
+      await reserveChargeOrWait({ ...options, reservationId: 'first' })
+      expect((await ChannelStore.deductFromChannel(store, channelId, 1n)).ok).toBe(false)
+      const waiting = reserveChargeOrWait({
+        ...options,
+        store: { ...store },
+        reservationId: 'second',
+      })
+      await vi.waitFor(() => expect(options.emit).toHaveBeenCalled())
+      expect((await store.getChannel(channelId))?.streamReservations?.second).toBeUndefined()
+      await releaseReservedCharges({ store, channelId, reservationId: 'first' })
+      await waiting
+      await commitReservedCharges({ store, channelId, reservationId: 'second' })
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 50n, units: 3 })
+    })
+
+    test('reclaims expired reservations and cannot renew them', async () => {
+      const store = reservationStore({
+        streamReservations: { test: { amount: 30n, units: 1, expiresAt: 0 } },
+      })
       await expect(
-        commitReservedCharges({
-          amount: 10n,
+        renewReservedCharges({ store, channelId, reservationId: 'test' }),
+      ).rejects.toThrow('expired')
+      await reserveChargeOrWait({
+        store,
+        channelId,
+        reservationId: 'new',
+        amount: 30n,
+        emit() {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+      })
+      expect((await store.getChannel(channelId))?.streamReservations?.test).toBeUndefined()
+    })
+
+    test('does not replace a lost reservation when adding another manual charge', async () => {
+      const store = memoryStore(channel())
+      await expect(
+        reserveChargeOrWait({
+          store,
           channelId,
-          store: memoryStore(channel({ finalized: true })),
-          units: 1,
+          reservationId: 'lost',
+          requireExisting: true,
+          amount: 1n,
+          emit() {},
+          formatNeedVoucher,
+          pollIntervalMs: 1,
         }),
-      ).rejects.toThrow(ChannelClosedError)
+      ).rejects.toThrow('reservation was lost')
     })
+
+    test('releases on cancellation even while generation is still pending', async () => {
+      const store = memoryStore(channel())
+      const controller = new AbortController()
+      let finish!: () => void
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const iterator = meterIterable({
+        store,
+        channelId,
+        tickCost: 10n,
+        pollIntervalMs: 1,
+        signal: controller.signal,
+        emitNeedVoucher() {},
+        formatNeedVoucher,
+        async *generate(stream) {
+          await stream.charge()
+          await gate
+          yield 'late value'
+        },
+      })
+      const next = iterator.next()
+      await vi.waitFor(async () =>
+        expect(ChannelStore.reservedStreamAmount((await store.getChannel(channelId))!)).toBe(10n),
+      )
+      controller.abort()
+      await vi.waitFor(async () =>
+        expect(ChannelStore.reservedStreamAmount((await store.getChannel(channelId))!)).toBe(0n),
+      )
+      finish()
+      expect(await next).toMatchObject({ done: true })
+      expect((await store.getChannel(channelId))?.spent).toBe(20n)
+    })
+
+    test.each(['yield', 'complete', 'cancel after failure'] as const)(
+      'propagates renewal failure when the generator resumes with %s',
+      async (outcome) => {
+        vi.useFakeTimers()
+        try {
+          const store = memoryStore(channel())
+          const controller = new AbortController()
+          const failure = new Error('reservation renewal failed')
+          let finish!: () => void
+          const gate = new Promise<void>((resolve) => {
+            finish = resolve
+          })
+          let reserved!: () => void
+          const ready = new Promise<void>((resolve) => {
+            reserved = resolve
+          })
+          const iterator = meterIterable({
+            store,
+            channelId,
+            tickCost: 10n,
+            pollIntervalMs: 1,
+            signal: controller.signal,
+            emitNeedVoucher() {},
+            formatNeedVoucher,
+            async *generate(stream) {
+              await stream.charge()
+              reserved()
+              await gate
+              if (outcome !== 'complete') yield 'late value'
+            },
+          })
+          const next = iterator.next()
+          await ready
+          vi.spyOn(store, 'updateChannel').mockRejectedValueOnce(failure)
+          await vi.advanceTimersByTimeAsync(streamReservationLeaseMs / 3)
+          expect(controller.signal.aborted).toBe(false)
+          if (outcome === 'cancel after failure') controller.abort()
+          const rejected = expect(next).rejects.toBe(failure)
+          finish()
+          await rejected
+          expect(await store.getChannel(channelId)).toMatchObject({
+            spent: 20n,
+            streamReservations: {},
+          })
+          expect(vi.getTimerCount()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+          vi.restoreAllMocks()
+        }
+      },
+    )
+
+    test.each(['complete', 'throw', 'abort'] as const)(
+      'releases or commits manual reservations on %s',
+      async (outcome) => {
+        const store = memoryStore(channel())
+        const controller = new AbortController()
+        const iterator = meterIterable({
+          store,
+          channelId,
+          tickCost: 10n,
+          pollIntervalMs: 1,
+          signal: controller.signal,
+          emitNeedVoucher() {},
+          formatNeedVoucher,
+          async *generate(stream) {
+            await stream.charge()
+            if (outcome === 'throw') throw new Error('generator failed')
+            if (outcome === 'abort') controller.abort()
+            yield* []
+          },
+        })
+        if (outcome === 'throw') await expect(iterator.next()).rejects.toThrow('generator failed')
+        else await iterator.next()
+        expect(await store.getChannel(channelId)).toMatchObject({
+          spent: outcome === 'complete' ? 30n : 20n,
+          streamReservations: {},
+        })
+      },
+    )
   })
 })
 

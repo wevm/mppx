@@ -311,6 +311,10 @@ export interface BaseState {
   token: Address
   /** Number of charge operations (API requests) fulfilled in the current session. */
   units: number
+  /** Uncommitted stream charges shared across workers. */
+  streamReservations?:
+    | Record<string, { amount: bigint; units: number; expiresAt: number }>
+    | undefined
   /** Active cross-worker claim for server-scheduled settlement. */
   scheduledSettlementLease?: ScheduledSettlementLease | undefined
   /** ISO 8601 timestamp of the last server-scheduled settlement. */
@@ -632,6 +636,8 @@ export async function verifyAndAcceptVoucher(
  * - **D1 / SQL**: Database transactions
  */
 export type ChannelStore = {
+  /** False when the backing store only serializes mutations within this process. */
+  atomic?: boolean | undefined
   getChannel(channelId: Hex): Promise<State | null>
 
   /**
@@ -805,6 +811,7 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
   }
 
   const cs: ChannelStore = {
+    atomic: typeof atomicUpdate === 'function',
     async getChannel(channelId) {
       const normalizedChannelId = normalizeChannelId(channelId)
       return normalizeMaybeState(normalizedChannelId, await stateStore.get(normalizedChannelId))
@@ -882,9 +889,18 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.closeRequestedAt !== 0n)
     return { op: 'noop', result: { ok: false, channel: current } }
-  if (current.highestVoucherAmount - current.spent < amount)
+  if (current.highestVoucherAmount - current.spent - reservedStreamAmount(current) < amount)
     return { op: 'noop', result: { ok: false, channel: current } }
 
   const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
   return { op: 'set', value: next, result: { ok: true, channel: next } }
+}
+
+/** Returns unexpired stream reservations that ordinary deductions must respect. */
+export function reservedStreamAmount(state: Pick<State, 'streamReservations'>): bigint {
+  const now = Date.now()
+  return Object.values(state.streamReservations ?? {}).reduce(
+    (total, reservation) => total + (reservation.expiresAt > now ? reservation.amount : 0n),
+    0n,
+  )
 }
