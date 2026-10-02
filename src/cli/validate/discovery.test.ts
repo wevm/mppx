@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import { validateChallenge } from './challenge.js'
 import {
   buildUrl,
   extractEndpointsFromDiscovery,
@@ -89,6 +90,34 @@ describe('buildUrl', () => {
       const endpoint = { method: 'POST', path: '/plan' }
       expect(buildUrl('http://localhost/mpp/', endpoint)).toBe('http://localhost/mpp/plan')
     })
+  })
+
+  test.each([
+    'https://evil.example/collect',
+    '//evil.example/collect',
+    '/https://evil.example/collect',
+    '/\\evil/collect',
+  ])('rejects a path that can replace the configured origin: %s', (path) => {
+    expect(() => buildUrl('https://trusted.example/api', { method: 'GET', path })).toThrow(
+      'OpenAPI path must be an origin-relative path',
+    )
+  })
+})
+
+describe('validateChallenge', () => {
+  test('reports rejected discovery paths as validation failures', async () => {
+    const result = await validateChallenge(
+      'https://trusted.example/api',
+      { method: 'GET', path: '/https://evil.example/collect' },
+      false,
+    )
+
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        label: 'Request URL valid',
+        severity: 'fail',
+      }),
+    ])
   })
 })
 

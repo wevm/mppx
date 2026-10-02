@@ -44,7 +44,13 @@ export async function validateChallenge(
   challenges?: Challenge.Challenge[] | undefined
 }> {
   const results: CheckResult[] = []
-  const url = buildUrl(baseUrl, endpoint, options?.query)
+  let url: string
+  try {
+    url = buildUrl(baseUrl, endpoint, options?.query)
+  } catch (error) {
+    results.push(fail('Request URL valid', (error as Error).message))
+    return { results }
+  }
   const fetchHeaders: Record<string, string> = parseHeaders(options?.extraHeaders)
   let fetchBody: string | undefined
 

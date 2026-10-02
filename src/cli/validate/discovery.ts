@@ -123,14 +123,25 @@ export function extractRequestBodyFromDiscovery(
   return undefined
 }
 
+/** Builds an endpoint URL and rejects paths that could escape the discovery document's origin. */
 export function buildUrl(baseUrl: string, endpoint: EndpointSpec, query?: string[]): string {
+  if (
+    !endpoint.path.startsWith('/') ||
+    endpoint.path.startsWith('//') ||
+    endpoint.path.includes('\\')
+  )
+    throw new Error(`OpenAPI path must be an origin-relative path: ${endpoint.path}`)
   let path = endpoint.path
   if (endpoint.parameters) {
     path = substitutePathParams(path, endpoint.parameters)
   }
   // Strip leading slash so URL resolves relative to baseUrl's path, not root.
   const relativePath = path.startsWith('/') ? path.slice(1) : path
-  let url = new URL(relativePath, baseUrl.replace(/\/?$/, '/')).href
+  const base = new URL(baseUrl.replace(/\/?$/, '/'))
+  const resolved = new URL(relativePath, base)
+  if (resolved.origin !== base.origin)
+    throw new Error(`OpenAPI path must be an origin-relative path: ${endpoint.path}`)
+  let url = resolved.href
   if (query) {
     const u = new URL(url)
     for (const q of query) {
