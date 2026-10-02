@@ -124,7 +124,7 @@ export function authorizationDomain(parameters: {
 
 /** Computes the Payment-auth EVM challenge hash used as the EIP-3009 nonce. */
 export function challengeHash(challenge: { id: string; realm: string }): `0x${string}` {
-  return Hash.keccak256(Bytes.fromString(`${challenge.id}${challenge.realm}`), {
+  return Hash.keccak256(Bytes.fromString(JSON.stringify([challenge.id, challenge.realm])), {
     as: 'Hex',
   }) as `0x${string}`
 }
