@@ -474,6 +474,28 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(2)
   })
 
+  test('respondReceipt accepts an ordinary streaming callback', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+    const stream = () =>
+      (async function* () {
+        yield 'hello'
+      })()
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: stream,
+      challengeId,
+    })
+
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+    expect(await readResponseText(response)).toContain('event: message\ndata: hello\n\n')
+  })
+
   test('respondReceipt with upstream SSE Response auto-detects and iterates', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)

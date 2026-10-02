@@ -65,46 +65,324 @@ describe('payment', () => {
         }),
     })
 
-    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
       app.get('/', () => {
         handlerRan = true
         return { data: 'content' }
       }),
     )
 
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
+    const response = await app.handle(new Request('http://localhost/'))
     expect(response.status).toBe(204)
     expect(response.headers.get('Payment-Receipt')).toBe('management-receipt')
     expect(await response.text()).toBe('')
     expect(handlerRan).toBe(false)
-
-    server.close()
   })
 
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
-        new Response(response?.body ?? null, {
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response(response.body, {
           headers: {
-            ...(response ? Object.fromEntries(response.headers) : {}),
+            ...Object.fromEntries(response.headers),
             'PAYMENT-RESPONSE': 'x402-response',
           },
-          status: response?.status ?? 200,
-        }),
+          status: response.status,
+        })
+      },
     })
 
-    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
       app.get('/', () => ({ data: 'content' })),
     )
 
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
+    const response = await app.handle(new Request('http://localhost/'))
     expect(response.status).toBe(200)
     expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
+    expect(await response.json()).toEqual({ data: 'content' })
+  })
 
-    server.close()
+  test.each(['guard', 'onBeforeHandle'] as const)(
+    'preserves receipts for legacy %s registration',
+    async (registration) => {
+      const intent = () => async () => ({
+        status: 200 as const,
+        withReceipt: (response?: Response) => {
+          if (!response)
+            throw Object.assign(new Error('withReceipt() requires a response argument'), {
+              name: 'MissingReceiptResponseError',
+            })
+          return new Response(response.body, {
+            headers: { ...Object.fromEntries(response.headers), 'Payment-Receipt': 'paid' },
+            status: response.status,
+          })
+        },
+      })
+      const hook = payment(intent as any, {} as any)
+      const app =
+        registration === 'guard'
+          ? new Elysia().guard({ beforeHandle: hook }, (app) => app.get('/', () => 'content'))
+          : new Elysia().onBeforeHandle(hook).get('/', () => 'content')
+
+      const response = await app.handle(new Request('http://localhost/'))
+      expect(response.headers.get('Payment-Receipt')).toBe('paid')
+      expect(await response.text()).toBe('content')
+    },
+  )
+
+  test.each(['guard', 'onBeforeHandle'] as const)(
+    'fails closed for SSE with legacy %s registration',
+    async (registration) => {
+      let handlerRan = false
+      const intent = () => async () => ({
+        _supportsStreamingReceipts: true,
+        status: 200 as const,
+        withReceipt: (response?: Response) => {
+          if (!response)
+            throw Object.assign(new Error('withReceipt() requires a response argument'), {
+              name: 'MissingReceiptResponseError',
+            })
+          return new Response('metered')
+        },
+      })
+      const hook = payment(intent as any, {} as any)
+      const app =
+        registration === 'guard'
+          ? new Elysia().guard({ beforeHandle: hook }, (app) =>
+              app.get('/', () => {
+                handlerRan = true
+                return 'unmetered content'
+              }),
+            )
+          : new Elysia().onBeforeHandle(hook).get('/', () => {
+              handlerRan = true
+              return 'unmetered content'
+            })
+
+      const response = await app.handle(new Request('http://localhost/'))
+      expect(response.status).toBe(500)
+      expect(await response.text()).toContain('paired beforeHandle and afterHandle')
+      expect(handlerRan).toBe(false)
+    },
+  )
+
+  test('preserves async iterable bodies for HTTP receipt transports', async () => {
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response(response.body, {
+          headers: { 'Payment-Receipt': 'http-receipt' },
+        })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', async function* () {
+        yield 'original stream'
+      }),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+    expect(response.headers.get('Payment-Receipt')).toBe('http-receipt')
+    const chunk = await response.body!.getReader().read()
+    expect(chunk.value).toBe('original stream')
+  })
+
+  test('preserves the receipt when a paid route throws', async () => {
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response(response.body, {
+          headers: { ...Object.fromEntries(response.headers), 'Payment-Receipt': 'paid' },
+          status: response.status,
+        })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => {
+        throw new Error('route failed')
+      }),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Payment-Receipt')).toBe('paid')
+  })
+
+  test('preserves the receipt when response mapping throws', async () => {
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response(response.body, {
+          headers: { ...Object.fromEntries(response.headers), 'Payment-Receipt': 'paid' },
+          status: response.status,
+        })
+      },
+    })
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => circular),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Payment-Receipt')).toBe('paid')
+  })
+
+  test('wraps the actual route response for a custom streaming transport', async () => {
+    let wrappedResponse: unknown
+    const intent = () => async () => ({
+      _transportName: 'custom-stream',
+      _supportsStreamingReceipts: true,
+      status: 200 as const,
+      withReceipt: (response?: unknown) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        wrappedResponse = response
+        return new Response('metered stream', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      },
+    })
+
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', async function* () {
+        yield 'original stream'
+      }),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+    expect(await response.text()).toBe('metered stream')
+    expect(typeof (wrappedResponse as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe(
+      'function',
+    )
+  })
+
+  test('forwards an ordinary streaming callback to the receipt transport', async () => {
+    let wrappedResponse: unknown
+    const stream = () =>
+      (async function* () {
+        yield 'original stream'
+      })()
+    const intent = () => async () => ({
+      _supportsStreamingReceipts: true,
+      status: 200 as const,
+      withReceipt: (response?: unknown) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        wrappedResponse = response
+        return new Response('metered stream', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => stream),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(await response.text()).toBe('metered stream')
+    expect(wrappedResponse).toBe(stream)
+  })
+
+  test('wraps a Response exactly once', async () => {
+    let wraps = 0
+    const intent = () => async () => ({
+      _supportsStreamingReceipts: true,
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        wraps++
+        return new Response(response.body, {
+          headers: { ...Object.fromEntries(response.headers), 'Payment-Receipt': 'paid' },
+          status: response.status,
+        })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => new Response('content')),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(wraps).toBe(1)
+    expect(response.headers.get('Payment-Receipt')).toBe('paid')
+    expect(await response.text()).toBe('content')
+  })
+
+  test('wraps a non-streaming Response exactly once', async () => {
+    let wraps = 0
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        wraps++
+        return new Response(response.body, {
+          headers: { ...Object.fromEntries(response.headers), 'Payment-Receipt': 'paid' },
+          status: response.status,
+        })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => new Response('content')),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(wraps).toBe(1)
+    expect(response.headers.get('Payment-Receipt')).toBe('paid')
+    expect(await response.text()).toBe('content')
+  })
+
+  test('returns a receipt-wrapping failure instead of unpaid route content', async () => {
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response('payment required', { status: 402 })
+      },
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => ({ data: 'unpaid content' })),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+
+    expect(response.status).toBe(402)
+    expect(await response.text()).toBe('payment required')
   })
 })
 
@@ -139,7 +417,7 @@ describe('charge', () => {
   test('returns 402 when no credential', async () => {
     const { mppx } = createChargeHarness(false)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -154,7 +432,7 @@ describe('charge', () => {
   test('returns 200 with receipt on valid payment', async () => {
     const { fetch, mppx } = createChargeHarness(false)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -175,7 +453,7 @@ describe('charge', () => {
   test('fee payer: returns 200 with receipt on valid payment', async () => {
     const { fetch, mppx } = createChargeHarness(true)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -255,7 +533,7 @@ describe('session', () => {
     const { mppx } = createSessionHarness(false)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 
@@ -271,7 +549,7 @@ describe('session', () => {
     const { fetch, mppx } = createSessionHarness(false)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 
@@ -293,7 +571,7 @@ describe('session', () => {
     const { fetch, mppx } = createSessionHarness(true)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 

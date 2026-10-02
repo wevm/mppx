@@ -28,6 +28,8 @@ export type Transport<
   name: string
   /** HTTP header names from which this transport can read credentials. */
   credentialHeaders?: readonly string[] | undefined
+  /** Whether receipt responses may wrap route-produced async iterables. */
+  supportsStreamingReceipts?: boolean | undefined
   /** Captures the transport request into an immutable verification snapshot. */
   captureRequest?: ((input: input) => MaybePromise<Method.CapturedRequest>) | undefined
   /**
