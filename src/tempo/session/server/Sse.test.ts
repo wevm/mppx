@@ -448,7 +448,7 @@ describe('serve', () => {
     expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
   })
 
-  test('drops a terminal reservation when the reader cancels', async () => {
+  test('retains a manual charge when the reader cancels', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)
 
@@ -485,7 +485,7 @@ describe('serve', () => {
     await finished
 
     const channel = await storage.getChannel(channelId)
-    expect(channel).toMatchObject({ spent: 0n, units: 0 })
+    expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
   })
 
   test('emits multiline message values as a single SSE message event', async () => {
@@ -780,7 +780,7 @@ describe('serve', () => {
     await expect(reader.read()).rejects.toThrow('channel not found')
   })
 
-  test('rejects a reserved charge when channel close is requested before commit', async () => {
+  test('rejects manual charges after channel close is requested', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)
 
@@ -790,10 +790,10 @@ describe('serve', () => {
       challengeId,
       tickCost: 1000000n,
       generate: async function* (stream) {
-        await stream.charge()
         await storage.updateChannel(channelId, (current) =>
           current ? { ...current, closeRequestedAt: 1n } : null,
         )
+        await stream.charge()
         yield 'blocked'
       },
     })

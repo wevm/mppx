@@ -56,9 +56,8 @@ export type { SessionController } from './MeteredStream.js'
  * 2. If balance is sufficient, emits `event: message` with the value.
  * 3. If balance is exhausted, emits `event: payment-need-voucher`
  *    and polls store until the client tops up the channel.
- * 4. Commits the reserved charge immediately before the chunk is emitted. If a
- *    manual generator completes after charging without yielding another chunk,
- *    commits that terminal charge on successful completion.
+ * 4. Commits automatic charges before emission and manual charges before
+ *    `stream.charge()` resolves, retaining them on cancellation or failure.
  * 5. On generator completion, emits a final `event: payment-receipt`.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
