@@ -172,6 +172,7 @@ async function createSerializedTransaction(parameters: {
   }[]
   gas?: bigint | undefined
   signed?: boolean | undefined
+  validBefore?: number | undefined
 }) {
   return (await Transaction.serialize({
     chainId,
@@ -184,7 +185,7 @@ async function createSerializedTransaction(parameters: {
           maxFeePerGas: 1n,
           maxPriorityFeePerGas: 1n,
           nonceKey: maxUint256,
-          validBefore: Math.floor(Date.now() / 1_000) + 600,
+          validBefore: parameters.validBefore ?? Math.floor(Date.now() / 1_000) + 600,
         }
       : {}),
     ...(parameters.signed
@@ -229,6 +230,7 @@ async function createOpenTransaction(
     payee?: `0x${string}` | undefined
     signed?: boolean | undefined
     token?: `0x${string}` | undefined
+    validBefore?: number | undefined
     to?: `0x${string}` | undefined
     prefixCalls?:
       | readonly {
@@ -255,6 +257,7 @@ async function createOpenTransaction(
     calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
     gas: parameters.gas,
     signed: parameters.signed,
+    validBefore: parameters.validBefore,
   })
 }
 
@@ -933,7 +936,7 @@ describe('precompile broadcastOpenTransaction', () => {
 
   test('hosted fee-payer relays a sender-signed open without local co-signing', async () => {
     const rpcMethods: string[] = []
-    const serializedTransaction = await createOpenTransaction({ signed: true })
+    const serializedTransaction = await createOpenTransaction({ gas: 100_000n, signed: true })
     const transaction = Transaction.deserialize(
       serializedTransaction as Transaction.TransactionSerializedTempo,
     )
@@ -974,6 +977,126 @@ describe('precompile broadcastOpenTransaction', () => {
     expect(rpcMethods.indexOf('eth_call')).toBeLessThan(
       rpcMethods.indexOf('eth_sendRawTransaction'),
     )
+  })
+
+  test('hosted fee-payer enforces local sponsor policy before relay', async () => {
+    const serializedTransaction = await createOpenTransaction({ gas: 2_000_001n, signed: true })
+    const transaction = Transaction.deserialize(
+      serializedTransaction as Transaction.TransactionSerializedTempo,
+    )
+    const payer = transaction.from!
+    const expiringNonceHash = Channel.computeExpiringNonceHash(
+      Channel.transactionForExpiringNonceHash({ feePayer: true, transaction }),
+      { sender: payer },
+    )
+    const expectedDescriptor = { ...descriptor, payer, expiringNonceHash }
+    const channelId = Channel.computeId({
+      ...expectedDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const rpcMethods: string[] = []
+
+    await expect(
+      Chain.broadcastOpenTransaction({
+        chainId,
+        client: createMockClient({ rpcMethods }),
+        escrowContract: tip20ChannelEscrow,
+        expectedAuthorizedSigner: descriptor.authorizedSigner,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        expectedExpiringNonceHash: expiringNonceHash,
+        expectedOperator: descriptor.operator,
+        expectedPayee: descriptor.payee,
+        expectedPayer: payer,
+        feePayer: true,
+        feePayerPolicy: { maxGas: 2_000_000n },
+        serializedTransaction,
+      }),
+    ).rejects.toThrow('fee-payer policy maxGas exceeded')
+
+    expect(rpcMethods).not.toContain('eth_sendRawTransaction')
+  })
+
+  test('hosted fee-payer rejects relay-completed fee limits', async () => {
+    const serializedTransaction = await createOpenTransaction({ signed: true })
+    const transaction = Transaction.deserialize(
+      serializedTransaction as Transaction.TransactionSerializedTempo,
+    )
+    const payer = transaction.from!
+    const expiringNonceHash = Channel.computeExpiringNonceHash(
+      Channel.transactionForExpiringNonceHash({ feePayer: true, transaction }),
+      { sender: payer },
+    )
+    const expectedDescriptor = { ...descriptor, payer, expiringNonceHash }
+    const channelId = Channel.computeId({
+      ...expectedDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const rpcMethods: string[] = []
+
+    await expect(
+      Chain.broadcastOpenTransaction({
+        chainId,
+        client: createMockClient({ rpcMethods }),
+        escrowContract: tip20ChannelEscrow,
+        expectedAuthorizedSigner: descriptor.authorizedSigner,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        expectedExpiringNonceHash: expiringNonceHash,
+        expectedOperator: descriptor.operator,
+        expectedPayee: descriptor.payee,
+        expectedPayer: payer,
+        feePayer: true,
+        serializedTransaction,
+      }),
+    ).rejects.toThrow('must declare gas')
+
+    expect(rpcMethods).not.toContain('eth_sendRawTransaction')
+  })
+
+  test('hosted fee-payer enforces transaction validity windows before relay', async () => {
+    const serializedTransaction = await createOpenTransaction({
+      gas: 100_000n,
+      signed: true,
+      validBefore: Math.floor(Date.now() / 1_000) + 3_600,
+    })
+    const transaction = Transaction.deserialize(
+      serializedTransaction as Transaction.TransactionSerializedTempo,
+    )
+    const payer = transaction.from!
+    const expiringNonceHash = Channel.computeExpiringNonceHash(
+      Channel.transactionForExpiringNonceHash({ feePayer: true, transaction }),
+      { sender: payer },
+    )
+    const expectedDescriptor = { ...descriptor, payer, expiringNonceHash }
+    const channelId = Channel.computeId({
+      ...expectedDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const rpcMethods: string[] = []
+
+    await expect(
+      Chain.broadcastOpenTransaction({
+        chainId,
+        client: createMockClient({ rpcMethods }),
+        escrowContract: tip20ChannelEscrow,
+        expectedAuthorizedSigner: descriptor.authorizedSigner,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        expectedExpiringNonceHash: expiringNonceHash,
+        expectedOperator: descriptor.operator,
+        expectedPayee: descriptor.payee,
+        expectedPayer: payer,
+        feePayer: true,
+        feePayerPolicy: { maxValidityWindowSeconds: 60 },
+        serializedTransaction,
+      }),
+    ).rejects.toThrow('validity window exceeds sponsor policy')
+
+    expect(rpcMethods).not.toContain('eth_sendRawTransaction')
   })
 
   test('rejects expiring nonce hash mismatches before broadcasting', async () => {

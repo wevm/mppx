@@ -556,7 +556,24 @@ function validateCredentialSponsorship(parameters: {
     feePayerPolicy,
     transaction,
   } = parameters
-  if (!feePayer || feePayer === true) return
+  if (!feePayer) return
+  if (feePayer === true) {
+    assertPrecompileFeePayerPolicy({ prepared: transaction, policy: feePayerPolicy })
+    if (
+      feePayerPolicy?.allowKeyAuthorization === false &&
+      transaction.keyAuthorization !== undefined
+    )
+      throw new BadRequestError({ reason: 'fee-payer policy keyAuthorization is not allowed' })
+    FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
+    FeePayer.assertTransactionPolicy({
+      challengeExpires,
+      chainId,
+      details,
+      policy: feePayerPolicy,
+      transaction,
+    })
+    return
+  }
   FeePayer.prepareSponsoredTransaction({
     account: feePayer,
     allowedFeeTokens,
