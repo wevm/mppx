@@ -92,6 +92,9 @@ export async function commitReservedCharges(
 
   let committed = false
   const channel = await store.updateChannel(channelId, (current) => {
+    // Store adapters may retry this callback. Only the final attempt determines
+    // whether the returned state includes this charge.
+    committed = false
     if (!current) return null
     if (current.finalized) return current
     if (current.closeRequestedAt !== 0n) return current

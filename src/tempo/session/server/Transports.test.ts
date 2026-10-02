@@ -177,6 +177,24 @@ describe('MeteredStream', () => {
       ).rejects.toThrow('reserved voucher coverage is no longer available')
     })
 
+    test('uses the final store retry to determine whether a charge committed', async () => {
+      const available = channel({ spent: 20n, highestVoucherAmount: 50n })
+      const unavailable = channel({ spent: 50n, highestVoucherAmount: 50n })
+      const store: ChannelStore.ChannelStore = {
+        async getChannel() {
+          return unavailable
+        },
+        async updateChannel(_channelId, fn) {
+          fn(available)
+          return fn(unavailable)
+        },
+      }
+
+      await expect(
+        commitReservedCharges({ amount: 10n, channelId, store, units: 1 }),
+      ).rejects.toThrow('reserved voucher coverage is no longer available')
+    })
+
     test('commitReservedCharges rejects closed channels', async () => {
       await expect(
         commitReservedCharges({
