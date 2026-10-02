@@ -311,12 +311,20 @@ export interface BaseState {
   token: Address
   /** Number of charge operations (API requests) fulfilled in the current session. */
   units: number
+  /** Active cross-worker claim for server-scheduled settlement. */
+  scheduledSettlementLease?: ScheduledSettlementLease | undefined
   /** ISO 8601 timestamp of the last server-scheduled settlement. */
   lastSettlementAt?: string | undefined
   /** Cumulative spent value when the last server-scheduled settlement ran. */
   lastSettlementSpent?: bigint | undefined
   /** Charge operation count when the last server-scheduled settlement ran. */
   lastSettlementUnits?: number | undefined
+}
+
+/** Expiring ownership claim for one server-scheduled settlement attempt. */
+export type ScheduledSettlementLease = {
+  expiresAt: number
+  owner: string
 }
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */

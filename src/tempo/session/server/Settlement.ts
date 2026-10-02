@@ -162,9 +162,12 @@ export type OnSessionSettlement = (context: SessionSettlementContext) => MaybePr
 /** Inputs used to mark a channel after automatic scheduled settlement succeeds. */
 export type MarkSettlementCompleteParameters = {
   channelId: ChannelStore.State['channelId']
+  leaseOwner: string
   settledAt?: string | undefined
   store: ChannelStore.ChannelStore
 }
+
+const scheduledSettlementLeaseMs = 5 * 60_000
 
 /** Converts a public settlement schedule into raw-unit thresholds. */
 export function resolveSettlementSchedule(
@@ -231,17 +234,74 @@ export function isSettlementDue(
 
 /** Records the channel spend/unit counters that a scheduled settlement captured. */
 export async function markSettlementComplete(parameters: MarkSettlementCompleteParameters) {
-  const { channelId, store, settledAt = new Date().toISOString() } = parameters
-  await store.updateChannel(channelId, (current) =>
-    current
-      ? {
-          ...current,
-          lastSettlementAt: settledAt,
-          lastSettlementSpent: current.spent,
-          lastSettlementUnits: current.units,
-        }
-      : current,
-  )
+  const { channelId, leaseOwner, store, settledAt = new Date().toISOString() } = parameters
+  await store.updateChannel(channelId, (current) => {
+    if (!current) return current
+    if (current.scheduledSettlementLease?.owner !== leaseOwner) return current
+    const { scheduledSettlementLease: _, ...channel } = current
+    return {
+      ...channel,
+      lastSettlementAt: settledAt,
+      lastSettlementSpent: current.spent,
+      lastSettlementUnits: current.units,
+    }
+  })
+}
+
+/** Atomically claims one due scheduled settlement across server workers. */
+export async function claimScheduledSettlement(parameters: {
+  channelId: Hex
+  leaseMs?: number | undefined
+  schedule: ResolvedSettlementSchedule
+  store: ChannelStore.ChannelStore
+}): Promise<string | undefined> {
+  const { channelId, leaseMs = scheduledSettlementLeaseMs, schedule, store } = parameters
+  const now = Date.now()
+  const owner = globalThis.crypto.randomUUID()
+  let claimed = false
+  await store.updateChannel(channelId, (current) => {
+    claimed = false
+    if (!current || !isSettlementDue(current, schedule)) return current
+    const lease = current.scheduledSettlementLease
+    if (lease && lease.expiresAt > now) return current
+    claimed = true
+    return {
+      ...current,
+      scheduledSettlementLease: { expiresAt: now + leaseMs, owner },
+    }
+  })
+  return claimed ? owner : undefined
+}
+
+/** Extends an owned scheduled settlement lease while its transaction is in flight. */
+export async function renewScheduledSettlement(parameters: {
+  channelId: Hex
+  leaseMs?: number | undefined
+  leaseOwner: string
+  store: ChannelStore.ChannelStore
+}): Promise<void> {
+  const { channelId, leaseMs = scheduledSettlementLeaseMs, leaseOwner, store } = parameters
+  await store.updateChannel(channelId, (current) => {
+    if (!current || current.scheduledSettlementLease?.owner !== leaseOwner) return current
+    return {
+      ...current,
+      scheduledSettlementLease: { expiresAt: Date.now() + leaseMs, owner: leaseOwner },
+    }
+  })
+}
+
+/** Releases a scheduled settlement claim after a failed attempt. */
+export async function releaseScheduledSettlement(parameters: {
+  channelId: Hex
+  leaseOwner: string
+  store: ChannelStore.ChannelStore
+}): Promise<void> {
+  const { channelId, leaseOwner, store } = parameters
+  await store.updateChannel(channelId, (current) => {
+    if (!current || current.scheduledSettlementLease?.owner !== leaseOwner) return current
+    const { scheduledSettlementLease: _, ...channel } = current
+    return channel
+  })
 }
 
 /** Callback used by post-verification accounting to deduct spend from a channel. */
@@ -422,18 +482,40 @@ export async function maybeSettleScheduled(
   parameters: MaybeSettleScheduledParameters,
 ): Promise<Hex | undefined> {
   const { channel, schedule, store } = parameters
-  if (!isSettlementDue(channel, schedule)) return undefined
-  const txHash = await settle(store, parameters.client, channel.channelId, {
-    account: parameters.account,
-    ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
-    ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
-    ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-    onSessionSettlement: parameters.onSessionSettlement
-      ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
-      : undefined,
+  if (!schedule || !isSettlementDue(channel, schedule)) return undefined
+  const leaseOwner = await claimScheduledSettlement({
+    channelId: channel.channelId,
+    schedule,
+    store,
   })
-  await markSettlementComplete({ channelId: channel.channelId, store })
-  return txHash
+  if (!leaseOwner) return undefined
+  const renewal = setInterval(() => {
+    void renewScheduledSettlement({
+      channelId: channel.channelId,
+      leaseOwner,
+      store,
+    }).catch(() => undefined)
+  }, scheduledSettlementLeaseMs / 2)
+  try {
+    const txHash = await settle(store, parameters.client, channel.channelId, {
+      account: parameters.account,
+      ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+      ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+      ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+      onSessionSettlement: parameters.onSessionSettlement
+        ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
+        : undefined,
+    })
+    await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store })
+    return txHash
+  } catch (error) {
+    await releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
+      () => undefined,
+    )
+    throw error
+  } finally {
+    clearInterval(renewal)
+  }
 }
 
 /** Settles the highest accepted voucher for a precompile-backed session channel. */

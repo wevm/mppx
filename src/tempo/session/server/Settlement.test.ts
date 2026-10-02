@@ -5,12 +5,16 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
 import type * as Method from '../../../Method.js'
+import * as Store from '../../../Store.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
-import type * as ChannelStore from './ChannelStore.js'
+import * as ChannelStore from './ChannelStore.js'
 import {
   applyVerifiedHttpAccounting,
+  claimScheduledSettlement,
   isSettlementDue,
   readRequestFeePayer,
+  renewScheduledSettlement,
+  releaseScheduledSettlement,
   resolveCredentialFeePayer,
   resolveRequestFeePayer,
   resolveSettlementProgress,
@@ -355,6 +359,71 @@ describe('SettlementSchedule', () => {
             : channel()
 
       expect(isSettlementDue(state, schedule)).toBe(false)
+    })
+
+    test('allows only one active settlement claim per channel', async () => {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () => channel())
+
+      const claims = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          claimScheduledSettlement({ channelId, schedule: { units: 1 }, store }),
+        ),
+      )
+
+      expect(claims.filter(Boolean)).toHaveLength(1)
+    })
+
+    test('releases only the owned settlement claim', async () => {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () => channel())
+      const owner = await claimScheduledSettlement({ channelId, schedule: { units: 1 }, store })
+      if (!owner) throw new Error('expected settlement claim')
+
+      await releaseScheduledSettlement({ channelId, leaseOwner: 'other-worker', store })
+      expect((await store.getChannel(channelId))?.scheduledSettlementLease?.owner).toBe(owner)
+
+      await releaseScheduledSettlement({ channelId, leaseOwner: owner, store })
+      expect((await store.getChannel(channelId))?.scheduledSettlementLease).toBeUndefined()
+    })
+
+    test('reclaims an expired settlement lease', async () => {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () =>
+        channel({
+          scheduledSettlementLease: { expiresAt: Date.now() - 1, owner: 'stopped-worker' },
+        }),
+      )
+
+      const owner = await claimScheduledSettlement({ channelId, schedule: { units: 1 }, store })
+
+      expect(owner).toBeTruthy()
+      expect(owner).not.toBe('stopped-worker')
+      expect((await store.getChannel(channelId))?.scheduledSettlementLease?.owner).toBe(owner)
+    })
+
+    test('renews an owned settlement lease', async () => {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () => channel())
+      const owner = await claimScheduledSettlement({
+        channelId,
+        leaseMs: 1,
+        schedule: { units: 1 },
+        store,
+      })
+      if (!owner) throw new Error('expected settlement claim')
+      const previousExpiry = (await store.getChannel(channelId))!.scheduledSettlementLease!
+        .expiresAt
+
+      await renewScheduledSettlement({ channelId, leaseMs: 60_000, leaseOwner: owner, store })
+
+      expect((await store.getChannel(channelId))?.scheduledSettlementLease).toEqual({
+        expiresAt: expect.any(Number),
+        owner,
+      })
+      expect(
+        (await store.getChannel(channelId))!.scheduledSettlementLease!.expiresAt,
+      ).toBeGreaterThan(previousExpiry)
     })
   })
 })
