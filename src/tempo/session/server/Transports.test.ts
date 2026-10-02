@@ -158,6 +158,44 @@ describe('MeteredStream', () => {
       expect(emitted).toHaveLength(1)
     })
 
+    test('cancels a store waiter when the polling timeout wins', async () => {
+      let reads = 0
+      let waiterAborted = false
+      const store: ChannelStore.ChannelStore = {
+        async getChannel() {
+          reads += 1
+          return channel({ highestVoucherAmount: reads === 1 ? 25n : 30n, spent: 20n })
+        },
+        async updateChannel() {
+          throw new Error('unexpected update')
+        },
+        waitForUpdate(_channelId, signal) {
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => {
+                waiterAborted = true
+                reject(signal.reason)
+              },
+              { once: true },
+            )
+          })
+        },
+      }
+
+      await reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit() {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservedAmount: 0n,
+        store,
+      })
+
+      expect(waiterAborted).toBe(true)
+    })
+
     test('commitReservedCharges increments spend and units', async () => {
       const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
 

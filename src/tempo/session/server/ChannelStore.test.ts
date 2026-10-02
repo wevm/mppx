@@ -803,6 +803,18 @@ describe('channelStore', () => {
       expect(count).toBe(3)
     })
 
+    test('aborting a waiter rejects it and releases its subscription', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await seedChannel(cs)
+      const controller = new AbortController()
+      const waiter = cs.waitForUpdate!(channelId, controller.signal)
+
+      controller.abort(new Error('cancelled'))
+
+      await expect(waiter).rejects.toThrow('cancelled')
+      await cs.updateChannel(channelId, (c) => (c ? { ...c, spent: 1n } : null))
+    })
+
     test('different channels are independent', async () => {
       const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)

@@ -646,11 +646,12 @@ export type ChannelStore = {
    * Returns a `Promise` that resolves once `updateChannel` is called for
    * `channelId`. Implementations should resolve immediately if the channel
    * was updated between the call to `waitForUpdate` and the `Promise`
-   * being awaited.
+   * being awaited. Implementations must reject and release the waiter when
+   * `signal` aborts.
    *
    * When not implemented, callers fall back to polling.
    */
-  waitForUpdate?(channelId: Hex): Promise<void>
+  waitForUpdate?(channelId: Hex, signal?: AbortSignal): Promise<void>
 
   /**
    * Atomic read-modify-write that returns the callback's `result` directly.
@@ -811,15 +812,29 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
     async updateChannel(channelId, fn) {
       return update(channelId, fn)
     },
-    waitForUpdate(channelId) {
-      return new Promise<void>((resolve) => {
+    waitForUpdate(channelId, signal) {
+      return new Promise<void>((resolve, reject) => {
         const normalizedChannelId = normalizeChannelId(channelId)
+        if (signal?.aborted) {
+          reject(signal.reason ?? new Error('aborted'))
+          return
+        }
         let set = runtime.waiters.get(normalizedChannelId)
         if (!set) {
           set = new Set()
           runtime.waiters.set(normalizedChannelId, set)
         }
-        set.add(resolve)
+        const settle = () => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve()
+        }
+        const onAbort = () => {
+          set?.delete(settle)
+          if (set?.size === 0) runtime.waiters.delete(normalizedChannelId)
+          reject(signal?.reason ?? new Error('aborted'))
+        }
+        signal?.addEventListener('abort', onAbort, { once: true })
+        set.add(settle)
       })
     },
   }

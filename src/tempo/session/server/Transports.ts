@@ -126,11 +126,18 @@ async function waitForUpdate(
   throwIfAborted(signal)
 
   if (store.waitForUpdate) {
-    await Promise.race([
-      store.waitForUpdate(channelId),
-      sleep(pollIntervalMs, signal),
-      ...(signal ? [onceAborted(signal)] : []),
-    ])
+    const controller = new AbortController()
+    const onAbort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    try {
+      await Promise.race([
+        store.waitForUpdate(channelId, controller.signal),
+        sleep(pollIntervalMs, controller.signal),
+      ])
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+      controller.abort()
+    }
   } else {
     await sleep(pollIntervalMs, signal)
   }
@@ -149,18 +156,6 @@ function sleep(ms: number, signal?: AbortSignal) {
       reject(signal?.reason ?? new Error('aborted'))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-function onceAborted(signal: AbortSignal) {
-  return new Promise<never>((_, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason ?? new Error('aborted'))
-      return
-    }
-    signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')), {
-      once: true,
-    })
   })
 }
 
