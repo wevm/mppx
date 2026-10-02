@@ -381,6 +381,7 @@ export function session<const parameters extends session.Parameters>(
 
   const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
     credential,
+    operation,
     request,
   }) => {
     const payload = requireSessionCredentialPayload(credential.payload)
@@ -406,6 +407,7 @@ export function session<const parameters extends session.Parameters>(
       feeToken: context.methodDetails.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
+      operation,
       payload,
       store,
     })

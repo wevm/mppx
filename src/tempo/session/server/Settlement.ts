@@ -390,6 +390,8 @@ export async function chargeSessionChannel(
     if (result.channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
     if (result.channel.closeRequestedAt !== 0n)
       throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+    if (ChannelStore.hasActiveCloseClaim(result.channel))
+      throw new ChannelClosedError({ reason: 'channel close is already in progress' })
     const available = result.channel.highestVoucherAmount - result.channel.spent
     throw new InsufficientBalanceError({
       reason: `requested ${amount}, available ${available}`,
@@ -426,6 +428,20 @@ export type SettlementTransactionOptions = {
   feeToken?: Address | undefined
   /** Callback invoked after the settlement transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** Accounting trigger to preserve if confirmed state needs later recovery. */
+  trigger?: Extract<SessionSettlementContext['trigger'], 'scheduled' | 'settle'> | undefined
+}
+
+/** Inputs for reconciling a settlement that was confirmed before local persistence completed. */
+export type ReconcileConfirmedSettlementClaimParameters = {
+  /** Persisted precompile channel containing the confirmed claim. */
+  channel: ChannelStore.StoredPrecompileChannel
+  /** Client used to verify the current on-chain settlement amount. */
+  client: Chain.TransactionClient
+  /** Settlement options, including an escrow override and accounting callback. */
+  options?: SettlementTransactionOptions | undefined
+  /** Server-side channel store. */
+  store: ChannelStore.ChannelStore
 }
 
 /** Inputs for applying a server-owned automatic settlement schedule. */
@@ -497,15 +513,18 @@ export async function maybeSettleScheduled(
     }).catch(() => undefined)
   }, scheduledSettlementLeaseMs / 2)
   try {
-    const txHash = await settle(store, parameters.client, channel.channelId, {
+    const txHash = await settleIfAvailable(store, parameters.client, channel.channelId, {
       account: parameters.account,
       ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
       ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
       ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-      onSessionSettlement: parameters.onSessionSettlement
-        ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
-        : undefined,
+      onSessionSettlement: parameters.onSessionSettlement,
+      trigger: 'scheduled',
     })
+    if (!txHash) {
+      await releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store })
+      return undefined
+    }
     await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store })
     return txHash
   } catch (error) {
@@ -525,70 +544,360 @@ export async function settle(
   channelId_: Hex,
   options?: SettlementTransactionOptions,
 ): Promise<Hex> {
+  const txHash = await settleIfAvailable(store_, client, channelId_, options)
+  if (!txHash)
+    throw new VerificationFailedError({ reason: 'channel settlement is already in progress' })
+  return txHash
+}
+
+/**
+ * Settles a channel under a persisted, backend-atomic lease.
+ *
+ * A confirmed settlement automatically advances to any newer voucher accepted
+ * while the transaction was pending. Failures release the lease only when no
+ * submission RPC began; ambiguous submission or receipt failures retain it
+ * until expiry so another worker cannot broadcast a duplicate transaction.
+ */
+export async function settleIfAvailable(
+  store_: SessionStoreInput,
+  client: Chain.TransactionClient,
+  channelId_: Hex,
+  options?: SettlementTransactionOptions,
+): Promise<Hex | undefined> {
   const store = resolveChannelStore(store_)
+  if (store.atomic === false)
+    throw new VerificationFailedError({
+      reason: 'settlement coordination requires an atomic store',
+    })
   const channelId = ChannelStore.normalizeChannelId(channelId_)
-  const channel = await store.getChannel(channelId)
-  if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
-  if (!ChannelStore.isPrecompileState(channel))
+  let initialChannel = await store.getChannel(channelId)
+  if (!initialChannel) throw new ChannelNotFoundError({ reason: 'channel not found' })
+  if (!ChannelStore.isPrecompileState(initialChannel))
     throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
-  if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
-  const escrow = options?.escrowContract ?? channel.escrowContract
+  if (!initialChannel.highestVoucher)
+    throw new VerificationFailedError({ reason: 'no voucher to settle' })
+  initialChannel = await reconcileConfirmedSettlementClaim({
+    channel: initialChannel,
+    client,
+    options,
+    store,
+  })
   const account = options?.account ?? getClientAccount(client)
+  const settlementTrigger = options?.trigger ?? 'settle'
   assertSettlementSender({
     operation: 'settle',
     channelId,
-    operator: channel.operator,
-    payee: channel.payee,
+    operator: initialChannel.operator,
+    payee: initialChannel.payee,
     sender: account?.address,
   })
-  const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const txHash = await Chain.settleOnChain(
-    client,
-    channel.descriptor,
-    amount,
-    channel.highestVoucher.signature,
-    escrow,
-    account
-      ? {
-          account,
-          ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
-          ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-          ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
-          candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+
+  const claimId = globalThis.crypto.randomUUID()
+  let channel = await claimSettlement()
+  if (!channel) return undefined
+  let lastTxHash: Hex | undefined
+
+  while (channel.highestVoucher) {
+    const escrow = options?.escrowContract ?? channel.escrowContract
+    const amount = uint96(channel.highestVoucher.cumulativeAmount)
+    const settlementDelta = amount - channel.settledOnChain
+    let submissionStarted = false
+    let settlementConfirmed = false
+    let settlementConfirmation:
+      | {
+          delta: bigint
+          settlementAt: string
+          spent: bigint
+          trigger: 'scheduled' | 'settle'
+          txHash: Hex
+          units: number
         }
-      : undefined,
-  )
-  const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
-  const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
-  const { newSettled } = settled
-  if (newSettled < amount)
-    throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' })
-  const state = await Chain.getChannelState(client, channelId, escrow)
-  if (state.settled !== newSettled)
-    throw new VerificationFailedError({
-      reason: 'on-chain channel state does not match settle receipt',
-    })
-  await store.updateChannel(channelId, (current) =>
-    current
-      ? {
+      | undefined
+    let settlementPinWriteCompleted = false
+    let settlementPinned = false
+    const stopMaintainingSettlementClaim = maintainSettlementClaim(() => settlementConfirmation)
+    try {
+      const txHash = await Chain.settleOnChain(
+        client,
+        channel.descriptor,
+        amount,
+        channel.highestVoucher.signature,
+        escrow,
+        account
+          ? {
+              account,
+              ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+              ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+              ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+              candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+              onSubmission: () => {
+                submissionStarted = true
+              },
+            }
+          : undefined,
+      )
+      const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
+      settlementConfirmed = true
+      const confirmation = {
+        delta: settlementDelta,
+        settlementAt: new Date().toISOString(),
+        spent: channel.spent,
+        trigger: settlementTrigger,
+        txHash,
+        units: channel.units,
+      }
+      settlementConfirmation = confirmation
+      const pinned = await store.updateChannel(channelId, (current) => {
+        if (!current || current.finalized) return current
+        if (
+          current.pendingSettlementClaim?.id !== claimId &&
+          ChannelStore.hasActiveSettlementClaim(current)
+        )
+          return current
+        return {
           ...current,
-          settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
-          lastSettlementAt: new Date().toISOString(),
+          pendingSettlementClaim: {
+            amount,
+            expiresAt: Number.MAX_SAFE_INTEGER,
+            id: claimId,
+            ...confirmation,
+          },
+        }
+      })
+      settlementPinWriteCompleted = true
+      if (
+        pinned &&
+        !pinned.finalized &&
+        (pinned.pendingSettlementClaim?.id !== claimId ||
+          !ChannelStore.hasActiveSettlementClaim(pinned))
+      )
+        throw new VerificationFailedError({ reason: 'failed to retain confirmed settlement state' })
+      settlementPinned = true
+      stopMaintainingSettlementClaim()
+      const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
+      const { newSettled } = settled
+      if (newSettled < amount)
+        throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' })
+      const state = await Chain.getChannelState(client, channelId, escrow)
+      if (state.settled !== newSettled)
+        throw new VerificationFailedError({
+          reason: 'on-chain channel state does not match settle receipt',
+        })
+      await store.updateChannel(channelId, (current) => {
+        if (!current) return current
+        const settledOnChain =
+          newSettled > current.settledOnChain ? newSettled : current.settledOnChain
+        const settlement = {
+          ...current,
+          settledOnChain,
+          lastSettlementAt: confirmation.settlementAt,
           lastSettlementSpent: current.spent,
           lastSettlementUnits: current.units,
         }
-      : current,
-  )
-  if (options?.onSessionSettlement) {
-    await emitSessionSettlement(options.onSessionSettlement, {
-      txHash,
-      channelId,
-      trigger: 'settle',
-      amount: newSettled,
-      delta: newSettled - channel.settledOnChain,
+        if (current.pendingSettlementClaim?.id !== claimId) return settlement
+        if (current.highestVoucher && current.highestVoucher.cumulativeAmount > newSettled)
+          return {
+            ...settlement,
+            pendingSettlementClaim: {
+              amount: current.highestVoucher.cumulativeAmount,
+              expiresAt: Date.now() + ChannelStore.channelTransactionClaimTtlMs,
+              id: claimId,
+            },
+          }
+        const { pendingSettlementClaim: _, ...withoutClaim } = settlement
+        return withoutClaim
+      })
+      if (options?.onSessionSettlement) {
+        await emitSessionSettlement(options.onSessionSettlement, {
+          txHash,
+          channelId,
+          trigger: settlementTrigger,
+          amount: newSettled,
+          delta: newSettled - channel.settledOnChain,
+        })
+      }
+      lastTxHash = txHash
+      const refreshed = await refreshSettlementClaim(newSettled)
+      if (!refreshed) return lastTxHash
+      channel = refreshed
+    } catch (error) {
+      if (!settlementConfirmed || settlementPinned || settlementPinWriteCompleted)
+        stopMaintainingSettlementClaim()
+      if (!submissionStarted || Chain.isConfirmedTransactionRevert(error))
+        await releaseSettlementClaim()
+      throw error
+    }
+  }
+
+  return lastTxHash
+
+  async function claimSettlement(): Promise<ChannelStore.StoredPrecompileChannel | undefined> {
+    const now = Date.now()
+    const claimed = await store.updateChannel(channelId, (current) => {
+      if (!current || !ChannelStore.isPrecompileState(current) || !current.highestVoucher)
+        return current
+      if (current.highestVoucher.cumulativeAmount <= current.settledOnChain) return current
+      if (ChannelStore.hasActiveCloseClaim(current, now)) return current
+      const existing = current.pendingSettlementClaim
+      if (existing && existing.expiresAt > now) return current
+      return {
+        ...current,
+        pendingSettlementClaim: {
+          amount: current.highestVoucher.cumulativeAmount,
+          expiresAt: now + ChannelStore.channelTransactionClaimTtlMs,
+          id: claimId,
+        },
+      }
+    })
+    if (!claimed) throw new ChannelNotFoundError({ reason: 'channel not found' })
+    if (!ChannelStore.isPrecompileState(claimed) || !claimed.highestVoucher)
+      throw new VerificationFailedError({ reason: 'no voucher to settle' })
+    return claimed.pendingSettlementClaim?.id === claimId ? claimed : undefined
+  }
+
+  async function releaseSettlementClaim(): Promise<void> {
+    await store.updateChannel(channelId, (current) => {
+      if (!current || current.pendingSettlementClaim?.id !== claimId) return current
+      const { pendingSettlementClaim: _, ...withoutClaim } = current
+      return withoutClaim
     })
   }
-  return txHash
+
+  /** Keeps this worker's settlement lease active through receipt reconciliation. */
+  function maintainSettlementClaim(
+    getConfirmation: () =>
+      | {
+          delta: bigint
+          settlementAt: string
+          spent: bigint
+          trigger: 'scheduled' | 'settle'
+          txHash: Hex
+          units: number
+        }
+      | undefined,
+  ): () => void {
+    const timer = setInterval(() => {
+      void store
+        .updateChannel(channelId, (current) => {
+          if (!current || current.pendingSettlementClaim?.id !== claimId) return current
+          const confirmation = getConfirmation()
+          return {
+            ...current,
+            pendingSettlementClaim: {
+              ...current.pendingSettlementClaim,
+              ...(confirmation ?? {}),
+              expiresAt: confirmation
+                ? Number.MAX_SAFE_INTEGER
+                : Date.now() + ChannelStore.channelTransactionClaimTtlMs,
+            },
+          }
+        })
+        .then((current) => {
+          if (
+            getConfirmation() &&
+            current?.pendingSettlementClaim?.id === claimId &&
+            current.pendingSettlementClaim.expiresAt === Number.MAX_SAFE_INTEGER
+          )
+            clearInterval(timer)
+        })
+        .catch(() => undefined)
+    }, ChannelStore.channelTransactionClaimTtlMs / 3)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    return () => clearInterval(timer)
+  }
+
+  /** Atomically renews this worker's lease for a still-unsettled newer voucher. */
+  async function refreshSettlementClaim(
+    settledAmount: bigint,
+  ): Promise<ChannelStore.StoredPrecompileChannel | undefined> {
+    const expiresAt = Date.now() + ChannelStore.channelTransactionClaimTtlMs
+    const refreshed = await store.updateChannel(channelId, (current) => {
+      if (
+        !current ||
+        !ChannelStore.isPrecompileState(current) ||
+        current.pendingSettlementClaim?.id !== claimId
+      )
+        return current
+      if (
+        !current.highestVoucher ||
+        current.highestVoucher.cumulativeAmount <= settledAmount ||
+        current.highestVoucher.cumulativeAmount <= current.settledOnChain
+      ) {
+        const { pendingSettlementClaim: _, ...withoutClaim } = current
+        return withoutClaim
+      }
+      return {
+        ...current,
+        pendingSettlementClaim: {
+          amount: current.highestVoucher.cumulativeAmount,
+          expiresAt,
+          id: claimId,
+        },
+      }
+    })
+    if (
+      !refreshed ||
+      !ChannelStore.isPrecompileState(refreshed) ||
+      refreshed.pendingSettlementClaim?.id !== claimId ||
+      !refreshed.highestVoucher ||
+      refreshed.highestVoucher.cumulativeAmount <= settledAmount ||
+      refreshed.highestVoucher.cumulativeAmount <= refreshed.settledOnChain
+    )
+      return undefined
+    return refreshed
+  }
+}
+
+/** Reconciles a permanently pinned, confirmed settlement with local channel state. */
+export async function reconcileConfirmedSettlementClaim(
+  parameters: ReconcileConfirmedSettlementClaimParameters,
+): Promise<ChannelStore.StoredPrecompileChannel> {
+  const { channel, client, options, store } = parameters
+  const claim = channel.pendingSettlementClaim
+  if (!claim || claim.expiresAt !== Number.MAX_SAFE_INTEGER) return channel
+  const escrow = options?.escrowContract ?? channel.escrowContract
+  const state = await Chain.getChannelState(client, channel.channelId, escrow)
+  if (state.settled < claim.amount) return channel
+  if (!store.updateChannelResult)
+    throw new VerificationFailedError({ reason: 'settlement recovery requires an atomic store' })
+  const recovery = await store.updateChannelResult<{
+    channel: ChannelStore.State | null
+    recovered: boolean
+  }>(channel.channelId, (latest) => {
+    if (
+      !latest ||
+      !ChannelStore.isPrecompileState(latest) ||
+      latest.pendingSettlementClaim?.id !== claim.id ||
+      latest.pendingSettlementClaim.expiresAt !== Number.MAX_SAFE_INTEGER
+    )
+      return { op: 'noop', result: { channel: latest, recovered: false } }
+    const { pendingSettlementClaim: _, ...withoutClaim } = latest
+    const reconciled = {
+      ...withoutClaim,
+      settledOnChain: state.settled > latest.settledOnChain ? state.settled : latest.settledOnChain,
+      ...(claim.settlementAt !== undefined && { lastSettlementAt: claim.settlementAt }),
+      ...(claim.spent !== undefined && { lastSettlementSpent: claim.spent }),
+      ...(claim.units !== undefined && { lastSettlementUnits: claim.units }),
+    }
+    return {
+      op: 'set',
+      result: { channel: reconciled, recovered: true },
+      value: reconciled,
+    }
+  })
+  const reconciled = recovery.channel
+  if (!reconciled) throw new ChannelNotFoundError({ reason: 'channel not found' })
+  if (!ChannelStore.isPrecompileState(reconciled))
+    throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
+  if (recovery.recovered && claim.txHash && options?.onSessionSettlement)
+    await emitSessionSettlement(options.onSessionSettlement, {
+      amount: claim.amount,
+      channelId: channel.channelId,
+      delta: claim.delta ?? claim.amount - channel.settledOnChain,
+      trigger: claim.trigger ?? 'settle',
+      txHash: claim.txHash,
+    })
+  return reconciled
 }
 
 /** Settles multiple precompile-backed session channels with the same validation as {@link settle}. */

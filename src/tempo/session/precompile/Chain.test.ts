@@ -1422,6 +1422,35 @@ describe('precompile broadcastTopUpTransaction', () => {
     ).toHaveLength(2)
   })
 
+  test('classifies a sponsored top-up receipt revert as confirmed', async () => {
+    const serializedTransaction = await createTopUpTransaction({ gas: 100_000n, signed: true })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const state = { settled: 0n, deposit, closeRequestedAt: 0 }
+    let error: unknown
+
+    try {
+      await Chain.broadcastTopUpTransaction({
+        additionalDeposit: deposit,
+        chainId,
+        client: createMockClient({
+          channel: { descriptor, state },
+          receipt: { ...receipt([]), status: '0x0' },
+        }),
+        descriptor,
+        escrowContract: tip20ChannelEscrow,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        feePayer: mockFeePayer,
+        serializedTransaction,
+      })
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(VerificationFailedError)
+    expect(Chain.isConfirmedTransactionRevert(error)).toBe(true)
+  })
+
   test('rejects top-up calldata amount mismatches before broadcasting', async () => {
     const serializedTransaction = await createTopUpTransaction({ additionalDeposit: 1n })
 
@@ -1460,6 +1489,27 @@ describe('precompile broadcastTopUpTransaction', () => {
     })
 
     expect(result).toEqual({ txHash, newDeposit, state })
+  })
+
+  test('reports confirmation before parsing the top-up receipt', async () => {
+    const serializedTransaction = await createTopUpTransaction()
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const onConfirmation = vi.fn()
+
+    await expect(
+      Chain.broadcastTopUpTransaction({
+        additionalDeposit: deposit,
+        chainId,
+        client: createMockClient({ receipt: receipt([]) }),
+        descriptor,
+        escrowContract: tip20ChannelEscrow,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        onConfirmation,
+        serializedTransaction,
+      }),
+    ).rejects.toThrow(/expected one TopUp event/)
+    expect(onConfirmation).toHaveBeenCalledWith(txHash)
   })
 
   test('rejects top-up receipt/readback deposit mismatches', async () => {

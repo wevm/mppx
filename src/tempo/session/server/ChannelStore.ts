@@ -139,8 +139,8 @@ export type AcceptVoucherStateUpdateParameters = {
 
 /** Inputs for marking a channel as pending cooperative close. */
 export type MarkPendingCloseParameters = {
-  /** Timestamp used to mark the local pending-close state. */
-  closeRequestedAt: bigint
+  /** Lease used to serialize cooperative-close transactions. */
+  claim: NonNullable<BaseState['pendingCloseClaim']>
   /** Close voucher cumulative amount. */
   cumulativeAmount: bigint
   /** Existing channel state being updated. */
@@ -319,6 +319,42 @@ export interface BaseState {
   lastSettlementSpent?: bigint | undefined
   /** Charge operation count when the last server-scheduled settlement ran. */
   lastSettlementUnits?: number | undefined
+  /** Lease held while a worker settles an accepted voucher after detecting a force close. */
+  pendingSettlementClaim?:
+    | {
+        amount: bigint
+        delta?: bigint | undefined
+        expiresAt: number
+        id: string
+        settlementAt?: string | undefined
+        spent?: bigint | undefined
+        trigger?: 'scheduled' | 'settle' | undefined
+        txHash?: Hex | undefined
+        units?: number | undefined
+      }
+    | undefined
+  /** Lease held while a worker submits and reconciles a top-up transaction. */
+  pendingTopUpClaim?:
+    | {
+        deposit?: bigint | undefined
+        expiresAt: number
+        id: string
+        txHash?: Hex | undefined
+      }
+    | undefined
+  /** Lease held while a worker submits a cooperative-close transaction. */
+  pendingCloseClaim?:
+    | {
+        captureAmount?: bigint | undefined
+        cumulativeAmount?: bigint | undefined
+        deposit?: bigint | undefined
+        expiresAt: number
+        id: string
+        settledOnChain?: bigint | undefined
+        signature?: Hex | undefined
+        txHash?: Hex | undefined
+      }
+    | undefined
 }
 
 /** Expiring ownership claim for one server-scheduled settlement attempt. */
@@ -326,6 +362,9 @@ export type ScheduledSettlementLease = {
   expiresAt: number
   owner: string
 }
+
+/** Duration used for mutually exclusive channel transaction leases. */
+export const channelTransactionClaimTtlMs = 10 * 60_000
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */
 export function isPrecompileState(state: State): state is BaseState & PrecompileBackendState {
@@ -443,6 +482,8 @@ export function acceptVoucherStateUpdate(parameters: AcceptVoucherStateUpdatePar
   if (current.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
   if (current.closeRequestedAt !== 0n)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (hasActiveCloseClaim(current))
+    throw new ChannelClosedError({ reason: 'channel close is already in progress' })
 
   const onChain = mergeActiveOnChainState(current, channelState)
 
@@ -486,11 +527,17 @@ export function resolveCloseCaptureAmount(parameters: ResolveCloseCaptureAmountP
 
 /** Marks local channel state as pending close and returns the bounded capture amount. */
 export function markPendingClose(parameters: MarkPendingCloseParameters): PendingCloseUpdate {
-  const { closeRequestedAt, cumulativeAmount, current, onChainSettled, onChainDeposit } = parameters
+  const { claim, cumulativeAmount, current, onChainSettled, onChainDeposit } = parameters
   if (!current) return { captureAmount: 0n, state: null }
   if (current.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
   if (current.closeRequestedAt !== 0n)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (hasActiveCloseClaim(current))
+    throw new ChannelClosedError({ reason: 'channel close is already in progress' })
+  if (hasActiveSettlementClaim(current))
+    throw new VerificationFailedError({ reason: 'channel settlement is already in progress' })
+  if (hasActiveTopUpClaim(current))
+    throw new VerificationFailedError({ reason: 'channel top-up is already in progress' })
   const captureAmount = resolveCloseCaptureAmount({
     cumulativeAmount,
     onChainDeposit,
@@ -500,8 +547,23 @@ export function markPendingClose(parameters: MarkPendingCloseParameters): Pendin
 
   return {
     captureAmount,
-    state: { ...current, closeRequestedAt },
+    state: { ...current, pendingCloseClaim: claim },
   }
+}
+
+/** Returns whether a cooperative-close lease is currently active. */
+export function hasActiveCloseClaim(state: BaseState, now = Date.now()): boolean {
+  return (state.pendingCloseClaim?.expiresAt ?? 0) > now
+}
+
+/** Returns whether a settlement transaction lease is currently active. */
+export function hasActiveSettlementClaim(state: BaseState, now = Date.now()): boolean {
+  return (state.pendingSettlementClaim?.expiresAt ?? 0) > now
+}
+
+/** Returns whether a top-up transaction lease is currently active. */
+export function hasActiveTopUpClaim(state: BaseState, now = Date.now()): boolean {
+  return (state.pendingTopUpClaim?.expiresAt ?? 0) > now
 }
 
 /** Finalizes local channel state after a successful close transaction. */
@@ -516,8 +578,9 @@ export function finalizeClosedChannelState(
     cumulativeAmount,
     signature,
   })
+  const { pendingCloseClaim: _, ...withoutCloseClaim } = current
   return {
-    ...current,
+    ...withoutCloseClaim,
     finalized: true,
     closeRequestedAt: 0n,
     deposit: 0n,
@@ -632,6 +695,8 @@ export async function verifyAndAcceptVoucher(
  * - **D1 / SQL**: Database transactions
  */
 export type ChannelStore = {
+  /** Whether updates are atomic across all processes sharing the backing store. */
+  atomic?: boolean | undefined
   getChannel(channelId: Hex): Promise<State | null>
 
   /**
@@ -805,6 +870,7 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
   }
 
   const cs: ChannelStore = {
+    atomic: Boolean(atomicUpdate),
     async getChannel(channelId) {
       const normalizedChannelId = normalizeChannelId(channelId)
       return normalizeMaybeState(normalizedChannelId, await stateStore.get(normalizedChannelId))
@@ -882,6 +948,7 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.closeRequestedAt !== 0n)
     return { op: 'noop', result: { ok: false, channel: current } }
+  if (hasActiveCloseClaim(current)) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.highestVoucherAmount - current.spent < amount)
     return { op: 'noop', result: { ok: false, channel: current } }
 

@@ -399,6 +399,11 @@ export type ChannelTransactionOptions = {
   feeToken?: Address | undefined
 }
 
+type TrackedChannelTransactionOptions = ChannelTransactionOptions & {
+  /** Invoked immediately before a transaction-submission RPC. */
+  onSubmission?: (() => void) | undefined
+}
+
 type ParsedPrecompileCredentialTransaction = {
   call: Transaction.TransactionTempo['calls'][number] & { data: Hex; to: Address }
   prefixCalls: readonly Transaction.TransactionTempo['calls'][number][]
@@ -620,13 +625,15 @@ function sendPrecompileContractCall(
     data: Hex
     feePayer?: true | undefined
     feeToken?: Address | undefined
+    onSubmission?: (() => void) | undefined
     to: Address
   },
 ): Promise<Hex> {
-  const { account, data, feePayer, feeToken, to } = parameters
+  const { account, data, feePayer, feeToken, onSubmission, to } = parameters
+  const submissionClient = trackTransactionSubmission(client, onSubmission)
   // `feeToken` is Tempo-specific and not represented on viem's base
   // transaction request type.
-  return sendViemTransaction(client, {
+  return sendViemTransaction(submissionClient, {
     ...(account ? { account } : {}),
     to,
     data,
@@ -638,6 +645,33 @@ function sendPrecompileContractCall(
 }
 
 /**
+ * Wraps a client so settlement coordination is notified immediately before a
+ * send RPC is delegated. It tracks local-account raw sends, JSON-RPC account
+ * sends, and Tempo synchronous raw sends; notification happens first because
+ * a transport failure can hide a transaction that the remote node accepted.
+ */
+function trackTransactionSubmission(
+  client: Client,
+  onSubmission: (() => void) | undefined,
+): Client {
+  if (!onSubmission) return client
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (property !== 'request') return Reflect.get(target, property, receiver)
+      return (request: { method: string }, options?: unknown) => {
+        if (
+          request.method === 'eth_sendTransaction' ||
+          request.method === 'eth_sendRawTransaction' ||
+          request.method === 'eth_sendRawTransactionSync'
+        )
+          onSubmission()
+        return Reflect.apply(target.request, target, [request, options])
+      }
+    },
+  }) as Client
+}
+
+/**
  * Submit a settle transaction on-chain.
  */
 export async function settleOnChain(
@@ -646,7 +680,7 @@ export async function settleOnChain(
   cumulativeAmount: bigint,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: ChannelTransactionOptions,
+  options?: TrackedChannelTransactionOptions,
 ): Promise<Hex> {
   assertUint96(cumulativeAmount)
   const args = [descriptorTuple(descriptor), cumulativeAmount, signature] as const
@@ -728,7 +762,7 @@ export async function closeOnChain(
   captureAmount: bigint,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: ChannelTransactionOptions,
+  options?: TrackedChannelTransactionOptions,
 ): Promise<Hex> {
   assertUint96(cumulativeAmount)
   assertUint96(captureAmount)
@@ -781,8 +815,19 @@ export async function sendTransaction(client: TransactionClient, transaction: He
 export async function waitForSuccessfulReceipt(client: TransactionClient, hash: Hex) {
   const receipt = await waitForTransactionReceipt(client, { hash, checkReplacement: false })
   if (receipt.status !== 'success')
-    throw new VerificationFailedError({ reason: 'precompile transaction reverted' })
+    throw new ConfirmedTransactionRevertError('precompile transaction reverted')
   return receipt
+}
+
+class ConfirmedTransactionRevertError extends VerificationFailedError {
+  constructor(reason: string) {
+    super({ reason })
+  }
+}
+
+/** Returns whether a submitted transaction has a receipt proving it reverted. */
+export function isConfirmedTransactionRevert(error: unknown): boolean {
+  return error instanceof ConfirmedTransactionRevertError
 }
 
 /** Extract exactly one channel event for a channel ID from a receipt. */
@@ -822,6 +867,10 @@ export type SendCredentialTransactionParameters = {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Management transaction kind, used for validation errors. */
   label: 'open' | 'topUp'
+  /** Hook invoked immediately before a transaction submission RPC is delegated. */
+  onSubmission?: (() => void) | undefined
+  /** Hook invoked after a successful receipt and before event parsing or state readback. */
+  onConfirmation?: ((txHash: Hex) => void | Promise<void>) | undefined
   /** Client-signed serialized transaction. */
   serializedTransaction: Hex
   /** Deserialized transaction corresponding to `serializedTransaction`. */
@@ -839,13 +888,18 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
     feePayer,
     feePayerPolicy,
     label,
+    onConfirmation,
+    onSubmission,
     serializedTransaction,
     transaction,
   } = parameters
 
   if (!feePayer) {
+    onSubmission?.()
     const txHash = await sendTransaction(client, serializedTransaction)
-    return waitForSuccessfulReceipt(client, txHash)
+    const receipt = await waitForSuccessfulReceipt(client, txHash)
+    await onConfirmation?.(receipt.transactionHash)
+    return receipt
   }
 
   if (!FeePayer.isTempoTransaction(serializedTransaction))
@@ -860,8 +914,11 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
       client,
       FeePayer.simulationTransaction(transaction, { feePayer: true }),
     )
+    onSubmission?.()
     const txHash = await sendTransaction(client, serializedTransaction)
-    return waitForSuccessfulReceipt(client, txHash)
+    const receipt = await waitForSuccessfulReceipt(client, txHash)
+    await onConfirmation?.(receipt.transactionHash)
+    return receipt
   }
 
   const sponsorshipTransaction = {
@@ -885,13 +942,15 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
     },
   })
   const serialized = await signTempoTransaction(client, completed.transaction)
+  onSubmission?.()
   const receipt = await sendRawTransactionSync(client, {
     serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
   })
   if (receipt.status !== 'success')
-    throw new VerificationFailedError({
-      reason: `${label} precompile transaction reverted: ${receipt.transactionHash}`,
-    })
+    throw new ConfirmedTransactionRevertError(
+      `${label} precompile transaction reverted: ${receipt.transactionHash}`,
+    )
+  await onConfirmation?.(receipt.transactionHash)
   return receipt
 }
 
@@ -1112,6 +1171,10 @@ export type BroadcastTopUpTransactionParameters = {
   feePayer?: Account | true | undefined
   /** Optional fee-payer policy enforced before co-signing. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+  /** Hook invoked immediately before a transaction submission RPC is delegated. */
+  onSubmission?: (() => void) | undefined
+  /** Hook invoked after a successful receipt and before event parsing or state readback. */
+  onConfirmation?: ((txHash: Hex) => void | Promise<void>) | undefined
   /** Client-signed serialized top-up transaction. */
   serializedTransaction: Hex
 }
@@ -1119,7 +1182,7 @@ export type BroadcastTopUpTransactionParameters = {
 /** Inputs for validating a client-signed TIP-1034 top-up transaction without broadcasting it. */
 export type ValidateTopUpCredentialTransactionParameters = Omit<
   BroadcastTopUpTransactionParameters,
-  'client'
+  'client' | 'onConfirmation' | 'onSubmission'
 >
 
 /** Validated fields recovered from a client-signed TIP-1034 top-up transaction. */
@@ -1186,6 +1249,8 @@ export async function broadcastTopUpTransaction(
     feePayer: parameters.feePayer,
     feePayerPolicy: parameters.feePayerPolicy,
     label: 'topUp',
+    onConfirmation: parameters.onConfirmation,
+    onSubmission: parameters.onSubmission,
     serializedTransaction: parameters.serializedTransaction,
     transaction,
   })
@@ -1239,7 +1304,7 @@ async function sendPrecompileTransaction(
   to: Address,
   data: Hex,
   label: string,
-  options?: ChannelTransactionOptions,
+  options?: TrackedChannelTransactionOptions,
 ): Promise<Hex> {
   const account = options?.account ?? client.account
   const feePayer = options?.feePayer
@@ -1253,6 +1318,7 @@ async function sendPrecompileTransaction(
       data,
       feePayer: true,
       feeToken: options.feeToken,
+      onSubmission: options.onSubmission,
       to,
     })
   }
@@ -1278,13 +1344,14 @@ async function sendPrecompileTransaction(
       account,
       feePayer,
     })
+    options.onSubmission?.()
     const receipt = await sendRawTransactionSync(client, {
       serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
     })
     if (receipt.status !== 'success')
-      throw new VerificationFailedError({
-        reason: `${label} precompile transaction reverted: ${receipt.transactionHash}`,
-      })
+      throw new ConfirmedTransactionRevertError(
+        `${label} precompile transaction reverted: ${receipt.transactionHash}`,
+      )
     return receipt.transactionHash
   }
 
@@ -1303,5 +1370,6 @@ async function sendPrecompileTransaction(
     to,
     data,
     feeToken,
+    onSubmission: options?.onSubmission,
   })
 }
