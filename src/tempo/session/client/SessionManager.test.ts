@@ -509,8 +509,13 @@ describe('Session', () => {
       expect(response.status).toBe(200)
       expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
       expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
-      expect(resolveAccount).toHaveBeenCalledTimes(2)
+      expect(resolveAccount).toHaveBeenCalledTimes(3)
       expect(resolveAccount).toHaveBeenNthCalledWith(1, {
+        account,
+        chainId: 4217,
+        operation: { kind: 'signPaymentProof' },
+      })
+      expect(resolveAccount).toHaveBeenNthCalledWith(2, {
         account,
         chainId: 4217,
         operation: { authority: account.address, kind: 'authorizePaymentChannel' },

@@ -370,6 +370,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     allowedChainIds: parameters.allowedChainIds,
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
+    resolveAccount: parameters.resolveAccount,
   })
 
   const wrappedFetch = Fetch.from({

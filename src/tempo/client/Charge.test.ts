@@ -817,6 +817,12 @@ describe('tempo.charge client', () => {
       const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
         access: account,
       })
+      const selectedRoot = privateKeyToAccount(
+        '0x0000000000000000000000000000000000000000000000000000000000000002',
+      )
+      const selectedAccessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+        access: selectedRoot,
+      })
       expect(accessKey.address).toBe(account.address)
       expect(accessKey.accessKeyAddress).not.toBe(account.address)
 
@@ -825,7 +831,7 @@ describe('tempo.charge client', () => {
         chain: { ...tempoLocalnet, id: 42431 },
         transport: http('http://127.0.0.1'),
       })
-      const resolveAccount = vi.fn()
+      const resolveAccount = vi.fn(() => selectedAccessKey)
       const method = chargeWithMockedActions({
         account: accessKey,
         getClient: () => client,
@@ -840,10 +846,14 @@ describe('tempo.charge client', () => {
       )
 
       expect(signTypedData).toHaveBeenCalledOnce()
-      expect(resolveAccount).not.toHaveBeenCalled()
-      expect(signedTypedData?.message.account).toBe(account.address)
+      expect(resolveAccount).toHaveBeenCalledWith({
+        account: accessKey,
+        chainId,
+        operation: { kind: 'signPaymentProof' },
+      })
+      expect(signedTypedData?.message.account).toBe(selectedRoot.address)
       expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'proof' })
-      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${selectedRoot.address}`)
     } finally {
       vi.doUnmock('viem/actions')
       vi.resetModules()

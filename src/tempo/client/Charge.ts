@@ -94,6 +94,12 @@ export function charge(parameters: charge.Parameters = {}) {
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
       const defaultAccount = getAccount(client, context)
+      const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
+        (await parameters.resolveAccount?.({
+          account: defaultAccount,
+          chainId,
+          operation,
+        })) ?? defaultAccount
 
       if (parameters.expectedRecipients) {
         const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
@@ -110,12 +116,13 @@ export function charge(parameters: charge.Parameters = {}) {
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
+        const account = await resolveAccount({ kind: 'signPaymentProof' })
         const signature = await signTypedData(client, {
-          account: defaultAccount,
+          account,
           // `account` here is the signing account; the proof's bound payer is
           // `account.address` (echoed in the credential `source` below).
           ...Proof.typedData({
-            account: defaultAccount.address,
+            account: account.address,
             chainId,
             challengeId: challenge.id,
             realm: challenge.realm,
@@ -124,7 +131,7 @@ export function charge(parameters: charge.Parameters = {}) {
         return Credential.serialize({
           challenge,
           payload: { signature, type: 'proof' },
-          source: Proof.proofSource({ address: defaultAccount.address, chainId }),
+          source: Proof.proofSource({ address: account.address, chainId }),
         })
       }
 
@@ -158,16 +165,6 @@ export function charge(parameters: charge.Parameters = {}) {
       )
       const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
-      const resolveAccount = async (calls?: readonly AccountResolution.ResolveAccountCall[]) =>
-        (await parameters.resolveAccount?.({
-          account: defaultAccount,
-          chainId,
-          operation: {
-            kind: 'executeCalls',
-            ...(calls ? { calls } : {}),
-          },
-        })) ?? defaultAccount
-
       const machineTokenCandidate = machineTokenEnabled
         ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
         : undefined
@@ -176,7 +173,10 @@ export function charge(parameters: charge.Parameters = {}) {
       if (machineTokenCandidate) {
         const machineTokenAccount = await (async () => {
           try {
-            return await resolveAccount(machineTokenCandidate.calls)
+            return await resolveAccount({
+              calls: machineTokenCandidate.calls,
+              kind: 'executeCalls',
+            })
           } catch {
             // A machine-token route is optional. A scoped account that cannot
             // execute it may still be able to satisfy the direct payment.
@@ -196,7 +196,10 @@ export function charge(parameters: charge.Parameters = {}) {
 
       let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
       if (!machineTokenRoute) {
-        account = await resolveAccount(autoSwap ? undefined : transferCalls)
+        account = await resolveAccount({
+          kind: 'executeCalls',
+          ...(autoSwap ? {} : { calls: transferCalls }),
+        })
         swapCalls = autoSwap
           ? await AutoSwap.findCalls(client, {
               account: account.address,

@@ -29,6 +29,10 @@ export type ResolveAccountOperation =
       calls?: readonly ResolveAccountCall[] | undefined
     }
   | {
+      /** Signs a zero-amount payment proof without executing calls. */
+      kind: 'signPaymentProof'
+    }
+  | {
       kind: 'authorizePaymentChannel'
       /**
        * Signer required by an existing reusable channel. Omitted when opening
