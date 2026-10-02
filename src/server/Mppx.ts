@@ -896,11 +896,16 @@ export function create<
     }
 
     let receipt: Receipt.Receipt
+    let emitPaymentSuccess = true
     try {
       if (mi.broadcast && mi.validate)
         await mi.validate({ credential: parsedCredential, envelope, request } as never)
       const broadcast = mi.broadcast ?? mi.verify
-      receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
+      const result = Method.unwrapPaymentResult(
+        await broadcast({ credential: parsedCredential, envelope, request } as never),
+      )
+      receipt = result.receipt
+      emitPaymentSuccess = result.emitPaymentSuccess
     } catch (e) {
       const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
       await emitStandalonePaymentFailed({
@@ -913,20 +918,21 @@ export function create<
       throw e
     }
 
-    await serverEvents.emit(
-      'payment.success',
-      createPaymentSuccessContext({
-        capturedRequest: options?.capturedRequest,
-        challenge: prepared.credential.challenge,
-        credential: parsedCredential,
-        envelope,
-        method: mi,
-        receipt,
-        request: parsedRequest,
-        ...(requestInput !== undefined && { requestInput }),
-      }) as never,
-      mi,
-    )
+    if (emitPaymentSuccess)
+      await serverEvents.emit(
+        'payment.success',
+        createPaymentSuccessContext({
+          capturedRequest: options?.capturedRequest,
+          challenge: prepared.credential.challenge,
+          credential: parsedCredential,
+          envelope,
+          method: mi,
+          receipt,
+          request: parsedRequest,
+          ...(requestInput !== undefined && { requestInput }),
+        }) as never,
+        mi,
+      )
 
     return receipt
   }
@@ -1348,19 +1354,20 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               request: challenge.request,
             } as never)
             if (authorized) {
-              await events.emit(
-                'payment.success',
-                createPaymentSuccessContext({
-                  capturedRequest,
-                  challenge,
-                  input,
+              if (authorized.emitPaymentSuccess !== false)
+                await events.emit(
+                  'payment.success',
+                  createPaymentSuccessContext({
+                    capturedRequest,
+                    challenge,
+                    input,
+                    method,
+                    receipt: authorized.receipt,
+                    request: parsedRequest,
+                    requestInput: request,
+                  }) as never,
                   method,
-                  receipt: authorized.receipt,
-                  request: parsedRequest,
-                  requestInput: request,
-                }) as never,
-                method,
-              )
+                )
               return success(authorized.receipt, {
                 managementResponse: authorized.response,
               })
@@ -1539,15 +1546,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // User-provided verification (e.g., check signature, submit tx, verify payment).
       // If verification fails, re-issue the challenge so the client can retry.
       let receiptData: Receipt.Receipt
+      let emitPaymentSuccess = true
       try {
         if (broadcast && validate)
           await validate({ credential: parsedCredential, envelope, request } as never)
         const broadcastCredential = broadcast ?? verify
-        receiptData = await broadcastCredential({
+        const paymentResult = await broadcastCredential({
           credential: parsedCredential,
           envelope,
           request,
         } as never)
+        ;({ emitPaymentSuccess, receipt: receiptData } = Method.unwrapPaymentResult(paymentResult))
       } catch (e) {
         if (!(e instanceof Errors.PaymentError))
           console.error('mppx: internal verification error', e)
@@ -1584,21 +1593,22 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           } as never)
         : undefined
 
-      await events.emit(
-        'payment.success',
-        createPaymentSuccessContext({
-          capturedRequest,
-          challenge: credential.challenge,
-          credential: parsedCredential,
-          envelope,
-          input,
+      if (emitPaymentSuccess)
+        await events.emit(
+          'payment.success',
+          createPaymentSuccessContext({
+            capturedRequest,
+            challenge: credential.challenge,
+            credential: parsedCredential,
+            envelope,
+            input,
+            method,
+            receipt: receiptData,
+            request: parsedRequest,
+            requestInput: request,
+          }) as never,
           method,
-          receipt: receiptData,
-          request: parsedRequest,
-          requestInput: request,
-        }) as never,
-        method,
-      )
+        )
 
       return success(receiptData, {
         challengeId: credential.challenge.id,

@@ -154,9 +154,11 @@ export function subscription<const parameters extends subscription.Parameters>(
           subscription,
         })
         if (!renewal) return undefined
-        if (renewal.status === 'charged') return { receipt: renewal.receipt }
+        if (renewal.status === 'charged')
+          return { emitPaymentSuccess: false, receipt: renewal.receipt }
         if (renewal.status === 'inFlight') {
           return {
+            emitPaymentSuccess: false,
             receipt: renewal.receipt,
             response: new Response(null, {
               headers: { 'Retry-After': '1' },
@@ -176,6 +178,7 @@ export function subscription<const parameters extends subscription.Parameters>(
       }
 
       return {
+        emitPaymentSuccess: false,
         receipt: SubscriptionReceipt.fromRecord(subscription),
       }
     },
@@ -357,9 +360,8 @@ export function subscription<const parameters extends subscription.Parameters>(
           if (!renewal) {
             throw new VerificationFailedError({ reason: 'subscription renewal failed' })
           }
-          if (renewal.status === 'charged' || renewal.status === 'inFlight') {
-            return renewal.receipt
-          }
+          if (renewal.status === 'charged' || renewal.status === 'inFlight')
+            return Method.paymentResult(renewal.receipt, { emitPaymentSuccess: false })
 
           await parameters.hooks?.renewed?.({
             periodIndex,
@@ -369,7 +371,9 @@ export function subscription<const parameters extends subscription.Parameters>(
           return renewal.result.receipt
         }
 
-        return SubscriptionReceipt.fromRecord(subscription)
+        return Method.paymentResult(SubscriptionReceipt.fromRecord(subscription), {
+          emitPaymentSuccess: false,
+        })
       }
 
       await parameters.hooks?.activated?.({

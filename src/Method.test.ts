@@ -174,4 +174,31 @@ describe('credential execution', () => {
 
     expect(calls).toEqual(['validate', 'broadcast'])
   })
+
+  test('unwraps terminal payment metadata from standalone broadcasts', async () => {
+    const receipt = {
+      method: 'alpha',
+      receipt: { extension: true },
+      reference: 'reference',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+    const method = Method.toServer(base, {
+      async broadcast() {
+        return Method.paymentResult(receipt, { emitPaymentSuccess: false })
+      },
+      async validate({ credential, request }) {
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+        }
+      },
+    })
+
+    await expect(Method.broadcastCredential([method], credential())).resolves.toBe(receipt)
+  })
 })
