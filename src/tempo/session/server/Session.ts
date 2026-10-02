@@ -381,6 +381,7 @@ export function session<const parameters extends session.Parameters>(
 
   const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
     credential,
+    operation,
     request,
   }) => {
     const payload = requireSessionCredentialPayload(credential.payload)
@@ -394,6 +395,7 @@ export function session<const parameters extends session.Parameters>(
 
     const details = await validateCredentialPayload({
       account,
+      allowPendingClose: operation === 'broadcast',
       challenge: credential.challenge,
       channelStateTtl,
       chainId: context.chainId,

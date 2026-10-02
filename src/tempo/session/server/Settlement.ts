@@ -221,6 +221,8 @@ export function isSettlementDue(
   if (!schedule) return false
   const progress = resolveSettlementProgress(channel)
   if (!progress) return false
+  // A detected force-close makes outstanding vouchers immediately due.
+  if (!channel.finalized && channel.closeRequestedAt > 0n) return true
 
   if (schedule.units !== undefined && progress.units >= schedule.units) return true
 

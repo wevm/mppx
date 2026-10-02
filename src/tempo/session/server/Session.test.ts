@@ -100,7 +100,7 @@ function createServerClient(
     sentReceipt?:
       | Record<string, unknown>
       | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
-    state?: ChainState | (() => ChainState | Promise<ChainState>)
+    state?: ChainState | ((sent: boolean) => ChainState | Promise<ChainState>)
   } = {},
 ) {
   let sentTransaction = false
@@ -132,7 +132,9 @@ function createServerClient(
           }
           if (args.method === 'eth_call') {
             const configuredState =
-              typeof options.state === 'function' ? await options.state() : options.state
+              typeof options.state === 'function'
+                ? await options.state(sentTransaction)
+                : options.state
             const state = configuredState ?? { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }
             const data = (args.params as [{ data?: Hex }])[0].data
             const getChannelSelector = options.descriptor
@@ -2024,38 +2026,93 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/exceeds.*deposit|insufficient channel deposit/)
   })
 
-  test('refreshes on-chain state before accepting a voucher', async () => {
-    const rawStore = Store.memory()
-    const store = channelStore(rawStore)
-    const openPayload = await createOpenPayload({ initialAmount: 100n })
-    await persistPrecompileChannel(store, openPayload, { closeRequestedAt: 0n })
-    const voucher = await ClientOps.createVoucherPayload(
-      createSigningClient(),
-      payer,
-      openPayload.descriptor,
-      Types.uint96(250n),
-      chainId,
-    )
-    const method = session({
-      amount: '1',
-      chainId,
-      channelStateTtl: Number.MAX_SAFE_INTEGER,
-      currency: token,
-      decimals: 0,
-      recipient: payee,
-      store: rawStore,
-      unitType: 'request',
-      getClient: () =>
-        createStateClient(payer, { settled: 0n, deposit: 1_000n, closeRequestedAt: 1 }),
-    })
-
-    await expect(
-      method.verify({
+  test.each(['validate', 'settle', 'busy', 'retry', 'reconcile'] as const)(
+    'handles a detected pending close through %s',
+    async (mode) => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 100n })
+      await persistPrecompileChannel(store, openPayload)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(250n),
+        chainId,
+      )
+      const calls: RpcCall[] = []
+      const client = createServerClient(calls, payer, openPayload.channelId, {
+        state: (sent) => ({
+          settled: sent || mode === 'reconcile' ? 100n : 0n,
+          deposit: 1_000n,
+          closeRequestedAt: 1,
+        }),
+        sentReceipt: () => {
+          return transactionReceipt([settledLog(openPayload.channelId, 100n)])
+        },
+      })
+      const method = session({
+        account: { address: payee, type: 'json-rpc' },
+        amount: '1',
+        chainId,
+        channelStateTtl: 0,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () => client,
+      })
+      const parameters = {
         credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
-      }),
-    ).rejects.toThrow(/pending close request/)
-  })
+      }
+      if (mode === 'validate') {
+        const before = await store.getChannel(openPayload.channelId)
+        await expect(method.validate!(parameters)).rejects.toThrow(/pending close request/)
+        expect(await store.getChannel(openPayload.channelId)).toEqual(before)
+        expect(calls.some(({ method }) => method.startsWith('eth_send'))).toBe(false)
+        return
+      }
+      if (mode === 'busy') {
+        await store.updateChannel(
+          openPayload.channelId,
+          (current) =>
+            current && {
+              ...current,
+              scheduledSettlementLease: { owner: 'other-worker', expiresAt: Date.now() + 60_000 },
+            },
+        )
+        await expect(method.verify(parameters)).rejects.toThrow(/pending close request/)
+        expect(calls.some(({ method }) => method.startsWith('eth_send'))).toBe(false)
+        await store.updateChannel(
+          openPayload.channelId,
+          (current) => current && { ...current, scheduledSettlementLease: undefined },
+        )
+      }
+      if (mode === 'retry') {
+        const failedSubmission = vi
+          .spyOn(Chain, 'settleOnChain')
+          .mockRejectedValueOnce(new Error('submission unavailable'))
+        try {
+          await expect(method.verify(parameters)).rejects.toThrow(/submission unavailable/)
+        } finally {
+          failedSubmission.mockRestore()
+        }
+        expect((await store.getChannel(openPayload.channelId))?.closeRequestedAt).toBe(1n)
+      }
+      await expect(method.verify(parameters)).rejects.toThrow(/pending close request/)
+      expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+        closeRequestedAt: 1n,
+        settledOnChain: 100n,
+        highestVoucherAmount: 100n,
+      })
+      const sent = calls.filter(({ method }) => method.startsWith('eth_send')).length
+      if (mode === 'reconcile') expect(sent).toBe(0)
+      await expect(method.verify(parameters)).rejects.toThrow(/pending close request/)
+      expect(calls.filter(({ method }) => method.startsWith('eth_send'))).toHaveLength(sent)
+    },
+  )
 
   test('rejects precompile voucher when on-chain deposit is zero', async () => {
     const rawStore = Store.memory()

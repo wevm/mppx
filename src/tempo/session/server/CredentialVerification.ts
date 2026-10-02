@@ -31,7 +31,12 @@ import {
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
 import { getChallengePaymentFields } from './RequestState.js'
-import { assertSettlementSender, getClientAccount, type OnSessionSettlement } from './Settlement.js'
+import {
+  assertSettlementSender,
+  getClientAccount,
+  maybeSettleScheduled,
+  type OnSessionSettlement,
+} from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
 export function authorizedSigner(descriptor: Channel.ChannelDescriptor): Address {
@@ -413,7 +418,10 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'payload'
   | 'store'
   | 'challenge'
->
+> & {
+  /** Allows terminal broadcast to recover accepted funds before rejecting a pending close. */
+  allowPendingClose?: boolean | undefined
+}
 
 /** Non-mutating result produced by session credential validation. */
 export type CredentialPayloadValidation = {
@@ -608,6 +616,7 @@ async function validateVoucherCredential(
     escrow,
     lastOnChainVerified,
   })
+  if (parameters.allowPendingClose && channelState.closeRequestedAt !== 0) return
   await ChannelStore.validateVoucher({
     channel,
     channelState,
@@ -631,7 +640,8 @@ async function resolveVoucherChannelState(parameters: {
   const shouldRefresh =
     forceRefresh || Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
   const state = shouldRefresh ? await Chain.getChannelState(client, channelId, escrow) : undefined
-  if (state) lastOnChainVerified.set(channelId, Date.now())
+  if (state?.closeRequestedAt) lastOnChainVerified.delete(channelId)
+  else if (state) lastOnChainVerified.set(channelId, Date.now())
   return {
     deposit: state?.deposit ?? uint96(channel.deposit),
     settled: state?.settled ?? uint96(channel.settledOnChain),
@@ -953,10 +963,14 @@ async function handleVoucherCredential(
     lastOnChainVerified,
   })
   if (channelState.closeRequestedAt !== 0) {
-    await store.updateChannel(channelId, (current) =>
+    const closing = await store.updateChannel(channelId, (current) =>
       current
         ? {
             ...current,
+            settledOnChain:
+              channelState.settled > current.settledOnChain
+                ? channelState.settled
+                : current.settledOnChain,
             closeRequestedAt:
               BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
                 ? BigInt(channelState.closeRequestedAt)
@@ -964,6 +978,19 @@ async function handleVoucherCredential(
           }
         : current,
     )
+    if (closing && !closing.finalized && channelState.deposit > 0n)
+      await maybeSettleScheduled({
+        account: parameters.account,
+        channel: closing,
+        client,
+        feePayer: parameters.feePayer,
+        feePayerPolicy: parameters.feePayerPolicy,
+        feeToken: parameters.feeToken,
+        onSessionSettlement: parameters.onSessionSettlement,
+        schedule: {},
+        store,
+      })
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
   return ChannelStore.verifyAndAcceptVoucher({
     store,
