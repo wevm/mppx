@@ -5,8 +5,25 @@ import * as Mppx from '../../server/Mppx.js'
 import type { AtomicStore } from '../../Store.js'
 import { stripe } from './Methods.js'
 
+const replayStore = {} as AtomicStore
+
+function createStripe(parameters: Omit<stripe.Parameters, 'store'>) {
+  return stripe.create({ ...parameters, store: replayStore })
+}
+
+test('stripe.create() requires an explicit atomic replay store', () => {
+  // @ts-expect-error - replay storage must be chosen explicitly
+  stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  stripe.create({
+    client: {} as any,
+    networkId: 'profile_x',
+    livemode: false,
+    store: replayStore,
+  })
+})
+
 test('async defaultMethods() produces types compose can use', async () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   const methods = await mp.defaultMethods()
   const mppx = Mppx.create({ methods, secretKey: 'test' })
 
@@ -43,8 +60,8 @@ test('async defaultMethods() produces types compose can use', async () => {
   expectTypeOf(result.status).toEqualTypeOf<200 | 402>()
 })
 
-test('tempo.session() accepts getClient, feePayer, store without casts', () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+test('tempo.session() accepts getClient and feePayer without casts', () => {
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   const addr = '' as stripe.DepositAddress<'tempo'>
 
   const session = mp.tempo.session({
@@ -54,7 +71,6 @@ test('tempo.session() accepts getClient, feePayer, store without casts', () => {
       url: 'https://api.tempo.xyz/rpc/sponsor',
       headers: { Authorization: 'Bearer test' },
     },
-    store: {} as AtomicStore,
     sse: true,
     settlementSchedule: { amount: '0.01' },
     onSessionSettlement: async () => {},
@@ -62,10 +78,32 @@ test('tempo.session() accepts getClient, feePayer, store without casts', () => {
 
   expectTypeOf(session).toHaveProperty('name')
   expectTypeOf(session).toHaveProperty('intent')
+
+  mp.tempo.session({
+    recipient: addr,
+    // @ts-expect-error - sessions use the factory-level shared store
+    store: {} as AtomicStore,
+  })
+})
+
+test('tempo.charge() uses the factory replay store and namespace', () => {
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const addr = '' as stripe.DepositAddress<'tempo'>
+
+  mp.tempo.charge({
+    recipient: addr,
+    // @ts-expect-error - charges use the factory-level shared store
+    store: {} as AtomicStore,
+  })
+  mp.tempo.charge({
+    recipient: addr,
+    // @ts-expect-error - charges use one shared replay namespace
+    storeKeyPrefix: 'isolated:',
+  })
 })
 
 test('stripe.create() accepts hosted fee-payer opt-in', () => {
-  const mp = stripe.create({
+  const mp = createStripe({
     client: {} as any,
     networkId: 'profile_x',
     livemode: true,
@@ -76,7 +114,7 @@ test('stripe.create() accepts hosted fee-payer opt-in', () => {
 })
 
 test('.charge() works with multiple charge methods (implicit compose)', async () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   const methods = await mp.defaultMethods()
   const mppx = Mppx.create({ methods, secretKey: 'test' })
 
@@ -89,10 +127,10 @@ test('.charge() works with multiple charge methods (implicit compose)', async ()
 
 test('stripe.create() rejects invalid parameters', () => {
   // @ts-expect-error - livemode is required
-  stripe.create({ client: {} as any, networkId: 'x' })
+  createStripe({ client: {} as any, networkId: 'x' })
   // @ts-expect-error - networkId is required
-  stripe.create({ client: {} as any, livemode: true })
-  stripe.create({
+  createStripe({ client: {} as any, livemode: true })
+  createStripe({
     client: {} as any,
     networkId: 'x',
     livemode: true,
@@ -102,20 +140,19 @@ test('stripe.create() rejects invalid parameters', () => {
 })
 
 test('additional() rejects unsupported network keys', async () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   // @ts-expect-error - 'arbitrum' is not a supported custom rail network
   await mp.defaultMethods().additional({ arbitrum: (_addr) => ({}) as any })
 })
 
 test('additional() accepts tempo.session and base with full params', async () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   const methods = await mp.defaultMethods().additional({
     base: {
       x402: { facilitator: { verify: async () => ({}) as any, settle: async () => ({}) as any } },
     },
     tempo: {
       session: {
-        store: {} as AtomicStore,
         sse: true,
         settlementSchedule: { amount: '0.01' },
         onSessionSettlement: async () => {},
@@ -130,7 +167,7 @@ test('additional() accepts tempo.session and base with full params', async () =>
 })
 
 test('sync defaultMethods() with static depositAddresses returns SyncMethodsResult', () => {
-  const mp = stripe.create({
+  const mp = createStripe({
     client: {} as any,
     networkId: 'profile_x',
     livemode: false,
@@ -145,7 +182,7 @@ test('sync defaultMethods() with static depositAddresses returns SyncMethodsResu
 })
 
 test('no depositAddresses returns SyncMethodsResult', () => {
-  const mp = stripe.create({
+  const mp = createStripe({
     client: {} as any,
     networkId: 'profile_x',
     livemode: false,
@@ -158,7 +195,7 @@ test('no depositAddresses returns SyncMethodsResult', () => {
 })
 
 test('depositAddresses as resolver function returns DefaultMethodsBuilder', async () => {
-  const mp = stripe.create({
+  const mp = createStripe({
     client: {} as any,
     networkId: 'profile_x',
     livemode: false,
@@ -170,7 +207,7 @@ test('depositAddresses as resolver function returns DefaultMethodsBuilder', asyn
 })
 
 test('connect config with stripeAccount passes to Mppx.create', async () => {
-  const mp = stripe.create({
+  const mp = createStripe({
     client: {} as any,
     networkId: 'profile_x',
     livemode: true,
@@ -182,7 +219,7 @@ test('connect config with stripeAccount passes to Mppx.create', async () => {
 })
 
 test('additional() with custom rail (solana) works via compose', async () => {
-  const mp = stripe.create({ client: {} as any, networkId: 'profile_x', livemode: false })
+  const mp = createStripe({ client: {} as any, networkId: 'profile_x', livemode: false })
   const methods = await mp.defaultMethods().additional({
     base: {
       x402: { facilitator: { verify: async () => ({}) as any, settle: async () => ({}) as any } },

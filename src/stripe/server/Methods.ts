@@ -1,6 +1,7 @@
 import * as EvmAssets from '../../evm/Assets.js'
 import { charge as evmCharge } from '../../evm/server/Charge.js'
 import type * as Method from '../../Method.js'
+import type * as Store from '../../Store.js'
 import * as tempoDefaults from '../../tempo/internal/defaults.js'
 import { charge as tempoCharge } from '../../tempo/server/Charge.js'
 import { session as tempoSession } from '../../tempo/session/server/Session.js'
@@ -34,6 +35,10 @@ export declare namespace stripe {
     networkId: string
     livemode: boolean
     hostedFeePayer?: boolean | undefined
+    /**
+     * Atomic replay store shared by every Stripe-backed Tempo server instance.
+     */
+    store: Store.AtomicStore
     connect?: ConnectConfig
     depositAddresses?: Partial<Record<Network, string>> | ((network: Network) => Promise<string>)
     metadata?: Record<string, string> | undefined
@@ -62,7 +67,7 @@ type CustomRailNetwork = Exclude<stripe.Network, 'tempo' | 'base'>
 
 type AdditionalConfig = {
   base?: BaseConfig
-  tempo?: { session: Omit<tempoSession.Parameters, 'currency' | 'recipient'> }
+  tempo?: { session: Omit<tempoSession.Parameters, 'currency' | 'recipient' | 'store'> }
 } & { [K in CustomRailNetwork]?: CustomRailFactory }
 
 type DefaultMethods = readonly [TempoServer, SptServer]
@@ -97,12 +102,17 @@ interface StripeMachinePayments<P extends stripe.Parameters = stripe.Parameters>
       params: {
         recipient: stripe.DepositAddress<'tempo'>
         metadata?: Record<string, string>
-      } & Partial<Omit<Parameters<typeof tempoCharge>[0], 'currency' | 'recipient'>>,
+      } & Partial<
+        Omit<
+          Parameters<typeof tempoCharge>[0],
+          'currency' | 'recipient' | 'store' | 'storeKeyPrefix'
+        >
+      >,
     ) => TempoServer
     session: (
       params: { recipient: stripe.DepositAddress<'tempo'> } & Omit<
         tempoSession.Parameters,
-        'currency' | 'recipient'
+        'currency' | 'recipient' | 'store'
       >,
     ) => TempoSessionServer
   }
@@ -156,6 +166,7 @@ class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
  *   client: stripeClient,
  *   networkId: process.env.STRIPE_PROFILE_ID!,
  *   livemode: !process.env.STRIPE_SECRET_KEY!.includes('_test_'),
+ *   store,
  * })
  *
  * // Async: deposit addresses resolved from Stripe API
@@ -173,6 +184,7 @@ class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
  *   networkId: process.env.STRIPE_PROFILE_ID!,
  *   livemode: !process.env.STRIPE_SECRET_KEY!.includes('_test_'),
  *   depositAddresses: { tempo: process.env.TEMPO_DEPOSIT_ADDRESS! },
+ *   store,
  * })
  *
  * const mppx = Mppx.create({
@@ -199,12 +211,22 @@ class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
  * retries the recording once without them. SPT payments do not use this fallback.
  */
 export function stripe<const P extends stripe.Parameters>(parameters: P): StripeMachinePayments<P> {
-  const { client, networkId, livemode, hostedFeePayer, connect, depositAddresses, metadata } =
-    parameters
+  const {
+    client,
+    networkId,
+    livemode,
+    hostedFeePayer,
+    connect,
+    depositAddresses,
+    metadata,
+    store,
+  } = parameters
   if (!client.rawRequest)
     throw new Error('stripe.create() requires a Stripe SDK client with rawRequest() (v15+)')
   if (hostedFeePayer && connect)
     throw new Error('Stripe hosted fee payer does not support Connect account routing.')
+  if (typeof store?.update !== 'function')
+    throw new Error('stripe.create() requires a shared atomic `store` for replay protection.')
   const tempoCurrency = (
     livemode ? tempoDefaults.tokens.usdc : tempoDefaults.tokens.pathUsd
   ) as `0x${string}`
@@ -231,10 +253,27 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
 
   function makeTempoCharge(
     params: { recipient: `0x${string}`; metadata?: Record<string, string> } & Partial<
-      Omit<Parameters<typeof tempoCharge>[0], 'currency' | 'recipient'>
+      Omit<Parameters<typeof tempoCharge>[0], 'currency' | 'recipient' | 'store' | 'storeKeyPrefix'>
     >,
   ): Method.AnyServer {
-    const { recipient, metadata: callMetadata, ...rest } = params
+    const supplied = params as Partial<NonNullable<Parameters<typeof tempoCharge>[0]>>
+    const suppliedStore = supplied.store
+    if (suppliedStore !== undefined && suppliedStore !== store)
+      throw new Error(
+        'stripe.create() Tempo charges must use the factory-level shared atomic `store`.',
+      )
+    if (supplied.storeKeyPrefix !== undefined)
+      throw new Error('stripe.create() Tempo charges cannot override the shared store namespace.')
+    const {
+      recipient,
+      metadata: callMetadata,
+      store: _,
+      storeKeyPrefix: __,
+      ...rest
+    } = params as typeof params & {
+      store?: Store.AtomicStore | undefined
+      storeKeyPrefix?: string | undefined
+    }
     const handler = callMetadata
       ? createPaymentSuccessHandler(client, 'tempo', connect, { ...metadata, ...callMetadata })
       : tempoPaymentHandler
@@ -247,13 +286,22 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
         canOffer: cryptoCanOffer,
         onPaymentSuccess: handler,
         ...rest,
+        store,
       }) as Method.AnyServer,
     )
   }
 
   function makeTempoSession(
-    params: { recipient: `0x${string}` } & Omit<tempoSession.Parameters, 'currency' | 'recipient'>,
+    params: { recipient: `0x${string}` } & Omit<
+      tempoSession.Parameters,
+      'currency' | 'recipient' | 'store'
+    >,
   ): Method.AnyServer {
+    const suppliedStore = (params as Partial<tempoSession.Parameters>).store
+    if (suppliedStore !== undefined && suppliedStore !== store)
+      throw new Error(
+        'stripe.create() Tempo sessions must use the factory-level shared atomic `store`.',
+      )
     const { recipient, onSessionSettlement, ...rest } = params
     return tempoSession({
       currency: tempoCurrency,
@@ -261,6 +309,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
       ...(!livemode && { chainId: tempoDefaults.chainId.testnet }),
       ...(hostedTempoFeePayer && { feePayer: hostedTempoFeePayer }),
       ...rest,
+      store,
       async onSessionSettlement(context) {
         await tempoPaymentHandler({
           intent: 'session',

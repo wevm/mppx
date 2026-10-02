@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { sdkIdentifier } from '../../internal/version.js'
 import * as Method from '../../Method.js'
 import type { AnyServer } from '../../Method.js'
+import * as Store from '../../Store.js'
 import * as TempoSession from '../../tempo/session/server/Session.js'
 import * as z from '../../zod.js'
 import type { StripeClient } from '../internal/types.js'
@@ -31,6 +32,14 @@ function createHostedFeePayerStripeClient(): StripeClient {
   }
 }
 
+function createStripe(
+  parameters: Omit<Parameters<typeof stripe>[0], 'store'> & {
+    store?: Store.AtomicStore | undefined
+  },
+) {
+  return stripe({ ...parameters, store: parameters.store ?? Store.memory() })
+}
+
 function findMethod(methods: readonly AnyServer[], name: string, intent: string) {
   return methods.find((m) => m.name === name && m.intent === intent)!
 }
@@ -38,9 +47,20 @@ function findMethod(methods: readonly AnyServer[], name: string, intent: string)
 const mockResolver = async () => '0xabc'
 
 describe('stripe.create() defaultMethods', () => {
+  test('requires an explicit atomic replay store', () => {
+    const parameters = {
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+    }
+
+    expect(() => stripe(parameters as never)).toThrow(/shared atomic `store`/)
+    expect(() => stripe({ ...parameters, store: {} } as never)).toThrow(/shared atomic `store`/)
+  })
+
   test('returns tempo and spt methods', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -55,7 +75,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test('forwards metadata to SPT method defaults', () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -70,7 +90,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test('forwards metadata to crypto PI recording', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -118,7 +138,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test('uses Stripe feepayer when hostedFeePayer set', async () => {
     const client = createHostedFeePayerStripeClient()
-    const methods = stripe({
+    const methods = createStripe({
       client,
       networkId: 'test-profile',
       livemode: true,
@@ -141,7 +161,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test('does not use Stripe feepayer when hostedFeePayer unset', async () => {
     const client = createMockStripeClient()
-    const methods = stripe({
+    const methods = createStripe({
       client,
       networkId: 'test-profile',
       livemode: true,
@@ -161,7 +181,7 @@ describe('stripe.create() defaultMethods', () => {
   })
 
   test('ignores hostedFeePayer in test mode', async () => {
-    const methods = stripe({
+    const methods = createStripe({
       client: createMockStripeClient(),
       networkId: 'test-profile',
       livemode: false,
@@ -190,7 +210,7 @@ describe('stripe.create() defaultMethods', () => {
     const client = createHostedFeePayerStripeClient()
 
     expect(() =>
-      stripe({
+      createStripe({
         client,
         networkId: 'test-profile',
         livemode: true,
@@ -202,7 +222,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test('rejects Stripe feepayer without Stripe request transport', () => {
     expect(() =>
-      stripe({
+      createStripe({
         client: createMockStripeClient(),
         networkId: 'test-profile',
         livemode: true,
@@ -213,7 +233,7 @@ describe('stripe.create() defaultMethods', () => {
 
   test.each(['tempo', 'spt'] as const)('exclude removes %s', async (excluded) => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -231,7 +251,7 @@ describe('stripe.create() defaultMethods', () => {
 describe('stripe.create() PI recording', () => {
   test('onPaymentSuccess handler returns a Promise', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -255,7 +275,7 @@ describe('stripe.create() PI recording', () => {
   test('does not execute an unresolved PaymentIntent options function after payment', async () => {
     const client = createMockStripeClient()
     const paymentIntentOptions = vi.fn(() => ({ customer: 'cus_123' }))
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -280,7 +300,7 @@ describe('stripe.create() PI recording', () => {
 
   test('onPaymentSuccess returns undefined when receipt has no reference', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -303,7 +323,7 @@ describe('stripe.create() PI recording', () => {
 describe('stripe.create() canOffer minimum amount', () => {
   test('tempo rejects amounts below 1 cent', () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -322,7 +342,7 @@ describe('stripe.create() canOffer minimum amount', () => {
 
   test('custom rail inherits minimum amount check', () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -386,7 +406,7 @@ describe('stripe.create() custom hook composition', () => {
         },
       },
     )
-    const machinePayments = stripe({
+    const machinePayments = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -448,7 +468,7 @@ describe('stripe.create() custom hook composition', () => {
       expect(request.amount).toBe('500000')
       return { hooks: { inputs: { tax: { calculation: `taxcalc_${challenge.id}` } } } }
     })
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -501,7 +521,7 @@ describe('stripe.create() custom hook composition', () => {
   test('does not broadcast when PaymentIntent option resolution fails', async () => {
     const client = createMockStripeClient()
     const broadcast = vi.fn()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -556,7 +576,7 @@ describe('stripe.create() custom hook composition', () => {
       expect(request.amount).toBe('500000')
       return { metadata: { order: 'order_123' } }
     })
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -620,7 +640,7 @@ describe('stripe.create() custom hook composition', () => {
     const respond = vi.fn(({ request }: { request: Record<string, unknown> }) => {
       parseStrictRequest(request)
     })
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -666,7 +686,7 @@ describe('stripe.create() custom hook composition', () => {
     const client = createMockStripeClient()
     const userHookCalls: unknown[] = []
 
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -702,7 +722,7 @@ describe('stripe.create() custom hook composition', () => {
   test('uses recorder alone when custom rail has no user hook', async () => {
     const client = createMockStripeClient()
 
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -739,8 +759,8 @@ describe('stripe.create() deposit address cache isolation', () => {
       rawRequest: vi.fn(async () => ({ data: [{ address: '0xdifferent' }] })),
     }
 
-    const mp1 = stripe({ client: client1, networkId: 'profile1', livemode: false })
-    const mp2 = stripe({ client: client2, networkId: 'profile2', livemode: true })
+    const mp1 = createStripe({ client: client1, networkId: 'profile1', livemode: false })
+    const mp2 = createStripe({ client: client2, networkId: 'profile2', livemode: true })
 
     const addr1 = await mp1.findOrCreateDepositAddress('tempo')
     const addr2 = await mp2.findOrCreateDepositAddress('tempo')
@@ -753,7 +773,7 @@ describe('stripe.create() deposit address cache isolation', () => {
 
   test('same client reuses cached address', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({ client, networkId: 'profile', livemode: false })
+    const mp = createStripe({ client, networkId: 'profile', livemode: false })
 
     const addr1 = await mp.findOrCreateDepositAddress('tempo')
     const addr2 = await mp.findOrCreateDepositAddress('tempo')
@@ -778,7 +798,7 @@ describe('stripe methods composed with non-stripe methods', () => {
 
   test('independent methods are not modified by stripe factory', () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -797,7 +817,7 @@ describe('stripe methods composed with non-stripe methods', () => {
 
   test('stripe PI recording does not fire for independent methods', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -829,7 +849,7 @@ describe('stripe.create() canOffer composition with user hook', () => {
     const client = createMockStripeClient()
     const userCanOffer = vi.fn(() => false)
 
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -859,7 +879,7 @@ describe('stripe.create() canOffer composition with user hook', () => {
     const client = createMockStripeClient()
     const userCanOffer = vi.fn(() => true)
 
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -891,7 +911,7 @@ describe('stripe.create() graceful degradation', () => {
     const client = createMockStripeClient()
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: false,
@@ -917,7 +937,7 @@ describe('stripe.create() graceful degradation', () => {
 
   test('no depositAddresses returns sync SPT-only with .additional()', () => {
     const client = createMockStripeClient()
-    const mp = stripe({ client, networkId: 'test-profile', livemode: false })
+    const mp = createStripe({ client, networkId: 'test-profile', livemode: false })
 
     const methods = mp.defaultMethods()
     expect(methods.additional).toBeTypeOf('function')
@@ -939,10 +959,12 @@ describe('Stripe session settlement recording', () => {
 
   test('records automatically through tempo.session()', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({ client, networkId: 'test-profile', livemode: true })
+    const store = Store.memory()
+    const mp = createStripe({ client, networkId: 'test-profile', livemode: true, store })
     const session = vi.spyOn(TempoSession, 'session')
     try {
       mp.tempo.session({ recipient })
+      expect(session.mock.calls.at(-1)![0]!.store).toBe(store)
       await session.mock.calls.at(-1)![0]!.onSessionSettlement!(event)
       expect(client.paymentIntents.create).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -965,9 +987,59 @@ describe('Stripe session settlement recording', () => {
     }
   })
 
+  test('rejects a conflicting per-session store', () => {
+    const store = Store.memory()
+    const mp = createStripe({
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+      store,
+    })
+
+    expect(() =>
+      mp.tempo.session({
+        recipient: '0x1111111111111111111111111111111111111111',
+        store: Store.memory(),
+      } as never),
+    ).toThrow(/factory-level shared atomic `store`/)
+  })
+
+  test('rejects a conflicting per-charge store', () => {
+    const store = Store.memory()
+    const mp = createStripe({
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+      store,
+    })
+
+    expect(() =>
+      mp.tempo.charge({
+        recipient: '0x1111111111111111111111111111111111111111',
+        store: Store.memory(),
+      } as never),
+    ).toThrow(/factory-level shared atomic `store`/)
+  })
+
+  test('rejects a per-charge store namespace', () => {
+    const mp = createStripe({
+      client: createMockStripeClient(),
+      networkId: 'test-profile',
+      livemode: false,
+      store: Store.memory(),
+    })
+
+    expect(() =>
+      mp.tempo.charge({
+        recipient: '0x1111111111111111111111111111111111111111',
+        storeKeyPrefix: 'isolated:',
+      } as never),
+    ).toThrow(/cannot override the shared store namespace/)
+  })
+
   test('records automatically through defaultMethods().additional()', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({
+    const mp = createStripe({
       client,
       networkId: 'test-profile',
       livemode: true,
