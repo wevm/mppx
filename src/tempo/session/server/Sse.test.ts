@@ -272,6 +272,30 @@ describe('serve', () => {
     }))
   }
 
+  test('does not exhaust the generator before the response is consumed', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 3n)
+    let produced = 0
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: async function* () {
+        for (const value of ['first', 'second', 'third']) {
+          produced++
+          yield value
+        }
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(produced).toBeLessThan(3)
+
+    await readStream(stream)
+    expect(produced).toBe(3)
+  })
+
   test('emits message events for each generated value', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 3000000n)
@@ -619,6 +643,52 @@ describe('serve', () => {
       const { done } = await reader.read()
       if (done) break
     }
+  })
+
+  test('aborting an idle backpressured stream releases its generator', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 10000000n)
+    const controller = new AbortController()
+    const cleanup = vi.fn()
+
+    async function* idleGen(): AsyncGenerator<string> {
+      try {
+        yield 'queued'
+      } finally {
+        cleanup()
+      }
+    }
+
+    serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: idleGen(),
+      signal: controller.signal,
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    controller.abort()
+
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce())
+  })
+
+  test('closes immediately when created with an aborted signal', async () => {
+    const storage = memoryStore()
+    const controller = new AbortController()
+    controller.abort()
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['unreachable']),
+      signal: controller.signal,
+    })
+
+    await expect(stream.getReader().read()).resolves.toEqual({ done: true, value: undefined })
   })
 
   test('emits receipt with correct spent and units', async () => {

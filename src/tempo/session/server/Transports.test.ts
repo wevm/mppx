@@ -196,6 +196,26 @@ describe('MeteredStream', () => {
       expect(waiterAborted).toBe(true)
     })
 
+    test('reserveChargeOrWait preserves the waitForUpdate receiver', async () => {
+      const store = memoryStore(channel({ highestVoucherAmount: 25n, spent: 20n }))
+      store.waitForUpdate = async function () {
+        expect(this).toBe(store)
+        await this.updateChannel(channelId, (current) =>
+          current ? { ...current, highestVoucherAmount: 30n } : current,
+        )
+      }
+
+      await reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit() {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservedAmount: 0n,
+        store,
+      })
+    })
+
     test('commitReservedCharges increments spend and units', async () => {
       const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
 

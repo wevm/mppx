@@ -76,34 +76,55 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
-  let canceled = false
-  const abort = () => abortController.abort(signal?.reason)
-  if (signal?.aborted) abort()
-  else signal?.addEventListener('abort', abort, { once: true })
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+  let terminal = false
+  const iterator = meterIterable({
+    store,
+    channelId,
+    tickCost,
+    generate,
+    onChargeCommitted: options.onChargeCommitted,
+    pollIntervalMs,
+    prepaidUnits: options.prepaidUnits,
+    signal: abortController.signal,
+    emitNeedVoucher: (event) => streamController?.enqueue(encoder.encode(event)),
+    formatNeedVoucher: formatNeedVoucherEvent,
+  })[Symbol.asyncIterator]()
+
+  const cleanup = () => signal?.removeEventListener('abort', abort)
+  const terminate = (reason?: unknown) => {
+    if (terminal) return
+    terminal = true
+    abortController.abort(reason)
+    cleanup()
+    void Promise.resolve()
+      .then(() => iterator.return?.(undefined))
+      .catch(() => {})
+    try {
+      streamController?.close()
+    } catch {}
+  }
+  const abort = () => terminate(signal?.reason)
+  signal?.addEventListener('abort', abort, { once: true })
 
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const aborted = () => abortController.signal.aborted
-      const emit = (event: string) => controller.enqueue(encoder.encode(event))
-
+    start(controller) {
+      streamController = controller
+      if (signal?.aborted) abort()
+    },
+    async pull(controller) {
+      if (terminal) return
       try {
-        for await (const value of meterIterable({
-          store,
-          channelId,
-          tickCost,
-          generate,
-          onChargeCommitted: options.onChargeCommitted,
-          pollIntervalMs,
-          prepaidUnits: options.prepaidUnits,
-          signal: abortController.signal,
-          emitNeedVoucher: emit,
-          formatNeedVoucher: formatNeedVoucherEvent,
-        })) {
-          if (aborted()) break
+        const next = await iterator.next()
+        if (terminal) return
+        if (!next.done) {
+          if (abortController.signal.aborted) return
+          const value = next.value
           controller.enqueue(encoder.encode(formatMessageEvent(value)))
+          return
         }
 
-        if (!aborted()) {
+        if (!abortController.signal.aborted) {
           const channel = await store.getChannel(channelId)
           if (channel) {
             const receipt = createSessionReceipt({
@@ -114,18 +135,25 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
               units: channel.units,
             })
             controller.enqueue(encoder.encode(formatReceiptEvent(receipt)))
+            terminal = true
+            cleanup()
+            controller.close()
+            return
           }
         }
+        terminal = true
+        cleanup()
+        controller.close()
       } catch (e) {
-        if (!aborted()) controller.error(e)
-      } finally {
-        signal?.removeEventListener('abort', abort)
-        if (!canceled) controller.close()
+        if (terminal) return
+        terminal = true
+        cleanup()
+        if (!abortController.signal.aborted) controller.error(e)
+        else controller.close()
       }
     },
     cancel(reason) {
-      canceled = true
-      abortController.abort(reason)
+      terminate(reason)
     },
   })
 }

@@ -8,7 +8,7 @@ import { deserializeSessionReceipt } from '../../session/precompile/Protocol.js'
 import type { SessionReceipt } from '../../session/precompile/Protocol.js'
 import * as ChannelStore from '../../session/server/ChannelStore.js'
 import { parseEvent } from '../../session/server/Sse.js'
-import { markPrepaidSessionTick, sse } from './transport.js'
+import { defaultServe, markPrepaidSessionTick, sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
@@ -171,6 +171,62 @@ function readTerminalReceipt(output: string) {
 }
 
 describe('sse transport', () => {
+  test('default streams do not exhaust generators before consumption', async () => {
+    let produced = 0
+    const response = defaultServe({
+      challengeId,
+      generate: async function* () {
+        for (const value of ['first', 'second', 'third']) {
+          produced++
+          yield value
+        }
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(produced).toBeLessThan(3)
+
+    await response.text()
+    expect(produced).toBe(3)
+  })
+
+  test('default stream cancellation does not wait for a pending iterator', async () => {
+    const returnIterator = vi.fn(() => new Promise<IteratorResult<string>>(() => {}))
+    const response = defaultServe({
+      challengeId,
+      generate: {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => new Promise<IteratorResult<string>>(() => {}),
+            return: returnIterator,
+          }
+        },
+      },
+    })
+
+    await response.body!.cancel()
+
+    expect(returnIterator).toHaveBeenCalledOnce()
+  })
+
+  test('default stream cancellation ignores synchronous iterator cleanup errors', async () => {
+    const response = defaultServe({
+      challengeId,
+      generate: {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => new Promise<IteratorResult<string>>(() => {}),
+            return() {
+              throw new Error('cleanup failed')
+            },
+          }
+        },
+      },
+    })
+
+    await expect(response.body!.cancel()).resolves.toBeUndefined()
+  })
+
   test('getCredential returns null when no Authorization header', () => {
     const store = memoryStore()
     const transport = sse({ store })

@@ -263,18 +263,30 @@ export function defaultServe(options: {
   challengeId: string
 }): Response {
   const iterable = typeof options.generate === 'function' ? options.generate() : options.generate
+  const iterator = iterable[Symbol.asyncIterator]()
   const encoder = new TextEncoder()
+  let closed = false
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
+    async pull(controller) {
+      if (closed) return
       try {
-        for await (const value of iterable) {
-          controller.enqueue(encoder.encode(Sse_core.formatMessageEvent(value)))
+        const next = await iterator.next()
+        if (next.done) {
+          closed = true
+          controller.close()
+          return
         }
+        controller.enqueue(encoder.encode(Sse_core.formatMessageEvent(next.value)))
       } catch (e) {
+        closed = true
         controller.error(e)
-      } finally {
-        controller.close()
       }
+    },
+    cancel() {
+      closed = true
+      void Promise.resolve()
+        .then(() => iterator.return?.())
+        .catch(() => {})
     },
   })
   return new Response(stream, {
