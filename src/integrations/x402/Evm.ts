@@ -12,7 +12,6 @@ import { eip3009 } from '../../evm/Types.js'
 import type * as EvmTypes from '../../evm/Types.js'
 import * as Expires from '../../Expires.js'
 import * as Mppx from '../../server/Mppx.js'
-import { tempo } from '../../tempo/server/Methods.js'
 import * as Types from '../../x402/Types.js'
 
 /** Configuration shared by the x402 compatibility integrations. */
@@ -59,8 +58,10 @@ export function createHandler(parameters: {
       return { reference: result.reference }
     },
   })
+  // Only advertise a native rail whose credential can be verified and settled
+  // by the selected x402 scheme. A Tempo transaction is not an EIP-3009 payload.
   const payment = Mppx.create({
-    methods: [tempo.charge({ recipient: normalizeAddress(requirement.payTo) }), evmMethod],
+    methods: [evmMethod],
     ...(parameters.config.realm ? { realm: parameters.config.realm } : {}),
     secretKey: parameters.config.secretKey,
   })
@@ -72,7 +73,7 @@ export function createHandler(parameters: {
     expires: Expires.seconds(requirement.maxTimeoutSeconds),
     scope: parameters.paymentRequired.resource.url,
   }
-  const handler = payment.compose([payment.tempo.charge, options], [payment.evm.charge, options])
+  const handler = payment.compose([payment.evm.charge, options])
   return async (request: Request) => ({
     payment: await handler(request),
     skipHandlerResponse,
