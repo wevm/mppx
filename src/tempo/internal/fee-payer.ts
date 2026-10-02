@@ -33,7 +33,7 @@ export const callScopes = [
 ]
 
 export type Policy = {
-  /** Allows a sponsored transaction to install a new access key. @default true */
+  /** Allows a sponsored transaction to install a new access key. @default false */
   allowKeyAuthorization: boolean
   maxGas: bigint
   maxFeePerGas: bigint
@@ -338,7 +338,7 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
  * swap transactions at peak gas prices. Bumped from 0.01 ETH in #327.
  */
 const defaultPolicy: Policy = {
-  allowKeyAuthorization: true,
+  allowKeyAuthorization: false,
   maxGas: 2_000_000n,
   maxFeePerGas: 100_000_000_000n,
   maxPriorityFeePerGas: 10_000_000_000n,

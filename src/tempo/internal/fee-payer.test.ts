@@ -1098,28 +1098,7 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
   })
 
-  test('preserves keyAuthorization by default', () => {
-    const keyAuthorization = {
-      address: bogus,
-      chainId: 42431,
-      nonce: 1n,
-      r: 1n,
-      s: 2n,
-      yParity: 0,
-    }
-
-    const sponsored = prepareSponsoredTransaction({
-      account: sponsor,
-      chainId: 42431,
-      details,
-      allowedFeeTokens: [bogus],
-      transaction: { ...baseTransaction, keyAuthorization } as any,
-    }) as { keyAuthorization?: unknown }
-
-    expect(sponsored.keyAuthorization).toEqual(keyAuthorization)
-  })
-
-  test('error: rejects keyAuthorization when explicitly disallowed', () => {
+  test('rejects keyAuthorization by default', () => {
     const keyAuthorization = {
       address: bogus,
       chainId: 42431,
@@ -1135,10 +1114,31 @@ describe('prepareSponsoredTransaction', () => {
         chainId: 42431,
         details,
         allowedFeeTokens: [bogus],
-        policy: { allowKeyAuthorization: false },
         transaction: { ...baseTransaction, keyAuthorization } as any,
       }),
     ).toThrow('keyAuthorization is not allowed')
+  })
+
+  test('preserves keyAuthorization when explicitly allowed', () => {
+    const keyAuthorization = {
+      address: bogus,
+      chainId: 42431,
+      nonce: 1n,
+      r: 1n,
+      s: 2n,
+      yParity: 0,
+    }
+
+    const sponsored = prepareSponsoredTransaction({
+      account: sponsor,
+      chainId: 42431,
+      details,
+      allowedFeeTokens: [bogus],
+      policy: { allowKeyAuthorization: true },
+      transaction: { ...baseTransaction, keyAuthorization } as any,
+    }) as { keyAuthorization?: unknown }
+
+    expect(sponsored.keyAuthorization).toEqual(keyAuthorization)
   })
 
   test('error: rejects unknown top-level fields from the sponsored transaction', () => {
