@@ -26,7 +26,18 @@ export { sessionClient as session }
  * ```
  */
 export function tempo(parameters: tempo.Parameters = {}) {
-  return [charge_(parameters), sessionClient(parameters)] as const
+  const expectedChainAllowed =
+    parameters.expectedChainId !== undefined &&
+    (parameters.allowedChainIds === undefined ||
+      parameters.allowedChainIds.includes(parameters.expectedChainId))
+  const sessionParameters =
+    parameters.expectedChainId === undefined
+      ? parameters
+      : {
+          ...parameters,
+          allowedChainIds: expectedChainAllowed ? [parameters.expectedChainId] : [],
+        }
+  return [charge_(parameters), sessionClient(sessionParameters)] as const
 }
 
 export namespace tempo {

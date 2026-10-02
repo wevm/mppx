@@ -9,6 +9,7 @@ import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
+import { tempo } from '../../client/Methods.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
@@ -1500,6 +1501,37 @@ describe('precompile client session', () => {
 })
 
 describe('session chain policy', () => {
+  test('applies the common client expectedChainId pin to sessions', async () => {
+    const getClient = vi.fn(() => client)
+    const [, method] = tempo({ account, expectedChainId: 4217, getClient })
+
+    await expect(
+      method.createCredential({
+        challenge: makeSessionChallenge(),
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      }),
+    ).rejects.toThrow(`Chain ID not allowed: ${chainId}.`)
+    expect(getClient).not.toHaveBeenCalled()
+  })
+
+  test('intersects the common expected chain pin with allowed chains', async () => {
+    const getClient = vi.fn(() => client)
+    const [, method] = tempo({
+      account,
+      allowedChainIds: [4217],
+      expectedChainId: chainId,
+      getClient,
+    })
+
+    await expect(
+      method.createCredential({
+        challenge: makeSessionChallenge(),
+        context: { action: 'voucher', descriptor, cumulativeAmountRaw: '100' },
+      }),
+    ).rejects.toThrow(`Chain ID not allowed: ${chainId}.`)
+    expect(getClient).not.toHaveBeenCalled()
+  })
+
   test.each([chainId, undefined])(
     'accepts a chain-agnostic client with advertised chain %s',
     async (advertised) => {
