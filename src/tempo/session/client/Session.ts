@@ -279,6 +279,7 @@ export function session(parameters: session.Parameters = {}) {
     fetch,
     input,
     requiredCumulative,
+    signal,
   }: {
     challenge: TempoSessionChallenge
     channel: ChannelEntry
@@ -286,6 +287,7 @@ export function session(parameters: session.Parameters = {}) {
     fetch: typeof globalThis.fetch
     input: RequestInfo | URL
     requiredCumulative: bigint
+    signal?: AbortSignal | undefined
   }) => {
     const knownDeposit = channel.deposit > deposit ? channel.deposit : deposit
     const additionalDeposit = resolveAutomaticTopUp({
@@ -308,6 +310,7 @@ export function session(parameters: session.Parameters = {}) {
           method.createCredential({ challenge, context }),
         fetch,
         input,
+        signal,
       })
     const nextDeposit = knownDeposit + additionalDeposit
     if (nextDeposit === channel.deposit) return
@@ -322,7 +325,7 @@ export function session(parameters: session.Parameters = {}) {
     sink.notifyUpdate(updated)
   }
 
-  MethodChallenge.register(method, async ({ challenge, context, fetch, input }) => {
+  MethodChallenge.register(method, async ({ challenge, context, fetch, input, signal }) => {
     if (!isTip1034SessionChallenge(challenge)) return
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
@@ -354,6 +357,7 @@ export function session(parameters: session.Parameters = {}) {
       fetch,
       input,
       requiredCumulative,
+      signal,
     })
   })
 
@@ -390,7 +394,7 @@ export function session(parameters: session.Parameters = {}) {
           method.createCredential({ challenge, context }),
         fetch,
         getChannel: () => channel ?? null,
-        async topUpIfNeeded({ deposit, requiredCumulative }) {
+        async topUpIfNeeded({ deposit, requiredCumulative, signal: topUpSignal }) {
           if (!channel) return
           await topUpChannelIfNeeded({
             challenge,
@@ -399,12 +403,14 @@ export function session(parameters: session.Parameters = {}) {
             fetch,
             input,
             requiredCumulative,
+            signal: topUpSignal,
           })
         },
       } satisfies SsePaymentDriver
 
       return wrapSseResponse({
-        onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
+        onNeedVoucher: (event, streamSignal) =>
+          handleSseNeedVoucher({ challenge, driver, input, signal: streamSignal }, event),
         onReceipt() {},
         response,
         signal,

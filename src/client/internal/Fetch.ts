@@ -309,6 +309,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                   context: credentialContext,
                   fetch: baseFetch,
                   input: paymentInput,
+                  signal: resolveRequestSignal(input, init),
                 }),
             }
             const promise = attempt
@@ -956,11 +957,14 @@ function cloneRequestInput(input: RequestInfo | URL): RequestInfo | URL {
   }
 }
 
-function resolveRequestSignal(
+/** @internal */
+export function resolveRequestSignal(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
 ): AbortSignal | undefined {
-  return init?.signal ?? (input instanceof Request ? input.signal : undefined)
+  if (init?.signal === null) return undefined
+  if (init?.signal !== undefined) return init.signal
+  return input instanceof Request ? input.signal : undefined
 }
 
 /** @internal */

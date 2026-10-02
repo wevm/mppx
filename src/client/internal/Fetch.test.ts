@@ -531,6 +531,17 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     expect(received.signal).toBe(customInit.signal)
   })
 
+  test('inherits request signals when init.signal is undefined', () => {
+    const request = new Request('https://example.com/api', {
+      signal: new AbortController().signal,
+    })
+
+    expect(
+      Fetch.resolveRequestSignal(request, { signal: undefined } as unknown as RequestInit),
+    ).toBe(request.signal)
+    expect(Fetch.resolveRequestSignal(request, { signal: null })).toBeUndefined()
+  })
+
   test('passes through undefined init', async () => {
     const receivedInits: (RequestInit | undefined)[] = []
     const mockFetch: typeof globalThis.fetch = async (_input, init) => {

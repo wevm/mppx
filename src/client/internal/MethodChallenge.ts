@@ -10,6 +10,7 @@ export type HandlerParameters = {
   context?: unknown
   fetch: typeof globalThis.fetch
   input: RequestInfo | URL
+  signal?: AbortSignal | undefined
 }
 
 /** Internal client-method challenge hook. */

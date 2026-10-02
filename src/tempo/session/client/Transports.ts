@@ -228,6 +228,8 @@ export type TopUpRequirement = {
   input: RequestInfo | URL
   /** Minimum cumulative voucher amount the server needs. */
   requiredCumulative: bigint
+  /** Cancels nested management requests for this top-up. */
+  signal?: AbortSignal | undefined
 }
 
 /** Inputs needed to validate a caller-requested manager top-up. */
@@ -310,6 +312,8 @@ export type ResolveNeedVoucherContextParameters = {
   getChannel(): ChannelEntry | null
   /** Original paid resource URL; converted to management URL by the caller. */
   input: RequestInfo | URL
+  /** Cancels top-up work triggered by this event. */
+  signal?: AbortSignal | undefined
   /** Performs the deposit top-up when server-required cumulative exceeds deposit. */
   topUpIfNeeded(parameters: TopUpRequirement): Promise<void>
 }
@@ -422,6 +426,7 @@ export async function resolveNeedVoucherContext(
     channelId: parameters.expectedChannelId,
     deposit: eventAmounts.deposit,
     requiredCumulative: eventAmounts.requiredCumulative,
+    ...(parameters.signal ? { signal: parameters.signal } : {}),
   })
 
   const channel = parameters.getChannel()
@@ -474,6 +479,8 @@ export type PostTopUpParameters = {
   fetch: typeof globalThis.fetch
   /** Original paid resource URL; normalized to a management URL before posting. */
   input: RequestInfo | URL
+  /** Cancels the top-up management request. */
+  signal?: AbortSignal | undefined
 }
 
 /** Inputs for retrying an HTTP 402 with a top-up/voucher management round trip. */
@@ -634,6 +641,7 @@ export async function postTopUp(
     createSessionCredential: parameters.createSessionCredential,
     fetch: parameters.fetch,
     input: parameters.input,
+    signal: parameters.signal,
   })
   if (!response.ok) throw new Error(`Top-up POST failed with status ${response.status}`)
 
@@ -648,10 +656,12 @@ async function postManagementCredential(parameters: {
   createSessionCredential: CreateSessionCredential
   fetch: typeof globalThis.fetch
   input: RequestInfo | URL
+  signal?: AbortSignal | undefined
 }): Promise<Response> {
   const post = async (challenge: TempoSessionChallenge) =>
     parameters.fetch(managementInput(parameters.input), {
       method: 'POST',
+      ...(parameters.signal ? { signal: parameters.signal } : {}),
       headers: {
         [Constants.Headers.authorization]: await parameters.createSessionCredential(
           challenge,
@@ -686,6 +696,9 @@ export async function retryHttpPaymentRequired(
     channelId: snapshot.channelId,
     deposit: BigInt(snapshot.deposit),
     requiredCumulative,
+    signal:
+      parameters.init?.signal ??
+      (parameters.input instanceof Request ? parameters.input.signal : undefined),
   })
 
   const currentChannel = parameters.getChannel()
@@ -858,7 +871,8 @@ export async function openSseSession(
   init: SseDriverOptions | undefined,
   driver: OpenSseSessionParameters,
 ): Promise<AsyncIterable<string>> {
-  const { onReceipt, signal, ...fetchInit } = init ?? {}
+  const { onReceipt, signal: explicitSignal, ...fetchInit } = init ?? {}
+  const signal = explicitSignal ?? (input instanceof Request ? input.signal : undefined)
   const sseInit = {
     ...fetchInit,
     headers: {
@@ -887,7 +901,8 @@ export function consumeSseSessionResponse(
   const challenge = driver.getChallenge()
 
   return iterateSseMessages({
-    onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
+    onNeedVoucher: (event) =>
+      handleSseNeedVoucher({ challenge, driver, input, signal: options?.signal }, event),
     onReceipt(receipt) {
       driver.acceptReceipt(receipt)
       options?.onReceipt?.(receipt)
@@ -908,7 +923,7 @@ export type SseResponseFrame = {
 /** Inputs for driving an open paid SSE response. */
 export type DriveSseResponseParameters = {
   /** Handles a request for the stream's next cumulative voucher. */
-  onNeedVoucher(event: NeedVoucherEvent): Promise<void>
+  onNeedVoucher(event: NeedVoucherEvent, signal?: AbortSignal | undefined): Promise<void>
   /** Handles a payment receipt emitted by the stream. */
   onReceipt(receipt: SessionReceipt): void
   /** Open SSE response to drive. */
@@ -967,7 +982,7 @@ export async function* driveSseResponse(
             yield { data: event.data, raw }
             break
           case 'payment-need-voucher':
-            await parameters.onNeedVoucher(event.data)
+            await parameters.onNeedVoucher(event.data, parameters.signal)
             break
           case 'payment-receipt':
             parameters.onReceipt(event.data)
@@ -1061,6 +1076,7 @@ export async function handleSseNeedVoucher(
     challenge: TempoSessionChallenge | null
     driver: SsePaymentDriver
     input: RequestInfo | URL
+    signal?: AbortSignal | undefined
   },
   event: NeedVoucherEvent,
 ) {
@@ -1074,6 +1090,7 @@ export async function handleSseNeedVoucher(
     expectedChannelId: channel.channelId,
     getChannel: parameters.driver.getChannel,
     input: parameters.input,
+    signal: parameters.signal,
     topUpIfNeeded: parameters.driver.topUpIfNeeded,
   })
   if (resolution.status !== 'ready') return
@@ -1084,6 +1101,7 @@ export async function handleSseNeedVoucher(
     createSessionCredential: parameters.driver.createSessionCredential,
     fetch: parameters.driver.fetch,
     input: parameters.input,
+    signal: parameters.signal,
   })
   if (!voucherResponse.ok) {
     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
@@ -1509,6 +1527,7 @@ async function handleNeedVoucher(
       expectedChannelId: parameters.socketState.channelId,
       getChannel: parameters.driver.getChannel,
       input: parameters.driver.httpUrl,
+      signal: parameters.driver.options?.signal,
       topUpIfNeeded: parameters.driver.topUpIfNeeded,
     })
     if (resolution.status === 'ignored') {

@@ -593,6 +593,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     channelId: Hex.Hex
     input: RequestInfo | URL
     knownDeposit?: bigint | undefined
+    signal?: AbortSignal | undefined
   }) {
     const { knownDeposit, ...topUp } = parameters
     const receipt = await postTopUp({
@@ -647,6 +648,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       channelId: parameters.channelId,
       additionalDeposit,
       knownDeposit: deposit,
+      signal: parameters.signal,
     })
   }
 
@@ -878,6 +880,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             context,
             fetch: config.fetch,
             input: probeUrl,
+            signal: init?.signal,
           })
           return createSessionCredential(challenge, context)
         },

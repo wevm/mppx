@@ -438,6 +438,7 @@ export function create<
           context,
           fetch: attestedFetch,
           input: preparedHttp.replayRequest,
+          signal: preparedHttp.replayRequest.signal,
         })
       return payment.createCredential(context)
     })

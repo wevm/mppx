@@ -573,12 +573,18 @@ describe('prepareRequest', () => {
     const mppx = setup(vi.fn(async () => paymentRequired()) as typeof globalThis.fetch)
     const prepare = vi.fn()
     MethodChallenge.register(mppx.methods[0]!, prepare)
-    const prepared = await mppx.prepareRequest('https://shop.example/resource')
+    const controller = new AbortController()
+    const prepared = await mppx.prepareRequest(
+      new Request('https://shop.example/resource', { signal: controller.signal }),
+    )
 
     await prepared.payment!.createCredential()
 
     expect(prepare).toHaveBeenCalledOnce()
     expect(prepare.mock.calls[0]?.[0].input).toBeInstanceOf(Request)
+    expect(prepare.mock.calls[0]?.[0].signal).toBe(prepare.mock.calls[0]?.[0].input.signal)
+    controller.abort()
+    expect(prepare.mock.calls[0]?.[0].signal.aborted).toBe(true)
   })
 
   test('behavior: returns responses that do not require payment', async () => {

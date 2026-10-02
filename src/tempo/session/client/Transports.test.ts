@@ -24,6 +24,7 @@ import {
   driveSseResponse,
   isExpectedSocketReceipt,
   managementInput,
+  openSseSession,
   postTopUp,
   prepareWebSocketSession,
   readNeedVoucherEventAmounts,
@@ -251,6 +252,33 @@ describe('HttpManagement', () => {
       expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe(`top-up-${routeChallenge.id}`)
     })
 
+    test('postTopUp forwards cancellation to the management request', async () => {
+      const controller = new AbortController()
+      const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(init?.signal).toBe(controller.signal)
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          })
+        })
+      })
+      const pending = postTopUp({
+        additionalDeposit: 3n,
+        challenge: challenge(),
+        channel: channel(),
+        channelId,
+        createSessionCredential: async () => 'top-up-credential',
+        fetch,
+        input: 'https://example.test/resource',
+        signal: controller.signal,
+      })
+
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+      controller.abort(new Error('cancelled'))
+
+      await expect(pending).rejects.toThrow('cancelled')
+    })
+
     test('retryHttpPaymentRequired signs the server-required cumulative voucher', async () => {
       let entry = channel({ cumulativeAmount: 5n, deposit: 6n })
       const topUpIfNeeded = vi.fn(async () => {
@@ -290,6 +318,29 @@ describe('HttpManagement', () => {
         expect.objectContaining({ channelId, deposit: 6n, requiredCumulative: 8n }),
       )
       expect(restoreCumulative).not.toHaveBeenCalled()
+    })
+
+    test('retryHttpPaymentRequired preserves a signal from a Request input', async () => {
+      const controller = new AbortController()
+      const input = new Request('https://example.test/resource', { signal: controller.signal })
+      const entry = channel({ cumulativeAmount: 5n })
+      const topUpIfNeeded = vi.fn(async (parameters: TopUpRequirement) => {
+        expect(parameters.signal).toBe(input.signal)
+        entry.cumulativeAmount = 8n
+      })
+
+      await retryHttpPaymentRequired({
+        createSessionCredential: async () => 'voucher-credential',
+        fetch: async () => new Response('ok', { status: 200 }),
+        getChannel: () => entry,
+        input,
+        response: response402(challenge(snapshot())),
+        restoreCumulative() {},
+        setChallenge() {},
+        topUpIfNeeded,
+      })
+
+      expect(topUpIfNeeded).toHaveBeenCalledOnce()
     })
 
     test('retryHttpPaymentRequired restores cumulative authorization when retry fails', async () => {
@@ -550,6 +601,7 @@ describe('VoucherManagement', () => {
     test('tops up when required and returns voucher credential context', async () => {
       const entry = channel({ cumulativeAmount: 1n })
       const topUps: TopUpRequirement[] = []
+      const controller = new AbortController()
 
       const resolution = await resolveNeedVoucherContext({
         assertVoucherWithinLocalLimit: vi.fn(),
@@ -563,6 +615,7 @@ describe('VoucherManagement', () => {
         expectedChannelId: channelId,
         getChannel: () => entry,
         input: 'https://example.test/stream',
+        signal: controller.signal,
         topUpIfNeeded: async (parameters) => {
           topUps.push(parameters)
         },
@@ -575,6 +628,7 @@ describe('VoucherManagement', () => {
           channelId,
           deposit: 3n,
           requiredCumulative: 5n,
+          signal: controller.signal,
         },
       ])
       expect(resolution.status).toBe('ready')
@@ -885,6 +939,60 @@ describe('SseDriver', () => {
     },
   )
 
+  test('aborts an in-flight voucher handler when the wrapped response is canceled', async () => {
+    let handlerSignal: AbortSignal | undefined
+    const sourceResponse = new Response(
+      formatNeedVoucherEvent({
+        acceptedCumulative: '0',
+        channelId: `0x${'01'.repeat(32)}`,
+        deposit: '1',
+        requiredCumulative: '1',
+      }),
+    )
+    const response = wrapSseResponse({
+      onNeedVoucher(_event, signal) {
+        handlerSignal = signal
+        return new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve()))
+      },
+      onReceipt() {},
+      response: sourceResponse,
+    })
+    const reader = response.body!.getReader()
+    const read = reader.read()
+
+    await vi.waitFor(() => expect(handlerSignal).toBeDefined())
+    await reader.cancel()
+    await read
+
+    expect(handlerSignal?.aborted).toBe(true)
+  })
+
+  test('openSseSession preserves a signal carried by a Request input', async () => {
+    const controller = new AbortController()
+    const input = new Request('https://example.test/stream', { signal: controller.signal })
+    const doFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(input.signal)
+      return new Response(new ReadableStream({ start: (stream) => stream.close() }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    })
+
+    await openSseSession(input, undefined, {
+      acceptReceipt() {},
+      assertVoucherWithinLocalLimit() {},
+      async createSessionCredential() {
+        return 'credential'
+      },
+      doFetch,
+      fetch: vi.fn(),
+      getChallenge: () => null,
+      getChannel: () => null,
+      async topUpIfNeeded() {},
+    })
+
+    expect(doFetch).toHaveBeenCalledOnce()
+  })
+
   test('keeps voucher events bound to the challenge that opened the stream', async () => {
     const channelId = `0x${'01'.repeat(32)}` as Hex.Hex
     const token = '0x20c0000000000000000000000000000000000001' as Address
@@ -914,7 +1022,12 @@ describe('SseDriver', () => {
       }) as TempoSessionChallenge
     const streamChallenge = makeChallenge('challenge-1')
     let currentChallenge = streamChallenge
+    const controller = new AbortController()
     const createSessionCredential = vi.fn(async () => 'Payment credential')
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
+      return new Response(null, { status: 204 })
+    })
     const channel: ChannelEntry = {
       chainId: 4217,
       channelId,
@@ -933,24 +1046,30 @@ describe('SseDriver', () => {
       }),
       { headers: { 'Content-Type': 'text/event-stream' } },
     )
-    const stream = consumeSseSessionResponse('https://example.test/stream', response, undefined, {
-      acceptReceipt() {},
-      assertVoucherWithinLocalLimit() {},
-      createSessionCredential,
-      async doFetch() {
-        throw new Error('unexpected resource fetch')
+    const stream = consumeSseSessionResponse(
+      'https://example.test/stream',
+      response,
+      { signal: controller.signal },
+      {
+        acceptReceipt() {},
+        assertVoucherWithinLocalLimit() {},
+        createSessionCredential,
+        async doFetch() {
+          throw new Error('unexpected resource fetch')
+        },
+        fetch,
+        getChallenge: () => currentChallenge,
+        getChannel: () => channel,
+        async topUpIfNeeded() {},
       },
-      fetch: vi.fn(async () => new Response(null, { status: 204 })),
-      getChallenge: () => currentChallenge,
-      getChannel: () => channel,
-      async topUpIfNeeded() {},
-    })
+    )
 
     currentChallenge = makeChallenge('challenge-2')
     const frames: string[] = []
     for await (const frame of stream) frames.push(frame)
 
     expect(frames).toEqual([])
+    expect(fetch).toHaveBeenCalledOnce()
     expect(createSessionCredential).toHaveBeenCalledOnce()
     expect(createSessionCredential).toHaveBeenCalledWith(
       streamChallenge,
