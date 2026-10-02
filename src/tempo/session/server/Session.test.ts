@@ -2394,7 +2394,7 @@ describe('precompile server session unit guardrails', () => {
       )
       expect(result.status).toBe(200)
       if (result.status !== 200) throw new Error('expected paid response')
-      const paid = result.withReceipt(new Response('paid-content'))
+      const paid = await result.withReceipt(new Response('paid-content'))
       const receipt = deserializeSessionReceipt(paid.headers.get('Payment-Receipt') as string)
       expect(receipt.spent).toBe('1')
       expect(receipt.units).toBe(1)

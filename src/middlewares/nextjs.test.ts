@@ -5,7 +5,7 @@ import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } 
 import { Mppx, discovery, payment } from 'mppx/nextjs'
 import { tempo as tempo_server } from 'mppx/server'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
@@ -95,6 +95,112 @@ describe('payment', () => {
     expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
 
     server.close()
+  })
+
+  test('awaits an async management probe before running the protected handler', async () => {
+    let handlerRan = false
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: async (response?: Response) => {
+        await Promise.resolve()
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    })
+    const handler = payment(intent as any, {} as any, () => {
+      handlerRan = true
+      return Response.json({ data: 'content' })
+    })
+
+    const response = await handler(new Request('http://localhost/'))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    expect(handlerRan).toBe(true)
+  })
+
+  test('cancels the receipt when the management probe fails', async () => {
+    const cancelReceipt = vi.fn()
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async () => {
+        throw new Error('probe failed')
+      },
+    })
+    const handler = payment(intent as any, {} as any, vi.fn())
+
+    await expect(handler(new Request('http://localhost/'))).rejects.toThrow('probe failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('cancels the receipt when the protected handler fails', async () => {
+    const cancelReceipt = vi.fn(async () => undefined)
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return response
+      },
+    })
+    const handler = payment(intent as any, {} as any, async () => {
+      throw new Error('route failed')
+    })
+
+    await expect(handler(new Request('http://localhost/'))).rejects.toThrow('route failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('does not run the protected handler after the request aborts', async () => {
+    const cancelReceipt = vi.fn()
+    let finishIntent!: (result: unknown) => void
+    const pendingIntent = new Promise((resolve) => {
+      finishIntent = resolve
+    })
+    const intent = () => () => pendingIntent
+    let handlerRan = false
+    const handler = payment(intent as any, {} as any, () => {
+      handlerRan = true
+      return Response.json({ data: 'content' })
+    })
+    const controller = new AbortController()
+    const response = handler(new Request('http://localhost/', { signal: controller.signal }))
+
+    controller.abort(new Error('client disconnected'))
+    finishIntent({ cancelReceipt, status: 200 as const, withReceipt: vi.fn() })
+
+    await expect(response).rejects.toThrow('client disconnected')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+    expect(handlerRan).toBe(false)
+  })
+
+  test('preserves the handler error when receipt cancellation also fails', async () => {
+    const intent = () => async () => ({
+      cancelReceipt: async () => {
+        throw new Error('cleanup failed')
+      },
+      status: 200 as const,
+      withReceipt: (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return response
+      },
+    })
+    const handler = payment(intent as any, {} as any, async () => {
+      throw new Error('route failed')
+    })
+
+    await expect(handler(new Request('http://localhost/'))).rejects.toThrow('route failed')
   })
 })
 

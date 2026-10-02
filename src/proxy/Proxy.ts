@@ -149,34 +149,70 @@ export function create(config: create.Config): Proxy {
       getConfiguredScope(handler) ? request : Scope.attach(request, scope),
     )
     if (result.status === 402) return result.challenge
+    await cancelIfAborted(request.signal, result)
 
-    const managementResponse = (() => {
+    const managementResponse = await (async () => {
       try {
-        return (result.withReceipt as () => Response)()
+        return await (result.withReceipt as () => Promise<Response> | Response)()
       } catch (error) {
         if (Mppx.isMissingReceiptResponseError(error)) return null
+        try {
+          await result.cancelReceipt?.()
+        } catch {
+          // Preserve the management response error when cleanup also fails.
+        }
         throw error
       }
     })()
 
+    await cancelIfAborted(request.signal, result)
     if (managementResponse) return managementResponse
-    if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
+    if (fallbackMatch) {
+      try {
+        await result.cancelReceipt?.()
+      } catch {
+        // Preserve the method-not-allowed response when cleanup also fails.
+      }
+      return new Response('Method Not Allowed', { status: 405 })
+    }
 
     const options = Service.getOptions(endpoint)
-    const upstreamRes = await proxyUpstream({
-      request,
-      service,
-      ctx: { ...ctx, ...options },
-      proxy,
-      onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
-    })
-    return result.withReceipt(upstreamRes)
+    try {
+      const upstreamRes = await proxyUpstream({
+        request,
+        service,
+        ctx: { ...ctx, ...options },
+        proxy,
+        onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
+      })
+      return await result.withReceipt(upstreamRes)
+    } catch (error) {
+      try {
+        await result.cancelReceipt?.()
+      } catch {
+        // Preserve the upstream or response error when cleanup also fails.
+      }
+      throw error
+    }
   }
 
   return {
     fetch: handle,
     listener: Request.toNodeListener(handle),
   }
+}
+
+async function cancelIfAborted(
+  signal: AbortSignal,
+  result: { cancelReceipt?: (() => Promise<void> | void) | undefined },
+) {
+  if (!signal.aborted) return
+  try {
+    await result.cancelReceipt?.()
+  } catch {
+    // Preserve the request abort when cleanup also fails.
+  }
+  throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }
 
 export declare namespace create {

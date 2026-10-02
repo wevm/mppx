@@ -16,7 +16,7 @@ import {
   type PaymentPayload,
 } from 'mppx/x402'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
@@ -40,7 +40,7 @@ describe('payment', () => {
     let handlerRan = false
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: () =>
+      withReceipt: async () =>
         new Response(null, {
           headers: { 'Payment-Receipt': 'management-receipt' },
           status: 204,
@@ -66,7 +66,7 @@ describe('payment', () => {
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
+      withReceipt: async (response?: Response) =>
         new Response(response?.body ?? null, {
           headers: {
             ...(response ? Object.fromEntries(response.headers) : {}),
@@ -85,6 +85,101 @@ describe('payment', () => {
     expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
 
     server.close()
+  })
+
+  test('cancels the receipt when a protected handler fails', async () => {
+    const cancelReceipt = vi.fn(async () => undefined)
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return response
+      },
+    })
+    const app = new Hono()
+    app.get('/', payment(intent as any, {} as any), () => {
+      throw new Error('route failed')
+    })
+
+    const response = await app.request('/')
+
+    expect(response.status).toBe(500)
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('cancels the receipt when the management probe fails', async () => {
+    const cancelReceipt = vi.fn()
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async () => {
+        throw new Error('probe failed')
+      },
+    })
+    const app = new Hono()
+    app.onError((error, c) => c.text(error.message, 500))
+    app.get('/', payment(intent as any, {} as any), (c) => c.text('content'))
+
+    const response = await app.request('/')
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe('probe failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('does not run the protected handler after the request aborts', async () => {
+    const cancelReceipt = vi.fn()
+    let finishIntent!: (result: unknown) => void
+    const pendingIntent = new Promise((resolve) => {
+      finishIntent = resolve
+    })
+    const intent = () => () => pendingIntent
+    let handlerRan = false
+    const app = new Hono()
+    app.onError((error, c) => c.text(error.message, 500))
+    app.get('/', payment(intent as any, {} as any), (c) => {
+      handlerRan = true
+      return c.json({ data: 'content' })
+    })
+    const controller = new AbortController()
+    const response = app.request(new Request('http://localhost/', { signal: controller.signal }))
+
+    controller.abort(new Error('client disconnected'))
+    finishIntent({ cancelReceipt, status: 200 as const, withReceipt: vi.fn() })
+
+    expect((await response).status).toBe(500)
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+    expect(handlerRan).toBe(false)
+  })
+
+  test('preserves the handler error when receipt cancellation also fails', async () => {
+    const intent = () => async () => ({
+      cancelReceipt: async () => {
+        throw new Error('cleanup failed')
+      },
+      status: 200 as const,
+      withReceipt: async (response?: Response) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return response
+      },
+    })
+    const app = new Hono()
+    app.onError((error, c) => c.text(error.message, 500))
+    app.get('/', payment(intent as any, {} as any), () => {
+      throw new Error('route failed')
+    })
+
+    const response = await app.request('/')
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe('route failed')
   })
 })
 

@@ -6,7 +6,7 @@ import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } 
 import { Mppx, discovery, payment } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
@@ -58,14 +58,14 @@ describe('payment', () => {
     let handlerRan = false
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: () =>
+      withReceipt: async () =>
         new Response(null, {
           headers: { 'Payment-Receipt': 'management-receipt' },
           status: 204,
         }),
     })
 
-    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
       app.get('/', () => {
         handlerRan = true
         return { data: 'content' }
@@ -85,7 +85,7 @@ describe('payment', () => {
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
+      withReceipt: async (response?: Response) =>
         new Response(response?.body ?? null, {
           headers: {
             ...(response ? Object.fromEntries(response.headers) : {}),
@@ -95,7 +95,7 @@ describe('payment', () => {
         }),
     })
 
-    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
       app.get('/', () => ({ data: 'content' })),
     )
 
@@ -105,6 +105,171 @@ describe('payment', () => {
     expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
 
     server.close()
+  })
+
+  test('cancels the receipt when the management probe fails', async () => {
+    const cancelReceipt = vi.fn()
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async () => {
+        throw new Error('probe failed')
+      },
+    })
+    const app = new Elysia()
+      .onError(({ error }) => new Response((error as Error).message, { status: 500 }))
+      .guard(payment(intent as any, {} as any), (guarded) =>
+        guarded.get('/', () => ({ data: 'content' })),
+      )
+
+    const response = await app.fetch(new Request('http://localhost/'))
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe('probe failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test.each(['guard', 'onBeforeHandle'] as const)(
+    'safely rejects legacy %s registration for deferred receipts',
+    async (registration) => {
+      let handlerRan = false
+      const cancelReceipt = vi.fn()
+      const withReceipt = vi.fn(async (response?: Response) => {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        response.headers.set('Payment-Receipt', 'legacy-receipt')
+        return response
+      })
+      const intent = () => async () => ({
+        status: 200 as const,
+        cancelReceipt,
+        withReceipt,
+      })
+      const hook = payment(intent as any, {} as any)
+      const app =
+        registration === 'guard'
+          ? new Elysia().guard({ beforeHandle: hook }).get('/', () => {
+              handlerRan = true
+              return { data: 'protected' }
+            })
+          : new Elysia().onBeforeHandle(hook).get('/', () => {
+              handlerRan = true
+              return { data: 'protected' }
+            })
+
+      const response = await app.fetch(new Request('http://localhost/'))
+      const body = await response.text()
+      expect(response.status).toBe(500)
+      expect(body).toContain('require full Elysia lifecycle hooks')
+      expect(handlerRan).toBe(false)
+      expect(cancelReceipt).toHaveBeenCalledOnce()
+      expect(withReceipt).toHaveBeenCalledOnce()
+      expect(withReceipt).toHaveBeenCalledWith()
+    },
+  )
+
+  test('cancels a pending receipt when the protected route throws', async () => {
+    const cancelReceipt = vi.fn()
+    const withReceipt = vi.fn(async (response?: Response) => {
+      if (!response) {
+        const error = new Error('withReceipt() requires a response argument')
+        error.name = 'MissingReceiptResponseError'
+        throw error
+      }
+      return response
+    })
+    const intent = () => async () => ({
+      status: 200 as const,
+      cancelReceipt,
+      withReceipt,
+    })
+
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', () => {
+        throw new Error('route failed')
+      }),
+    )
+
+    const response = await app.fetch(new Request('http://localhost/'))
+    expect(response.status).toBe(500)
+    await vi.waitFor(() => expect(cancelReceipt).toHaveBeenCalledOnce())
+    expect(withReceipt).toHaveBeenCalledOnce()
+    expect(withReceipt).toHaveBeenCalledWith()
+  })
+
+  test('keeps receipt cancellation available through response mapping', async () => {
+    const cancelReceipt = vi.fn()
+    const intent = () => async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async (response?: Response) => response!,
+    })
+    const hook = payment(intent as any, {} as any)
+    const context = {
+      request: new Request('http://localhost/'),
+      set: { headers: {} },
+    } as any
+
+    await hook.beforeHandle(context)
+    await hook.afterHandle(context)
+    await hook.error(context)
+    await hook.afterResponse(context)
+
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('does not continue after verification completes for an aborted request', async () => {
+    const cancelReceipt = vi.fn()
+    let finishIntent!: (result: unknown) => void
+    const pendingIntent = new Promise((resolve) => {
+      finishIntent = resolve
+    })
+    const hook = payment((() => () => pendingIntent) as any, {} as any)
+    const controller = new AbortController()
+    const context = {
+      request: new Request('http://localhost/', { signal: controller.signal }),
+      set: { headers: {} },
+    } as any
+    const handled = hook.beforeHandle(context)
+
+    controller.abort(new Error('client disconnected'))
+    finishIntent({ cancelReceipt, status: 200 as const, withReceipt: vi.fn() })
+
+    await expect(handled).rejects.toThrow('client disconnected')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('retries pending receipt cleanup after a transient failure', async () => {
+    const cancelReceipt = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('cleanup failed'))
+      .mockResolvedValue(undefined)
+    const intent = () => async () => ({
+      status: 200 as const,
+      cancelReceipt,
+      withReceipt: async (response?: Response) => {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        return response
+      },
+    })
+    const hook = payment(intent as any, {} as any)
+    const context = {
+      request: new Request('http://localhost/'),
+      set: { headers: {} },
+    } as any
+
+    await hook.beforeHandle(context)
+    await hook.error(context)
+    await hook.afterResponse(context)
+
+    expect(cancelReceipt).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -139,7 +304,7 @@ describe('charge', () => {
   test('returns 402 when no credential', async () => {
     const { mppx } = createChargeHarness(false)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -154,7 +319,7 @@ describe('charge', () => {
   test('returns 200 with receipt on valid payment', async () => {
     const { fetch, mppx } = createChargeHarness(false)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -175,7 +340,7 @@ describe('charge', () => {
   test('fee payer: returns 200 with receipt on valid payment', async () => {
     const { fetch, mppx } = createChargeHarness(true)
 
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+    const app = new Elysia().guard(mppx.charge({ amount: '1' }), (app) =>
       app.get('/', () => ({ fortune: 'You will be rich' })),
     )
 
@@ -255,7 +420,7 @@ describe('session', () => {
     const { mppx } = createSessionHarness(false)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 
@@ -271,7 +436,7 @@ describe('session', () => {
     const { fetch, mppx } = createSessionHarness(false)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 
@@ -293,7 +458,7 @@ describe('session', () => {
     const { fetch, mppx } = createSessionHarness(true)
 
     const app = new Elysia().guard(
-      { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+      mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
       (app) => app.get('/', () => ({ data: 'streamed' })),
     )
 

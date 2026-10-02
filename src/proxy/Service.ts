@@ -54,7 +54,11 @@ export type IntentHandler = (input: Request) => Promise<IntentResult>
 /** Result of an intent handler — either a 402 challenge or a 200 with receipt attachment. */
 export type IntentResult =
   | { challenge: Response; status: 402 }
-  | { status: 200; withReceipt: <response>(response: response) => response }
+  | {
+      cancelReceipt?: (() => void | Promise<void>) | undefined
+      status: 200
+      withReceipt: <response>(response: response) => response | Promise<response>
+    }
 
 /** Context passed to `rewriteRequest`/`rewriteResponse` hooks, including any per-endpoint options. */
 export type Context = {

@@ -158,7 +158,7 @@ export async function resolveSessionSnapshot(
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
   if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
-  const spendBoundary = channel.spent + amount
+  const spendBoundary = channel.spent + ChannelStore.reservedStreamAmount(channel) + amount
   const advanceBoundary = requireVoucherAdvance
     ? channel.highestVoucherAmount + (minimumVoucherAdvance > 0n ? minimumVoucherAdvance : 1n)
     : 0n

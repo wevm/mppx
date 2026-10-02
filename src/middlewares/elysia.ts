@@ -7,15 +7,34 @@ import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
 
-type ElysiaHook = (context: Context) => Promise<Response | undefined>
+type ElysiaBeforeHandle = (context: {
+  request: Request
+  route?: string | undefined
+  set: Context['set']
+}) => Promise<Response | undefined>
+
+type ElysiaHook = ElysiaBeforeHandle & {
+  afterResponse(context: { request: Request; set: Context['set'] }): Promise<void>
+  afterHandle(context: { request: Request; set: Context['set'] }): Promise<Response | undefined>
+  beforeHandle(context: {
+    request: Request
+    route?: string | undefined
+    set: Context['set']
+  }): Promise<Response | undefined>
+  error(context: { request: Request; set: Context['set'] }): Promise<void>
+}
+
+type PendingResult = {
+  cancelReceipt?: () => Promise<void> | void
+  withReceipt(response?: Response): Promise<Response> | Response
+}
 
 export namespace Mppx {
   /**
-   * Creates an Elysia-aware payment handler where each intent
-   * returns an Elysia `beforeHandle` hook.
+   * Creates an Elysia-aware payment handler where each intent returns
+   * Elysia lifecycle hooks.
    *
-   * Use with `.guard()` to scope payment to specific routes,
-   * or `.onBeforeHandle()` to apply globally.
+   * Use with `.guard()` to scope payment to specific routes.
    *
    * @example
    * ```ts
@@ -25,9 +44,8 @@ export namespace Mppx {
    * const mppx = Mppx.create({ methods: [tempo()] })
    *
    * const app = new Elysia()
-   *   .guard(
-   *     { beforeHandle: mppx.charge({ amount: '1' }) },
-   *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
+   *   .guard(mppx.charge({ amount: '1' }), (app) =>
+   *     app.get('/premium', () => ({ data: 'paid content' })),
    *   )
    * ```
    */
@@ -39,7 +57,7 @@ export namespace Mppx {
 }
 
 /**
- * Elysia `beforeHandle` hook that gates a route behind a payment intent.
+ * Elysia lifecycle hooks that gate a route behind a payment intent.
  *
  * Returns a 402 challenge if no valid credential is provided.
  *
@@ -52,9 +70,8 @@ export namespace Mppx {
  * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = new Elysia()
- *   .guard(
- *     { beforeHandle: payment(mppx.charge, { amount: '1' }) },
- *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
+ *   .guard(payment(mppx.charge, { amount: '1' }), (app) =>
+ *     app.get('/premium', () => ({ data: 'paid content' })),
  *   )
  * ```
  */
@@ -62,7 +79,9 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
-  return async ({ request, route, set }) => {
+  const pending = new WeakMap<object, PendingResult>()
+  const finalized = new WeakSet<object>()
+  const beforeHandle: ElysiaHook['beforeHandle'] = async ({ request, route, set }) => {
     const scopedRequest =
       options.scope === undefined && Scope.read(options.meta) === undefined
         ? Scope.attach(
@@ -72,20 +91,79 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
         : request
     const result = await intent(options)(scopedRequest)
     if (result.status === 402) return result.challenge
-    const managementResponse = getManagementResponse(result)
+    await cancelIfAborted(request.signal, result)
+    const managementResponse = await getManagementResponse(result)
+    await cancelIfAborted(request.signal, result)
     if (managementResponse) return managementResponse
-    const receipt = result.withReceipt(new Response())
-    for (const [key, value] of receipt.headers) set.headers[key] = value
+    pending.set(set, result)
+  }
+  const afterHandle: ElysiaHook['afterHandle'] = async ({ set }) => {
+    const result = pending.get(set)
+    if (!result) return
+    try {
+      const receipt = await result.withReceipt(new Response())
+      if (!receipt.ok) return receipt
+      for (const [key, value] of receipt.headers) set.headers[key] = value
+      finalized.add(set)
+    } catch (error) {
+      if (await cancelReceipt(result)) pending.delete(set)
+      throw error
+    }
+  }
+  const cancelPending = async (set: Context['set']) => {
+    const result = pending.get(set)
+    if (!result) return
+    if (await cancelReceipt(result)) {
+      finalized.delete(set)
+      pending.delete(set)
+    }
+  }
+  const error: ElysiaHook['error'] = async ({ set }) => cancelPending(set)
+  const afterResponse: ElysiaHook['afterResponse'] = async ({ set }) => {
+    if (!finalized.has(set)) return cancelPending(set)
+    finalized.delete(set)
+    pending.delete(set)
+  }
+
+  const legacyBeforeHandle: ElysiaBeforeHandle = async (context) => {
+    const response = await beforeHandle(context)
+    if (response) return response
+    await cancelPending(context.set)
+    return new Response(
+      'Deferred payment receipts require full Elysia lifecycle hooks. Pass payment(...) directly to .guard().',
+      { status: 500 },
+    )
+  }
+
+  return Object.assign(legacyBeforeHandle, { afterHandle, afterResponse, beforeHandle, error })
+}
+
+async function cancelIfAborted(signal: AbortSignal, result: PendingResult) {
+  if (!signal.aborted) return
+  await cancelReceipt(result)
+  throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+}
+
+async function cancelReceipt(result: { cancelReceipt?: (() => Promise<void> | void) | undefined }) {
+  try {
+    await result.cancelReceipt?.()
+    return true
+  } catch {
+    return false
   }
 }
 
-function getManagementResponse(result: { withReceipt: (response?: Response) => Response }) {
+async function getManagementResponse(result: {
+  cancelReceipt?: (() => Promise<void> | void) | undefined
+  withReceipt: (response?: Response) => Promise<Response> | Response
+}) {
   try {
-    return result.withReceipt()
+    return await result.withReceipt()
   } catch (error) {
     if (Mppx_core.isMissingReceiptResponseError(error)) {
       return null
     }
+    await cancelReceipt(result)
     throw error
   }
 }

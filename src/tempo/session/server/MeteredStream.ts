@@ -3,7 +3,13 @@ import type { Hex } from 'viem'
 import type { MaybePromise } from '../../../internal/types.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
-import { commitReservedCharges, reserveChargeOrWait } from './Transports.js'
+import {
+  commitReservedCharges,
+  finalizeCommittedCharges,
+  maintainReservedCharges,
+  releaseReservedCharges,
+  reserveChargeOrWait,
+} from './Transports.js'
 
 /** Controller passed to manual-charge streaming generators. */
 export type SessionController = {
@@ -45,6 +51,10 @@ export type MeteredStreamOptions = {
   pollIntervalMs: number
   /** Pre-authorized implicit tick-cost units that may be emitted without a new reservation. */
   prepaidUnits?: number | undefined
+  /** Existing shared reservation to commit on the next emitted value. */
+  reservationId?: string | undefined
+  /** Implicit units already covered by the existing reservation. */
+  reservedUnits?: number | undefined
   /** Optional abort signal for stream cancellation. */
   signal?: AbortSignal | undefined
   /** Channel store used for state reads and atomic charge commits. */
@@ -53,56 +63,170 @@ export type MeteredStreamOptions = {
   tickCost: bigint
 }
 
+/** Value whose committed reservation is finalized after transport delivery. */
+export type MeteredValue = {
+  delivered(): Promise<void>
+  value: string
+}
+
 /** Applies voucher reservation and spend commits to an async session stream. */
-export async function* meterIterable(options: MeteredStreamOptions): AsyncGenerator<string> {
+export async function* meterIterable(options: MeteredStreamOptions): AsyncGenerator<MeteredValue> {
   let prepaidUnits = options.prepaidUnits ?? 0
-  let reservedAmount = 0n
-  let reservedUnits = 0
+  let reservedUnits = options.reservedUnits ?? 0
+  let reservationPending = reservedUnits > 0
+  const reservationId = options.reservationId ?? globalThis.crypto.randomUUID()
+  let stopMaintainingReservation: (() => void) | undefined
+  let releasePromise: Promise<void> | undefined
+
+  const maintainReservation = () => {
+    if (stopMaintainingReservation) return
+    stopMaintainingReservation = maintainReservedCharges({
+      store: options.store,
+      channelId: options.channelId,
+      reservationId,
+    })
+  }
+  const stopMaintaining = () => {
+    stopMaintainingReservation?.()
+    stopMaintainingReservation = undefined
+  }
+  const releaseReservation = () => {
+    stopMaintaining()
+    if (!reservationPending) return Promise.resolve()
+    releasePromise ??= releaseReservedCharges({
+      store: options.store,
+      channelId: options.channelId,
+      reservationId,
+    })
+      .then(() => {
+        reservationPending = false
+      })
+      .finally(() => {
+        releasePromise = undefined
+      })
+    return releasePromise
+  }
+  if (reservationPending) maintainReservation()
+
+  const onAbort = () => {
+    void releaseReservation().catch(() => undefined)
+  }
+  options.signal?.addEventListener('abort', onAbort, { once: true })
+  if (options.signal?.aborted) onAbort()
 
   const charge = async (amount?: bigint) => {
     if (amount === undefined && prepaidUnits > 0) {
       prepaidUnits -= 1
       return
     }
+    if (amount === undefined && reservedUnits > 0) {
+      reservedUnits -= 1
+      return
+    }
 
     const resolvedAmount = amount ?? options.tickCost
+    const replaceExisting = amount !== undefined && reservedUnits > 0
 
     await reserveChargeOrWait({
       store: options.store,
       channelId: options.channelId,
       amount: resolvedAmount,
-      reservedAmount,
+      reservationId,
       emit: options.emitNeedVoucher,
       formatNeedVoucher: options.formatNeedVoucher,
       pollIntervalMs: options.pollIntervalMs,
+      replaceExisting,
       signal: options.signal,
     })
-    reservedAmount += resolvedAmount
-    reservedUnits += 1
+    if (replaceExisting) reservedUnits = 0
+    reservationPending = true
+    if (options.signal?.aborted) {
+      await releaseReservation()
+      return
+    }
+    maintainReservation()
+  }
+
+  /** Keeps completed work charged even when reservation cleanup fails. */
+  const finalize = async () => {
+    // Delivery or successful generator completion is irreversible. Prevent cleanup from rolling the
+    // charge back even if removing its persisted marker transiently fails.
+    reservationPending = false
+    stopMaintaining()
+    let channel: ChannelStore.State
+    try {
+      channel = await finalizeCommittedCharges({
+        store: options.store,
+        channelId: options.channelId,
+        reservationId,
+      })
+    } catch (error) {
+      // Retry once for stores that persisted an update but failed while
+      // acknowledging it. The committed marker also has a bounded lease,
+      // so a terminated worker cannot block channel close indefinitely.
+      try {
+        await finalizeCommittedCharges({
+          store: options.store,
+          channelId: options.channelId,
+          reservationId,
+        })
+      } catch {
+        // Preserve the original cleanup failure.
+      }
+      throw error
+    }
+    await options.onChargeCommitted?.(channel)
   }
 
   const signal = options.signal ?? new AbortController().signal
-  const iterable =
-    typeof options.generate === 'function' ? options.generate({ charge, signal }) : options.generate
 
-  const commit = async () => {
-    const channel = await commitReservedCharges({
-      store: options.store,
-      channelId: options.channelId,
-      amount: reservedAmount,
-      units: reservedUnits,
-    })
-    reservedAmount = 0n
-    reservedUnits = 0
-    if (channel) await options.onChargeCommitted?.(channel)
+  try {
+    const iterable =
+      typeof options.generate === 'function'
+        ? options.generate({ charge, signal })
+        : options.generate
+    for await (const value of iterable) {
+      if (options.signal?.aborted) break
+      if (typeof options.generate !== 'function') await charge()
+      if (options.signal?.aborted) {
+        await releaseReservation()
+        break
+      }
+      let chargeCommitted = false
+      if (reservationPending) {
+        await commitReservedCharges({
+          store: options.store,
+          channelId: options.channelId,
+          reservationId,
+          signal: options.signal,
+        })
+        chargeCommitted = true
+        reservedUnits = 0
+      }
+      if (options.signal?.aborted) {
+        await releaseReservation()
+        break
+      }
+      yield {
+        value,
+        async delivered() {
+          if (!chargeCommitted) return
+          chargeCommitted = false
+          await finalize()
+        },
+      }
+    }
+    if (!options.signal?.aborted && reservationPending && reservedUnits === 0) {
+      await commitReservedCharges({
+        store: options.store,
+        channelId: options.channelId,
+        reservationId,
+        signal: options.signal,
+      })
+      if (!options.signal?.aborted) await finalize()
+    }
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort)
+    await releaseReservation()
   }
-
-  for await (const value of iterable) {
-    if (options.signal?.aborted) break
-    if (typeof options.generate !== 'function') await charge()
-    await commit()
-    yield value
-  }
-
-  if (!options.signal?.aborted) await commit()
 }

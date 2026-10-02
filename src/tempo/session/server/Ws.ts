@@ -39,7 +39,7 @@ export {
 /** Result returned by an HTTP route before upgrading or authorizing a WebSocket session. */
 export type SessionRouteResult =
   | { status: 402; challenge: Response }
-  | { status: 200; withReceipt(response?: Response): Response }
+  | { status: 200; withReceipt(response?: Response): Response | Promise<Response> }
 
 /** HTTP route used to perform a WebSocket payment probe. */
 export type SessionRoute = (request: Request) => Promise<SessionRouteResult>
@@ -149,7 +149,7 @@ export async function serve(options: serve.Options): Promise<void> {
 
   const runStream = async (context: StreamContext) => {
     try {
-      for await (const value of meterIterable({
+      for await (const item of meterIterable({
         store,
         channelId: context.channelId,
         tickCost: context.tickCost,
@@ -161,7 +161,8 @@ export async function serve(options: serve.Options): Promise<void> {
         formatNeedVoucher: formatNeedVoucherMessage,
       })) {
         if (abortController.signal.aborted) break
-        await send(socket, formatApplicationMessage(value))
+        await send(socket, formatApplicationMessage(item.value))
+        await item.delivered()
       }
 
       if (!abortController.signal.aborted) await sendCloseReady()
@@ -428,7 +429,7 @@ async function authorizePaymentFrame(
     }
   }
 
-  const response = result.withReceipt(new Response(null, { status: 204 }))
+  const response = await result.withReceipt(new Response(null, { status: 204 }))
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
   if (!receiptHeader) throw new Error('management response missing Payment-Receipt header')
   return { status: 'accepted', receipt: deserializeSessionReceipt(receiptHeader) }

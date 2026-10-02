@@ -206,10 +206,12 @@ describe('parseMessage', () => {
 describe('isows', () => {
   test('wraps application payloads in an explicit message envelope', async () => {
     const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await seedChannel(store, 1n)
 
     await Ws.serve({
       socket,
-      store: Store.memory(),
+      store,
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
@@ -613,7 +615,7 @@ describe('isows', () => {
   })
 
   test.each(['onChargeCommitted', 'settleScheduled'] as const)(
-    'runs %s after each committed charge and before emitting its message',
+    'runs %s after each committed charge is emitted',
     async (hookName) => {
       const socket = new MockSocket()
       const store = memoryChannelStore()
@@ -660,8 +662,8 @@ describe('isows', () => {
       await sleep(10)
 
       expect(committed).toEqual([
-        { emitted: 0, spent: 1n, units: 1 },
-        { emitted: 1, spent: 2n, units: 2 },
+        { emitted: 1, spent: 1n, units: 1 },
+        { emitted: 2, spent: 2n, units: 2 },
       ])
       expect(
         socket.sent
@@ -713,7 +715,7 @@ describe('isows', () => {
     expect(callbacks).toEqual(['current'])
   })
 
-  test('closes without emitting a charged message when the post-commit hook fails', async () => {
+  test('closes after emitting a charged message when the post-commit hook fails', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
     await seedChannel(store, 1n)
@@ -753,7 +755,7 @@ describe('isows', () => {
         const parsed = Ws.parseMessage(message)
         return parsed?.mpp === 'message' && parsed.data === 'blocked'
       }),
-    ).toBe(false)
+    ).toBe(true)
     expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
   })
 

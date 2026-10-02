@@ -1135,6 +1135,309 @@ describe('server events', () => {
     })
   })
 
+  test('maintains a receipt throughout post-verification hooks', async () => {
+    const events: string[] = []
+    let maintaining = false
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'maintained-http',
+      maintainReceipt() {
+        maintaining = true
+        events.push('maintain')
+        return () => {
+          maintaining = false
+          events.push('stop')
+        }
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        events.push('verify')
+        return receipt()
+      },
+      async respond() {
+        events.push(`respond:${maintaining}`)
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    handler.onPaymentSuccess(async () => {
+      events.push(`event:${maintaining}`)
+    })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({ challenge, payload: { token: 'valid' } }),
+          ),
+        },
+      }),
+    )
+
+    expect(paid.status).toBe(200)
+    if (paid.status !== 200) throw new Error()
+    expect(events).toEqual(['verify', 'maintain', 'respond:true', 'event:true'])
+    paid.withReceipt(new Response('ok'))
+    expect(events).toEqual(['verify', 'maintain', 'respond:true', 'event:true', 'stop'])
+  })
+
+  test('cancels a receipt when maintenance setup fails', async () => {
+    const cancelReceipt = vi.fn()
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'failing-maintenance-http',
+      cancelReceipt() {
+        cancelReceipt()
+      },
+      maintainReceipt() {
+        throw new Error('maintenance failed')
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    if (challengeResult.status !== 402) throw new Error()
+
+    await expect(
+      handle(
+        new Request('https://example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize(
+              Credential.from({
+                challenge: Challenge.fromResponse(challengeResult.challenge),
+                payload: { token: 'valid' },
+              }),
+            ),
+          },
+        }),
+      ),
+    ).rejects.toThrow('maintenance failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('cancels receipt maintenance when a request aborts during post-verification hooks', async () => {
+    let maintaining = false
+    const cancelReceipt = vi.fn()
+    let respondStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      respondStarted = resolve
+    })
+    let finishRespond!: () => void
+    const respondGate = new Promise<void>((resolve) => {
+      finishRespond = resolve
+    })
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'abort-maintained-http',
+      cancelReceipt() {
+        cancelReceipt()
+      },
+      maintainReceipt() {
+        maintaining = true
+        return () => {
+          maintaining = false
+        }
+      },
+      respondReceipt(options) {
+        if (options.signal?.aborted) throw options.signal.reason
+        return baseTransport.respondReceipt(options)
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+      async respond() {
+        respondStarted()
+        await respondGate
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    if (challengeResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const controller = new AbortController()
+    const paidResult = handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({ challenge, payload: { token: 'valid' } }),
+          ),
+        },
+        signal: controller.signal,
+      }),
+    )
+    await started
+    expect(maintaining).toBe(true)
+
+    controller.abort(new Error('client disconnected'))
+
+    await vi.waitFor(() => expect(cancelReceipt).toHaveBeenCalledOnce())
+    expect(maintaining).toBe(false)
+    finishRespond()
+    const paid = await paidResult
+    if (paid.status !== 200) throw new Error()
+    expect(() => paid.withReceipt(new Response('ok'))).toThrow('client disconnected')
+  })
+
+  test('maintains a receipt until async response finalization settles', async () => {
+    let maintaining = false
+    let finalizationStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      finalizationStarted = resolve
+    })
+    let releaseFinalization!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseFinalization = resolve
+    })
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'async-maintained-http',
+      maintainReceipt() {
+        maintaining = true
+        return () => {
+          maintaining = false
+        }
+      },
+      async respondReceipt(options) {
+        finalizationStarted()
+        await gate
+        expect(maintaining).toBe(true)
+        return baseTransport.respondReceipt(options)
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    if (challengeResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({ challenge, payload: { token: 'valid' } }),
+          ),
+        },
+      }),
+    )
+    if (paid.status !== 200) throw new Error()
+
+    const finalization = paid.withReceipt(new Response('ok'))
+    await started
+    expect(maintaining).toBe(true)
+    releaseFinalization()
+    await finalization
+    expect(maintaining).toBe(false)
+  })
+
+  test('exposes cleanup for a transport that only maintains receipts', async () => {
+    let maintaining = false
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'maintenance-only-http',
+      maintainReceipt() {
+        maintaining = true
+        return () => {
+          maintaining = false
+        }
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    if (challengeResult.status !== 402) throw new Error()
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(challengeResult.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    if (paid.status !== 200) throw new Error()
+
+    expect(maintaining).toBe(true)
+    expect(paid.cancelReceipt).toBeTypeOf('function')
+    await paid.cancelReceipt?.()
+    expect(maintaining).toBe(false)
+  })
+
+  test('cancels a pending receipt when its request aborts before finalization', async () => {
+    const cancelReceipt = vi.fn()
+    let finalizationSignal: AbortSignal | undefined
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'abort-aware-http',
+      cancelReceipt() {
+        cancelReceipt()
+      },
+      respondReceipt(options) {
+        finalizationSignal = options.signal
+        if (options.signal?.aborted) throw options.signal.reason
+        return baseTransport.respondReceipt(options)
+      },
+    })
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const handle = handler.charge(options())
+    const challengeResult = await handle(new Request('https://example.com/resource'))
+    if (challengeResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const controller = new AbortController()
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({ challenge, payload: { token: 'valid' } }),
+          ),
+        },
+        signal: controller.signal,
+      }),
+    )
+    if (paid.status !== 200) throw new Error()
+
+    controller.abort(new Error('client disconnected'))
+
+    await vi.waitFor(() => expect(cancelReceipt).toHaveBeenCalledOnce())
+    expect(() => paid.withReceipt(new Response('ok'))).toThrow('client disconnected')
+    expect(finalizationSignal?.aborted).toBe(true)
+  })
+
   test('does not let server event errors alter payment control flow', async () => {
     const events: string[] = []
     const serverMethod = Method.toServer(eventCharge, {
@@ -5312,6 +5615,537 @@ describe('withReceipt', () => {
     })
 
     expect(status).toBe(413)
+    server.close()
+  })
+
+  test('toNodeListener defers receipt finalization until application work completes', async () => {
+    let applicationComplete = false
+    let receiptFinalized = false
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        expect(applicationComplete).toBe(true)
+        receiptFinalized = true
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      expect(receiptFinalized).toBe(false)
+      applicationComplete = true
+      res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    expect(receiptFinalized).toBe(true)
+    server.close()
+  })
+
+  test('toNodeListener cancels the receipt when the management probe fails', async () => {
+    const cancelReceipt = vi.fn()
+    const listener = Mppx.toNodeListener(async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async () => {
+        throw new Error('probe failed')
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      try {
+        await listener(req, res)
+      } catch (error) {
+        res.statusCode = 500
+        res.end((error as Error).message)
+      }
+    })
+
+    const response = await fetch(server.url)
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe('probe failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+    server.close()
+  })
+
+  test('toNodeListener preserves informational application statuses', async () => {
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(101, { Connection: 'Upgrade', Upgrade: 'mppx-test' })
+      res.end()
+    })
+
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const request = http.request(server.url, {
+        headers: { Connection: 'Upgrade', Upgrade: 'mppx-test' },
+      })
+      request.once('upgrade', (response, socket) => {
+        socket.destroy()
+        resolve(response.statusCode)
+      })
+      request.once('response', (response) => resolve(response.statusCode))
+      request.once('error', reject)
+      request.end()
+    })
+
+    expect(status).toBe(101)
+    server.close()
+  })
+
+  test('toNodeListener finalizes receipt before streaming headers are sent', async () => {
+    let finalizationStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      finalizationStarted = resolve
+    })
+    let releaseFinalization!: () => void
+    const finalizationGate = new Promise<void>((resolve) => {
+      releaseFinalization = resolve
+    })
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        finalizationStarted()
+        await finalizationGate
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write('data: first\n\n')
+      res.write('data: second\n\n')
+      res.end()
+    })
+
+    try {
+      const responsePromise = fetch(server.url)
+      await started
+      releaseFinalization()
+      const response = await responsePromise
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+      expect(await response.text()).toBe('data: first\n\ndata: second\n\n')
+    } finally {
+      releaseFinalization()
+      server.close()
+    }
+  })
+
+  test('toNodeListener finalizes and flushes a response opened with writeHead', async () => {
+    let finalizationStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      finalizationStarted = resolve
+    })
+    let releaseHandler!: () => void
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve
+    })
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        finalizationStarted()
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      await handlerGate
+      res.end('done')
+    })
+
+    try {
+      const responsePromise = new Promise<http.IncomingMessage>((resolve, reject) => {
+        const request = http.get(server.url, resolve)
+        request.once('error', reject)
+      })
+      await started
+      releaseHandler()
+      const response = await responsePromise
+      expect(response.headers['payment-receipt']).toBe('receipt')
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => {
+        body += chunk
+      })
+      await new Promise<void>((resolve) => response.once('end', resolve))
+      expect(body).toBe('done')
+    } finally {
+      releaseHandler()
+      server.close()
+    }
+  })
+
+  test('toNodeListener preserves finalized headers over writeHead headers', async () => {
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        response.headers.set('Cache-Control', 'private, no-store')
+        response.headers.set('Payment-Receipt', 'final-receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(200, {
+        'Cache-Control': 'public, max-age=3600',
+        'Payment-Receipt': 'stale-receipt',
+        'X-Application': 'preserved',
+      })
+      res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(response.headers.get('Payment-Receipt')).toBe('final-receipt')
+    expect(response.headers.get('X-Application')).toBe('preserved')
+    server.close()
+  })
+
+  test('toNodeListener preserves finalized headers over raw writeHead headers', async () => {
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        response.headers.set('Cache-Control', 'private, no-store')
+        response.headers.set('Payment-Receipt', 'final-receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(200, [
+        'Cache-Control',
+        'public, max-age=3600',
+        'Payment-Receipt',
+        'stale-receipt',
+        'X-Application',
+        'preserved',
+      ])
+      res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(response.headers.get('Payment-Receipt')).toBe('final-receipt')
+    expect(response.headers.get('X-Application')).toBe('preserved')
+    server.close()
+  })
+
+  test('toNodeListener validates writeHead headers before finalizing a receipt', async () => {
+    let receiptFinalized = false
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        receiptFinalized = true
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      expect(() => res.writeHead(200, { 'X-Invalid': 'line one\nline two' })).toThrow()
+      res.statusCode = 500
+      res.end('invalid response')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.status).toBe(500)
+    expect(receiptFinalized).toBe(false)
+    server.close()
+  })
+
+  test('toNodeListener preserves application redirects after receipt finalization', async () => {
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        response.headers.set('Payment-Receipt', 'receipt')
+        return response
+      },
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.writeHead(302, { Location: '/next' })
+      res.end()
+    })
+
+    const response = await fetch(server.url, { redirect: 'manual' })
+    expect(response.status).toBe(302)
+    expect(response.headers.get('Location')).toBe('/next')
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    server.close()
+  })
+
+  test('toNodeListener does not finalize a cancelled receipt after disconnect', async () => {
+    const cancelReceipt = vi.fn(async () => undefined)
+    const withReceipt = vi.fn((response?: Response) => {
+      if (!response) {
+        const error = new Error('withReceipt() requires a response argument')
+        error.name = 'MissingReceiptResponseError'
+        throw error
+      }
+      return response
+    })
+    const listener = Mppx.toNodeListener(async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt,
+    }))
+    let handlerReady!: () => void
+    const ready = new Promise<void>((resolve) => {
+      handlerReady = resolve
+    })
+    let releaseHandler!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseHandler = resolve
+    })
+    let handlerDone!: () => void
+    const done = new Promise<void>((resolve) => {
+      handlerDone = resolve
+    })
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      handlerReady()
+      await gate
+      res.end('late')
+      handlerDone()
+    })
+
+    try {
+      const request = http.get(server.url)
+      request.on('error', () => undefined)
+      await ready
+      request.destroy()
+      await vi.waitFor(() => expect(cancelReceipt).toHaveBeenCalledOnce())
+      releaseHandler()
+      await done
+      expect(withReceipt).toHaveBeenCalledOnce()
+      expect(withReceipt).toHaveBeenCalledWith()
+    } finally {
+      releaseHandler()
+      server.close()
+    }
+  })
+
+  test('toNodeListener does not return control after disconnect during verification', async () => {
+    const cancelReceipt = vi.fn()
+    let verificationStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve
+    })
+    let finishVerification!: () => void
+    const verification = new Promise<void>((resolve) => {
+      finishVerification = resolve
+    })
+    const listener = Mppx.toNodeListener(async () => {
+      verificationStarted()
+      await verification
+      return {
+        cancelReceipt,
+        status: 200 as const,
+        withReceipt: vi.fn(),
+      }
+    })
+    let applicationRan = false
+    let listenerDone!: () => void
+    const done = new Promise<void>((resolve) => {
+      listenerDone = resolve
+    })
+    let responseClosed!: () => void
+    const closed = new Promise<void>((resolve) => {
+      responseClosed = resolve
+    })
+    const server = await Http.createServer(async (req, res) => {
+      res.once('close', responseClosed)
+      try {
+        await listener(req, res)
+        applicationRan = true
+      } catch {
+        // The disconnected request must not reach application work.
+      } finally {
+        listenerDone()
+      }
+    })
+
+    try {
+      const request = http.get(server.url)
+      request.on('error', () => undefined)
+      await started
+      request.destroy()
+      await closed
+      finishVerification()
+      await done
+      expect(applicationRan).toBe(false)
+      expect(cancelReceipt).toHaveBeenCalledOnce()
+    } finally {
+      finishVerification()
+      server.close()
+    }
+  })
+
+  test('toNodeListener preserves backpressure while receipt finalization is pending', async () => {
+    let releaseFinalization!: () => void
+    const finalizationGate = new Promise<void>((resolve) => {
+      releaseFinalization = resolve
+    })
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        await finalizationGate
+        return response
+      },
+    }))
+    let firstWriteAccepted: boolean | undefined
+    let drainObserved = false
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      firstWriteAccepted = res.write('first')
+      if (!firstWriteAccepted)
+        res.once('drain', () => {
+          drainObserved = true
+          res.end('second')
+        })
+    })
+
+    try {
+      const responsePromise = fetch(server.url)
+      await vi.waitFor(() => expect(firstWriteAccepted).toBe(false))
+      releaseFinalization()
+      const response = await responsePromise
+
+      expect(await response.text()).toBe('firstsecond')
+      expect(drainObserved).toBe(true)
+    } finally {
+      releaseFinalization()
+      server.close()
+    }
+  })
+
+  test('toNodeListener cancels a pending receipt for an application error response', async () => {
+    const cancelReceipt = vi.fn(async () => undefined)
+    const withReceipt = vi.fn((response?: Response) => {
+      if (!response) {
+        const error = new Error('withReceipt() requires a response argument')
+        error.name = 'MissingReceiptResponseError'
+        throw error
+      }
+      return response
+    })
+    const listener = Mppx.toNodeListener(async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt,
+    }))
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      res.statusCode = 500
+      res.end('failed')
+    })
+
+    const response = await fetch(server.url)
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe('failed')
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+    expect(withReceipt).toHaveBeenCalledOnce()
+    expect(withReceipt).toHaveBeenCalledWith()
+    server.close()
+  })
+
+  test('toNodeListener replaces the application response with a non-success receipt response', async () => {
+    const listener = Mppx.toNodeListener(async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        return new Response('payment required', { status: 402 })
+      },
+    }))
+    let handlerRan = false
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status === 402) return
+      handlerRan = true
+      res.setHeader('Content-Length', '1')
+      res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.status).toBe(402)
+    expect(await response.text()).toBe('payment required')
+    expect(response.headers.get('Content-Length')).not.toBe('1')
+    expect(handlerRan).toBe(true)
+
     server.close()
   })
 })
