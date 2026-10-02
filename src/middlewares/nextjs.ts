@@ -1,4 +1,5 @@
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -59,7 +60,11 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   handler: RouteHandler,
 ): RouteHandler {
   return async (request) => {
-    const result = await intent(options)(request)
+    const scopedRequest =
+      options.scope === undefined && Scope.read(options.meta) === undefined
+        ? Scope.attach(request, `${request.method.toUpperCase()} ${new URL(request.url).pathname}`)
+        : request
+    const result = await intent(options)(scopedRequest)
     if (result.status === 402) return result.challenge
     const managementResponse = getManagementResponse(result)
     if (managementResponse) return managementResponse

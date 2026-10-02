@@ -10,6 +10,8 @@ import { beforeAll, describe, expect, test } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
+import * as Scope from '../server/internal/scope.js'
+
 function createServer(app: Elysia<any, any, any, any, any, any, any>) {
   return new Promise<TestHttp.TestServer>((resolve) => {
     const server = http.createServer(async (req, res) => {
@@ -34,6 +36,24 @@ function createServer(app: Elysia<any, any, any, any, any, any, any>) {
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('payment', () => {
+  test('attaches the Elysia route template as payment scope', async () => {
+    let scope: string | undefined
+    const intent = () => async (request: Request) => {
+      scope = Scope.get(request)
+      return { challenge: new Response(null, { status: 402 }), status: 402 as const }
+    }
+    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+      app.get('/items/:id', () => 'unreachable'),
+    )
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(`${server.url}/items/123`)
+
+    expect(response.status).toBe(402)
+    expect(scope).toBe('GET /items/:id')
+    server.close()
+  })
+
   test('short-circuits management responses', async () => {
     let handlerRan = false
     const intent = () => async () => ({

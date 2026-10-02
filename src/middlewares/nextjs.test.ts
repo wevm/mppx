@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, test } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
+import * as Scope from '../server/internal/scope.js'
 import { tokens } from '../tempo/internal/defaults.js'
 
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
@@ -35,6 +36,20 @@ function createServer(handler: (request: Request) => Promise<Response> | Respons
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('payment', () => {
+  test('attaches the request pathname as payment scope', async () => {
+    let scope: string | undefined
+    const intent = () => async (request: Request) => {
+      scope = Scope.get(request)
+      return { challenge: new Response(null, { status: 402 }), status: 402 as const }
+    }
+    const handler = payment(intent as any, {} as any, () => new Response('unreachable'))
+
+    const response = await handler(new Request('https://example.com/items/123?view=full'))
+
+    expect(response.status).toBe(402)
+    expect(scope).toBe('GET /items/123')
+  })
+
   test('short-circuits management responses', async () => {
     let handlerRan = false
     const intent = () => async () => ({

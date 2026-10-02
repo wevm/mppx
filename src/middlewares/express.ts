@@ -7,6 +7,7 @@ import type {
 } from 'express'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as ExpressAdapter from './internal/express.js'
 import * as Mppx_internal from './internal/mppx.js'
@@ -63,7 +64,12 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const request = ExpressAdapter.toRequest(req)
+    const rawRequest = ExpressAdapter.toRequest(req)
+    const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
+    const request =
+      options.scope === undefined && Scope.read(options.meta) === undefined
+        ? Scope.attach(rawRequest, `${req.method.toUpperCase()} ${req.baseUrl}${routePath}`)
+        : rawRequest
     const result = await intent(options)(request)
 
     if (result.status === 402) {

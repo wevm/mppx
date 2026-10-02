@@ -1,6 +1,7 @@
 import { Elysia, type Context } from 'elysia'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -61,8 +62,15 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
-  return async ({ request, set }) => {
-    const result = await intent(options)(request)
+  return async ({ request, route, set }) => {
+    const scopedRequest =
+      options.scope === undefined && Scope.read(options.meta) === undefined
+        ? Scope.attach(
+            request,
+            `${request.method.toUpperCase()} ${route || new URL(request.url).pathname}`,
+          )
+        : request
+    const result = await intent(options)(scopedRequest)
     if (result.status === 402) return result.challenge
     const managementResponse = getManagementResponse(result)
     if (managementResponse) return managementResponse
