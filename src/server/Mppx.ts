@@ -3211,9 +3211,17 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
 export function toNodeListener(
   handler: (input: globalThis.Request) => Promise<MethodFn.Response<Transport.Http>>,
   options?: Request.NodeConversionOptions | undefined,
-): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>> {
+): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>>
+export function toNodeListener(
+  handler: (input: globalThis.Request) => Promise<MethodFn.Response<Transport.Sse>>,
+  options?: Request.NodeConversionOptions | undefined,
+): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Sse>>
+export function toNodeListener(
+  handler: (input: globalThis.Request) => Promise<MethodFn.Response<any>>,
+  options?: Request.NodeConversionOptions | undefined,
+): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<any>> {
   return async (req, res) => {
-    let result: MethodFn.Response<Transport.Http>
+    let result: MethodFn.Response<any>
     try {
       const request = Request.fromNodeListener(req, res, options)
       await Request.waitForBody(request)
@@ -3231,13 +3239,23 @@ export function toNodeListener(
     if (result.status === 402) {
       await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
     } else {
-      const managementResponse = getManagementResponse(result)
+      const managementResponse = await getManagementResponse(
+        result as { withReceipt: () => globalThis.Response | Promise<globalThis.Response> },
+      )
       if (managementResponse) {
         await NodeListener.sendResponse(res, managementResponse)
         return { challenge: managementResponse, status: 402 }
       }
 
-      const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
+      const wrapped = await (
+        result.withReceipt as (
+          response: globalThis.Response,
+        ) => globalThis.Response | Promise<globalThis.Response>
+      )(new globalThis.Response(null, { status: 204 }))
+      if (wrapped.status === 402) {
+        await NodeListener.sendResponse(res, wrapped)
+        return { challenge: wrapped, status: 402 }
+      }
       for (const [name, value] of wrapped.headers) res.setHeader(name, value)
     }
 
@@ -3245,11 +3263,11 @@ export function toNodeListener(
   }
 }
 
-function getManagementResponse(
-  result: Extract<MethodFn.Response<Transport.Http>, { status: 200 }>,
-): globalThis.Response | null {
+async function getManagementResponse(result: {
+  withReceipt: () => globalThis.Response | Promise<globalThis.Response>
+}): Promise<globalThis.Response | null> {
   try {
-    return (result.withReceipt as () => globalThis.Response)()
+    return await result.withReceipt()
   } catch (error) {
     if (isMissingReceiptResponseError(error)) {
       return null

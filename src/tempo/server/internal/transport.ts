@@ -67,7 +67,7 @@ export function sse(
   })()
 
   const base = Transport.http()
-  return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
+  return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Promise<Response>>({
     name: 'sse',
 
     captureRequest(request) {
@@ -89,7 +89,7 @@ export function sse(
       return base.respondChallenge(options) as Response
     },
 
-    respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
+    async respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
       const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
@@ -148,8 +148,7 @@ export function sse(
       if (hasPrepaidSessionTick(currentReceipt)) {
         return baseResponse
       }
-      const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
-      if (available < tickCost) {
+      const paymentRequired = (available: bigint) => {
         const error = new Errors.InsufficientBalanceError({
           reason: `requested ${tickCost}, available ${available}`,
         })
@@ -167,6 +166,8 @@ export function sse(
           },
         )
       }
+      const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
+      if (available < tickCost) return paymentRequired(available)
 
       const chargedReceipt: SessionReceipt = {
         ...currentReceipt,
@@ -192,7 +193,9 @@ export function sse(
       // For null-body statuses, the request shape determines whether the
       // response is management (no charge) or plain content (charge one tick).
       if (isNullBodyStatus(chargedResponse.status)) {
-        void chargePlainResponse()
+        const result = await chargePlainResponse()
+        if (!result.ok)
+          return paymentRequired(result.channel.highestVoucherAmount - result.channel.spent)
         return chargedResponse
       }
 

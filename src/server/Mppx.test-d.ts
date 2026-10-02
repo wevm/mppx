@@ -114,6 +114,9 @@ describe('Mppx type tests', () => {
 
     expectTypeOf(mppx.session.settleScheduled).toBeFunction()
     expectTypeOf(mppx.session.serveWebSocket).toBeFunction()
+    type SessionResult = Awaited<ReturnType<ReturnType<typeof mppx.session>>>
+    type WithReceipt = Extract<SessionResult, { status: 200 }>['withReceipt']
+    expectTypeOf<ReturnType<WithReceipt>>().toEqualTypeOf<Promise<Response>>()
     type Options = Parameters<typeof mppx.session.serveWebSocket>[0]
     expectTypeOf<Options>().toHaveProperty('route')
     expectTypeOf<Options>().not.toHaveProperty('store')

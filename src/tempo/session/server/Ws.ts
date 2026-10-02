@@ -39,7 +39,7 @@ export {
 /** Result returned by an HTTP route before upgrading or authorizing a WebSocket session. */
 export type SessionRouteResult =
   | { status: 402; challenge: Response }
-  | { status: 200; withReceipt(response?: Response): Response }
+  | { status: 200; withReceipt(response?: Response): Response | Promise<Response> }
 
 /** HTTP route used to perform a WebSocket payment probe. */
 export type SessionRoute = (request: Request) => Promise<SessionRouteResult>
@@ -428,7 +428,7 @@ async function authorizePaymentFrame(
     }
   }
 
-  const response = result.withReceipt(new Response(null, { status: 204 }))
+  const response = await result.withReceipt(new Response(null, { status: 204 }))
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
   if (!receiptHeader) throw new Error('management response missing Payment-Receipt header')
   return { status: 'accepted', receipt: deserializeSessionReceipt(receiptHeader) }

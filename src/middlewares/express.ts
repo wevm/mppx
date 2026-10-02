@@ -78,9 +78,9 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
-    const managementResponse = (() => {
+    const managementResponse = await (async () => {
       try {
-        return (result.withReceipt as () => Response)()
+        return await (result.withReceipt as () => Response | Promise<Response>)()
       } catch (error) {
         if (Mppx_core.isMissingReceiptResponseError(error)) return null
         throw error
@@ -100,9 +100,11 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
 
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
-      const wrapped = result.withReceipt(Response.json(body))
-      ExpressAdapter.copyHeaders(res, wrapped.headers)
-      return originalJson(body)
+      void Promise.resolve(result.withReceipt(Response.json(body))).then((wrapped: Response) => {
+        ExpressAdapter.copyHeaders(res, wrapped.headers)
+        originalJson(body)
+      }, next)
+      return res
     }
 
     next()

@@ -5314,6 +5314,67 @@ describe('withReceipt', () => {
     expect(status).toBe(413)
     server.close()
   })
+
+  test('toNodeListener awaits bodyless receipt accounting before returning', async () => {
+    let releaseCharge!: () => void
+    const chargeGate = new Promise<void>((resolve) => {
+      releaseCharge = resolve
+    })
+    let chargeStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      chargeStarted = resolve
+    })
+    const listener = Mppx.toNodeListener((async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response) throw new Mppx.MissingReceiptResponseError()
+        expect(response.status).toBe(204)
+        chargeStarted()
+        await chargeGate
+        return new Response(null, { headers: { 'Payment-Receipt': 'receipt' }, status: 204 })
+      },
+    })) as any)
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status !== 402) res.end('OK')
+    })
+
+    let responseResolved = false
+    const responsePromise = fetch(server.url).then((response) => {
+      responseResolved = true
+      return response
+    })
+    await started
+    await Promise.resolve()
+    expect(responseResolved).toBe(false)
+    releaseCharge()
+    const response = await responsePromise
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    server.close()
+  })
+
+  test('toNodeListener sends a 402 returned by bodyless accounting', async () => {
+    const listener = Mppx.toNodeListener((async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response) throw new Mppx.MissingReceiptResponseError()
+        return new Response('payment required', {
+          headers: { 'WWW-Authenticate': 'Payment test' },
+          status: 402,
+        })
+      },
+    })) as any)
+    const server = await Http.createServer(async (req, res) => {
+      const result = await listener(req, res)
+      if (result.status !== 402) res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.status).toBe(402)
+    expect(await response.text()).toBe('payment required')
+    server.close()
+  })
 })
 
 describe('realm auto-detection', () => {

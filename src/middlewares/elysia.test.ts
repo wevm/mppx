@@ -54,11 +54,80 @@ describe('payment', () => {
     server.close()
   })
 
+  test('awaits the bodyless receipt probe before continuing to the handler', async () => {
+    let handlerRan = false
+    let releaseCharge!: () => void
+    const chargeGate = new Promise<void>((resolve) => {
+      releaseCharge = resolve
+    })
+    let chargeStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      chargeStarted = resolve
+    })
+    const intent = () => async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        expect(response.status).toBe(204)
+        chargeStarted()
+        await chargeGate
+        return new Response(null, {
+          headers: { 'Payment-Receipt': 'receipt' },
+          status: 204,
+        })
+      },
+    })
+    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+      app.get('/', () => {
+        handlerRan = true
+        return 'content'
+      }),
+    )
+
+    const responsePromise = app.handle(new Request('http://localhost/'))
+    await started
+    expect(handlerRan).toBe(false)
+    releaseCharge()
+    const response = await responsePromise
+    expect(handlerRan).toBe(true)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+  })
+
+  test('short-circuits the handler when bodyless accounting returns 402', async () => {
+    let handlerRan = false
+    const intent = () => async () => ({
+      status: 200 as const,
+      async withReceipt(response?: Response) {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        return new Response('payment required', {
+          headers: { 'WWW-Authenticate': 'Payment test' },
+          status: 402,
+        })
+      },
+    })
+    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+      app.get('/', () => {
+        handlerRan = true
+        return 'content'
+      }),
+    )
+
+    const response = await app.handle(new Request('http://localhost/'))
+    expect(response.status).toBe(402)
+    expect(handlerRan).toBe(false)
+  })
+
   test('short-circuits management responses', async () => {
     let handlerRan = false
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: () =>
+      withReceipt: async () =>
         new Response(null, {
           headers: { 'Payment-Receipt': 'management-receipt' },
           status: 204,
@@ -85,7 +154,7 @@ describe('payment', () => {
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
+      withReceipt: async (response?: Response) =>
         new Response(response?.body ?? null, {
           headers: {
             ...(response ? Object.fromEntries(response.headers) : {}),

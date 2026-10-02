@@ -54,7 +54,7 @@ describe('payment', () => {
     let handlerRan = false
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: () =>
+      withReceipt: async () =>
         new Response(null, {
           headers: { 'Payment-Receipt': 'management-receipt' },
           status: 204,
@@ -78,7 +78,7 @@ describe('payment', () => {
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
+      withReceipt: async (response?: Response) =>
         new Response(response?.body ?? null, {
           headers: {
             ...(response ? Object.fromEntries(response.headers) : {}),

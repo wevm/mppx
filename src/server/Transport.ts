@@ -74,11 +74,15 @@ export type Http = Transport<Request, Response>
 
 export type Mcp = Transport<core_Mcp.JsonRpcRequest, core_Mcp.Response>
 
+/**
+ * SSE receipt wrapping is asynchronous so accounting completes before even a
+ * bodyless response can be returned to the application.
+ */
 export type Sse<stream = any> = Transport<
   Request,
   Response,
   Response | AsyncIterable<string> | ((stream: stream) => AsyncIterable<string>),
-  Response
+  Promise<Response>
 >
 
 /** Extracts the input type from a transport. */

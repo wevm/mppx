@@ -183,7 +183,7 @@ describe('payment', () => {
   test('copies transport-specific success headers', async () => {
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: (response?: Response) =>
+      withReceipt: async (response?: Response) =>
         new Response(response?.body ?? null, {
           headers: {
             ...(response ? Object.fromEntries(response.headers) : {}),
@@ -303,7 +303,7 @@ describe('payment', () => {
     })
     const intent = () => async () => ({
       status: 200 as const,
-      withReceipt: () => managementResponse,
+      withReceipt: async () => managementResponse,
     })
 
     const app = express()
