@@ -6114,6 +6114,59 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('server rejects a transaction credential that claims a different source', async () => {
+      const challenged = await server.charge({
+        amount: '1',
+        currency: asset,
+        recipient: accounts[0].address,
+      })(new Request('https://example.com/resource'))
+      if (challenged.status !== 402) throw new Error('expected payment challenge')
+      const challenge = Challenge.fromResponse(challenged.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      const envelope = TxEnvelopeTempo.from({
+        calls: [
+          tokenTransferCall({
+            amount: BigInt(challenge.request.amount),
+            memo: Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm }),
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+        ],
+        chainId: chain.id,
+        gas: 100_000n,
+        maxFeePerGas: 1n,
+        maxPriorityFeePerGas: 1n,
+        nonce: 0n,
+      })
+      const { r, s, yParity } = parseSignature(
+        await accounts[1].sign!({ hash: TxEnvelopeTempo.getSignPayload(envelope) }),
+      )
+      const signature = TxEnvelopeTempo.serialize(envelope, {
+        signature: { r: BigInt(r), s: BigInt(s), yParity },
+      })
+      const credential = (source: string) =>
+        Credential.serialize(
+          Credential.from({
+            challenge,
+            payload: { signature, type: 'transaction' as const },
+            source,
+          }),
+        )
+
+      await expect(
+        server.verifyCredential(credential(`did:pkh:eip155:${chain.id}:${accounts[2].address}`)),
+      ).rejects.toThrow('Transaction credential source does not match the sender.')
+      await expect(
+        server.verifyCredential(
+          credential(`did:pkh:eip155:${chain.id + 1}:${accounts[1].address}`),
+        ),
+      ).rejects.toThrow('Transaction credential source is invalid.')
+      await expect(server.verifyCredential(credential('invalid-source'))).rejects.toThrow(
+        'Transaction credential source is invalid.',
+      )
+    })
+
     test('server rejects transaction with wrong challenge nonce (stolen signed tx)', async () => {
       const chargeServer = Mppx_server.create({
         methods: [

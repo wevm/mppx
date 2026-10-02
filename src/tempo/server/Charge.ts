@@ -329,8 +329,16 @@ export function charge<const parameters extends charge.Parameters>(
     request: Method.VerifyContext<typeof Methods.charge>['request'],
     context: CredentialContext,
   ) {
-    const { amount, client, methodDetails, recipient, requestAllowsFeePayer, supportedModes } =
-      context
+    const {
+      amount,
+      chainId,
+      challenge,
+      client,
+      methodDetails,
+      recipient,
+      requestAllowsFeePayer,
+      supportedModes,
+    } = context
     if (supportedModes && !supportedModes.includes('pull'))
       throw new MismatchError('Transaction credentials are not supported for this challenge.', {})
 
@@ -344,6 +352,16 @@ export function charge<const parameters extends charge.Parameters>(
         'Transaction must be signed by the sender before fee payer co-signing.',
         {},
       )
+
+    if (credential.source) {
+      const source = Proof.parsePkhSource(credential.source)
+      const resolvedChainId =
+        challenge.request.methodDetails?.chainId ?? chainId ?? client.chain?.id
+      if (!source || source.chainId !== resolvedChainId)
+        throw new MismatchError('Transaction credential source is invalid.', {})
+      if (!TempoAddress.isEqual(source.address, transaction.from))
+        throw new MismatchError('Transaction credential source does not match the sender.', {})
+    }
 
     const isFeePayerTx =
       methodDetails?.feePayer === true &&
