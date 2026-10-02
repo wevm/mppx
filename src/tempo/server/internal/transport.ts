@@ -69,6 +69,7 @@ export function sse(
   const base = Transport.http()
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Promise<Response>>({
     name: 'sse',
+    supportsStreamingReceipts: true,
 
     captureRequest(request) {
       return (

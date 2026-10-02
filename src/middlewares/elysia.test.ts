@@ -6,11 +6,12 @@ import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } 
 import { Mppx, discovery, payment } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as Scope from '../server/internal/scope.js'
+import * as MppxCore from '../server/Mppx.js'
 
 function createServer(app: Elysia<any, any, any, any, any, any, any>) {
   return new Promise<TestHttp.TestServer>((resolve) => {
@@ -36,6 +37,79 @@ function createServer(app: Elysia<any, any, any, any, any, any, any>) {
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('payment', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  test.each(['response', 'json', 'iterable'] as const)(
+    'wraps the actual %s route response',
+    async (kind) => {
+      const wrap = vi.fn(async (response?: unknown) => {
+        if (!response)
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        if (kind === 'iterable') {
+          expect(typeof (response as AsyncIterable<string>)[Symbol.asyncIterator]).toBe('function')
+          return new Response('metered', { headers: { 'Content-Type': 'text/event-stream' } })
+        }
+        const actual = response as Response
+        expect(actual.status).toBe(kind === 'response' ? 201 : 200)
+        expect(await actual.text()).toBe(kind === 'response' ? 'content' : '{"value":"content"}')
+        return new Response('wrapped', { headers: { 'Payment-Receipt': 'paid' } })
+      })
+      vi.spyOn(MppxCore, 'supportsStreamingReceipts').mockReturnValue(true)
+      const intent = () => async () => ({ status: 200 as const, withReceipt: wrap })
+      const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+        app.get('/', () => {
+          if (kind === 'response') return new Response('content', { status: 201 })
+          if (kind === 'json') return { value: 'content' }
+          return (async function* () {
+            yield 'original'
+          })()
+        }),
+      )
+      const response = await app.handle(new Request('http://localhost/'))
+      expect(await response.text()).toBe(kind === 'iterable' ? 'metered' : 'wrapped')
+      expect(wrap).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  test.each(['guard', 'onBeforeHandle'] as const)(
+    'rejects streaming with legacy %s registration',
+    async (registration) => {
+      vi.spyOn(MppxCore, 'supportsStreamingReceipts').mockReturnValue(true)
+      const handler = vi.fn(() => 'unmetered')
+      const intent = () => async () => ({
+        status: 200 as const,
+        withReceipt() {
+          throw Object.assign(new Error('withReceipt() requires a response argument'), {
+            name: 'MissingReceiptResponseError',
+          })
+        },
+      })
+      const hook = payment(intent as any, {} as any)
+      const app =
+        registration === 'guard'
+          ? new Elysia().guard({ beforeHandle: hook }, (app) => app.get('/', handler))
+          : new Elysia().onBeforeHandle(hook).get('/', handler)
+      const response = await app.handle(new Request('http://localhost/'))
+      expect(response.status).toBe(500)
+      expect(handler).not.toHaveBeenCalled()
+    },
+  )
+
+  test('paired hooks short-circuit management responses', async () => {
+    const handler = vi.fn(() => 'unreachable')
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: async () => new Response(null, { status: 204 }),
+    })
+    const app = new Elysia().guard(payment(intent as any, {} as any), (app) =>
+      app.get('/', handler),
+    )
+    expect((await app.handle(new Request('http://localhost/'))).status).toBe(204)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   test('attaches the Elysia route template as payment scope', async () => {
     let scope: string | undefined
     const intent = () => async (request: Request) => {

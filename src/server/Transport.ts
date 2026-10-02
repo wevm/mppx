@@ -26,6 +26,8 @@ export type Transport<
 > = {
   /** Transport name for identification. */
   name: string
+  /** Whether receipt wrapping accepts route-produced async iterables. */
+  supportsStreamingReceipts?: boolean | undefined
   /** HTTP header names from which this transport can read credentials. */
   credentialHeaders?: readonly string[] | undefined
   /** Captures the transport request into an immutable verification snapshot. */

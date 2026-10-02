@@ -5162,6 +5162,42 @@ describe('withReceipt', () => {
     expect(body).toEqual({ data: 'ok' })
   })
 
+  test('records streaming receipt capability independently of the transport name', async () => {
+    const mockMethod = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'custom-stream',
+      supportsStreamingReceipts: true,
+    })
+    const handler = Mppx.create({ methods: [mockMethod], realm, secretKey, transport })
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    if (firstResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+    expect(Mppx.supportsStreamingReceipts(result)).toBe(true)
+  })
+
   test('throws when called without response arg and no management response', async () => {
     const mockMethod = Method.toServer(mockCharge, {
       async verify() {
