@@ -201,15 +201,16 @@ export function resolveSettlementProgress(
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount <= channel.settledOnChain) return undefined
 
+  const provisional = ChannelStore.provisionalStreamCharges(channel)
   const amountBoundary = channel.lastSettlementSpent ?? channel.settledOnChain
   const timestampBoundary = Date.parse(channel.lastSettlementAt ?? channel.createdAt)
 
   return {
-    amount: channel.spent - amountBoundary,
+    amount: channel.spent - provisional.amount - amountBoundary,
     ...(Number.isFinite(timestampBoundary) && {
       elapsedMs: Date.now() - timestampBoundary,
     }),
-    units: channel.units - (channel.lastSettlementUnits ?? 0),
+    units: channel.units - provisional.units - (channel.lastSettlementUnits ?? 0),
   }
 }
 
@@ -239,11 +240,12 @@ export async function markSettlementComplete(parameters: MarkSettlementCompleteP
     if (!current) return current
     if (current.scheduledSettlementLease?.owner !== leaseOwner) return current
     const { scheduledSettlementLease: _, ...channel } = current
+    const provisional = ChannelStore.provisionalStreamCharges(current)
     return {
       ...channel,
       lastSettlementAt: settledAt,
-      lastSettlementSpent: current.spent,
-      lastSettlementUnits: current.units,
+      lastSettlementSpent: current.spent - provisional.amount,
+      lastSettlementUnits: current.units - provisional.units,
     }
   })
 }
@@ -334,6 +336,8 @@ export type ApplyVerifiedHttpAccountingParameters = {
   receipt: SessionReceipt
   /** Marks an SSE receipt whose first content unit was charged during verification. */
   markPrepaidReceipt?: ((receipt: SessionReceipt) => SessionReceipt) | undefined
+  /** Reserves the first SSE response unit before a protected POST handler runs. */
+  reserve: (receipt: SessionReceipt, amount: bigint) => Promise<SessionReceipt>
   /** Whether SSE transport is enabled. SSE accounting is stream-driven, not HTTP-response-driven. */
   sseEnabled: boolean
   /** Runs optional server settlement policy after a successful content charge. */
@@ -358,7 +362,15 @@ export function shouldApplyVerifiedHttpAccounting(
 export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
 ): Promise<SessionReceipt> {
-  const { receipt, sseEnabled } = parameters
+  const { capturedRequest, payloadAction, receipt, sseEnabled } = parameters
+  if (
+    capturedRequest &&
+    sseEnabled &&
+    capturedRequest.method === 'POST' &&
+    (payloadAction === 'open' || payloadAction === 'voucher') &&
+    isSessionContentRequest(capturedRequest)
+  )
+    return parameters.reserve(receipt, parameters.getRequestAmount())
   if (!shouldApplyVerifiedHttpAccounting(parameters)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
@@ -390,7 +402,10 @@ export async function chargeSessionChannel(
     if (result.channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
     if (result.channel.closeRequestedAt !== 0n)
       throw new ChannelClosedError({ reason: 'channel has a pending close request' })
-    const available = result.channel.highestVoucherAmount - result.channel.spent
+    const available =
+      result.channel.highestVoucherAmount -
+      result.channel.spent -
+      ChannelStore.reservedStreamAmount(result.channel)
     throw new InsufficientBalanceError({
       reason: `requested ${amount}, available ${available}`,
     })
@@ -568,17 +583,17 @@ export async function settle(
     throw new VerificationFailedError({
       reason: 'on-chain channel state does not match settle receipt',
     })
-  await store.updateChannel(channelId, (current) =>
-    current
-      ? {
-          ...current,
-          settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
-          lastSettlementAt: new Date().toISOString(),
-          lastSettlementSpent: current.spent,
-          lastSettlementUnits: current.units,
-        }
-      : current,
-  )
+  await store.updateChannel(channelId, (current) => {
+    if (!current) return current
+    const provisional = ChannelStore.provisionalStreamCharges(current)
+    return {
+      ...current,
+      settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
+      lastSettlementAt: new Date().toISOString(),
+      lastSettlementSpent: current.spent - provisional.amount,
+      lastSettlementUnits: current.units - provisional.units,
+    }
+  })
   if (options?.onSessionSettlement) {
     await emitSessionSettlement(options.onSessionSettlement, {
       txHash,

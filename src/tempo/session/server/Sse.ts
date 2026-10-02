@@ -75,19 +75,19 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   } = options
 
   const encoder = new TextEncoder()
-  const abortController = new AbortController()
+  const controller = new AbortController()
   let canceled = false
-  const abort = () => abortController.abort(signal?.reason)
+  const abort = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', abort, { once: true })
   if (signal?.aborted) abort()
-  else signal?.addEventListener('abort', abort, { once: true })
 
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const aborted = () => abortController.signal.aborted
-      const emit = (event: string) => controller.enqueue(encoder.encode(event))
+    async start(streamController) {
+      const aborted = () => controller.signal.aborted
+      const emit = (event: string) => streamController.enqueue(encoder.encode(event))
 
       try {
-        for await (const value of meterIterable({
+        for await (const item of meterIterable({
           store,
           channelId,
           tickCost,
@@ -95,12 +95,15 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           onChargeCommitted: options.onChargeCommitted,
           pollIntervalMs,
           prepaidUnits: options.prepaidUnits,
-          signal: abortController.signal,
+          reservationId: options.reservationId,
+          reservedUnits: options.reservedUnits,
+          signal: controller.signal,
           emitNeedVoucher: emit,
           formatNeedVoucher: formatNeedVoucherEvent,
         })) {
           if (aborted()) break
-          controller.enqueue(encoder.encode(formatMessageEvent(value)))
+          streamController.enqueue(encoder.encode(formatMessageEvent(item.value)))
+          await item.delivered()
         }
 
         if (!aborted()) {
@@ -113,19 +116,19 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
               spent: channel.spent,
               units: channel.units,
             })
-            controller.enqueue(encoder.encode(formatReceiptEvent(receipt)))
+            streamController.enqueue(encoder.encode(formatReceiptEvent(receipt)))
           }
         }
       } catch (e) {
-        if (!aborted()) controller.error(e)
+        if (!aborted()) streamController.error(e)
       } finally {
         signal?.removeEventListener('abort', abort)
-        if (!canceled) controller.close()
+        if (!canceled) streamController.close()
       }
     },
     cancel(reason) {
       canceled = true
-      abortController.abort(reason)
+      controller.abort(reason)
     },
   })
 }
@@ -142,6 +145,8 @@ export declare namespace serve {
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     pollIntervalMs?: number | undefined
     prepaidUnits?: number | undefined
+    reservationId?: string | undefined
+    reservedUnits?: number | undefined
     signal?: AbortSignal | undefined
   }
 }

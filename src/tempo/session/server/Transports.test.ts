@@ -1,14 +1,21 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { ChannelClosedError } from '../../../Errors.js'
+import * as Store from '../../../Store.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
+import { meterIterable } from './MeteredStream.js'
 import {
   commitReservedCharges,
+  finalizeCommittedCharges,
+  releaseReservedCharges,
+  renewReservedCharges,
+  reserveCharge,
   reserveChargeOrWait,
   send,
   subscribe,
+  streamReservationTtlMs,
   toText,
   type SocketEventListener,
   type SocketEventMap,
@@ -70,6 +77,16 @@ describe('MeteredStream', () => {
         waiters.clear()
         return state
       },
+      async updateChannelResult(_channelId, fn) {
+        const change = fn(state)
+        if (change.op === 'set') state = change.value
+        if (change.op === 'delete') state = null
+        if (change.op !== 'noop') {
+          for (const waiter of waiters) waiter()
+          waiters.clear()
+        }
+        return change.result
+      },
     }
     if (options.waitForUpdate) {
       store.waitForUpdate = () => {
@@ -85,6 +102,12 @@ describe('MeteredStream', () => {
     return JSON.stringify(event)
   }
 
+  const activeReservation = (amount: bigint, units = 1) => ({
+    amount,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    units,
+  })
+
   describe('MeteredStream', () => {
     test('reserveChargeOrWait returns immediately when voucher headroom is available', async () => {
       const emitted: string[] = []
@@ -96,11 +119,50 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'stream-1',
         store: memoryStore(channel()),
       })
 
       expect(emitted).toEqual([])
+    })
+
+    test('timestamps a reservation when its atomic update runs', async () => {
+      const store = memoryStore(channel())
+      const updateChannelResult = store.updateChannelResult!.bind(store)
+      let updateStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        updateStarted = resolve
+      })
+      let releaseUpdate!: () => void
+      const updateGate = new Promise<void>((resolve) => {
+        releaseUpdate = resolve
+      })
+      store.updateChannelResult = async (...parameters) => {
+        updateStarted()
+        await updateGate
+        return updateChannelResult(...parameters)
+      }
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+
+      try {
+        const reservation = reserveCharge({
+          amount: 10n,
+          channelId,
+          reservationId: 'stream-1',
+          store,
+        })
+        await started
+        clock.mockReturnValue(1_000 + streamReservationTtlMs + 1)
+        releaseUpdate()
+        await reservation
+
+        expect(
+          (await store.getChannel(channelId))?.streamReservations?.['stream-1']?.expiresAt,
+        ).toBe(1_000 + streamReservationTtlMs * 2 + 1)
+      } finally {
+        releaseUpdate()
+        clock.mockRestore()
+      }
     })
 
     test('reserveChargeOrWait emits need-voucher and waits for accepted headroom', async () => {
@@ -114,11 +176,11 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'stream-1',
         store,
       })
 
-      await Promise.resolve()
+      await expect.poll(() => emitted.length).toBe(1)
       expect(emitted.map((item) => JSON.parse(item))).toEqual([
         {
           channelId,
@@ -151,7 +213,7 @@ describe('MeteredStream', () => {
         },
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'stream-1',
         store,
       })
 
@@ -159,15 +221,17 @@ describe('MeteredStream', () => {
     })
 
     test('cancels a store waiter when the polling timeout wins', async () => {
-      let reads = 0
+      let updates = 0
+      let state = channel({ highestVoucherAmount: 25n, spent: 20n })
       let waiterAborted = false
       const store: ChannelStore.ChannelStore = {
         async getChannel() {
-          reads += 1
-          return channel({ highestVoucherAmount: reads === 1 ? 25n : 30n, spent: 20n })
+          return state
         },
-        async updateChannel() {
-          throw new Error('unexpected update')
+        async updateChannel(_channelId, update) {
+          updates += 1
+          state = update({ ...state, highestVoucherAmount: updates === 1 ? 25n : 30n })!
+          return state
         },
         waitForUpdate(_channelId, signal) {
           return new Promise<void>((_resolve, reject) => {
@@ -189,7 +253,7 @@ describe('MeteredStream', () => {
         emit() {},
         formatNeedVoucher,
         pollIntervalMs: 1,
-        reservedAmount: 0n,
+        reservationId: 'stream-1',
         store,
       })
 
@@ -197,27 +261,212 @@ describe('MeteredStream', () => {
     })
 
     test('commitReservedCharges increments spend and units', async () => {
-      const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
+      const store = memoryStore(
+        channel({
+          spent: 20n,
+          units: 2,
+          highestVoucherAmount: 50n,
+          streamReservations: { 'stream-1': activeReservation(10n) },
+        }),
+      )
 
-      await commitReservedCharges({ amount: 10n, channelId, store, units: 1 })
+      await commitReservedCharges({ channelId, reservationId: 'stream-1', store })
 
       expect(await store.getChannel(channelId)).toMatchObject({ spent: 30n, units: 3 })
+      expect((await store.getChannel(channelId))?.streamReservations?.['stream-1']).toMatchObject({
+        committed: true,
+      })
+      await finalizeCommittedCharges({ channelId, reservationId: 'stream-1', store })
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
+    })
+
+    test('bounds the lease for committed reservations left by terminated workers', async () => {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+      const store = memoryStore(
+        channel({
+          highestVoucherAmount: 50n,
+          streamReservations: { 'stream-1': activeReservation(10n) },
+        }),
+      )
+
+      try {
+        await commitReservedCharges({ channelId, reservationId: 'stream-1', store })
+        const committed = (await store.getChannel(channelId))!.streamReservations!['stream-1']!
+        expect(committed.expiresAt).toBe(1_000 + streamReservationTtlMs)
+        expect(
+          ChannelStore.hasActiveStreamReservation(
+            (await store.getChannel(channelId))!,
+            committed.expiresAt,
+          ),
+        ).toBe(false)
+
+        clock.mockReturnValue(committed.expiresAt)
+        await reserveCharge({ amount: 1n, channelId, reservationId: 'stream-2', store })
+        expect((await store.getChannel(channelId))?.streamReservations).toEqual({
+          'stream-2': expect.objectContaining({ amount: 1n }),
+        })
+      } finally {
+        clock.mockRestore()
+      }
+    })
+
+    test('renews a committed reservation until transport delivery completes', async () => {
+      vi.useFakeTimers({ now: 1_000 })
+      const store = memoryStore(channel({ highestVoucherAmount: 50n }))
+      const stream = meterIterable({
+        channelId,
+        emitNeedVoucher: () => {},
+        formatNeedVoucher,
+        generate: (async function* () {
+          yield 'slow-send'
+        })(),
+        pollIntervalMs: 1,
+        store,
+        tickCost: 10n,
+      })
+
+      try {
+        const item = await stream.next()
+        if (item.done) throw new Error('expected a metered value')
+        const before = (await store.getChannel(channelId))!.streamReservations![
+          Object.keys((await store.getChannel(channelId))!.streamReservations!)[0]!
+        ]!.expiresAt
+
+        await vi.advanceTimersByTimeAsync(streamReservationTtlMs / 2)
+
+        const reservation = Object.values(
+          (await store.getChannel(channelId))!.streamReservations!,
+        )[0]!
+        expect(reservation.committed).toBe(true)
+        expect(reservation.expiresAt).toBeGreaterThan(before)
+        await item.value.delivered()
+        await stream.return(undefined)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    test('releases instead of committing when cancellation wins a pending update', async () => {
+      const store = memoryStore(
+        channel({
+          spent: 20n,
+          units: 2,
+          highestVoucherAmount: 50n,
+          streamReservations: { 'stream-1': activeReservation(10n) },
+        }),
+      )
+      const updateChannel = store.updateChannel.bind(store)
+      let updateStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        updateStarted = resolve
+      })
+      let releaseUpdate!: () => void
+      const updateGate = new Promise<void>((resolve) => {
+        releaseUpdate = resolve
+      })
+      store.updateChannel = async (...parameters) => {
+        updateStarted()
+        await updateGate
+        return updateChannel(...parameters)
+      }
+      const controller = new AbortController()
+      const commit = commitReservedCharges({
+        channelId,
+        reservationId: 'stream-1',
+        signal: controller.signal,
+        store,
+      })
+      await started
+
+      controller.abort(new Error('client disconnected'))
+      releaseUpdate()
+
+      await expect(commit).rejects.toThrow(/client disconnected/)
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 20n, units: 2 })
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
+    })
+
+    test('releases instead of committing when cancellation arrives during persistence', async () => {
+      const memory = Store.memory()
+      let gatePersistence = false
+      let persistenceStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        persistenceStarted = resolve
+      })
+      let finishPersistence!: () => void
+      const persistence = new Promise<void>((resolve) => {
+        finishPersistence = resolve
+      })
+      const store = ChannelStore.fromStore({
+        delete: memory.delete.bind(memory),
+        get: memory.get.bind(memory),
+        async put(key, value) {
+          if (gatePersistence) {
+            gatePersistence = false
+            persistenceStarted()
+            await persistence
+          }
+          await memory.put(key, value)
+        },
+      })
+      await store.updateChannel(channelId, () =>
+        channel({
+          spent: 20n,
+          units: 2,
+          highestVoucherAmount: 50n,
+          streamReservations: { 'stream-1': activeReservation(10n) },
+        }),
+      )
+      gatePersistence = true
+      const controller = new AbortController()
+      const commit = commitReservedCharges({
+        channelId,
+        reservationId: 'stream-1',
+        signal: controller.signal,
+        store,
+      })
+      await started
+
+      controller.abort(new Error('client disconnected'))
+      let closeSawReservation = false
+      const close = store.updateChannel(channelId, (current) => {
+        closeSawReservation = ChannelStore.hasActiveStreamReservation(current!)
+        return current
+      })
+      finishPersistence()
+
+      await expect(commit).rejects.toThrow(/client disconnected/)
+      await close
+      expect(closeSawReservation).toBe(true)
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 20n, units: 2 })
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
     })
 
     test('commitReservedCharges rejects when reserved coverage is no longer available', async () => {
       await expect(
         commitReservedCharges({
-          amount: 40n,
           channelId,
-          store: memoryStore(channel({ spent: 20n, highestVoucherAmount: 50n })),
-          units: 1,
+          reservationId: 'stream-1',
+          store: memoryStore(
+            channel({
+              spent: 20n,
+              highestVoucherAmount: 50n,
+              streamReservations: { 'stream-1': activeReservation(40n) },
+            }),
+          ),
         }),
       ).rejects.toThrow('reserved voucher coverage is no longer available')
     })
 
     test('uses the final store retry to determine whether a charge committed', async () => {
-      const available = channel({ spent: 20n, highestVoucherAmount: 50n })
-      const unavailable = channel({ spent: 50n, highestVoucherAmount: 50n })
+      const available = channel({
+        spent: 20n,
+        highestVoucherAmount: 50n,
+        streamReservations: {
+          'stream-1': { amount: 10n, units: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+        },
+      })
+      const unavailable = { ...available, spent: 50n }
       const store: ChannelStore.ChannelStore = {
         async getChannel() {
           return unavailable
@@ -229,19 +478,309 @@ describe('MeteredStream', () => {
       }
 
       await expect(
-        commitReservedCharges({ amount: 10n, channelId, store, units: 1 }),
+        commitReservedCharges({ channelId, reservationId: 'stream-1', store }),
       ).rejects.toThrow('reserved voucher coverage is no longer available')
+    })
+
+    test('commitReservedCharges rejects when the reservation was reclaimed', async () => {
+      await expect(
+        commitReservedCharges({
+          channelId,
+          reservationId: 'stream-1',
+          store: memoryStore(channel({ highestVoucherAmount: 50n })),
+        }),
+      ).rejects.toThrow('stream reservation no longer exists')
     })
 
     test('commitReservedCharges rejects closed channels', async () => {
       await expect(
         commitReservedCharges({
-          amount: 10n,
           channelId,
-          store: memoryStore(channel({ finalized: true })),
-          units: 1,
+          reservationId: 'stream-1',
+          store: memoryStore(
+            channel({
+              finalized: true,
+              streamReservations: { 'stream-1': activeReservation(10n) },
+            }),
+          ),
         }),
       ).rejects.toThrow(ChannelClosedError)
+    })
+
+    test('serializes reservations across concurrent streams', async () => {
+      const emitted: string[] = []
+      const store = memoryStore(channel({ highestVoucherAmount: 30n, spent: 20n }))
+
+      await reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit(message) {
+          emitted.push(message)
+        },
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'stream-1',
+        store,
+      })
+      const second = reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit(message) {
+          emitted.push(message)
+        },
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'stream-2',
+        store,
+      })
+
+      await expect.poll(() => emitted.length).toBe(1)
+      expect(emitted.map((message) => JSON.parse(message))).toEqual([
+        {
+          acceptedCumulative: '30',
+          channelId,
+          deposit: '100',
+          requiredCumulative: '40',
+        },
+      ])
+      expect((await store.getChannel(channelId))?.streamReservations).toEqual({
+        'stream-1': expect.objectContaining({ amount: 10n, units: 1 }),
+      })
+
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, highestVoucherAmount: 40n } : current,
+      )
+      await second
+      expect((await store.getChannel(channelId))?.streamReservations).toEqual({
+        'stream-1': expect.objectContaining({ amount: 10n, units: 1 }),
+        'stream-2': expect.objectContaining({ amount: 10n, units: 1 }),
+      })
+    })
+
+    test('releaseReservedCharges restores unused shared headroom', async () => {
+      const store = memoryStore(
+        channel({ streamReservations: { 'stream-1': activeReservation(10n) } }),
+      )
+
+      await releaseReservedCharges({ channelId, reservationId: 'stream-1', store })
+
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
+    })
+
+    test('does not renew an expired reservation', async () => {
+      const store = memoryStore(
+        channel({
+          streamReservations: {
+            'stream-1': { amount: 10n, expiresAt: Date.now() - 1, units: 1 },
+          },
+        }),
+      )
+
+      await renewReservedCharges({ channelId, reservationId: 'stream-1', store })
+
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
+    })
+
+    test('reclaims expired reservations left by terminated workers', async () => {
+      const store = memoryStore(
+        channel({
+          highestVoucherAmount: 30n,
+          streamReservations: {
+            orphan: { amount: 10n, expiresAt: 0, units: 1 },
+          },
+        }),
+      )
+
+      await reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit: () => {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'replacement',
+        store,
+      })
+
+      expect((await store.getChannel(channelId))?.streamReservations).toEqual({
+        replacement: expect.objectContaining({ amount: 10n, units: 1 }),
+      })
+    })
+
+    test('reclaims its own expired reservation before checking headroom', async () => {
+      let needVoucher!: () => void
+      const voucherRequested = new Promise<void>((resolve) => {
+        needVoucher = resolve
+      })
+      const store = memoryStore(
+        channel({
+          highestVoucherAmount: 23n,
+          spent: 20n,
+          streamReservations: {
+            'stream-1': { amount: 5n, expiresAt: 0, units: 1 },
+          },
+        }),
+      )
+
+      const pending = reserveChargeOrWait({
+        amount: 6n,
+        channelId,
+        emit: needVoucher,
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'stream-1',
+        store,
+      })
+      await voucherRequested
+      expect((await store.getChannel(channelId))?.streamReservations).toBeUndefined()
+
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, highestVoucherAmount: 26n } : current,
+      )
+      await pending
+
+      expect((await store.getChannel(channelId))?.streamReservations).toEqual({
+        'stream-1': expect.objectContaining({ amount: 6n, units: 1 }),
+      })
+    })
+
+    test('reserves and commits zero-cost stream units', async () => {
+      const store = memoryStore(channel())
+
+      await reserveChargeOrWait({
+        amount: 0n,
+        channelId,
+        emit: () => {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'stream-1',
+        store,
+      })
+      await commitReservedCharges({ channelId, reservationId: 'stream-1', store })
+      await finalizeCommittedCharges({ channelId, reservationId: 'stream-1', store })
+
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 20n, units: 3 })
+    })
+
+    test('rejects zero-cost stream units after the channel closes', async () => {
+      await expect(
+        reserveChargeOrWait({
+          amount: 0n,
+          channelId,
+          emit: () => {},
+          formatNeedVoucher,
+          pollIntervalMs: 1,
+          reservationId: 'stream-1',
+          store: memoryStore(channel({ finalized: true })),
+        }),
+      ).rejects.toThrow(ChannelClosedError)
+    })
+
+    test('re-emits a larger requirement after losing a reservation race', async () => {
+      const emitted: NeedVoucherEvent[] = []
+      const store = memoryStore(channel({ highestVoucherAmount: 25n }), {
+        waitForUpdate: true,
+      })
+      const reserve = (reservationId: string) =>
+        reserveChargeOrWait({
+          amount: 10n,
+          channelId,
+          emit(message) {
+            emitted.push(JSON.parse(message))
+          },
+          formatNeedVoucher,
+          pollIntervalMs: 5,
+          reservationId,
+          store,
+        })
+
+      const first = reserve('stream-1')
+      const second = reserve('stream-2')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(emitted.filter((event) => event.requiredCumulative === '30')).toHaveLength(2)
+
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, highestVoucherAmount: 30n } : current,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(emitted.some((event) => event.requiredCumulative === '40')).toBe(true)
+
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, highestVoucherAmount: 40n } : current,
+      )
+      await Promise.all([first, second])
+    })
+
+    test('re-emits a smaller requirement after reserved headroom is released', async () => {
+      const emitted: NeedVoucherEvent[] = []
+      const store = memoryStore(
+        channel({
+          highestVoucherAmount: 80n,
+          spent: 80n,
+          streamReservations: { other: activeReservation(15n) },
+        }),
+        { waitForUpdate: true },
+      )
+      const pending = reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit(message) {
+          emitted.push(JSON.parse(message))
+        },
+        formatNeedVoucher,
+        pollIntervalMs: 5,
+        reservationId: 'stream-1',
+        store,
+      })
+
+      await expect.poll(() => emitted.at(-1)?.requiredCumulative).toBe('105')
+      await releaseReservedCharges({ channelId, reservationId: 'other', store })
+      await expect.poll(() => emitted.at(-1)?.requiredCumulative).toBe('90')
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, highestVoucherAmount: 90n } : current,
+      )
+      await pending
+    })
+
+    test('does not persist unchanged state while polling for headroom', async () => {
+      let state: ChannelStore.State | null = channel({ highestVoucherAmount: 20n })
+      let writes = 0
+      const store: ChannelStore.ChannelStore = {
+        async getChannel() {
+          return state
+        },
+        async updateChannel(_channelId, fn) {
+          state = fn(state)
+          writes += 1
+          return state
+        },
+        async updateChannelResult(_channelId, fn) {
+          const change = fn(state)
+          if (change.op === 'set') {
+            state = change.value
+            writes += 1
+          } else if (change.op === 'delete') {
+            state = null
+            writes += 1
+          }
+          return change.result
+        },
+      }
+      const controller = new AbortController()
+      const pending = reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit: () => {},
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservationId: 'stream-1',
+        signal: controller.signal,
+        store,
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      controller.abort(new Error('stop'))
+      await expect(pending).rejects.toThrow('stop')
+      expect(writes).toBe(0)
     })
   })
 })

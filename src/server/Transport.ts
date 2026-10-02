@@ -66,7 +66,29 @@ export type Transport<
     input: input
     receipt: Receipt.Receipt
     response: receiptResponse
+    /** Aborted when the pending receipt is canceled before finalization completes. */
+    signal?: AbortSignal | undefined
   }) => receiptOutput
+  /** Releases transport resources reserved for a receipt that will not be emitted. */
+  cancelReceipt?:
+    | ((options: {
+        challengeId: string
+        credential: Credential.Credential
+        envelope?: Method.VerifiedChallengeEnvelope | undefined
+        input: input
+        receipt: Receipt.Receipt
+      }) => MaybePromise<void>)
+    | undefined
+  /** Keeps transport resources alive while application code prepares the receipt response. */
+  maintainReceipt?:
+    | ((options: {
+        challengeId: string
+        credential: Credential.Credential
+        envelope?: Method.VerifiedChallengeEnvelope | undefined
+        input: input
+        receipt: Receipt.Receipt
+      }) => (() => void) | undefined)
+    | undefined
 }
 export type AnyTransport = Transport<any, any, any, any>
 

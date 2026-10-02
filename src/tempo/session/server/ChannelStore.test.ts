@@ -340,6 +340,38 @@ describe('ChannelStore state updates', () => {
     expect(next.state?.closeRequestedAt).toBe(11n)
   })
 
+  test('markPendingClose rejects while a protected response reservation is active', () => {
+    expect(() =>
+      ChannelStore.markPendingClose({
+        closeRequestedAt: 11n,
+        cumulativeAmount: 50n,
+        current: stateUpdateChannel({
+          streamReservations: {
+            response: { amount: 10n, expiresAt: Date.now() + 60_000, units: 1 },
+          },
+        }),
+        onChainDeposit: 100n,
+        onChainSettled: 30n,
+      }),
+    ).toThrow(/protected response in progress/)
+  })
+
+  test('markPendingClose treats a zero-value response reservation as active', () => {
+    expect(() =>
+      ChannelStore.markPendingClose({
+        closeRequestedAt: 11n,
+        cumulativeAmount: 50n,
+        current: stateUpdateChannel({
+          streamReservations: {
+            response: { amount: 0n, expiresAt: Date.now() + 60_000, units: 1 },
+          },
+        }),
+        onChainDeposit: 100n,
+        onChainSettled: 30n,
+      }),
+    ).toThrow(/protected response in progress/)
+  })
+
   test('markPendingClose rejects close voucher below capture amount', () => {
     expect(() =>
       ChannelStore.markPendingClose({
@@ -871,6 +903,25 @@ describe('ChannelStore.deductFromChannel', () => {
     const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(result.ok).toBe(false)
     expect(result.channel.spent).toBe(500_000n)
+  })
+
+  test('does not spend headroom reserved by an active stream', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, {
+      highestVoucherAmount: 1_000_000n,
+      spent: 0n,
+      streamReservations: {
+        stream: { amount: 500_000n, expiresAt: Number.MAX_SAFE_INTEGER, units: 1 },
+      },
+    })
+
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 600_000n)
+
+    expect(result.ok).toBe(false)
+    expect(result.channel.spent).toBe(0n)
+    expect(result.channel.streamReservations).toEqual({
+      stream: { amount: 500_000n, expiresAt: Number.MAX_SAFE_INTEGER, units: 1 },
+    })
   })
 
   test('throws when channel does not exist', async () => {

@@ -14,16 +14,24 @@ import { requireSessionCredentialContext } from '../../session/precompile/Protoc
 import * as ChannelStore from '../../session/server/ChannelStore.js'
 import type { SettleChargedSessionChannel } from '../../session/server/Settlement.js'
 import * as Sse_core from '../../session/server/Sse.js'
+import * as SessionTransports from '../../session/server/Transports.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+const reservedSessionTick = Symbol('mppx.reservedSessionTick')
 
 /** SSE transport with Tempo session controller. */
-export type Sse = Transport.Sse<Sse_core.SessionController>
+export type Sse = Transport.Transport<
+  Request,
+  Response,
+  Transport.ReceiptResponseOf<Transport.Sse<Sse_core.SessionController>>,
+  Response | Promise<Response>
+>
 
 /** Receipt marker used to avoid double-charging a request already charged during verification. */
 export type PrepaidSessionReceipt = SessionReceipt & {
   [prepaidSessionTick]?: true | undefined
+  [reservedSessionTick]?: string | undefined
 }
 
 /** Marks a session receipt as already charged for the current request. */
@@ -38,6 +46,70 @@ export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt 
 
 function hasPrepaidSessionTick(receipt: SessionReceipt): boolean {
   return (receipt as PrepaidSessionReceipt)[prepaidSessionTick] === true
+}
+
+function getReservedSessionTick(receipt: SessionReceipt): string | undefined {
+  return (receipt as PrepaidSessionReceipt)[reservedSessionTick]
+}
+
+/** Reserves one response unit before a protected session handler runs. */
+export async function reserveSessionTick(
+  store: ChannelStore.ChannelStore,
+  receipt: SessionReceipt,
+  amount: bigint,
+): Promise<SessionReceipt> {
+  const reservationId = globalThis.crypto.randomUUID()
+  const result = await SessionTransports.reserveCharge({
+    amount,
+    channelId: receipt.channelId,
+    reservationId,
+    store,
+  })
+  if (!result.ok) {
+    SessionTransports.throwIfChannelClosed(result.channel)
+    const available =
+      result.channel.highestVoucherAmount -
+      result.channel.spent -
+      ChannelStore.reservedStreamAmount(result.channel)
+    throw new Errors.InsufficientBalanceError({
+      reason: `requested ${amount}, available ${available}`,
+    })
+  }
+  Object.defineProperty(receipt, reservedSessionTick, {
+    configurable: true,
+    enumerable: false,
+    value: reservationId,
+  })
+  return receipt
+}
+
+/** Releases a response-unit reservation when a protected handler fails. */
+export async function releaseSessionTick(
+  store: ChannelStore.ChannelStore,
+  receipt: SessionReceipt,
+): Promise<void> {
+  const reservationId = getReservedSessionTick(receipt)
+  if (!reservationId) return
+  await SessionTransports.releaseReservedCharges({
+    store,
+    channelId: receipt.channelId,
+    reservationId,
+  })
+  delete (receipt as PrepaidSessionReceipt)[reservedSessionTick]
+}
+
+/** Keeps a response-unit reservation alive until its receipt is emitted or cancelled. */
+export function maintainSessionTick(
+  store: ChannelStore.ChannelStore,
+  receipt: SessionReceipt,
+): (() => void) | undefined {
+  const reservationId = getReservedSessionTick(receipt)
+  if (!reservationId) return undefined
+  return SessionTransports.maintainReservedCharges({
+    store,
+    channelId: receipt.channelId,
+    reservationId,
+  })
 }
 
 /**
@@ -67,7 +139,12 @@ export function sse(
   })()
 
   const base = Transport.http()
-  return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
+  return Transport.from<
+    Request,
+    Response,
+    Transport.ReceiptResponseOf<Sse>,
+    Response | Promise<Response>
+  >({
     name: 'sse',
 
     captureRequest(request) {
@@ -89,7 +166,15 @@ export function sse(
       return base.respondChallenge(options) as Response
     },
 
-    respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
+    cancelReceipt({ receipt }) {
+      return releaseSessionTick(store, receipt as SessionReceipt)
+    },
+
+    maintainReceipt({ receipt }) {
+      return maintainSessionTick(store, receipt as SessionReceipt)
+    },
+
+    respondReceipt({ credential, envelope, receipt, response, challengeId, input, signal }) {
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
       const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
@@ -101,6 +186,17 @@ export function sse(
       const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
       const unitType =
         typeof verifiedRequest.unitType === 'string' ? verifiedRequest.unitType : undefined
+      const reservedTick = getReservedSessionTick(receipt as SessionReceipt)
+      const settleCharged = options.settleCharged
+      const settleCommittedCharge = settleCharged
+        ? async (channel: ChannelStore.State) => {
+            try {
+              await settleCharged(channel)
+            } catch {
+              // The response is already paid; settlement can be retried independently.
+            }
+          }
+        : undefined
 
       // Auto-detect upstream SSE responses and parse them into an
       // AsyncIterable so they flow through the metered pipeline.
@@ -123,8 +219,9 @@ export function sse(
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
-          onChargeCommitted: options.settleCharged,
+          onChargeCommitted: settleCommittedCharge,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
+          ...(reservedTick ? { reservationId: reservedTick, reservedUnits: 1 } : {}),
           signal: input.signal,
         })
         return Sse_core.toResponse(stream)
@@ -148,8 +245,7 @@ export function sse(
       if (hasPrepaidSessionTick(currentReceipt)) {
         return baseResponse
       }
-      const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
-      if (available < tickCost) {
+      const insufficientResponse = (available: bigint) => {
         const error = new Errors.InsufficientBalanceError({
           reason: `requested ${tickCost}, available ${available}`,
         })
@@ -167,70 +263,63 @@ export function sse(
           },
         )
       }
+      const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
+      if (!reservedTick && available < tickCost) return insufficientResponse(available)
 
-      const chargedReceipt: SessionReceipt = {
-        ...currentReceipt,
-        spent: (BigInt(currentReceipt.spent) + tickCost).toString(),
-        units: (currentReceipt.units ?? 0) + 1,
-      }
-      const chargedResponse = base.respondReceipt({
-        credential: verifiedCredential,
-        envelope,
-        input,
-        receipt: chargedReceipt,
-        response: response as Response,
-        challengeId: verifiedChallengeId,
-      })
       const chargePlainResponse = async () => {
+        if (reservedTick) {
+          await SessionTransports.commitReservedCharges({
+            store,
+            channelId,
+            reservationId: reservedTick,
+            signal,
+          })
+          const channel = await store.getChannel(channelId)
+          if (!channel) throw new Error('channel not found')
+          return { channel, ok: true } as const
+        }
         const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
-        if (result.ok) await options.settleCharged?.(result.channel)
+        if (result.ok) void settleCommittedCharge?.(result.channel)
         return result
       }
 
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
-      // Need to deduct tickCost so request isn't free.
-      // For null-body statuses, the request shape determines whether the
-      // response is management (no charge) or plain content (charge one tick).
-      if (isNullBodyStatus(chargedResponse.status)) {
-        void chargePlainResponse()
-        return chargedResponse
-      }
+      // Complete the deduction before exposing success headers or content.
+      return chargePlainResponse().then((result) => {
+        if (!result.ok)
+          return insufficientResponse(
+            result.channel.highestVoucherAmount -
+              result.channel.spent -
+              ChannelStore.reservedStreamAmount(result.channel),
+          )
 
-      const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          // deduction completes before consumer reads
-          const result = await chargePlainResponse()
-          if (!result.ok) {
-            controller.error(
-              new Errors.InsufficientBalanceError({
-                reason: `requested ${tickCost}, available ${
-                  result.channel.highestVoucherAmount - result.channel.spent
-                }`,
-              }),
-            )
-            return
-          }
-          if (!chargedResponse.body) {
-            controller.close()
-            return
-          }
-          const reader = chargedResponse.body.getReader()
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              controller.enqueue(value)
-            }
-          } finally {
-            reader.releaseLock()
-            controller.close()
-          }
-        },
-      })
-      return new Response(stream, {
-        status: chargedResponse.status,
-        statusText: chargedResponse.statusText,
-        headers: chargedResponse.headers,
+        const chargedReceipt: SessionReceipt = {
+          ...currentReceipt,
+          acceptedCumulative: result.channel.highestVoucherAmount.toString(),
+          spent: result.channel.spent.toString(),
+          units: result.channel.units,
+        }
+        const paidResponse = base.respondReceipt({
+          credential: verifiedCredential,
+          envelope,
+          input,
+          receipt: chargedReceipt,
+          response: response as Response,
+          challengeId: verifiedChallengeId,
+        })
+        if (reservedTick) {
+          const timer = setTimeout(() => {
+            void SessionTransports.finalizeCommittedCharges({
+              store,
+              channelId,
+              reservationId: reservedTick,
+            })
+              .then((channel) => settleCommittedCharge?.(channel))
+              .catch(() => undefined)
+          }, 0)
+          ;(timer as unknown as { unref?: () => void }).unref?.()
+        }
+        return paidResponse
       })
     },
   })
@@ -315,8 +404,4 @@ function resolveMeteredGenerate(
       yield chunk
     }
   }
-}
-
-function isNullBodyStatus(status: number): boolean {
-  return [101, 204, 205, 304].includes(status)
 }

@@ -11,7 +11,9 @@ import * as ChannelStore from './ChannelStore.js'
 import {
   applyVerifiedHttpAccounting,
   claimScheduledSettlement,
+  chargeSessionChannel,
   isSettlementDue,
+  markSettlementComplete,
   readRequestFeePayer,
   renewScheduledSettlement,
   releaseScheduledSettlement,
@@ -19,6 +21,36 @@ import {
   resolveRequestFeePayer,
   resolveSettlementProgress,
 } from './Settlement.js'
+
+describe('chargeSessionChannel', () => {
+  test('reports available balance net of active stream reservations', async () => {
+    const channel = {
+      channelId: `0x${'01'.repeat(32)}`,
+      closeRequestedAt: 0n,
+      finalized: false,
+      highestVoucherAmount: 100n,
+      spent: 0n,
+      streamReservations: {
+        stream: { amount: 80n, expiresAt: Number.MAX_SAFE_INTEGER, units: 1 },
+      },
+    } as unknown as ChannelStore.State
+    const store: ChannelStore.ChannelStore = {
+      async getChannel() {
+        return channel
+      },
+      async updateChannel() {
+        return channel
+      },
+      async updateChannelResult(_channelId, fn) {
+        return fn(channel).result
+      },
+    }
+
+    await expect(
+      chargeSessionChannel({ amount: 30n, channelId: channel.channelId, store }),
+    ).rejects.toThrow('requested 30, available 20')
+  })
+})
 
 describe('FeePayerResolution', () => {
   const defaultFeePayer = privateKeyToAccount(
@@ -228,6 +260,7 @@ describe('applyVerifiedHttpAccounting', () => {
       markPrepaidReceipt,
       payloadAction: 'voucher',
       receipt: receipt(),
+      reserve: async (value) => value,
       settleCharged: async () => undefined,
       sseEnabled: true,
     })
@@ -236,8 +269,9 @@ describe('applyVerifiedHttpAccounting', () => {
     expect(markPrepaidReceipt).toHaveBeenCalledOnce()
   })
 
-  test('does not charge SSE voucher management POSTs', async () => {
+  test('reserves SSE POST content before the handler runs', async () => {
     const charge = vi.fn(async () => chargedChannel())
+    const reserve = vi.fn(async (value) => value)
 
     const result = await applyVerifiedHttpAccounting({
       capturedRequest: capturedRequest({ hasBody: true, method: 'POST' }),
@@ -245,11 +279,13 @@ describe('applyVerifiedHttpAccounting', () => {
       getRequestAmount: () => 75n,
       payloadAction: 'voucher',
       receipt: receipt(),
+      reserve,
       settleCharged: async () => undefined,
       sseEnabled: true,
     })
 
     expect(charge).not.toHaveBeenCalled()
+    expect(reserve).toHaveBeenCalledWith(expect.any(Object), 75n)
     expect(result.spent).toBe('0')
   })
 
@@ -262,6 +298,7 @@ describe('applyVerifiedHttpAccounting', () => {
       getRequestAmount: () => 75n,
       payloadAction: 'voucher',
       receipt: receipt(),
+      reserve: async (value) => value,
       settleCharged: async () => undefined,
       sseEnabled: false,
     })
@@ -328,6 +365,45 @@ describe('SettlementSchedule', () => {
         amount: 225n,
         units: 5,
       })
+    })
+
+    test('excludes provisional stream charges from progress and checkpoints', async () => {
+      let state = channel({
+        lastSettlementSpent: 125n,
+        lastSettlementUnits: 2,
+        streamReservations: {
+          stream: {
+            amount: 50n,
+            committed: true,
+            expiresAt: Number.MAX_SAFE_INTEGER,
+            units: 1,
+          },
+        },
+      })
+      const store: ChannelStore.ChannelStore = {
+        async getChannel() {
+          return state
+        },
+        async updateChannel(_channelId, update) {
+          state = update(state)!
+          return state
+        },
+      }
+
+      expect(resolveSettlementProgress(state)).toMatchObject({ amount: 175n, units: 4 })
+      const leaseOwner = await claimScheduledSettlement({
+        channelId,
+        store,
+        schedule: { units: 1 },
+      })
+      expect(leaseOwner).toBeDefined()
+      await markSettlementComplete({
+        channelId,
+        leaseOwner: leaseOwner!,
+        store,
+        settledAt: '2026-01-02T00:00:00.000Z',
+      })
+      expect(state).toMatchObject({ lastSettlementSpent: 300n, lastSettlementUnits: 6 })
     })
 
     test.each([

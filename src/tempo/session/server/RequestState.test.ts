@@ -479,6 +479,22 @@ describe('SessionSnapshotHints', () => {
       expect(snapshot?.highestVoucher?.cumulativeAmount).toBe('500')
     })
 
+    test('includes active stream reservations in the required cumulative amount', async () => {
+      const snapshot = await resolveSessionSnapshot({
+        amount: 130n,
+        channelId,
+        store: store(
+          channel({
+            streamReservations: {
+              stream: { amount: 80n, expiresAt: Number.MAX_SAFE_INTEGER, units: 1 },
+            },
+          }),
+        ),
+      })
+
+      expect(snapshot?.requiredCumulative).toBe('510')
+    })
+
     test('omits reusable channel hints without a matching signed highest voucher', async () => {
       await expect(
         resolveSessionSnapshot({

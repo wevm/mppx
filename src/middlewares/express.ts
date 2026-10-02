@@ -64,6 +64,13 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
+    let responseClosed = res.destroyed
+    let releaseReceipt: (() => void) | undefined
+    res.once('close', () => {
+      responseClosed = true
+      releaseReceipt?.()
+    })
+
     const rawRequest = ExpressAdapter.toRequest(req)
     const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
     const request =
@@ -73,21 +80,64 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const result = await intent(options)(request)
 
     if (result.status === 402) {
+      if (responseClosed) return
       const challenge = result.challenge as Response
       await ExpressAdapter.sendResponse(res, challenge)
       return
     }
 
-    const managementResponse = (() => {
+    let receiptFinalizing = false
+    let receiptHandled = false
+    let receiptReleased = false
+    let receiptReleasePending = false
+    let receiptReleaseRetry = false
+    releaseReceipt = () => {
+      if (receiptHandled || receiptReleased) return
+      if (receiptReleasePending) {
+        receiptReleaseRetry = true
+        return
+      }
+      receiptReleasePending = true
+      void Promise.resolve()
+        .then(() => result.cancelReceipt?.())
+        .then(
+          () => {
+            receiptReleasePending = false
+            receiptReleased = true
+          },
+          (error) => {
+            receiptReleasePending = false
+            next(error)
+            if (receiptReleaseRetry) {
+              receiptReleaseRetry = false
+              releaseReceipt?.()
+            }
+          },
+        )
+    }
+    if (responseClosed) {
+      releaseReceipt()
+      return
+    }
+
+    const managementResponse = await (async () => {
       try {
-        return (result.withReceipt as () => Response)()
+        return await (result.withReceipt as () => Promise<Response> | Response)()
       } catch (error) {
         if (Mppx_core.isMissingReceiptResponseError(error)) return null
+        try {
+          await result.cancelReceipt?.()
+          receiptReleased = true
+        } catch {
+          // Preserve the management response error when cleanup also fails.
+        }
         throw error
       }
     })()
+    if (responseClosed || receiptReleased) return
 
     if (managementResponse) {
+      receiptHandled = true
       res.status(managementResponse.status)
       ExpressAdapter.copyHeaders(res, managementResponse.headers)
       if (managementResponse.body === null) {
@@ -99,10 +149,35 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     }
 
     const originalJson = res.json.bind(res)
+    res.once('finish', releaseReceipt)
     res.json = (body: any) => {
-      const wrapped = result.withReceipt(Response.json(body))
-      ExpressAdapter.copyHeaders(res, wrapped.headers)
-      return originalJson(body)
+      if (receiptFinalizing || receiptHandled || responseClosed) return res
+      receiptFinalizing = true
+      void Promise.resolve()
+        .then(() => result.withReceipt(Response.json(body)))
+        .then(async (wrapped) => {
+          receiptFinalizing = false
+          if (responseClosed || receiptReleased) return
+          receiptHandled = true
+          if (!wrapped.ok) {
+            await ExpressAdapter.sendResponse(res, wrapped)
+            return
+          }
+          ExpressAdapter.copyHeaders(res, wrapped.headers)
+          originalJson(body)
+        })
+        .catch(async (error) => {
+          receiptFinalizing = false
+          receiptHandled = false
+          try {
+            await result.cancelReceipt?.()
+          } catch {
+            // Preserve the original response error when cleanup also fails.
+          } finally {
+            next(error)
+          }
+        })
+      return res
     }
 
     next()

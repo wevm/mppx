@@ -1,4 +1,9 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import {
+  type IncomingMessage,
+  type ServerResponse,
+  validateHeaderName,
+  validateHeaderValue,
+} from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
 import * as AttestationServer from '../attestation/Server.js'
@@ -1296,12 +1301,63 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         return { challenge: response, status: 402 }
       }
 
+      type ReceiptContext = Omit<
+        Parameters<typeof transport.respondReceipt>[0],
+        'response' | 'signal'
+      >
+      const createReceiptLifecycle = (receiptContext: ReceiptContext) => {
+        let stopMaintaining: (() => void) | undefined
+        try {
+          stopMaintaining = transport.maintainReceipt?.(receiptContext)
+        } catch (error) {
+          try {
+            void Promise.resolve(transport.cancelReceipt?.(receiptContext)).catch(() => undefined)
+          } catch {
+            // Preserve the maintenance setup error when cleanup also fails.
+          }
+          throw error
+        }
+        let maintaining = true
+        const receiptAbortController = new AbortController()
+        let requestAbortListener: (() => void) | undefined
+        let cancellation: Promise<void> | undefined
+        const stop = () => {
+          if (!maintaining) return
+          maintaining = false
+          stopMaintaining?.()
+          if (input instanceof globalThis.Request && requestAbortListener)
+            input.signal.removeEventListener('abort', requestAbortListener)
+        }
+        const cancel = (reason?: unknown): Promise<void> => {
+          stop()
+          receiptAbortController.abort(reason)
+          if (!transport.cancelReceipt) return Promise.resolve()
+          if (cancellation) return cancellation
+          cancellation = Promise.resolve()
+            .then(() => transport.cancelReceipt!(receiptContext))
+            .catch((error) => {
+              cancellation = undefined
+              throw error
+            })
+          return cancellation
+        }
+        if (input instanceof globalThis.Request) {
+          requestAbortListener = () => {
+            void cancel(input.signal.reason).catch(() => undefined)
+          }
+          if (input.signal.aborted) requestAbortListener()
+          else input.signal.addEventListener('abort', requestAbortListener, { once: true })
+        }
+        return { cancel, signal: receiptAbortController.signal, stop }
+      }
+
       const success = (
         receiptData: Receipt.Receipt,
         options: {
           challengeId?: string | undefined
           credentialForReceipt?: Credential.Credential | undefined
           envelopeForReceipt?: Method.VerifiedChallengeEnvelope | undefined
+          lifecycle?: ReturnType<typeof createReceiptLifecycle> | undefined
           managementResponse?: globalThis.Response | undefined
         } = {},
       ): MethodFn.Response => {
@@ -1309,31 +1365,52 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           challengeId = challenge.id,
           credentialForReceipt = { challenge, payload: {} } as Credential.Credential,
           envelopeForReceipt,
+          lifecycle: providedLifecycle,
           managementResponse,
         } = options
-
-        return {
-          status: 200,
-          withReceipt<response>(response?: response) {
-            if (managementResponse) {
-              return transport.respondReceipt({
-                challengeId,
-                credential: credentialForReceipt,
-                ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
-                input,
-                receipt: receiptData,
-                response: managementResponse as never,
-              }) as response
-            }
-            if (!response) throw new MissingReceiptResponseError()
-            return transport.respondReceipt({
+        const receiptContext = {
+          challengeId,
+          credential: credentialForReceipt,
+          ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+          input,
+          receipt: receiptData,
+        }
+        const lifecycle = providedLifecycle ?? createReceiptLifecycle(receiptContext)
+        const finalizeReceipt = <response>(response: response): response => {
+          try {
+            const finalized = transport.respondReceipt({
               challengeId,
               credential: credentialForReceipt,
               ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
               input,
               receipt: receiptData,
               response: response as never,
+              signal: lifecycle.signal,
             }) as response
+            if (
+              finalized &&
+              typeof finalized === 'object' &&
+              'then' in finalized &&
+              typeof finalized.then === 'function'
+            )
+              return Promise.resolve(finalized).finally(lifecycle.stop) as response
+            lifecycle.stop()
+            return finalized
+          } catch (error) {
+            lifecycle.stop()
+            throw error
+          }
+        }
+
+        return {
+          cancelReceipt() {
+            return lifecycle.cancel()
+          },
+          status: 200,
+          withReceipt<response>(response?: response) {
+            if (managementResponse) return finalizeReceipt(managementResponse) as response
+            if (!response) throw new MissingReceiptResponseError()
+            return finalizeReceipt(response)
           },
         }
       }
@@ -1569,43 +1646,61 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         return { challenge: response, status: 402 }
       }
 
-      // If the method's `respond` hook returns a Response, it means this
-      // request is a management action (e.g. channel open, voucher POST)
-      // and the user's route handler should NOT run. `withReceipt()` will
-      // return the management response directly. If undefined, `withReceipt()`
-      // expects the caller to pass the user handler's response instead.
-      const managementResponse = respond
-        ? await respond({
+      const receiptContext = {
+        challengeId: credential.challenge.id,
+        credential: parsedCredential,
+        envelope,
+        input,
+        receipt: receiptData,
+      }
+      const lifecycle = createReceiptLifecycle(receiptContext)
+      try {
+        // If the method's `respond` hook returns a Response, it means this
+        // request is a management action (e.g. channel open, voucher POST)
+        // and the user's route handler should NOT run. `withReceipt()` will
+        // return the management response directly. If undefined, `withReceipt()`
+        // expects the caller to pass the user handler's response instead.
+        const managementResponse = respond
+          ? await respond({
+              credential: parsedCredential,
+              envelope,
+              input,
+              receipt: receiptData,
+              request,
+            } as never)
+          : undefined
+
+        await events.emit(
+          'payment.success',
+          createPaymentSuccessContext({
+            capturedRequest,
+            challenge: credential.challenge,
             credential: parsedCredential,
             envelope,
             input,
+            method,
             receipt: receiptData,
-            request,
-          } as never)
-        : undefined
-
-      await events.emit(
-        'payment.success',
-        createPaymentSuccessContext({
-          capturedRequest,
-          challenge: credential.challenge,
-          credential: parsedCredential,
-          envelope,
-          input,
+            request: parsedRequest,
+            requestInput: request,
+          }) as never,
           method,
-          receipt: receiptData,
-          request: parsedRequest,
-          requestInput: request,
-        }) as never,
-        method,
-      )
+        )
 
-      return success(receiptData, {
-        challengeId: credential.challenge.id,
-        credentialForReceipt: parsedCredential,
-        envelopeForReceipt: envelope,
-        managementResponse,
-      })
+        return success(receiptData, {
+          challengeId: credential.challenge.id,
+          credentialForReceipt: parsedCredential,
+          envelopeForReceipt: envelope,
+          lifecycle,
+          managementResponse,
+        })
+      } catch (error) {
+        try {
+          await lifecycle.cancel()
+        } catch {
+          // Preserve the post-verification hook error when cleanup also fails.
+        }
+        throw error
+      }
     }
 
     return Object.assign(handler, { _internal: internal })
@@ -2509,6 +2604,7 @@ declare namespace MethodFn {
         status: 402
       }
     | {
+        cancelReceipt?: (() => MaybePromise<void>) | undefined
         status: 200
         withReceipt: Transport.WithReceipt<transport>
       }
@@ -3181,6 +3277,16 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   ]
 }
 
+type NodeListenerResponse =
+  | { challenge: globalThis.Response; status: 402 }
+  | {
+      cancelReceipt?: (() => MaybePromise<void>) | undefined
+      status: 200
+      withReceipt(
+        response?: globalThis.Response,
+      ): globalThis.Response | Promise<globalThis.Response>
+    }
+
 /**
  * Wraps a payment handler to create a Node.js HTTP listener.
  *
@@ -3211,11 +3317,20 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
 export function toNodeListener(
   handler: (input: globalThis.Request) => Promise<MethodFn.Response<Transport.Http>>,
   options?: Request.NodeConversionOptions | undefined,
-): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>> {
+): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>>
+export function toNodeListener(
+  handler: (input: globalThis.Request) => Promise<NodeListenerResponse>,
+  options?: Request.NodeConversionOptions | undefined,
+): (req: IncomingMessage, res: ServerResponse) => Promise<NodeListenerResponse>
+export function toNodeListener(
+  handler: (input: globalThis.Request) => Promise<NodeListenerResponse>,
+  options?: Request.NodeConversionOptions | undefined,
+): (req: IncomingMessage, res: ServerResponse) => Promise<NodeListenerResponse> {
   return async (req, res) => {
-    let result: MethodFn.Response<Transport.Http>
+    let request: globalThis.Request
+    let result: NodeListenerResponse
     try {
-      const request = Request.fromNodeListener(req, res, options)
+      request = Request.fromNodeListener(req, res, options)
       await Request.waitForBody(request)
       result = await handler(request)
     } catch (error) {
@@ -3229,30 +3344,214 @@ export function toNodeListener(
     }
 
     if (result.status === 402) {
+      if (request.signal.aborted || res.destroyed) return result
       await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
     } else {
-      const managementResponse = getManagementResponse(result)
+      await cancelNodeReceiptIfAborted(request.signal, res, result)
+      const managementResponse = await getManagementResponse(result)
+      await cancelNodeReceiptIfAborted(request.signal, res, result)
       if (managementResponse) {
         await NodeListener.sendResponse(res, managementResponse)
         return { challenge: managementResponse, status: 402 }
       }
 
-      const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
-      for (const [name, value] of wrapped.headers) res.setHeader(name, value)
+      deferNodeReceipt(result, res)
     }
 
     return result
   }
 }
 
-function getManagementResponse(
-  result: Extract<MethodFn.Response<Transport.Http>, { status: 200 }>,
-): globalThis.Response | null {
+async function cancelNodeReceiptIfAborted(
+  signal: AbortSignal,
+  res: ServerResponse,
+  result: Extract<NodeListenerResponse, { status: 200 }>,
+): Promise<void> {
+  if (!signal.aborted && !res.destroyed) return
   try {
-    return (result.withReceipt as () => globalThis.Response)()
+    await result.cancelReceipt?.()
+  } catch {
+    // Preserve the disconnect when cleanup also fails.
+  }
+  throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+}
+
+/** Finalizes or cancels a pending receipt when the application ends its Node response. */
+function deferNodeReceipt(
+  result: Extract<NodeListenerResponse, { status: 200 }>,
+  res: ServerResponse,
+) {
+  const originalFlushHeaders = res.flushHeaders
+  const originalEnd = res.end
+  const originalWrite = res.write
+  const originalWriteHead = res.writeHead
+  const pendingWrites: unknown[][] = []
+  let pendingEnd: unknown[] | undefined
+  let pendingWriteHead: unknown[] | undefined
+  let flushRequested = false
+  let bufferedBackpressure = false
+  let completed = false
+  let finalizing = false
+  const restoreResponse = () => {
+    res.flushHeaders = originalFlushHeaders
+    res.end = originalEnd
+    res.write = originalWrite
+    res.writeHead = originalWriteHead
+  }
+  const cancelReceipt = async () => {
+    try {
+      await result.cancelReceipt?.()
+    } catch {
+      // Preserve the application response or finalization error when cleanup also fails.
+    }
+  }
+  res.once('close', () => {
+    if (completed) return
+    completed = true
+    restoreResponse()
+    void cancelReceipt()
+  })
+
+  const flushApplicationResponse = (protectedHeaders?: Set<string>) => {
+    restoreResponse()
+    if (pendingWriteHead)
+      Reflect.apply(
+        originalWriteHead,
+        res,
+        protectedHeaders
+          ? protectFinalizedHeaders(pendingWriteHead, protectedHeaders)
+          : pendingWriteHead,
+      )
+    else if (flushRequested) Reflect.apply(originalFlushHeaders, res, [])
+    let underlyingBackpressure = false
+    for (const args of pendingWrites)
+      if (!Reflect.apply(originalWrite, res, args)) underlyingBackpressure = true
+    if (pendingEnd) Reflect.apply(originalEnd, res, pendingEnd)
+    if (bufferedBackpressure && !underlyingBackpressure && !pendingEnd)
+      queueMicrotask(() => res.emit('drain'))
+  }
+
+  const finalize = () => {
+    if (finalizing || completed) return
+    finalizing = true
+    void (async () => {
+      if (res.statusCode >= 400) {
+        await cancelReceipt()
+        completed = true
+        flushApplicationResponse()
+        return
+      }
+      const receiptStatus = res.statusCode >= 200 && res.statusCode <= 599 ? res.statusCode : 200
+      const wrapped = await result.withReceipt(
+        new globalThis.Response(null, { status: receiptStatus }),
+      )
+      if (completed) return
+      completed = true
+      if (!wrapped.ok && wrapped.status !== res.statusCode) {
+        restoreResponse()
+        for (const name of res.getHeaderNames()) res.removeHeader(name)
+        await NodeListener.sendResponse(res, wrapped)
+        return
+      }
+      for (const [name, value] of wrapped.headers) res.setHeader(name, value)
+      flushApplicationResponse(new Set([...wrapped.headers].map(([name]) => name.toLowerCase())))
+    })().catch(async (error) => {
+      restoreResponse()
+      await cancelReceipt()
+      res.destroy(error as Error)
+    })
+  }
+
+  res.writeHead = ((...args: unknown[]) => {
+    validateWriteHeadArguments(args)
+    const [statusCode, statusMessage] = args
+    if (typeof statusCode === 'number') res.statusCode = statusCode
+    if (typeof statusMessage === 'string') res.statusMessage = statusMessage
+    pendingWriteHead = args
+    finalize()
+    return res
+  }) as ServerResponse['writeHead']
+  res.flushHeaders = (() => {
+    flushRequested = true
+    finalize()
+  }) as ServerResponse['flushHeaders']
+  res.write = ((...args: unknown[]) => {
+    pendingWrites.push(args)
+    bufferedBackpressure = true
+    finalize()
+    return false
+  }) as ServerResponse['write']
+  res.end = ((...args: unknown[]) => {
+    pendingEnd = args
+    finalize()
+    return res
+  }) as ServerResponse['end']
+}
+
+/** Validates deferred `writeHead` arguments before receipt finalization can charge. */
+function validateWriteHeadArguments(args: unknown[]): void {
+  const [statusCode, statusMessage] = args
+  if (!Number.isInteger(statusCode) || (statusCode as number) < 100 || (statusCode as number) > 999)
+    throw new RangeError(`Invalid status code: ${String(statusCode)}`)
+  if (typeof statusMessage === 'string') validateHeaderValue('statusMessage', statusMessage)
+
+  const headers = args[typeof statusMessage === 'string' ? 2 : 1]
+  if (headers === undefined) return
+  if (Array.isArray(headers)) {
+    if (headers.length % 2 !== 0) throw new TypeError('Raw headers must contain name/value pairs')
+    for (let index = 0; index < headers.length; index += 2) {
+      const name = headers[index]
+      const value = headers[index + 1]
+      if (typeof name !== 'string' || typeof value !== 'string')
+        throw new TypeError('Raw header names and values must be strings')
+      validateHeaderName(name)
+      validateHeaderValue(name, value)
+    }
+    return
+  }
+  if (!headers || typeof headers !== 'object') throw new TypeError('Headers must be an object')
+  for (const [name, value] of Object.entries(headers)) {
+    validateHeaderName(name)
+    validateHeaderValue(name, value as string)
+  }
+}
+
+/** Removes application `writeHead` values superseded by finalized transport headers. */
+function protectFinalizedHeaders(args: unknown[], protectedHeaders: Set<string>): unknown[] {
+  const headersIndex = typeof args[1] === 'string' ? 2 : 1
+  const headers = args[headersIndex]
+  if (Array.isArray(headers)) {
+    const filtered: unknown[] = []
+    for (let index = 0; index < headers.length; index += 2)
+      if (!protectedHeaders.has(String(headers[index]).toLowerCase()))
+        filtered.push(headers[index], headers[index + 1])
+    const updated = [...args]
+    updated[headersIndex] = filtered
+    return updated
+  }
+  if (headers && typeof headers === 'object') {
+    const updated = [...args]
+    updated[headersIndex] = Object.fromEntries(
+      Object.entries(headers).filter(([name]) => !protectedHeaders.has(name.toLowerCase())),
+    )
+    return updated
+  }
+  return args
+}
+
+async function getManagementResponse(
+  result: Extract<NodeListenerResponse, { status: 200 }>,
+): Promise<globalThis.Response | null> {
+  try {
+    return await result.withReceipt()
   } catch (error) {
     if (isMissingReceiptResponseError(error)) {
       return null
+    }
+    try {
+      await result.cancelReceipt?.()
+    } catch {
+      // Preserve the management response error when cleanup also fails.
     }
     throw error
   }

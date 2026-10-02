@@ -313,6 +313,8 @@ export interface BaseState {
   units: number
   /** Active cross-worker claim for server-scheduled settlement. */
   scheduledSettlementLease?: ScheduledSettlementLease | undefined
+  /** In-flight stream charges reserved atomically by reservation ID. */
+  streamReservations?: Record<string, StreamReservation> | undefined
   /** ISO 8601 timestamp of the last server-scheduled settlement. */
   lastSettlementAt?: string | undefined
   /** Cumulative spent value when the last server-scheduled settlement ran. */
@@ -325,6 +327,16 @@ export interface BaseState {
 export type ScheduledSettlementLease = {
   expiresAt: number
   owner: string
+}
+
+/** Voucher headroom reserved by one active stream before emission. */
+export type StreamReservation = {
+  amount: bigint
+  /** Set after spend is persisted and cleared once the transport accepts the value. */
+  committed?: boolean | undefined
+  /** Epoch milliseconds after which other workers may reclaim this reservation. */
+  expiresAt: number
+  units: number
 }
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */
@@ -491,6 +503,8 @@ export function markPendingClose(parameters: MarkPendingCloseParameters): Pendin
   if (current.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
   if (current.closeRequestedAt !== 0n)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (hasActiveStreamReservation(current))
+    throw new VerificationFailedError({ reason: 'channel has a protected response in progress' })
   const captureAmount = resolveCloseCaptureAmount({
     cumulativeAmount,
     onChainDeposit,
@@ -882,9 +896,48 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.closeRequestedAt !== 0n)
     return { op: 'noop', result: { ok: false, channel: current } }
-  if (current.highestVoucherAmount - current.spent < amount)
+  if (current.highestVoucherAmount - current.spent - reservedStreamAmount(current) < amount)
     return { op: 'noop', result: { ok: false, channel: current } }
 
   const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
   return { op: 'set', value: next, result: { ok: true, channel: next } }
+}
+
+/** Returns voucher headroom currently reserved by active streams. */
+export function reservedStreamAmount(
+  state: Pick<State, 'streamReservations'>,
+  now = Date.now(),
+): bigint {
+  return Object.values(state.streamReservations ?? {}).reduce(
+    (total, reservation) =>
+      !reservation.committed && reservation.expiresAt > now ? total + reservation.amount : total,
+    0n,
+  )
+}
+
+/** Returns committed charges that are still provisional until transport delivery. */
+export function provisionalStreamCharges(
+  state: Pick<State, 'streamReservations'>,
+  now = Date.now(),
+): { amount: bigint; units: number } {
+  return Object.values(state.streamReservations ?? {}).reduce(
+    (total, reservation) => {
+      if (!reservation.committed || reservation.expiresAt <= now) return total
+      return {
+        amount: total.amount + reservation.amount,
+        units: total.units + reservation.units,
+      }
+    },
+    { amount: 0n, units: 0 },
+  )
+}
+
+/** Returns whether any unexpired stream reservation still protects work. */
+export function hasActiveStreamReservation(
+  state: Pick<State, 'streamReservations'>,
+  now = Date.now(),
+): boolean {
+  return Object.values(state.streamReservations ?? {}).some(
+    (reservation) => reservation.expiresAt > now,
+  )
 }

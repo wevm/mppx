@@ -1,5 +1,5 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { ChannelClosedError } from '../../../Errors.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
@@ -12,6 +12,7 @@ import {
   parseEvent,
   serve,
 } from './Sse.js'
+import { reserveCharge, streamReservationTtlMs } from './Transports.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
@@ -326,6 +327,34 @@ describe('serve', () => {
     expect(committed).toEqual([{ spent: 2000000n, units: 2 }])
   })
 
+  test('does not persist state for prepaid or manually uncharged values', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+    let updates = 0
+    const updateChannel = storage.updateChannel.bind(storage)
+    storage.updateChannel = async (...parameters) => {
+      updates++
+      return updateChannel(...parameters)
+    }
+
+    await readStream(
+      serve({
+        store: storage,
+        channelId,
+        challengeId,
+        tickCost: 1000000n,
+        generate: async function* (stream) {
+          await stream.charge()
+          yield 'prepaid'
+          yield 'uncharged'
+        },
+        prepaidUnits: 1,
+      }),
+    )
+
+    expect(updates).toBe(0)
+  })
+
   test('uses the provided amount for an explicit charge when a prepaid unit exists', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 4015n)
@@ -352,7 +381,200 @@ describe('serve', () => {
     expect(channel!.units).toBe(2)
   })
 
-  test('runs the post-commit hook before emitting each charged value', async () => {
+  test('replaces a reserved response tick with an explicit manual charge', async () => {
+    const storage = memoryStore()
+    const reservationId = 'response'
+    await seedChannel(storage, 4015n)
+    await reserveCharge({ amount: 1n, channelId, reservationId, store: storage })
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: async function* (stream) {
+        await stream.charge(4014n)
+        yield 'charged'
+      },
+      reservationId,
+      reservedUnits: 1,
+    })
+
+    await readStream(stream)
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel!.spent).toBe(4014n)
+    expect(channel!.units).toBe(1)
+  })
+
+  test('does not reuse a reserved unit after its reservation is committed', async () => {
+    const storage = memoryStore()
+    const reservationId = 'response'
+    await seedChannel(storage, 2n)
+    await reserveCharge({ amount: 1n, channelId, reservationId, store: storage })
+
+    await readStream(
+      serve({
+        store: storage,
+        channelId,
+        challengeId,
+        tickCost: 1n,
+        generate: async function* (stream) {
+          yield 'reserved'
+          await stream.charge()
+          yield 'new charge'
+        },
+        reservationId,
+        reservedUnits: 1,
+      }),
+    )
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel?.spent).toBe(2n)
+    expect(channel?.units).toBe(2)
+  })
+
+  test('commits zero-cost units before emitting stream values', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 0n)
+
+    await readStream(
+      serve({
+        store: storage,
+        channelId,
+        challengeId,
+        tickCost: 0n,
+        generate: (async function* () {
+          yield 'first'
+          yield 'second'
+        })(),
+      }),
+    )
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel).toMatchObject({ spent: 0n, units: 2 })
+    expect(channel?.streamReservations).toBeUndefined()
+  })
+
+  test('renews an existing response reservation until the first emitted value', async () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') })
+    try {
+      const storage = memoryStore()
+      const reservationId = 'response'
+      await seedChannel(storage, 1n)
+      await reserveCharge({ amount: 1n, channelId, reservationId, store: storage })
+      const updateChannel = storage.updateChannel.bind(storage)
+      let renewalFailed = false
+      storage.updateChannel = async (...parameters) => {
+        if (!renewalFailed) {
+          renewalFailed = true
+          throw new Error('transient renewal failure')
+        }
+        return updateChannel(...parameters)
+      }
+      let releaseFirstValue!: () => void
+      const firstValue = new Promise<void>((resolve) => {
+        releaseFirstValue = resolve
+      })
+      const output = readStream(
+        serve({
+          store: storage,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          generate: async function* () {
+            await firstValue
+            yield 'delayed'
+          },
+          reservationId,
+          reservedUnits: 1,
+        }),
+      )
+
+      await vi.advanceTimersByTimeAsync(streamReservationTtlMs + 1)
+      const reservation = (await storage.getChannel(channelId))?.streamReservations?.[reservationId]
+      expect(reservation?.expiresAt).toBeGreaterThan(Date.now())
+
+      releaseFirstValue()
+      await expect(output).resolves.toContain('event: message\ndata: delayed\n\n')
+      expect(await storage.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('releases an existing response reservation when the reader cancels', async () => {
+    const storage = memoryStore()
+    const reservationId = 'response'
+    await seedChannel(storage, 1n)
+    await reserveCharge({ amount: 1n, channelId, reservationId, store: storage })
+    let releaseFirstValue!: () => void
+    const firstValue = new Promise<void>((resolve) => {
+      releaseFirstValue = resolve
+    })
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: async function* () {
+        await firstValue
+        yield 'late'
+      },
+      reservationId,
+      reservedUnits: 1,
+    }).getReader()
+
+    await Promise.resolve()
+    await reader.cancel('client disconnected')
+
+    await expect
+      .poll(async () => (await storage.getChannel(channelId))?.streamReservations?.[reservationId])
+      .toBeUndefined()
+    releaseFirstValue()
+  })
+
+  test('releases headroom reserved concurrently with reader cancellation', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1n)
+    const updateChannel = storage.updateChannel.bind(storage)
+    let reservationStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      reservationStarted = resolve
+    })
+    let finishReservation!: () => void
+    const reservationGate = new Promise<void>((resolve) => {
+      finishReservation = resolve
+    })
+    let firstUpdate = true
+    storage.updateChannel = async (...parameters) => {
+      if (firstUpdate) {
+        firstUpdate = false
+        reservationStarted()
+        await reservationGate
+      }
+      return updateChannel(...parameters)
+    }
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: generate(['late']),
+    }).getReader()
+    const read = reader.read()
+    await started
+
+    const canceled = reader.cancel('client disconnected')
+    finishReservation()
+    await canceled
+    await expect(read).resolves.toMatchObject({ done: true })
+
+    await expect.poll(() => storage.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+    expect((await storage.getChannel(channelId))?.streamReservations).toBeUndefined()
+  })
+
+  test('runs the post-commit hook after delivering each charged value', async () => {
     const storage = memoryStore()
     const committed: Array<{ spent: bigint; units: number }> = []
     await seedChannel(storage, 2000000n)
@@ -378,7 +600,7 @@ describe('serve', () => {
     ])
   })
 
-  test('does not emit a charged value when the post-commit hook fails', async () => {
+  test('reports a post-commit hook failure after delivering the charged value', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)
 
@@ -393,9 +615,74 @@ describe('serve', () => {
       },
     }).getReader()
 
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toContain('event: message\ndata: blocked\n\n')
     await expect(reader.read()).rejects.toThrow('settlement failed')
     const channel = await storage.getChannel(channelId)
     expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
+  })
+
+  test('keeps a delivered charge when cancellation arrives during the post-commit hook', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+    let hookStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      hookStarted = resolve
+    })
+    let finishHook!: () => void
+    const hook = new Promise<void>((resolve) => {
+      finishHook = resolve
+    })
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['delivered']),
+      async onChargeCommitted() {
+        hookStarted()
+        await hook
+      },
+    }).getReader()
+
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toContain('event: message\ndata: delivered\n\n')
+    await started
+    const canceled = reader.cancel('client disconnected')
+    finishHook()
+    await canceled
+
+    expect(await storage.getChannel(channelId)).toMatchObject({ spent: 1000000n, units: 1 })
+  })
+
+  test('does not roll back a delivered charge when marker cleanup fails', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+    const updateChannel = storage.updateChannel.bind(storage)
+    let cleanupFailures = 2
+    storage.updateChannel = (id, update) =>
+      updateChannel(id, (current) => {
+        const next = update(current)
+        const committed = Object.values(current?.streamReservations ?? {}).some(
+          (reservation) => reservation.committed,
+        )
+        const removed = Object.keys(next?.streamReservations ?? {}).length === 0
+        if (committed && removed && cleanupFailures-- > 0) throw new Error('cleanup failed')
+        return next
+      })
+
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['delivered']),
+    }).getReader()
+
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toContain('event: message\ndata: delivered\n\n')
+    await expect(reader.read()).rejects.toThrow('cleanup failed')
+    expect(await storage.getChannel(channelId)).toMatchObject({ spent: 1000000n, units: 1 })
   })
 
   test('commits a manual charge when the generator finishes without yielding', async () => {

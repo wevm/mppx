@@ -66,19 +66,51 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
         : request
     const result = await intent(options)(scopedRequest)
     if (result.status === 402) return result.challenge
-    const managementResponse = getManagementResponse(result)
+    await cancelIfAborted(request.signal, result)
+    const managementResponse = await getManagementResponse(result)
+    await cancelIfAborted(request.signal, result)
     if (managementResponse) return managementResponse
-    const response = await handler(request)
-    return result.withReceipt(response)
+    try {
+      const response = await handler(request)
+      return await result.withReceipt(response)
+    } catch (error) {
+      try {
+        await result.cancelReceipt?.()
+      } catch {
+        // Preserve the handler or response error when cleanup also fails.
+      }
+      throw error
+    }
   }
 }
 
-function getManagementResponse(result: { withReceipt: (response?: Response) => Response }) {
+async function cancelIfAborted(
+  signal: AbortSignal,
+  result: { cancelReceipt?: (() => Promise<void> | void) | undefined },
+) {
+  if (!signal.aborted) return
   try {
-    return result.withReceipt()
+    await result.cancelReceipt?.()
+  } catch {
+    // Preserve the request abort when cleanup also fails.
+  }
+  throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+}
+
+async function getManagementResponse(result: {
+  cancelReceipt?: (() => Promise<void> | void) | undefined
+  withReceipt: (response?: Response) => Promise<Response> | Response
+}) {
+  try {
+    return await result.withReceipt()
   } catch (error) {
     if (Mppx_core.isMissingReceiptResponseError(error)) {
       return null
+    }
+    try {
+      await result.cancelReceipt?.()
+    } catch {
+      // Preserve the management response error when cleanup also fails.
     }
     throw error
   }

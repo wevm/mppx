@@ -1,7 +1,7 @@
 import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { afterEach, describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 import { tempoNetwork } from '~test/config.js'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -560,6 +560,71 @@ describe('create', () => {
       method: 'POST',
       body: { model: 'gpt-4', prompt: 'hello' },
     })
+  })
+
+  test('awaits an async management probe before proxying content', async () => {
+    let upstreamRequests = 0
+    upstream = await createUpstream(() => {
+      upstreamRequests++
+      return Response.json({ ok: true })
+    })
+    const withReceipt = vi.fn(async (response?: Response) => {
+      await Promise.resolve()
+      if (!response) {
+        const error = new Error('withReceipt() requires a response argument')
+        error.name = 'MissingReceiptResponseError'
+        throw error
+      }
+      response.headers.set('Payment-Receipt', 'receipt')
+      return response
+    })
+    const pay = async () => ({ status: 200 as const, withReceipt })
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: { 'GET /v1/data': pay as any },
+        }),
+      ],
+    })
+
+    const response = await proxy.fetch(new Request('http://localhost/api/v1/data'))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    expect(await response.json()).toEqual({ ok: true })
+    expect(upstreamRequests).toBe(1)
+    expect(withReceipt).toHaveBeenCalledTimes(2)
+  })
+
+  test('cancels the receipt when the management probe fails', async () => {
+    let upstreamRequests = 0
+    upstream = await createUpstream(() => {
+      upstreamRequests++
+      return Response.json({ ok: true })
+    })
+    const cancelReceipt = vi.fn()
+    const pay = async () => ({
+      cancelReceipt,
+      status: 200 as const,
+      withReceipt: async () => {
+        throw new Error('probe failed')
+      },
+    })
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: { 'GET /v1/data': pay as any },
+        }),
+      ],
+    })
+
+    await expect(proxy.fetch(new Request('http://localhost/api/v1/data'))).rejects.toThrow(
+      'probe failed',
+    )
+    expect(cancelReceipt).toHaveBeenCalledOnce()
+    expect(upstreamRequests).toBe(0)
   })
 
   test('behavior: management POST falls back to paid route with different method', async () => {

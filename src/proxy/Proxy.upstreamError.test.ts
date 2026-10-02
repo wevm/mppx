@@ -7,6 +7,7 @@ import * as Service from './Service.js'
 type CreatePaidProxyParameters = {
   fetch: typeof globalThis.fetch
   method?: 'GET' | 'POST' | undefined
+  onCancel?: (() => void) | undefined
   onPayment?: (() => void) | undefined
   onProxyError?: Service.UpstreamErrorHandler | undefined
   onServiceError?: Service.UpstreamErrorHandler | undefined
@@ -21,7 +22,7 @@ function createPaidProxy(parameters: CreatePaidProxyParameters): Proxy.Proxy {
     onUpstreamError: parameters.onServiceError,
     rewriteRequest: parameters.rewriteRequest,
     routes: {
-      [`${method} /resource`]: createPaidHandler(parameters.onPayment),
+      [`${method} /resource`]: createPaidHandler(parameters.onPayment, parameters.onCancel),
     },
   })
   service.rewriteResponse = parameters.rewriteResponse
@@ -32,10 +33,11 @@ function createPaidProxy(parameters: CreatePaidProxyParameters): Proxy.Proxy {
   })
 }
 
-function createPaidHandler(onPayment?: () => void): Service.IntentHandler {
+function createPaidHandler(onPayment?: () => void, onCancel?: () => void): Service.IntentHandler {
   return async () => {
     onPayment?.()
     return {
+      cancelReceipt: onCancel,
       status: 200,
       withReceipt<response>(response: response): response {
         if (!(response instanceof Response)) throw new Mppx.MissingReceiptResponseError()
@@ -61,6 +63,43 @@ function paidRequest(init?: RequestInit): Request {
 }
 
 describe('onUpstreamError', () => {
+  test('cancels the receipt before returning a paid fallback 405', async () => {
+    const onCancel = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createPaidProxy({ fetch, method: 'GET', onCancel })
+
+    const response = await proxy.fetch(paidRequest({ method: 'POST' }))
+
+    expect(response.status).toBe(405)
+    expect(onCancel).toHaveBeenCalledOnce()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('cancels the receipt when upstream proxying fails', async () => {
+    const onCancel = vi.fn()
+    const fetch = vi.fn(async () => {
+      throw new Error('upstream failed')
+    }) as typeof globalThis.fetch
+    const proxy = createPaidProxy({ fetch, onCancel })
+
+    await expect(proxy.fetch(paidRequest())).rejects.toThrow('upstream failed')
+    expect(onCancel).toHaveBeenCalledOnce()
+  })
+
+  test('preserves the upstream error when receipt cancellation also fails', async () => {
+    const fetch = vi.fn(async () => {
+      throw new Error('upstream failed')
+    }) as typeof globalThis.fetch
+    const proxy = createPaidProxy({
+      fetch,
+      onCancel: () => {
+        throw new Error('cleanup failed')
+      },
+    })
+
+    await expect(proxy.fetch(paidRequest())).rejects.toThrow('upstream failed')
+  })
+
   test('retries upstream without verifying payment again', async () => {
     const onPayment = vi.fn()
     const onUpstreamError = vi.fn((context: Service.UpstreamErrorContext) => ({
