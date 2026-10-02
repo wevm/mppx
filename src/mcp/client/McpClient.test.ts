@@ -507,6 +507,49 @@ describe('McpClient.wrap (in-place)', () => {
     expect(createCredential).toHaveBeenCalledOnce()
     expect(rawCallTool).toHaveBeenCalledTimes(2)
   })
+
+  test('behavior: creates credentials with the selected same-key method', async () => {
+    const challenge = createChallenge()
+    const firstCreateCredential = vi.fn(async () => {
+      throw new Error('unselected method used')
+    })
+    const selectedCreateCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const rawCallTool = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockResolvedValueOnce({
+        _meta: { [core_Mcp.receiptMetaKey]: createReceipt(challenge) },
+        content: [{ type: 'text', text: 'paid' }],
+      })
+    const first = Method.toClient(Methods.charge, {
+      createCredential: firstCreateCredential,
+    })
+    const selected = Method.toClient(Methods.charge, {
+      createCredential: selectedCreateCredential,
+    })
+    const wrapped = McpClient.wrap(
+      { callTool: rawCallTool as Client['callTool'] },
+      {
+        methods: [first, selected],
+        orderChallenges: (candidates) => [candidates[1]!, candidates[0]!],
+      },
+    )
+
+    await wrapped.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(firstCreateCredential).not.toHaveBeenCalled()
+    expect(selectedCreateCredential).toHaveBeenCalledOnce()
+  })
 })
 
 describe('isPaymentRequiredError', () => {

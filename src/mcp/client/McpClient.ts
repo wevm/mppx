@@ -159,25 +159,20 @@ export function isPaymentRequiredError(
 }
 
 /** @internal */
-async function createCredential<methods extends readonly Method.AnyClient[]>(
+async function createCredential(
   challenge: Challenge.Challenge,
   config: {
     context?: unknown
-    methods: methods
+    method: Method.AnyClient
   },
 ): Promise<string> {
-  const { context, methods } = config
-
-  const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
-  if (!mi)
-    throw new Error(
-      `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
-    )
+  const { context, method } = config
 
   if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
-  const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
-  return mi.createCredential(
+  const parsedContext =
+    method.context && context !== undefined ? method.context.parse(context) : undefined
+  return method.createCredential(
     parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
   )
 }
@@ -234,7 +229,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
 
     const credential = await createCredential(selected.challenge, {
       context: call.context,
-      methods,
+      method: selected.method,
     })
     const parsed = Credential.deserialize(credential)
 
