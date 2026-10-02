@@ -1,12 +1,14 @@
 import { tempo as serverTempo } from 'mppx/server'
 import { expectTypeOf, test } from 'vp/test'
 
+import * as Client from '../client/index.js'
 import type {
   PaymentResponse as ClientPaymentResponse,
   SessionManager as ClientSessionManager,
   SessionManagerSseOptions as ClientSessionManagerSseOptions,
   SessionManagerWebSocketOptions as ClientSessionManagerWebSocketOptions,
 } from './client/index.js'
+import * as TempoClient from './client/index.js'
 import * as Tempo from './index.js'
 import type { charge as ServerCharge } from './server/Charge.js'
 import type { SettlementSchedule as ServerSettlementSchedule } from './server/index.js'
@@ -116,16 +118,20 @@ test('tempo session public barrel hides internal session drivers', () => {
   expectTypeOf<SessionServerPublic>().not.toHaveProperty('Chain')
 })
 
-test('tempo legacy namespace retains client and channel primitives only', () => {
+test('tempo legacy namespace retains channel primitives only', () => {
   type LegacySessionPublic = typeof import('./legacy/session/index.js')
   type LegacyNamespacePublic = typeof import('./legacy/index.js')
 
-  expectTypeOf(Tempo.SessionLegacy.Client.session).toBeFunction()
-  expectTypeOf(Tempo.SessionLegacy.Client.sessionManager).toBeFunction()
   expectTypeOf(Tempo.SessionLegacy.Session.Chain).toBeObject()
   expectTypeOf(Tempo.SessionLegacy.Session.Channel).toBeObject()
   expectTypeOf(Tempo.SessionLegacy.Session.Voucher).toBeObject()
 
+  expectTypeOf<typeof Client>().not.toHaveProperty('sessionLegacy')
+  expectTypeOf<typeof Client>().not.toHaveProperty('sessionLegacyManager')
+  expectTypeOf<typeof TempoClient>().not.toHaveProperty('sessionLegacy')
+  expectTypeOf<typeof TempoClient>().not.toHaveProperty('sessionLegacyManager')
+  expectTypeOf(TempoClient.tempo).not.toHaveProperty('sessionLegacy')
+  expectTypeOf<LegacyNamespacePublic>().not.toHaveProperty('Client')
   expectTypeOf<LegacyNamespacePublic>().not.toHaveProperty('Server')
   expectTypeOf<LegacySessionPublic>().not.toHaveProperty('ChannelStore')
   expectTypeOf<LegacySessionPublic>().not.toHaveProperty('Receipt')

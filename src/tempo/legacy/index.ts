@@ -1,4 +1,2 @@
-/** Legacy contract-backed session client surface. */
-export * as Client from './client/index.js'
-/** Legacy contract-backed session channel primitives used by the client. */
+/** Legacy contract-backed session channel primitives retained for compatibility. */
 export * as Session from './session/index.js'

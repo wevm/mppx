@@ -1,9 +1,10 @@
 # Tempo Legacy Session
 
-This directory contains the retained client for the legacy smart-contract-backed
-`tempo/session` implementation.
+This directory contains compatibility internals for the legacy
+smart-contract-backed `tempo/session` implementation. They are not part of the
+public package API.
 
-The default `tempo.session` implementation is TIP-1034 precompile-backed and
-lives under `src/tempo/session/precompile`. The legacy server implementation has
-been removed, while legacy chain, channel, voucher, and client code remains here
-for clients migrating existing sessions.
+The supported `tempo.session` implementation is TIP-1034 precompile-backed and
+lives under `src/tempo/session`. The legacy server implementation and public
+client exports have been removed; the remaining source is retained only for
+internal compatibility coverage.
