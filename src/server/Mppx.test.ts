@@ -5111,6 +5111,42 @@ describe('withReceipt', () => {
 
     server.close()
   })
+
+  test('toNodeListener forwards the configured request body limit', async () => {
+    const mockMethod = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+    const handler = Mppx.create({ methods: [mockMethod], realm, secretKey })
+    const server = await Http.createServer(
+      Mppx.toNodeListener(
+        handler.charge({
+          amount: '1000',
+          currency: '0x0000000000000000000000000000000000000001',
+          decimals: 6,
+          recipient: '0x0000000000000000000000000000000000000002',
+        }),
+        { maxBodySize: 4 },
+      ),
+    )
+
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const request = http.request(
+        server.url,
+        { method: 'POST', headers: { 'Content-Length': 5 } },
+        (response) => {
+          response.resume()
+          resolve(response.statusCode)
+        },
+      )
+      request.on('error', reject)
+      request.end()
+    })
+
+    expect(status).toBe(413)
+    server.close()
+  })
 })
 
 describe('realm auto-detection', () => {

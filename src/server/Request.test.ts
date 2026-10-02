@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { connect } from 'node:net'
 
 import { Request } from 'mppx/server'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 function createMockRequest(options: {
   method?: string
@@ -26,6 +26,9 @@ function createMockRequest(options: {
     headers,
     rawHeaders,
     socket: options.socket ?? {},
+    pause() {},
+    resume() {},
+    destroy() {},
   }) as unknown as IncomingMessage
 
   const res = new EventEmitter() as unknown as ServerResponse
@@ -200,6 +203,92 @@ describe('fromNodeListener', () => {
 
     expect(await request.text()).toBe('hello')
   })
+
+  test('pauses request input when the web stream applies backpressure', async () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+    })
+    const pause = vi.spyOn(req, 'pause')
+    Request.fromNodeListener(req, res)
+
+    req.emit('data', Buffer.alloc(64 * 1024))
+
+    expect(pause).toHaveBeenCalled()
+  })
+
+  test('does not greedily resume an unread request body', async () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+    })
+    const resume = vi.spyOn(req, 'resume')
+    Request.fromNodeListener(req, res)
+    resume.mockClear()
+
+    req.emit('data', Buffer.alloc(64 * 1024))
+    await Promise.resolve()
+
+    expect(resume).not.toHaveBeenCalled()
+  })
+
+  test('cancels body monitoring when Fetch rejects the request method', () => {
+    const [req, res] = createMockRequest({
+      method: 'TRACE',
+      rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+    })
+    const destroy = vi.spyOn(req, 'destroy')
+
+    expect(() => Request.fromNodeListener(req, res)).toThrow(/TRACE/)
+    expect(destroy).toHaveBeenCalledOnce()
+  })
+
+  test.each(['GET', 'HEAD', 'POST'])(
+    'rejects a declared %s body larger than the configured limit',
+    (method) => {
+      const [req, res] = createMockRequest({
+        method,
+        rawHeaders: ['Host', 'example.com', 'Content-Length', '5'],
+      })
+
+      const resume = vi.spyOn(req, 'resume')
+
+      expect(() => Request.fromNodeListener(req, res, { maxBodySize: 4 })).toThrow(
+        Request.RequestBodyTooLargeError,
+      )
+      expect(resume).toHaveBeenCalledOnce()
+    },
+  )
+
+  test('errors a chunked request body after it crosses the configured limit', async () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+    })
+    const request = Request.fromNodeListener(req, res, { maxBodySize: 4 })
+
+    setImmediate(() => {
+      req.emit('data', Buffer.from('12345'))
+    })
+
+    await expect(request.text()).rejects.toThrow(Request.RequestBodyTooLargeError)
+  })
+
+  test.each(['GET', 'HEAD', 'POST'])(
+    'rejects an unread chunked %s body after it crosses the configured limit',
+    async (method) => {
+      const [req, res] = createMockRequest({
+        method,
+        rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+      })
+      const request = Request.fromNodeListener(req, res, { maxBodySize: 4 })
+      const completion = Request.waitForBody(request)
+
+      req.emit('data', Buffer.from('12345'))
+
+      await expect(completion).rejects.toThrow(Request.RequestBodyTooLargeError)
+    },
+  )
 })
 
 // Conformance harness: a normal HTTP client cannot emit these request targets,

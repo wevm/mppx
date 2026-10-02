@@ -3141,6 +3141,9 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
  * On 402: writes the challenge response and ends the connection.
  * On 200: sets the Payment-Receipt header; caller should write response body.
  *
+ * @param handler - Payment handler to adapt.
+ * @param options - Node request conversion and body-size options.
+ *
  * @example
  * ```ts
  * import * as http from 'node:http'
@@ -3161,9 +3164,23 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
  */
 export function toNodeListener(
   handler: (input: globalThis.Request) => Promise<MethodFn.Response<Transport.Http>>,
+  options?: Request.NodeConversionOptions | undefined,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>> {
   return async (req, res) => {
-    const result = await handler(Request.fromNodeListener(req, res))
+    let result: MethodFn.Response<Transport.Http>
+    try {
+      const request = Request.fromNodeListener(req, res, options)
+      await Request.waitForBody(request)
+      result = await handler(request)
+    } catch (error) {
+      if (!(error instanceof Request.RequestBodyTooLargeError)) throw error
+      const response = new globalThis.Response('Payload Too Large', {
+        status: 413,
+        headers: { 'Content-Type': 'text/plain' },
+      })
+      await NodeListener.sendResponse(res, response)
+      return { challenge: response, status: 402 }
+    }
 
     if (result.status === 402) {
       await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
