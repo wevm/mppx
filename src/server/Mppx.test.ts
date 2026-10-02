@@ -6232,6 +6232,34 @@ describe('verifyCredential', () => {
     expect(calls).toEqual(['validate', 'broadcast'])
   })
 
+  test('broadcastCredential suppresses success events for reused payments', async () => {
+    const receipt = { ...mockReceipt('broadcast'), receipt: { extension: true } }
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async broadcast() {
+        return Method.paymentResult(receipt, { emitPaymentSuccess: false })
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const onSuccess = vi.fn()
+    mppx.onPaymentSuccess(onSuccess)
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.broadcastCredential(credential)).resolves.toBe(receipt)
+    expect(onSuccess).not.toHaveBeenCalled()
+  })
+
   test('verifyCredential remains a legacy alias for broadcast', async () => {
     const calls: string[] = []
     const splitServer = Method.toServer(mockCharge, {

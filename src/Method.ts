@@ -309,6 +309,8 @@ export type AuthorizeFn<method extends Method> = (parameters: {
 
 /** Successful result returned from an {@link AuthorizeFn}. */
 export type AuthorizeResult = {
+  /** Whether this authorization represents a fresh payment success. @default true */
+  emitPaymentSuccess?: boolean | undefined
   receipt: Receipt.Receipt
   response?: globalThis.Response | undefined
 }
@@ -348,7 +350,7 @@ export type StableBindingFn<method extends Method> = (
  */
 export type VerifyFn<method extends Method> = (
   parameters: VerifyContext<method>,
-) => Promise<Receipt.Receipt>
+) => Promise<PaymentResult>
 
 /**
  * Non-mutating validation function for a single method.
@@ -363,7 +365,40 @@ export type ValidateFn<method extends Method> = (
 /** Terminal payment function for a single method. */
 export type BroadcastFn<method extends Method> = (
   parameters: VerifyContext<method>,
-) => Promise<Receipt.Receipt>
+) => Promise<PaymentResult>
+
+/** Result of a terminal payment operation. */
+export type PaymentResult =
+  | Receipt.Receipt
+  | {
+      readonly [paymentResultTag]: true
+      /** Suppresses the success event when no fresh payment occurred. @default true */
+      emitPaymentSuccess?: boolean | undefined
+      receipt: Receipt.Receipt
+    }
+
+const paymentResultTag: unique symbol = Symbol('mppx.paymentResult')
+
+/** Wraps a receipt with terminal-payment event metadata. */
+export function paymentResult(
+  receipt: Receipt.Receipt,
+  options: { emitPaymentSuccess?: boolean | undefined } = {},
+): PaymentResult {
+  return { [paymentResultTag]: true, ...options, receipt }
+}
+
+/** Normalizes a terminal payment result for internal execution paths. @internal */
+export function unwrapPaymentResult(result: PaymentResult): {
+  emitPaymentSuccess: boolean
+  receipt: Receipt.Receipt
+} {
+  if (paymentResultTag in result)
+    return {
+      emitPaymentSuccess: result.emitPaymentSuccess !== false,
+      receipt: result.receipt,
+    }
+  return { emitPaymentSuccess: true, receipt: result }
+}
 
 /**
  * Validates a credential against one of the configured methods.
@@ -405,7 +440,9 @@ export async function broadcastCredential<const methods extends readonly AnyServ
     await method.validate({ credential: prepared.credential, request: prepared.request } as never)
 
   const broadcast = method.broadcast ?? method.verify
-  return broadcast({ credential: prepared.credential, request: prepared.request } as never)
+  return unwrapPaymentResult(
+    await broadcast({ credential: prepared.credential, request: prepared.request } as never),
+  ).receipt
 }
 
 /**

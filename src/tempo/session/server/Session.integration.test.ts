@@ -111,7 +111,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     })
     if (payload.action !== 'open') throw new Error('expected open payload')
 
-    const receipt = await method.verify({
+    const result = await method.verify({
       credential: {
         challenge: {
           id: 'chain-open-challenge',
@@ -125,6 +125,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       request: sessionRequest(payload.channelId) as never,
     })
 
+    const receipt = 'receipt' in result ? result.receipt : result
     expect(receipt.reference).toBe(payload.channelId)
     if (!('txHash' in receipt)) throw new Error('expected open txHash')
     const txReceipt = await waitForTransactionReceipt(client, { hash: receipt.txHash as Hex.Hex })
@@ -177,7 +178,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       uint96(700n),
       chain.id,
     )
-    const receipt = await method.verify({
+    const result = await method.verify({
       credential: {
         challenge: {
           id: 'chain-topup',
@@ -188,6 +189,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       request: sessionRequest(topUpPayload.channelId) as never,
     })
 
+    const receipt = 'receipt' in result ? result.receipt : result
     if (!('txHash' in receipt)) throw new Error('expected topUp txHash')
     const txReceipt = await waitForTransactionReceipt(client, { hash: receipt.txHash as Hex.Hex })
     const toppedUp = getSingleEvent(txReceipt, 'TopUp')
@@ -241,7 +243,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     })
     const payload = await createVoucherPayload(client, payer, descriptor, uint96(300n), chain.id)
 
-    const receipt = await method.verify({
+    const result = await method.verify({
       credential: {
         challenge: {
           id: 'chain-challenge',
@@ -255,6 +257,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       },
       request: sessionRequest(channelId) as never,
     })
+    const receipt = 'receipt' in result ? result.receipt : result
     expect(receipt.reference).toBe(channelId)
 
     const txHash = await settle(store, client, channelId)
