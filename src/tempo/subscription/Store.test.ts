@@ -100,6 +100,48 @@ describe('tempo subscription store', () => {
     ).toEqual({ status: 'replayed' })
   })
 
+  test('resumes a commit interrupted after the subscription was persisted', async () => {
+    const base = Store.memory()
+    let crashArmed = true
+    const store = fromStore(
+      {
+        ...base,
+        async put(key: string, value: unknown) {
+          // Crash after `committingAt` is written (via update) but before the
+          // subscription record lands.
+          if (crashArmed && key.includes(subscriptionId))
+            throw new Error('simulated crash before commit')
+          return base.put(key, value)
+        },
+      },
+      { activationRecoveryTimeoutMs: 0 },
+    )
+
+    let creates = 0
+    const create = async () => {
+      creates++
+      return { subscription: createRecord() }
+    }
+
+    await expect(
+      store.activate({ challengeId: 'c1', create, lookupKey: 'user-1:plan:pro' }),
+    ).rejects.toThrow('simulated crash before commit')
+    expect(creates).toBe(1)
+
+    // A fresh challenge must resume the interrupted commit, not re-run create()
+    // (which would charge the first period again) or lock the lookup forever.
+    crashArmed = false
+    const retry = await store.activate({
+      challengeId: 'c2',
+      create,
+      lookupKey: 'user-1:plan:pro',
+    })
+
+    expect(retry.status).toBe('existing')
+    expect(creates).toBe(1)
+    expect((await store.get(subscriptionId))?.subscriptionId).toBe(subscriptionId)
+  })
+
   test('tracks a resolved lookup key activation until committed', async () => {
     const store = fromStore(Store.memory())
     let finishActivation!: () => void
