@@ -1,5 +1,14 @@
 # mppx
 
+## 0.13.1
+
+### Patch Changes
+
+- ec6c6cf: Added paired Elysia lifecycle hooks that wrapped actual route responses for streaming metering. Rejected streaming payments registered with only a beforeHandle hook and required Elysia 1.2.0 or newer.
+- 86dddc8: Stopped emitting payment-success events when authorization reused existing access without verifying a new credential.
+- e60b7ea: Settled previously accepted vouchers when terminal voucher processing detected a pending channel close, using the existing shared scheduled-settlement claim. Kept standalone validation free of settlement side effects.
+- cfb4bff: Reserved stream charges atomically in shared channel state and released or expired unused reservations.
+
 ## 0.13.0
 
 ### Minor Changes
