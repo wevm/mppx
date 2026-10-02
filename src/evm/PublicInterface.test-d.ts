@@ -50,6 +50,7 @@ describe('evm public interface', () => {
     >()
     expectTypeOf(evmRoot.assets.celo.USDC).toMatchTypeOf<typeof serverAssets.celo.USDC>()
     expectTypeOf(evmRoot.assets.celo.USDT).toMatchTypeOf<typeof serverAssets.celo.USDT>()
+    expectTypeOf(evmRoot.assets.celo.USAT).toMatchTypeOf<typeof serverAssets.celo.USAT>()
     expectTypeOf(clientAssets.celoSepolia.USDC).toMatchTypeOf<
       typeof serverAssets.celoSepolia.USDC
     >()

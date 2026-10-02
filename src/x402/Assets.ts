@@ -115,6 +115,17 @@ export const celo = {
       version: '1',
     },
   }),
+  USAT: define({
+    address: '0xD2ab3C9A02DBBAB236BfEC45D1d755DF4267F771',
+    decimals: 6,
+    network: 'eip155:42220',
+    transfer: {
+      // Celo USAT signs with domain version "1", matching USDT rather than Circle's FiatToken "2".
+      name: 'Tether America USD',
+      type: 'eip3009',
+      version: '1',
+    },
+  }),
 } as const
 
 /** Celo Sepolia known assets. */

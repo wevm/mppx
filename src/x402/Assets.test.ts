@@ -237,6 +237,20 @@ describe('x402 assets', () => {
     })
   })
 
+  test('exports Celo USAT metadata', () => {
+    expect(Assets.isAsset(Assets.celo.USAT)).toBe(true)
+    expect(Assets.celo.USAT).toMatchObject({
+      address: '0xD2ab3C9A02DBBAB236BfEC45D1d755DF4267F771',
+      decimals: 6,
+      network: 'eip155:42220',
+      transfer: {
+        name: 'Tether America USD',
+        type: 'eip3009',
+        version: '1',
+      },
+    })
+  })
+
   test('exports Celo Sepolia USDC metadata', () => {
     expect(Assets.isAsset(Assets.celoSepolia.USDC)).toBe(true)
     expect(Assets.celoSepolia.USDC).toMatchObject({
