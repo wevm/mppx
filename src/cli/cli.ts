@@ -301,6 +301,97 @@ function resolveFetchTarget(url: string): { host?: string | undefined; url: stri
   return { host, url: url.replace(hostname, '127.0.0.1') }
 }
 
+type ChallengeRequest = {
+  init: RequestInit
+  logicalUrl: string
+  response: Response
+  target: { host?: string | undefined; url: string }
+}
+
+/** Follows challenge redirects while retaining the request semantics used at the final URL. */
+async function fetchChallengeRequest(
+  fetch: typeof globalThis.fetch,
+  url: string,
+  init: RequestInit,
+  follow: boolean,
+): Promise<ChallengeRequest> {
+  let logicalUrl = url
+  let target = resolveFetchTarget(logicalUrl)
+  let requestInit: RequestInit = {
+    ...init,
+    redirect: 'manual',
+    headers: normalizeHeaders(init.headers),
+  }
+  if (target.host) setTargetHost(requestInit.headers as Record<string, string>, target.host)
+
+  for (let redirects = 0; redirects <= 20; redirects++) {
+    const response = await fetch(target.url, requestInit)
+    const location = response.headers.get('location')
+    if (!follow || !location || ![301, 302, 303, 307, 308].includes(response.status))
+      return { init: requestInit, logicalUrl, response, target }
+    if (redirects === 20) throw new TypeError('Too many redirects')
+    await response.body?.cancel().catch(() => {})
+
+    const nextUrl = new URL(location, logicalUrl)
+    const currentUrl = new URL(logicalUrl)
+    const headers = normalizeHeaders(requestInit.headers)
+    if (nextUrl.origin !== currentUrl.origin)
+      for (const name of ['authorization', 'cookie', 'host', 'proxy-authorization'])
+        for (const key of Object.keys(headers)) if (key.toLowerCase() === name) delete headers[key]
+
+    const method = (requestInit.method ?? (requestInit.body ? 'POST' : 'GET')).toUpperCase()
+    const becomesGet =
+      (response.status === 303 && method !== 'GET' && method !== 'HEAD') ||
+      ((response.status === 301 || response.status === 302) && method === 'POST')
+    if (becomesGet)
+      for (const name of [
+        'content-encoding',
+        'content-language',
+        'content-length',
+        'content-location',
+        'content-type',
+      ])
+        for (const key of Object.keys(headers)) if (key.toLowerCase() === name) delete headers[key]
+
+    logicalUrl = nextUrl.href
+    target = resolveFetchTarget(logicalUrl)
+    if (target.host) setTargetHost(headers, target.host)
+    const redirectedInit = { ...requestInit }
+    if (becomesGet) {
+      delete redirectedInit.body
+      redirectedInit.method = 'GET'
+    }
+    requestInit = {
+      ...redirectedInit,
+      headers,
+      redirect: 'manual',
+    }
+  }
+
+  throw new TypeError('Too many redirects')
+}
+
+/** Resolves a credential retry without allowing an MPP challenge redirect to change origins. */
+export function resolveMppCredentialTarget(
+  initialUrl: string,
+  _initialTarget: { host?: string | undefined; url: string },
+  responseUrl: string,
+): { host?: string | undefined; url: string } {
+  const initial = new URL(initialUrl)
+  const response = new URL(responseUrl || initialUrl)
+
+  if (response.origin !== initial.origin) throwUnsafePaymentRedirect(response)
+  return resolveFetchTarget(response.href)
+}
+
+function throwUnsafePaymentRedirect(target: URL): never {
+  throw new Errors.IncurError({
+    code: 'UNSAFE_PAYMENT_REDIRECT',
+    message: `Refusing to send a payment credential to redirected origin ${target.origin}.`,
+    exitCode: 1,
+  })
+}
+
 /** Replaces a target-specific Host header without forwarding it to another origin. */
 function setTargetHost(headers: Record<string, string>, host?: string | undefined): void {
   for (const key of Object.keys(headers)) if (key.toLowerCase() === 'host') delete headers[key]
@@ -515,7 +606,13 @@ const cli = Cli.create('mppx', {
       }
 
       if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
-      const challengeResponse = await targetFetch(fetchUrl, init)
+      const challengeRequest = await fetchChallengeRequest(
+        targetFetch,
+        url,
+        init,
+        c.options.location ?? false,
+      )
+      const challengeResponse = challengeRequest.response
       if (challengeResponse.status !== 402) {
         if (c.options.session !== 'auto')
           return c.error({
@@ -589,6 +686,9 @@ const cli = Cli.create('mppx', {
 
       const { challenge, plugin, method: configMethod } = selected
       const isX402Challenge = x402_ChallengeBrand.is(challenge)
+      const mppCredentialTarget = isX402Challenge
+        ? undefined
+        : resolveMppCredentialTarget(url, initialTarget, challengeRequest.logicalUrl)
       const selectedChallengeResponse = toSelectedChallengeResponse(challenge, challengeResponse)
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
@@ -710,10 +810,10 @@ const cli = Cli.create('mppx', {
             challenge,
             challengeResponse: selectedChallengeResponse,
             credentialContext,
-            endpoint: url,
+            endpoint: challengeRequest.logicalUrl,
             fetch: targetFetch,
-            fetchInput: fetchUrl,
-            init,
+            fetchInput: mppCredentialTarget!.url,
+            init: { ...challengeRequest.init, redirect: 'manual' },
             info,
             methodOptions: methodOpts,
             options: {
@@ -779,9 +879,10 @@ const cli = Cli.create('mppx', {
             return targetFetch(input, requestInit)
           },
         })
-        credentialResponse = await mppx.fetch(fetchUrl, {
-          ...init,
+        credentialResponse = await mppx.fetch(mppCredentialTarget!.url, {
+          ...challengeRequest.init,
           context: credentialContext as never,
+          redirect: 'manual',
         })
       } else {
         // Create credential
@@ -817,18 +918,18 @@ const cli = Cli.create('mppx', {
           ? x402_Types.paymentSignatureHeader
           : Challenge.credentialHeader(challenge)
         const credentialHeaders = {
-          ...normalizeHeaders(init.headers),
+          ...normalizeHeaders(challengeRequest.init.headers),
           [credentialHeader]: credential,
         }
         const credentialTarget = isX402Challenge
           ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
-          : initialTarget
+          : mppCredentialTarget!
         if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
         plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
         const credentialFetchInit = {
-          ...init,
-          ...(isX402Challenge && { redirect: 'manual' as const }),
+          ...challengeRequest.init,
+          redirect: 'manual' as const,
           headers: credentialHeaders,
         }
         if (c.options.verbose >= 2)

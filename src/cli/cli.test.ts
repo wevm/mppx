@@ -31,7 +31,7 @@ import * as x402_Assets from '../x402/Assets.js'
 import * as x402_Header from '../x402/Header.js'
 import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
-import cli from './cli.js'
+import cli, { resolveMppCredentialTarget } from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
@@ -160,6 +160,7 @@ export default defineConfig({
     }),
   ],
 })
+
       `.trim(),
     )
 
@@ -376,6 +377,23 @@ export default defineConfig({
     }
   })
 
+  test('preserves an explicit Host header for an ordinary target', async () => {
+    const originalFetch = globalThis.fetch
+    let host: string | undefined
+    globalThis.fetch = (async (_input, init) => {
+      host = new Headers(init?.headers).get('host') ?? undefined
+      return new Response('ok')
+    }) as typeof fetch
+
+    try {
+      await serve(['http://localhost/', '-H', 'Host: virtual.example', '-s'])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(host).toBe('virtual.example')
+  })
+
   test('retries an x402 credential directly with the challenge resource', async () => {
     let credentialLeakedToRedirect = false
     const paymentServer = await Http.createServer((req, res) => {
@@ -403,6 +421,127 @@ export default defineConfig({
     }
 
     expect(credentialLeakedToRedirect).toBe(false)
+  })
+
+  test('does not send an MPP credential after a cross-origin redirect', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-redirect-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const mppxModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { Credential, Method, z } from '${mppxModuleUrl}'
+import { defineConfig } from '${cliModuleUrl}'
+
+const method = Method.toClient(Method.from({
+  name: 'mock',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string(), currency: z.string(), decimals: z.number(), recipient: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    return Credential.serialize({ challenge, payload: { token: 'secret' } })
+  },
+})
+
+export default defineConfig({ methods: [method] })
+      `.trim(),
+    )
+    let credentialReceived = false
+    const paymentServer = await Http.createServer((req, res) => {
+      credentialReceived ||= req.headers.authorization !== undefined
+      res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: mppChallenge() })
+      res.end()
+    })
+    const redirectServer = await Http.createServer((_req, res) => {
+      res.writeHead(302, { Location: paymentServer.url })
+      res.end()
+    })
+
+    try {
+      const { exitCode, output } = await serve([
+        redirectServer.url,
+        '--location',
+        '--config',
+        configPath,
+        '-s',
+      ])
+      expect(exitCode).toBe(1)
+      expect(output).toContain('Refusing to send a payment credential to redirected origin')
+      expect(credentialReceived).toBe(false)
+    } finally {
+      redirectServer.close()
+      paymentServer.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  test('replays the redirected method when sending an MPP credential', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-redirect-method-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const mppxModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { Credential, Method, z } from '${mppxModuleUrl}'
+import { defineConfig } from '${cliModuleUrl}'
+
+const method = Method.toClient(Method.from({
+  name: 'mock',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string(), currency: z.string(), decimals: z.number(), recipient: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    return Credential.serialize({ challenge, payload: { token: 'secret' } })
+  },
+})
+
+export default defineConfig({ methods: [method] })
+      `.trim(),
+    )
+    let credentialMethod: string | undefined
+    let credentialBody = ''
+    const server = await Http.createServer(async (req, res) => {
+      if (req.url === '/start') {
+        req.resume()
+        res.writeHead(303, { Location: '/paid' })
+        res.end()
+        return
+      }
+      if (!req.headers.authorization) {
+        res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: mppChallenge() })
+        res.end()
+        return
+      }
+      credentialMethod = req.method
+      for await (const chunk of req) credentialBody += chunk.toString()
+      res.end('paid')
+    })
+
+    try {
+      const { output } = await serve([
+        `${server.url}/start`,
+        '--location',
+        '--config',
+        configPath,
+        '--data',
+        'side-effect',
+        '-s',
+      ])
+      expect(output).toContain('paid')
+      expect(credentialMethod).toBe('GET')
+      expect(credentialBody).toBe('')
+    } finally {
+      server.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
   })
 
   test('--protocol mpp ignores a co-offered x402 challenge', async () => {
@@ -454,6 +593,48 @@ export default defineConfig({
     } finally {
       httpServer.close()
     }
+  })
+})
+
+describe('MPP credential redirects', () => {
+  test('rejects a challenge response from a different origin', () => {
+    expect(() =>
+      resolveMppCredentialTarget(
+        'https://trusted.example/start',
+        { url: 'https://trusted.example/start' },
+        'https://untrusted.example/paid',
+      ),
+    ).toThrow('Refusing to send a payment credential to redirected origin')
+  })
+
+  test('retries the final same-origin challenge URL directly', () => {
+    expect(
+      resolveMppCredentialTarget(
+        'https://trusted.example/start',
+        { url: 'https://trusted.example/start' },
+        'https://trusted.example/paid?plan=pro',
+      ),
+    ).toEqual({ url: 'https://trusted.example/paid?plan=pro' })
+  })
+
+  test('preserves a sub-localhost Host mapping', () => {
+    expect(
+      resolveMppCredentialTarget(
+        'http://app.localhost:3000/start',
+        { host: 'app.localhost:3000', url: 'http://127.0.0.1:3000/start' },
+        'http://app.localhost:3000/paid',
+      ),
+    ).toEqual({ host: 'app.localhost:3000', url: 'http://127.0.0.1:3000/paid' })
+  })
+
+  test('rejects a redirect between sub-localhost origins', () => {
+    expect(() =>
+      resolveMppCredentialTarget(
+        'http://app.localhost:3000/start',
+        { host: 'app.localhost:3000', url: 'http://127.0.0.1:3000/start' },
+        'http://evil.localhost:3000/paid',
+      ),
+    ).toThrow('Refusing to send a payment credential to redirected origin')
   })
 })
 
