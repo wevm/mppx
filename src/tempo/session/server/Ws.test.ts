@@ -366,7 +366,7 @@ describe('isows', () => {
     expect(socket.sent.some((m) => m.includes('should-not-reach'))).toBe(false)
   })
 
-  test('drops reserved charges when the stream ends without delivering a chunk', async () => {
+  test('commits a manual charge when the stream ends without yielding a chunk', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
     let commits = 0
@@ -424,14 +424,14 @@ describe('isows', () => {
 
     expect(closeReady?.mpp).toBe('payment-close-ready')
     if (closeReady?.mpp === 'payment-close-ready') {
-      expect(closeReady.data.spent).toBe('0')
-      expect(closeReady.data.units).toBe(0)
+      expect(closeReady.data.spent).toBe('1')
+      expect(closeReady.data.units).toBe(1)
     }
 
     const channel = await store.getChannel(channelId)
-    expect(channel?.spent).toBe(0n)
-    expect(channel?.units).toBe(0)
-    expect(commits).toBe(0)
+    expect(channel?.spent).toBe(1n)
+    expect(channel?.units).toBe(1)
+    expect(commits).toBe(1)
   })
 
   test('aborts a blocked application generator before sending close-ready', async () => {

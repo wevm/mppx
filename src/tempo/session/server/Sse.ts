@@ -56,7 +56,9 @@ export type { SessionController } from './MeteredStream.js'
  * 2. If balance is sufficient, emits `event: message` with the value.
  * 3. If balance is exhausted, emits `event: payment-need-voucher`
  *    and polls store until the client tops up the channel.
- * 4. Commits the reserved charge immediately before the chunk is emitted.
+ * 4. Commits the reserved charge immediately before the chunk is emitted. If a
+ *    manual generator completes after charging without yielding another chunk,
+ *    commits that terminal charge on successful completion.
  * 5. On generator completion, emits a final `event: payment-receipt`.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
@@ -73,10 +75,15 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   } = options
 
   const encoder = new TextEncoder()
+  const abortController = new AbortController()
+  let canceled = false
+  const abort = () => abortController.abort(signal?.reason)
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort, { once: true })
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      const aborted = () => signal?.aborted ?? false
+      const aborted = () => abortController.signal.aborted
       const emit = (event: string) => controller.enqueue(encoder.encode(event))
 
       try {
@@ -88,7 +95,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           onChargeCommitted: options.onChargeCommitted,
           pollIntervalMs,
           prepaidUnits: options.prepaidUnits,
-          signal,
+          signal: abortController.signal,
           emitNeedVoucher: emit,
           formatNeedVoucher: formatNeedVoucherEvent,
         })) {
@@ -112,8 +119,13 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
       } catch (e) {
         if (!aborted()) controller.error(e)
       } finally {
-        controller.close()
+        signal?.removeEventListener('abort', abort)
+        if (!canceled) controller.close()
       }
+    },
+    cancel(reason) {
+      canceled = true
+      abortController.abort(reason)
     },
   })
 }

@@ -11,8 +11,9 @@ export type SessionController = {
    * Reserve voucher coverage for the next emitted chunk.
    *
    * The reservation blocks until sufficient voucher headroom exists, but the
-   * charge is only committed once a chunk is actually emitted. If the stream
-   * ends or aborts before that emission, the reservation is dropped.
+   * charge is committed when a chunk is emitted or when the generator finishes
+   * successfully. A reservation is only dropped when the stream aborts or the
+   * generator fails before the charge can be committed.
    *
    * Pass an explicit raw-unit `amount` for request-aware or otherwise dynamic
    * pricing. When omitted, the session challenge's configured tick cost is
@@ -84,9 +85,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
   const iterable =
     typeof options.generate === 'function' ? options.generate({ charge, signal }) : options.generate
 
-  for await (const value of iterable) {
-    if (options.signal?.aborted) break
-    if (typeof options.generate !== 'function') await charge()
+  const commit = async () => {
     const channel = await commitReservedCharges({
       store: options.store,
       channelId: options.channelId,
@@ -96,6 +95,14 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     reservedAmount = 0n
     reservedUnits = 0
     if (channel) await options.onChargeCommitted?.(channel)
+  }
+
+  for await (const value of iterable) {
+    if (options.signal?.aborted) break
+    if (typeof options.generate !== 'function') await charge()
+    await commit()
     yield value
   }
+
+  if (!options.signal?.aborted) await commit()
 }

@@ -242,7 +242,7 @@ describe('Sse.serve', () => {
     expect(channel!.units).toBe(0)
   })
 
-  test('drops reserved charges when a generator never emits a chunk', async () => {
+  test('commits reserved charges when a generator completes without a chunk', async () => {
     const store = memoryStore()
     await seedChannel(store, 1000000n)
 
@@ -263,12 +263,12 @@ describe('Sse.serve', () => {
     const receiptRaw = output.split('event: payment-receipt\ndata: ')[1]?.split('\n\n')[0]
     const receipt = JSON.parse(receiptRaw!)
 
-    expect(receipt.spent).toBe('0')
-    expect(receipt.units).toBe(0)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
 
     const channel = await store.getChannel(channelId)
-    expect(channel!.spent).toBe(0n)
-    expect(channel!.units).toBe(0)
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
   })
 
   test('allows tickCost override', async () => {

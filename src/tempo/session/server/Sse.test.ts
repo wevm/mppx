@@ -360,7 +360,7 @@ describe('serve', () => {
     expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
   })
 
-  test('does not run the post-commit hook for an unconsumed reservation', async () => {
+  test('commits a manual charge when the generator finishes without yielding', async () => {
     const storage = memoryStore()
     let commits = 0
     await seedChannel(storage, 1000000n)
@@ -381,7 +381,47 @@ describe('serve', () => {
       }),
     )
 
-    expect(commits).toBe(0)
+    expect(commits).toBe(1)
+    const channel = await storage.getChannel(channelId)
+    expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
+  })
+
+  test('drops a terminal reservation when the reader cancels', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+
+    let reservationReady!: () => void
+    const ready = new Promise<void>((resolve) => {
+      reservationReady = resolve
+    })
+    let generatorFinished!: () => void
+    const finished = new Promise<void>((resolve) => {
+      generatorFinished = resolve
+    })
+
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: async function* (stream) {
+        try {
+          await stream.charge()
+          reservationReady()
+          await new Promise<void>((resolve) => {
+            stream.signal.addEventListener('abort', () => resolve(), { once: true })
+          })
+        } finally {
+          generatorFinished()
+        }
+        yield* []
+      },
+    }).getReader()
+
+    await ready
+    await reader.cancel()
+    await finished
+
     const channel = await storage.getChannel(channelId)
     expect(channel).toMatchObject({ spent: 0n, units: 0 })
   })
