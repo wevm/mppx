@@ -1975,7 +1975,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/exceeds.*deposit|insufficient channel deposit/)
   })
 
-  test('rejects precompile voucher when on-chain state has pending close', async () => {
+  test('refreshes on-chain state before accepting a voucher', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload({ initialAmount: 100n })
@@ -1990,7 +1990,7 @@ describe('precompile server session unit guardrails', () => {
     const method = session({
       amount: '1',
       chainId,
-      channelStateTtl: 0,
+      channelStateTtl: Number.MAX_SAFE_INTEGER,
       currency: token,
       decimals: 0,
       recipient: payee,

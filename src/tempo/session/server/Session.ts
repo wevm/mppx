@@ -606,7 +606,7 @@ export namespace session {
 
   /** Parameters accepted by the TIP-1034 server session payment method. */
   export type Parameters = {
-    /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 5_000 */
+    /** TTL in milliseconds for cached on-chain channel state during non-mutating validation. Voucher acceptance always refreshes on-chain state. @default 5_000 */
     channelStateTtl?: number | undefined
     /** Override the fee-sponsor policy used for sponsored open/topUp transactions and server-driven close transactions. */
     feePayerPolicy?: FeePayerPolicy | undefined

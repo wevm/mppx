@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../../Challenge.js'
 import * as Store from '../../../Store.js'
 import { chainId as chainIds } from '../../internal/defaults.js'
+import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
@@ -243,6 +244,11 @@ describe('SessionCredentialGuards', () => {
     ])('accepts voucher credentials from the channel $label', async ({ sourceAddress }) => {
       const store = channelStore()
       await seedChannel(store)
+      const getChannelState = vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+        closeRequestedAt: 0,
+        deposit: 100n,
+        settled: 0n,
+      })
       const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
 
       await expect(
@@ -265,6 +271,7 @@ describe('SessionCredentialGuards', () => {
           store,
         }),
       ).resolves.toMatchObject({ acceptedCumulative: '60' })
+      expect(getChannelState).toHaveBeenCalledOnce()
       expect(verifyVoucher).toHaveBeenCalledOnce()
     })
 

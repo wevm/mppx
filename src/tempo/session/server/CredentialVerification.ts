@@ -622,11 +622,14 @@ async function resolveVoucherChannelState(parameters: {
   channelStateTtl: number
   client: Chain.TransactionClient
   escrow: Address
+  forceRefresh?: boolean | undefined
   lastOnChainVerified: Map<Hex, number>
 }): Promise<Chain.ChannelState> {
-  const { channel, channelId, channelStateTtl, client, escrow, lastOnChainVerified } = parameters
-  const isStale = Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
-  const state = isStale ? await Chain.getChannelState(client, channelId, escrow) : undefined
+  const { channel, channelId, channelStateTtl, client, escrow, forceRefresh, lastOnChainVerified } =
+    parameters
+  const shouldRefresh =
+    forceRefresh || Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
+  const state = shouldRefresh ? await Chain.getChannelState(client, channelId, escrow) : undefined
   if (state) lastOnChainVerified.set(channelId, Date.now())
   return {
     deposit: state?.deposit ?? uint96(channel.deposit),
@@ -937,6 +940,7 @@ async function handleVoucherCredential(
     channelStateTtl,
     client,
     escrow,
+    forceRefresh: true,
     lastOnChainVerified,
   })
   if (channelState.closeRequestedAt !== 0) {
