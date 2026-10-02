@@ -18,6 +18,8 @@ export type SubscriptionStore = {
   activate<result extends { subscription: SubscriptionRecord }>(
     parameters: ActivateParameters<result>,
   ): Promise<ActivateResult<result>>
+  /** Releases a transient credential claim so the same challenge can be retried. */
+  releaseCredential(challengeId: string): Promise<void>
   /** Looks up a subscription by subscription ID. */
   get(subscriptionId: string): Promise<SubscriptionRecord | null>
   /** Looks up a generated access key for a resolved request key. */
@@ -239,6 +241,10 @@ export function fromStore(
       await store.put(lookupRecordKey(subscription.lookupKey), subscription.subscriptionId)
       await clearActivationState(subscription.lookupKey, challengeId)
       return { status: 'activated', result }
+    },
+
+    async releaseCredential(challengeId) {
+      await store.delete(credentialKey(challengeId))
     },
 
     async get(subscriptionId) {

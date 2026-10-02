@@ -951,6 +951,73 @@ describe('tempo.subscription', () => {
     expect(response.headers.get('Retry-After')).toBe('1')
   })
 
+  test('does not verify a credential while renewal is still in flight', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const method = subscription({
+      accessKey: async () => accessKey,
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      requireCredential: true,
+      resolve: async () => ({ accessKey, key: subscriptionKey }),
+      renew: async () => {
+        throw new Error('renew should not run')
+      },
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        inFlightPeriod: 1,
+        inFlightStartedAt: new Date().toISOString(),
+        lastChargedPeriod: 0,
+        payer: { address: rootAccount.address, chainId },
+        subscriptionId: 'sub_due',
+      }),
+    )
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+    if (challengeResult.status !== 402) throw new Error('expected subscription challenge')
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const challengeAccessKey = (
+      challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+    ).methodDetails?.accessKey
+    if (!challengeAccessKey) throw new Error('expected challenge access key')
+    const credential = await createCredential(challenge, rootAccount.address, challengeAccessKey)
+
+    const result = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        lastChargedPeriod: 3,
+        payer: { address: rootAccount.address, chainId },
+        subscriptionId: 'sub_due',
+      }),
+    )
+    const retried = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(retried.status).toBe(200)
+  })
+
   test('does not authorize an active subscription whose request binding differs', async () => {
     const store = Store.memory()
     const subscriptions = SubscriptionStore.fromStore(store)

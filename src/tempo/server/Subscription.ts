@@ -318,6 +318,7 @@ export function subscription<const parameters extends subscription.Parameters>(
         })
       }
       if (activation.status === 'inFlight') {
+        await store.releaseCredential(credential.challenge.id)
         throw new VerificationFailedError({
           reason: 'subscription activation is already in flight',
         })
@@ -357,8 +358,12 @@ export function subscription<const parameters extends subscription.Parameters>(
           if (!renewal) {
             throw new VerificationFailedError({ reason: 'subscription renewal failed' })
           }
-          if (renewal.status === 'charged' || renewal.status === 'inFlight') {
-            return renewal.receipt
+          if (renewal.status === 'charged') return renewal.receipt
+          if (renewal.status === 'inFlight') {
+            await store.releaseCredential(credential.challenge.id)
+            throw new VerificationFailedError({
+              reason: 'subscription renewal is already in flight',
+            })
           }
 
           await parameters.hooks?.renewed?.({
