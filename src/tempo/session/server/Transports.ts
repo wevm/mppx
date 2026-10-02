@@ -180,6 +180,8 @@ export type SocketEventListener<type extends keyof SocketEventMap> =
 
 /** Minimal socket shape required by the session WebSocket adapter. */
 export type Socket = {
+  /** Bytes queued by the runtime but not yet written to the network. */
+  readonly bufferedAmount?: number | undefined
   close(code?: number, reason?: string): unknown
   send(data: string): unknown
   addEventListener?: <type extends keyof SocketEventMap>(
@@ -198,6 +200,11 @@ export type Socket = {
     type: type,
     listener: (event: SocketEventMap[type]) => void,
   ) => unknown
+}
+
+/** Raised after a socket is closed to keep its outbound queue bounded. */
+export class WebSocketOutboundBufferLimitError extends Error {
+  override readonly name = 'WebSocketOutboundBufferLimitError'
 }
 
 /** Handlers for socket lifecycle and message events. */
@@ -240,9 +247,48 @@ export function subscribe(socket: Socket, handlers: SocketHandlers) {
   throw new Error('unsupported websocket implementation')
 }
 
-/** Sends a text frame through sync or async socket implementations. */
-export async function send(socket: Socket, data: string) {
-  await Promise.resolve(socket.send(data))
+const socketSendQueues = new WeakMap<Socket, Promise<void>>()
+
+/** Sends a text frame while bounding runtime-managed outbound buffering. */
+export async function send(
+  socket: Socket,
+  data: string,
+  options: { maxBufferedAmount?: number } = {},
+) {
+  const previous = socketSendQueues.get(socket) ?? Promise.resolve()
+  const current = previous
+    .catch(() => {})
+    .then(async () => {
+      const maxBufferedAmount = options.maxBufferedAmount ?? 1024 * 1024
+      if ((socket.bufferedAmount ?? 0) + textByteLength(data) > maxBufferedAmount) {
+        try {
+          await Promise.resolve(socket.close(4008, 'outbound buffer limit exceeded'))
+        } catch {}
+        throw new WebSocketOutboundBufferLimitError('websocket outbound buffer limit exceeded')
+      }
+      await Promise.resolve(socket.send(data))
+    })
+  socketSendQueues.set(socket, current)
+  try {
+    await current
+  } finally {
+    if (socketSendQueues.get(socket) === current) socketSendQueues.delete(socket)
+  }
+}
+
+function textByteLength(value: string): number {
+  let bytes = 0
+  for (let index = 0; index < value.length; index++) {
+    const codePoint = value.codePointAt(index)!
+    if (codePoint <= 0x7f) bytes += 1
+    else if (codePoint <= 0x7ff) bytes += 2
+    else if (codePoint <= 0xffff) bytes += 3
+    else {
+      bytes += 4
+      index += 1
+    }
+  }
+  return bytes
 }
 
 /** Converts socket message payloads into text frames when possible. */

@@ -20,7 +20,13 @@ import type { SettleChargedSessionChannel } from './Settlement.js'
 export type { SessionController } from './MeteredStream.js'
 export type { Socket } from './Transports.js'
 import { meterIterable } from './MeteredStream.js'
-import { send, subscribe, toText, type Socket } from './Transports.js'
+import {
+  send,
+  subscribe,
+  toText,
+  WebSocketOutboundBufferLimitError,
+  type Socket,
+} from './Transports.js'
 
 /** Public WebSocket payment frame helpers. */
 export {
@@ -99,6 +105,7 @@ export async function serve(options: serve.Options): Promise<void> {
     amount: expectedAmount,
     generate,
     maxIncomingMessageBytes = 64 * 1024,
+    maxBufferedAmount = 1024 * 1024,
     pollIntervalMs = 100,
     route,
     socket,
@@ -108,6 +115,7 @@ export async function serve(options: serve.Options): Promise<void> {
   const store = 'getChannel' in rawStore ? rawStore : ChannelStore.fromStore(rawStore)
   const requestUrl = normalizeHttpUrl(url)
   const maxQueuedPaymentMessages = 32
+  const sendFrame = (data: string) => send(socket, data, { maxBufferedAmount })
 
   const abortController = new AbortController()
   const runtime: ServeRuntime = {
@@ -144,7 +152,7 @@ export async function serve(options: serve.Options): Promise<void> {
       spent: channel.spent,
       units: channel.units,
     })
-    await send(socket, formatCloseReadyMessage(receipt))
+    await sendFrame(formatCloseReadyMessage(receipt))
   }
 
   const runStream = async (context: StreamContext) => {
@@ -157,24 +165,27 @@ export async function serve(options: serve.Options): Promise<void> {
         onChargeCommitted: options.onChargeCommitted ?? options.settleScheduled,
         pollIntervalMs,
         signal: abortController.signal,
-        emitNeedVoucher: (message) => send(socket, message),
+        emitNeedVoucher: (message) => sendFrame(message),
         formatNeedVoucher: formatNeedVoucherMessage,
       })) {
         if (abortController.signal.aborted) break
-        await send(socket, formatApplicationMessage(value))
+        await sendFrame(formatApplicationMessage(value))
       }
 
       if (!abortController.signal.aborted) await sendCloseReady()
     } catch (error) {
       if (!abortController.signal.aborted) {
-        await send(
-          socket,
-          formatErrorMessage({
-            message: error instanceof Error ? error.message : 'websocket session failed',
-            status: 500,
-          }),
-        )
-        await close(1011, 'websocket session failed')
+        if (error instanceof WebSocketOutboundBufferLimitError) {
+          await close(4008, 'outbound buffer limit exceeded').catch(() => {})
+        } else {
+          await sendFrame(
+            formatErrorMessage({
+              message: error instanceof Error ? error.message : 'websocket session failed',
+              status: 500,
+            }),
+          ).catch(() => {})
+          await close(1011, 'websocket session failed').catch(() => {})
+        }
       }
     } finally {
       runtime.streamTask = null
@@ -198,8 +209,7 @@ export async function serve(options: serve.Options): Promise<void> {
     if (payload.action === 'close') runtime.closeRequested = true
 
     if (expectedAmount && credential.challenge.request.amount !== expectedAmount) {
-      await send(
-        socket,
+      await sendFrame(
         formatErrorMessage({
           message: 'credential amount does not match this endpoint',
           status: 402,
@@ -211,8 +221,7 @@ export async function serve(options: serve.Options): Promise<void> {
 
     const authorizationResult = await authorizePaymentFrame({ authorization, requestUrl, route })
     if (authorizationResult.status === 'rejected') {
-      await send(
-        socket,
+      await sendFrame(
         formatErrorMessage({
           message: authorizationResult.message,
           status: authorizationResult.responseStatus,
@@ -226,7 +235,7 @@ export async function serve(options: serve.Options): Promise<void> {
     if (payload.action === 'voucher' && runtime.streamContext) {
       runtime.streamContext.challengeId = credential.challenge.id
     }
-    await send(socket, formatReceiptMessage(receipt))
+    await sendFrame(formatReceiptMessage(receipt))
 
     if (payload.action === 'close') {
       await close(1000, 'payment session closed')
@@ -282,8 +291,7 @@ export async function serve(options: serve.Options): Promise<void> {
 
     if (!work) return
     if (runtime.queuedActions >= maxQueuedPaymentMessages) {
-      void send(
-        socket,
+      void sendFrame(
         formatErrorMessage({
           message: 'too many queued payment messages',
           status: 429,
@@ -305,14 +313,17 @@ export async function serve(options: serve.Options): Promise<void> {
       })
       .catch(async (error) => {
         if (!runtime.closed) {
-          await send(
-            socket,
-            formatErrorMessage({
-              message: error instanceof Error ? error.message : 'invalid payment message',
-              status: 400,
-            }),
-          )
-          await close(1008, 'invalid payment message')
+          if (error instanceof WebSocketOutboundBufferLimitError) {
+            await close(4008, 'outbound buffer limit exceeded').catch(() => {})
+          } else {
+            await sendFrame(
+              formatErrorMessage({
+                message: error instanceof Error ? error.message : 'invalid payment message',
+                status: 400,
+              }),
+            ).catch(() => {})
+            await close(1008, 'invalid payment message').catch(() => {})
+          }
         }
       })
   }
@@ -345,6 +356,8 @@ export declare namespace serve {
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     /** Maximum accepted inbound WebSocket frame size in bytes. @default 65536 */
     maxIncomingMessageBytes?: number | undefined
+    /** Maximum queued outbound bytes before the socket is closed. @default 1048576 */
+    maxBufferedAmount?: number | undefined
     pollIntervalMs?: number | undefined
     /** Payment route handler. Receives synthetic `POST` requests with only
      *  the `Authorization` header — no cookies, bodies, or upgrade headers. */

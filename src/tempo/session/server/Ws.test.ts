@@ -24,6 +24,7 @@ const challenge = Challenge.from({
 const channelId = `0x${'11'.repeat(32)}` as const
 
 class MockSocket implements Ws.Socket {
+  bufferedAmount = 0
   closed = false
   sent: string[] = []
   private listeners = {
@@ -257,6 +258,38 @@ describe('isows', () => {
         mpp: 'message',
         data: '{"mpp":"payment-need-voucher","data":{"requiredCumulative":"9"}}',
       })
+  })
+
+  test('uses the configured outbound buffer limit', async () => {
+    const socket = new MockSocket()
+    socket.bufferedAmount = 8
+
+    await Ws.serve({
+      socket,
+      store: Store.memory(),
+      url: 'ws://example.test/stream',
+      maxBufferedAmount: 10,
+      route: acceptingRoute(1n),
+      generate: async function* () {},
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(socket.closed).toBe(true)
+    expect(socket.sent).toEqual([])
   })
 
   test('caps queued payment work and closes noisy sockets', async () => {

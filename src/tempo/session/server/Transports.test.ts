@@ -248,6 +248,7 @@ describe('MeteredStream', () => {
 
 describe('SocketTransport', () => {
   class BrowserSocket {
+    bufferedAmount = 0
     sent: string[] = []
     listeners = {
       close: new Set<SocketEventListener<'close'>>(),
@@ -286,6 +287,7 @@ describe('SocketTransport', () => {
   }
 
   class NodeSocket {
+    bufferedAmount = 0
     sent: string[] = []
     listeners = {
       close: new Set<(event: SocketEventMap['close']) => void>(),
@@ -371,13 +373,17 @@ describe('SocketTransport', () => {
 
     test('subscribe rejects unsupported socket implementations', () => {
       expect(() =>
-        subscribe({ close() {}, send() {} }, { close() {}, error() {}, message() {} }),
+        subscribe(
+          { bufferedAmount: 0, close() {}, send() {} },
+          { close() {}, error() {}, message() {} },
+        ),
       ).toThrow('unsupported websocket implementation')
     })
 
     test('send supports sync and async socket implementations', async () => {
       const syncSocket = new BrowserSocket()
       const asyncSocket = {
+        bufferedAmount: 0,
         close() {},
         sent: [] as string[],
         async send(data: string) {
@@ -387,9 +393,64 @@ describe('SocketTransport', () => {
 
       await send(syncSocket, 'sync')
       await send(asyncSocket, 'async')
+      await send({ close() {}, send() {} }, 'optional buffer')
 
       expect(syncSocket.sent).toEqual(['sync'])
       expect(asyncSocket.sent).toEqual(['async'])
+    })
+
+    test('send closes a socket before exceeding its outbound buffer limit', async () => {
+      const close = vi.fn()
+      const socket = {
+        bufferedAmount: 8,
+        close,
+        send: vi.fn(),
+      }
+
+      await expect(send(socket, 'four', { maxBufferedAmount: 10 })).rejects.toThrow(
+        'websocket outbound buffer limit exceeded',
+      )
+
+      expect(socket.send).not.toHaveBeenCalled()
+      expect(close).toHaveBeenCalledWith(4008, 'outbound buffer limit exceeded')
+    })
+
+    test('serializes sends before checking buffered bytes', async () => {
+      let release!: () => void
+      const firstSend = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const close = vi.fn()
+      const socket = {
+        bufferedAmount: 0,
+        close,
+        send: vi.fn(async () => {
+          await firstSend
+          socket.bufferedAmount = 6
+        }),
+      }
+
+      const first = send(socket, '123456', { maxBufferedAmount: 10 })
+      const second = send(socket, '123456', { maxBufferedAmount: 10 })
+      await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce())
+      release()
+
+      await first
+      await expect(second).rejects.toThrow('websocket outbound buffer limit exceeded')
+      expect(socket.send).toHaveBeenCalledOnce()
+      expect(close).toHaveBeenCalledWith(4008, 'outbound buffer limit exceeded')
+    })
+
+    test('send uses a standards-compatible application close code', async () => {
+      const close = vi.fn((code?: number) => {
+        if (code !== 1000 && (code === undefined || code < 3000 || code > 4999))
+          throw new DOMException('invalid close code', 'InvalidAccessError')
+      })
+
+      await expect(
+        send({ bufferedAmount: 8, close, send() {} }, 'four', { maxBufferedAmount: 10 }),
+      ).rejects.toThrow('websocket outbound buffer limit exceeded')
+      expect(close).toHaveBeenCalledWith(4008, 'outbound buffer limit exceeded')
     })
 
     test('toText normalizes common message payloads', () => {
