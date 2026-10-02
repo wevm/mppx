@@ -1,5 +1,51 @@
 # mppx
 
+## 0.13.0
+
+### Minor Changes
+
+- e6f903f: Required shared replay storage for Stripe Tempo payment methods.
+- 44b9115: Removed the deprecated legacy session client exports.
+
+### Patch Changes
+
+- e73cd68: Fixed Node server responses so streams stopped when clients disconnected.
+- eb888ab: Fixed server request handling so bodies were bounded and backpressured.
+- 22c0633: Fixed proxy requests so payment authorization was not forwarded upstream.
+- beceee5: Fixed proxy responses so payment-specific headers were stripped.
+- 47e2faf: Fixed Stripe proxy requests so caller routing headers were removed.
+- e2bfcf3: Fixed CLI discovery so untrusted origins were rejected.
+- b224b23: Fixed EVM nonce hashing so input fields were framed unambiguously.
+- 4bdad2b: Fixed Tempo SSE parsing so standard line endings were accepted.
+- e66245d: Fixed MCP payments so the selected payment method was used.
+- 8c42db6: Fixed Tempo transaction credentials so proofs were bound to their source account.
+- 23499aa: Fixed composed server methods so credential headers remained scoped to their transports.
+- 3fc6dd4: Fixed x402 verification so route-bound credentials were required by default.
+- 7e6a86a: Fixed CLI credential retries so requests remained pinned to the challenge origin.
+- 7c91998: Fixed CLI challenge handling so mismatched payment realms were rejected.
+- 8bfe2d1: Fixed middleware payment challenges so credentials were bound to routes.
+- 8bfeb03: Fixed manual session streams so terminal charges were committed.
+- 52b88c6: Fixed session charging so the final retry result was validated.
+- adc5c07: Fixed Tempo sessions so expected chain pins were applied.
+- f9c56d8: Fixed Tempo payment proofs so signer accounts were resolved correctly.
+- ad11f54: Fixed subscriptions so pending renewal credentials were rejected.
+- f14f1ee: Fixed CLI token approvals so configured decimals were verified.
+- c301267: Fixed session channel waits so timed-out callers were cancelled.
+- 91eed32: Fixed session WebSocket input so oversized frames were rejected.
+- f823c86: Fixed session management requests so nested operations honored cancellation.
+- 6568964: Fixed session SSE streams so values were pulled with backpressure.
+- d40dfbd: Fixed session WebSocket output so buffered data remained bounded.
+- e77e9c3: Fixed hosted session sponsorship so configured policy was enforced.
+- 9076794: Fixed sponsored access keys so installation required explicit opt-in.
+- dcee2e8: Fixed sponsored subscriptions so fee tokens were restricted to configured tokens.
+- a7eb66a: Fixed x402 compatibility offers so their payment lifecycle remained safe.
+- 25952d3: Fixed cooperative session closes so close credentials were authorized.
+- 909ccc1: Fixed sponsored session calls so supported call payloads were canonicalized.
+- f431415: Fixed session voucher acceptance so channel state was refreshed before validation.
+- 2afa94d: Fixed scheduled session settlements so concurrent workers claimed each settlement atomically.
+- bd96362: Fixed bodyless session responses so payment accounting completed before protected handlers continued.
+- c7968ca: Added optional funding currency metadata to Tempo charge receipts for verified direct, MACH, and DEX auto-swap payment routes.
+
 ## 0.12.0
 
 ### Minor Changes
