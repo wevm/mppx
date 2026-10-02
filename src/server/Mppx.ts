@@ -28,6 +28,15 @@ import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
+type ReceiptWrapper = (response?: unknown) => unknown
+
+const streamingReceiptWrappers = new WeakSet<ReceiptWrapper>()
+
+/** Returns whether a successful payment result accepts streaming receipt responses. @internal */
+export function supportsStreamingReceipts(result: { withReceipt: ReceiptWrapper }): boolean {
+  return streamingReceiptWrappers.has(result.withReceipt)
+}
+
 export type ServerEventMap<
   methods extends readonly Method.Method[] = readonly Method.Method[],
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -1312,7 +1321,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           managementResponse,
         } = options
 
-        return {
+        const result = {
           status: 200,
           withReceipt<response>(response?: response) {
             if (managementResponse) {
@@ -1335,7 +1344,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               response: response as never,
             }) as response
           },
-        }
+        } as const
+        if (transport.supportsStreamingReceipts) streamingReceiptWrappers.add(result.withReceipt)
+        return result
       }
 
       // No credential provided—issue challenge

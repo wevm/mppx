@@ -69,6 +69,7 @@ export function sse(
   const base = Transport.http()
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
     name: 'sse',
+    supportsStreamingReceipts: true,
 
     captureRequest(request) {
       return (
@@ -111,7 +112,7 @@ export function sse(
           ? Sse_core.iterateData(response, { skip: (d) => d === '[DONE]' })
           : response
 
-      if (isAsyncGeneratorFunction(resolved) || isAsyncIterable(resolved)) {
+      if (isStreamGeneratorFunction(resolved) || isAsyncIterable(resolved)) {
         // Pass async generator functions directly so Sse.serve gives them
         // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
@@ -286,11 +287,10 @@ export function defaultServe(options: {
   })
 }
 
-function isAsyncGeneratorFunction(
+function isStreamGeneratorFunction(
   value: unknown,
 ): value is (...args: unknown[]) => AsyncIterable<string> {
-  if (typeof value !== 'function') return false
-  return value.constructor?.name === 'AsyncGeneratorFunction'
+  return typeof value === 'function'
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
@@ -301,7 +301,7 @@ function resolveMeteredGenerate(
   value: AsyncIterable<string> | ((...args: unknown[]) => AsyncIterable<string>),
   unitType: string | undefined,
 ): Sse_core.serve.Options['generate'] {
-  if (isAsyncGeneratorFunction(value)) return value as Sse_core.serve.Options['generate']
+  if (isStreamGeneratorFunction(value)) return value as Sse_core.serve.Options['generate']
   if (unitType !== 'request') return value as AsyncIterable<string>
 
   const iterable = value as AsyncIterable<string>
