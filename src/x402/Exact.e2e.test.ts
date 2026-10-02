@@ -266,6 +266,7 @@ describe('x402 exact e2e', () => {
           currency: evm.assets.baseSepolia.USDC,
           recipient: accounts[0].address,
           x402: {
+            routeBinding: 'resource',
             facilitator: {
               async verify() {
                 verifyCalls++

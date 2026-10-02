@@ -56,7 +56,7 @@ export type Options = {
    * and client bugs, not an active attacker. Body binding is unaffected either
    * way — `challenge.digest` is verified against the actual body.
    *
-   * @default 'resource'
+   * @default 'required'
    */
   routeBinding?: RouteBindingMode | undefined
 }
@@ -101,7 +101,7 @@ export function resolveOptions(parameters: {
         }
       : {}),
     maxTimeoutSeconds: parameters.options?.maxTimeoutSeconds ?? 300,
-    routeBinding: parameters.options?.routeBinding ?? 'resource',
+    routeBinding: parameters.options?.routeBinding ?? 'required',
   }
 }
 

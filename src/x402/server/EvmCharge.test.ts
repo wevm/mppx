@@ -148,7 +148,7 @@ describe('x402 evm charge route binding', () => {
   const url = 'https://example.com/paid-scoped'
   const scope = 'GET /paid-scoped'
 
-  test('a scoped charge accepts a standard extension echo without a bound nonce', async () => {
+  test('a scoped charge requires a route-bound nonce by default', async () => {
     const { mppx, reached } = createMppx()
     const route = mppx.evm.charge({ amount: '0.25', scope })
 
@@ -157,8 +157,6 @@ describe('x402 evm charge route binding', () => {
     if (challenged.status !== 402) throw new Error()
     const challenge = readChallenge(challenged.challenge)
 
-    // The challenge still advertises the binding mppx prefers, so an mppx client
-    // keeps producing it. Not producing it is no longer fatal.
     expect(challenge.extensions?.mppx?.info).toMatchObject({
       _mppx_scope: scope,
       method: 'GET',
@@ -176,12 +174,16 @@ describe('x402 evm charge route binding', () => {
       ),
     )
 
-    expect(result.status).toBe(200)
-    expect(reached).toEqual(['verify', 'settle'])
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(readError(result.challenge)).toBe(
+      'Payment verification failed: x402 payment payload does not bind required route metadata.',
+    )
+    expect(reached).toEqual([])
   })
 
-  test('a scoped charge still requires the resource to be echoed', async () => {
-    const { mppx, reached } = createMppx()
+  test("`routeBinding: 'resource'` requires the resource to be echoed", async () => {
+    const { mppx, reached } = createMppx({ routeBinding: 'resource' })
     const route = mppx.evm.charge({ amount: '0.25', scope })
 
     const challenged = await route(request(url))
@@ -200,8 +202,8 @@ describe('x402 evm charge route binding', () => {
     expect(reached).toEqual([])
   })
 
-  test('a scoped charge accepts an enriched echoed resource', async () => {
-    const { mppx, reached } = createMppx()
+  test("`routeBinding: 'resource'` accepts an enriched echoed resource", async () => {
+    const { mppx, reached } = createMppx({ routeBinding: 'resource' })
     const route = mppx.evm.charge({ amount: '0.25', scope })
 
     const challenged = await route(request(url))
@@ -226,7 +228,7 @@ describe('x402 evm charge route binding', () => {
   })
 
   test('a scoped charge rejects a credential minted for another route', async () => {
-    const { mppx, reached } = createMppx()
+    const { mppx, reached } = createMppx({ routeBinding: 'resource' })
     const route = mppx.evm.charge({ amount: '0.25', scope })
     const other = mppx.evm.charge({ amount: '0.25', scope: 'GET /other' })
 
@@ -450,12 +452,7 @@ describe('x402 evm charge route binding', () => {
   })
 })
 
-/**
- * `Proxy` attaches a derived scope to every charge it serves, so before this it
- * put each proxied route into the mppx-only binding mode with no way to opt out.
- * Reselling an API is what `Proxy` is for, so this is the case that has to work
- * without configuring anything.
- */
+/** `Proxy` scopes every route, so third-party clients require the explicit resource mode. */
 describe('x402 evm charge behind Proxy', () => {
   const origin = 'https://example.com'
   const basePath = '/__proxy'
@@ -463,7 +460,7 @@ describe('x402 evm charge behind Proxy', () => {
   const proxyUrl = `${origin}${basePath}/${serviceId}/free`
 
   function createProxy() {
-    const { mppx, reached } = createMppx()
+    const { mppx, reached } = createMppx({ routeBinding: 'resource' })
     const proxy = Proxy.create({
       basePath,
       async fetch() {
@@ -480,7 +477,7 @@ describe('x402 evm charge behind Proxy', () => {
     return { proxy, reached }
   }
 
-  test('is payable by a third-party client with no configuration', async () => {
+  test("is payable by a third-party client with `routeBinding: 'resource'`", async () => {
     const { proxy, reached } = createProxy()
 
     const challenged = await proxy.fetch(request(proxyUrl))

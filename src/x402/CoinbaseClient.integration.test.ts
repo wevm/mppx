@@ -502,7 +502,7 @@ function createMppxProxy(harness: CoinbaseHarness): Proxy.Proxy {
       evmServer.charge({
         currency: asset,
         recipient: recipient.address,
-        x402: { facilitator: harness.facilitator.url },
+        x402: { facilitator: harness.facilitator.url, routeBinding: 'resource' },
       }),
     ],
     secretKey: 'coinbase-x402-integration-secret-key',
