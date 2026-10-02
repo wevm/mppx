@@ -16,6 +16,8 @@ const paymentHeaders = new Set([
   'payment-receipt',
   'payment-required',
   'payment-response',
+  'payment-session',
+  'payment-session-snapshot',
   'payment-signature',
   'www-authenticate',
 ])
@@ -58,9 +60,64 @@ export function scrubResponse(response: Response): Response {
   headers.delete('content-encoding')
   headers.delete('content-length')
   headers.delete('set-cookie')
+  for (const name of paymentHeaders) {
+    if (name !== 'authorization' && name !== 'www-authenticate') headers.delete(name)
+  }
+  headers.delete('payment-authorization')
+  const authorization = headers.get('authorization')
+  if (authorization && /^\s*Payment(?:\s|$)/i.test(authorization)) headers.delete('authorization')
+  const authenticate = headers.get('www-authenticate')
+  if (authenticate) {
+    const remaining = removePaymentChallenges(authenticate)
+    if (remaining) headers.set('www-authenticate', remaining)
+    else headers.delete('www-authenticate')
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
   })
+}
+
+/** Removes Payment authentication challenges while preserving other schemes. */
+function removePaymentChallenges(value: string): string {
+  const starts: { index: number; scheme: string }[] = []
+  let inQuotes = false
+  let escaped = false
+
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]!
+    if (inQuotes) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === '"') inQuotes = false
+      continue
+    }
+    if (character === '"') {
+      inQuotes = true
+      continue
+    }
+
+    const previous = value.slice(0, index).trimEnd().at(-1)
+    if (index !== 0 && previous !== ',') continue
+    const match = value.slice(index).match(/^\s*([!#$%&'*+.^_`|~0-9A-Za-z-]+)(?=\s|,|$)/)
+    if (!match) continue
+    const start = index + match[0].length - match[0].trimStart().length
+    const afterScheme = start + match[1]!.length
+    let next = afterScheme
+    while (/\s/.test(value[next] ?? '')) next++
+    if (value[next] === '=') continue
+    starts.push({ index: start, scheme: match[1]!.toLowerCase() })
+    index = afterScheme - 1
+  }
+
+  return starts
+    .filter(({ scheme }) => scheme !== 'payment')
+    .map(({ index }) => {
+      const originalPosition = starts.findIndex((start) => start.index === index)
+      const end = starts[originalPosition + 1]?.index ?? value.length
+      return value.slice(index, end).replace(/,\s*$/, '').trim()
+    })
+    .filter(Boolean)
+    .join(', ')
 }

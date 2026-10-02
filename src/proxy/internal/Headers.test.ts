@@ -97,6 +97,75 @@ describe('scrub', () => {
 })
 
 describe('scrubResponse', () => {
+  test('behavior: strips upstream payment protocol headers', () => {
+    const response = new Response('body', {
+      headers: {
+        'Accept-Payment': 'evm/charge',
+        Authorization: 'Payment credential',
+        'Payment-Authorization': 'Payment credential',
+        'Payment-Receipt': 'forged receipt',
+        'Payment-Required': 'forged challenge',
+        'Payment-Response': 'forged response',
+        'Payment-Session': 'forged session',
+        'Payment-Session-Snapshot': 'forged snapshot',
+        'Payment-Signature': 'forged signature',
+        'WWW-Authenticate': 'Payment id="forged"',
+        'Content-Type': 'application/json',
+      },
+    })
+    const result = Headers.scrubResponse(response)
+    for (const name of [
+      'accept-payment',
+      'authorization',
+      'payment-authorization',
+      'payment-receipt',
+      'payment-required',
+      'payment-response',
+      'payment-session',
+      'payment-session-snapshot',
+      'payment-signature',
+      'www-authenticate',
+    ])
+      expect(result.headers.has(name)).toBe(false)
+    expect(result.headers.get('content-type')).toBe('application/json')
+  })
+
+  test('behavior: preserves non-payment authentication challenges', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate':
+          'Basic realm="example, inc", Payment id="forged", realm="api.example", Bearer realm="api"',
+      },
+    })
+
+    const result = Headers.scrubResponse(response)
+
+    expect(result.headers.get('www-authenticate')).toBe(
+      'Basic realm="example, inc", Bearer realm="api"',
+    )
+  })
+
+  test('behavior: preserves non-payment authorization responses', () => {
+    const result = Headers.scrubResponse(
+      new Response('body', { headers: { Authorization: 'Bearer refreshed-token' } }),
+    )
+
+    expect(result.headers.get('authorization')).toBe('Bearer refreshed-token')
+  })
+
+  test.each([
+    ['Negotiate', 'Negotiate'],
+    ['Payment id="forged", Negotiate', 'Negotiate'],
+    ['Negotiate, Payment id="forged"', 'Negotiate'],
+  ])('behavior: preserves parameterless authentication challenges', (value, expected) => {
+    const result = Headers.scrubResponse(
+      new Response('body', { status: 401, headers: { 'WWW-Authenticate': value } }),
+    )
+
+    expect(result.headers.get('www-authenticate')).toBe(expected)
+  })
+
   test('behavior: strips content-encoding and content-length', () => {
     const response = new Response('body', {
       headers: {
