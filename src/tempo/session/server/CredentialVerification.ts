@@ -314,6 +314,7 @@ export function requireSessionCredentialPayload(payload: unknown): SessionCreden
         descriptor: readDescriptor(candidate.descriptor),
         cumulativeAmount: readRawAmount(candidate.cumulativeAmount, 'cumulativeAmount'),
         signature: readHex(candidate.signature, 'signature'),
+        closeSignature: readHex(candidate.closeSignature, 'closeSignature'),
       }
   }
 }
@@ -661,6 +662,14 @@ async function validateCloseCredential(
     escrow,
     store,
   })
+  const closeAuthorized = Voucher.verifyCloseAuthorization(
+    escrow,
+    chainId,
+    { channelId, cumulativeAmount, signature: payload.closeSignature },
+    [channel.payer, channel.authorizedSigner],
+  )
+  if (!closeAuthorized)
+    throw new InvalidSignatureError({ reason: 'invalid close authorization signature' })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
   const state = await Chain.getChannelState(client, channelId, escrow)
   if (state.closeRequestedAt !== 0)
@@ -989,6 +998,14 @@ async function handleCloseCredential(
     escrow,
     store,
   })
+  const closeAuthorized = Voucher.verifyCloseAuthorization(
+    escrow,
+    chainId,
+    { channelId, cumulativeAmount, signature: payload.closeSignature },
+    [channel.payer, channel.authorizedSigner],
+  )
+  if (!closeAuthorized)
+    throw new InvalidSignatureError({ reason: 'invalid close authorization signature' })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
   const state = await Chain.getChannelState(client, channelId, escrow)
   if (state.closeRequestedAt !== 0)

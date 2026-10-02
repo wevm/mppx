@@ -214,12 +214,23 @@ export async function createClosePayload(
     chainId,
     escrow,
   )
+  const closeSignature = await Voucher.signCloseAuthorization(
+    client,
+    account,
+    {
+      channelId: voucher.channelId,
+      cumulativeAmount: uint96(BigInt(voucher.cumulativeAmount)),
+    },
+    escrow,
+    chainId,
+  )
   return {
     action: 'close',
     channelId: voucher.channelId,
     descriptor,
     cumulativeAmount: voucher.cumulativeAmount,
     signature: voucher.signature,
+    closeSignature,
   }
 }
 

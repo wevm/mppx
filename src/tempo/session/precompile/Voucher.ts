@@ -36,6 +36,27 @@ export const voucherTypes = {
   ],
 } as const
 
+/** EIP-712 type that distinguishes cooperative close authorization from a voucher. */
+export const closeAuthorizationTypes = {
+  CloseAuthorization: [
+    { name: 'channelId', type: 'bytes32' },
+    { name: 'cumulativeAmount', type: 'uint96' },
+  ],
+} as const
+
+function getCloseAuthorizationPayload(
+  verifyingContract: Address,
+  chainId: number,
+  authorization: Voucher,
+): Hex {
+  return hashTypedData({
+    domain: getVoucherDomain(verifyingContract, chainId),
+    types: closeAuthorizationTypes,
+    primaryType: 'CloseAuthorization',
+    message: authorization,
+  })
+}
+
 function getVoucherDigest(chainId: number, voucher: Voucher): Hex {
   return Channel.getVoucherSignPayload({
     chainId,
@@ -116,6 +137,55 @@ export async function signVoucher(
     )
 
   return SignatureEnvelope.serialize(envelope)
+}
+
+/**
+ * Signs a distinct EIP-712 authorization for cooperatively closing a channel.
+ */
+export async function signCloseAuthorization(
+  client: Client,
+  account: Account,
+  authorization: Voucher,
+  verifyingContract: Address,
+  chainId: number,
+): Promise<Hex> {
+  const signature = await signTypedData(client, {
+    account,
+    domain: getVoucherDomain(verifyingContract, chainId),
+    types: closeAuthorizationTypes,
+    primaryType: 'CloseAuthorization',
+    message: authorization,
+  })
+  const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+  if (!isPrimitiveEnvelope(envelope.type))
+    throw new Error(
+      `TIP-1034 close authorizations require a TIP-1020 primitive signature; received "${envelope.type}".`,
+    )
+  return SignatureEnvelope.serialize(envelope)
+}
+
+/** Verifies that a cooperative-close signature belongs to a channel authority. */
+export function verifyCloseAuthorization(
+  escrowContract: Address,
+  chainId: number,
+  authorization: SignedVoucher,
+  expectedSigners: readonly Address[],
+): boolean {
+  try {
+    const envelope = SignatureEnvelope.from(authorization.signature as SignatureEnvelope.Serialized)
+    if (!isPrimitiveEnvelope(envelope.type)) return false
+    if (
+      SignatureEnvelope.serialize(envelope).toLowerCase() !== authorization.signature.toLowerCase()
+    )
+      return false
+
+    const payload = getCloseAuthorizationPayload(escrowContract, chainId, authorization)
+    const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
+    const valid = SignatureEnvelope.verify(envelope, { address: signer, payload })
+    return valid && expectedSigners.some((expected) => TempoAddress.isEqual(signer, expected))
+  } catch {
+    return false
+  }
 }
 
 /**

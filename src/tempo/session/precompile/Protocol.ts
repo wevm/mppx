@@ -133,6 +133,8 @@ export type CloseCredentialPayload = {
   cumulativeAmount: RawAmountString
   /** Voucher signature for `cumulativeAmount`. */
   signature: Hex
+  /** Separate signature authorizing the cooperative close action. */
+  closeSignature: Hex
 }
 
 /**

@@ -20,7 +20,7 @@ import type {
   ChannelDescriptor,
   SessionCredentialPayload,
 } from '../../tempo/session/precompile/Protocol.js'
-import { signVoucher } from '../../tempo/session/precompile/Voucher.js'
+import { signCloseAuthorization, signVoucher } from '../../tempo/session/precompile/Voucher.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from '../account.js'
 import {
   fetchTokenInfo,
@@ -298,20 +298,27 @@ export function tempo() {
         }) {
           const descriptor = _session?.descriptor
           if (!descriptor) throw new Error('session descriptor not available')
+          const voucher = { channelId: channelId as `0x${string}`, cumulativeAmount }
+          const signature = await signVoucher(client!, account!, voucher, escrowContract, chainId)
           return Credential.serialize({
             challenge,
             payload: {
               action,
               channelId,
+              ...(action === 'close'
+                ? {
+                    closeSignature: await signCloseAuthorization(
+                      client!,
+                      account!,
+                      voucher,
+                      escrowContract,
+                      chainId,
+                    ),
+                  }
+                : {}),
               descriptor,
               cumulativeAmount: cumulativeAmount.toString(),
-              signature: await signVoucher(
-                client!,
-                account!,
-                { channelId: channelId as `0x${string}`, cumulativeAmount },
-                escrowContract,
-                chainId,
-              ),
+              signature,
             },
             source: `did:pkh:eip155:${chainId}:${account!.address}`,
           })

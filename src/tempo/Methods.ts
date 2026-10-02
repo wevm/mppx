@@ -233,6 +233,7 @@ export const session = Method.from({
         z.object({
           action: z.literal('close'),
           channelId: z.hash(),
+          closeSignature: z.signature(),
           cumulativeAmount: z.amount(),
           descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
