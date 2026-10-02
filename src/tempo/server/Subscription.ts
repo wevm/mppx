@@ -28,6 +28,7 @@ import * as Attribution from '../Attribution.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
+import { resolveFeeToken } from '../internal/fee-token.js'
 import * as Proof from '../internal/proof.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
@@ -962,6 +963,18 @@ async function submitSubscriptionPayment(parameters: {
       ...baseTransaction,
       nonceKey: 'expiring',
     } as never)
+    const resolvedChainId = chainId ?? client.chain!.id
+    const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(resolvedChainId)
+    const feeToken =
+      allowedFeeTokens.length === 1
+        ? allowedFeeTokens[0]
+        : await resolveFeeToken({
+            account: feePayer.address,
+            allowedTokens: allowedFeeTokens,
+            candidateTokens: allowedFeeTokens,
+            client,
+          })
+    delete (prepared as Record<string, unknown>).feeToken
     prepared.gas = (prepared.gas ?? 0n) + 5_000n
     ;(prepared as Record<string, unknown>).feePayer = true
     const userSerialized = await signTransaction(client, prepared as never)
@@ -974,16 +987,24 @@ async function submitSubscriptionPayment(parameters: {
       async complete() {
         const sponsored = FeePayer.prepareSponsoredTransaction({
           account: feePayer,
-          chainId: chainId ?? client.chain!.id,
+          allowedFeeTokens,
+          chainId: resolvedChainId,
           details: {
             amount: String(request.amount),
             currency: String(request.currency),
             recipient: String(request.recipient),
           },
           ...(feePayerPolicy ? { policy: feePayerPolicy } : {}),
-          transaction: userTransaction as never,
+          transaction: {
+            ...userTransaction,
+            ...(feeToken ? { feeToken } : {}),
+          } as never,
         })
-        return { feePayer: feePayer.address, transaction: sponsored }
+        return {
+          feePayer: feePayer.address,
+          feeToken: sponsored.feeToken,
+          transaction: sponsored,
+        }
       },
     })
     return await signTransaction(client, completed.transaction as never)

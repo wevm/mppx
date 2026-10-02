@@ -40,6 +40,7 @@ const subscriptionPeriodCount = '1'
 const subscriptionPeriodUnit = 'day'
 const subscriptionPeriodMilliseconds = 86_400_000
 const subscriptionRecipient = '0x1234567890abcdef1234567890abcdef12345678'
+const disallowedFeeToken = '0x9999999999999999999999999999999999999999'
 const rootAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000001',
 )
@@ -117,7 +118,11 @@ async function createCredential(
 
 function createBillingClient(
   hashes: readonly string[],
-  options: { account?: typeof rootAccount; failSimulation?: number | undefined } = {},
+  options: {
+    account?: typeof rootAccount
+    failSimulation?: number | undefined
+    feeToken?: Address | undefined
+  } = {},
 ) {
   const callRequests: Record<string, unknown>[] = []
   const rpcMethods: string[] = []
@@ -125,7 +130,7 @@ function createBillingClient(
   let simulations = 0
   const client = createClient({
     account: options.account,
-    chain: { ...tempo_chain, id: chainId },
+    chain: { ...tempo_chain, id: chainId, feeToken: options.feeToken },
     transport: custom({
       async request({ method, params }) {
         rpcMethods.push(method)
@@ -148,7 +153,10 @@ function createBillingClient(
   return { callRequests, client, rpcMethods }
 }
 
-async function activateFeeSponsoredSubscription(options?: { failSimulation?: number | undefined }) {
+async function activateFeeSponsoredSubscription(options?: {
+  failSimulation?: number | undefined
+  feeToken?: Address | undefined
+}) {
   const store = Store.memory()
   const billing = createBillingClient([hashActivate], {
     account: rootAccount,
@@ -292,12 +300,16 @@ function createConfirmingBillingClient(options?: {
 
 describe('tempo.subscription', () => {
   test('preflights sender and final envelopes for fee-sponsored activation', async () => {
-    const { callRequests, result, rpcMethods } = await activateFeeSponsoredSubscription()
+    const { callRequests, result, rpcMethods } = await activateFeeSponsoredSubscription({
+      feeToken: disallowedFeeToken,
+    })
 
     expect(result.status).toBe(200)
-    expect(callRequests).toHaveLength(2)
-    expect(callRequests[0]).not.toHaveProperty('feePayer')
-    expect(callRequests[1]?.feePayer).toBe(rootAccount.address)
+    const transactionCalls = callRequests.filter((request) => 'calls' in request)
+    expect(transactionCalls).toHaveLength(2)
+    expect(transactionCalls[0]).not.toHaveProperty('feePayer')
+    expect(transactionCalls[1]?.feePayer).toBe(rootAccount.address)
+    expect(transactionCalls[1]?.feeToken).toBe(tokens.pathUsd)
     expect(rpcMethods).toContain('eth_sendRawTransaction')
   })
 
