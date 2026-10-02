@@ -31,6 +31,7 @@ export function stripe(config: stripe.Config) {
     rewriteRequest(request, ctx) {
       const apiKey = ctx.apiKey ?? config.apiKey
       request.headers.delete('Stripe-Account')
+      request.headers.delete('Stripe-Context')
       request.headers.set('Authorization', `Basic ${btoa(`${apiKey}:`)}`)
       return request
     },

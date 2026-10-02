@@ -81,7 +81,7 @@ describe('stripe', () => {
     expect(receipt.method).toBe('tempo')
   })
 
-  test('security: strips caller-supplied Stripe-Account header before proxying', async () => {
+  test('security: strips caller-supplied Stripe routing headers before proxying', async () => {
     upstreamServer = await Http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(
@@ -89,6 +89,7 @@ describe('stripe', () => {
           headers: {
             authorization: req.headers.authorization,
             stripeAccount: req.headers['stripe-account'],
+            stripeContext: req.headers['stripe-context'],
           },
         }),
       )
@@ -112,16 +113,22 @@ describe('stripe', () => {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Stripe-Account': 'acct_123',
+        'Stripe-Context': 'ctx_123',
       },
       body: 'amount=100&currency=usd',
     })
     expect(res.status).toBe(200)
 
     const body = (await res.json()) as {
-      headers: { authorization: string; stripeAccount?: string | string[] | undefined }
+      headers: {
+        authorization: string
+        stripeAccount?: string | string[] | undefined
+        stripeContext?: string | string[] | undefined
+      }
     }
     expect(body.headers.authorization).toBe(`Basic ${btoa(`${apiKey}:`)}`)
     expect(body.headers.stripeAccount).toBeUndefined()
+    expect(body.headers.stripeContext).toBeUndefined()
   })
 
   test('behavior: returns 402 without credential', async () => {
