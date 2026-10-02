@@ -46,7 +46,7 @@ class MockSocket implements Ws.Socket {
     ;(this.listeners[type] as Set<(...args: any[]) => void>).add(listener)
   }
 
-  receive(data: string) {
+  receive(data: unknown) {
     for (const listener of Array.from(this.listeners.message)) listener(data)
   }
 
@@ -311,6 +311,71 @@ describe('isows', () => {
     expect(
       socket.sent.some((message) => message.includes('too many queued payment messages')),
     ).toBe(true)
+  })
+
+  test.each([
+    ['text', '{"authorization":"too large"}'],
+    ['binary', new Uint8Array(17)],
+    ['binary fragments', [new Uint8Array(8), new Uint8Array(9)]],
+    ['blob', new Blob([new Uint8Array(17)])],
+  ])('rejects oversized %s frames before parsing them', async (_type, payload) => {
+    const socket = new MockSocket()
+    let routeCalls = 0
+
+    await Ws.serve({
+      socket,
+      store: Store.memory(),
+      url: 'ws://example.test/stream',
+      maxIncomingMessageBytes: 16,
+      route: async () => {
+        routeCalls++
+        throw new Error('oversized frame must not reach the payment route')
+      },
+      generate: async function* () {},
+    })
+
+    socket.receive(payload)
+
+    await expect.poll(() => socket.closed).toBe(true)
+    expect(routeCalls).toBe(0)
+    expect(socket.sent.some((message) => message.includes('payment message is too large'))).toBe(
+      true,
+    )
+  })
+
+  test('stops accepting frames before an oversized-frame notification settles', async () => {
+    const socket = new MockSocket()
+    socket.send = () => new Promise<void>(() => {})
+    let routeCalls = 0
+
+    await Ws.serve({
+      socket,
+      store: Store.memory(),
+      url: 'ws://example.test/stream',
+      maxIncomingMessageBytes: 1,
+      route: async () => {
+        routeCalls++
+        throw new Error('closed socket must not reach the payment route')
+      },
+      generate: async function* () {},
+    })
+
+    socket.receive('oversized')
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    expect(socket.closed).toBe(true)
+    expect(routeCalls).toBe(0)
   })
 
   test('rejects credentials whose amount does not match the expected amount', async () => {

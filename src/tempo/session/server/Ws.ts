@@ -98,6 +98,7 @@ export async function serve(options: serve.Options): Promise<void> {
   const {
     amount: expectedAmount,
     generate,
+    maxIncomingMessageBytes = 64 * 1024,
     pollIntervalMs = 100,
     route,
     socket,
@@ -250,6 +251,18 @@ export async function serve(options: serve.Options): Promise<void> {
 
   const onMessage = (payload: unknown) => {
     if (runtime.closed) return
+    const messageBytes = frameByteLength(payload)
+    if (messageBytes !== null && messageBytes > maxIncomingMessageBytes) {
+      runtime.closed = true
+      abortController.abort()
+      unsubscribe()
+      void send(
+        socket,
+        formatErrorMessage({ message: 'payment message is too large', status: 413 }),
+      ).catch(() => {})
+      void Promise.resolve(socket.close(1009, 'payment message is too large')).catch(() => {})
+      return
+    }
     const raw = toText(payload)
     if (!raw) return
     const message = parseMessage(raw)
@@ -330,6 +343,8 @@ export declare namespace serve {
     /** Application stream. A manual stream can call `charge(amount)` with a
      *  per-message raw-unit amount; omitting it uses the challenge tick cost. */
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Maximum accepted inbound WebSocket frame size in bytes. @default 65536 */
+    maxIncomingMessageBytes?: number | undefined
     pollIntervalMs?: number | undefined
     /** Payment route handler. Receives synthetic `POST` requests with only
      *  the `Authorization` header — no cookies, bodies, or upgrade headers. */
@@ -342,6 +357,35 @@ export declare namespace serve {
     store: ChannelStore.ChannelStore | import('../../../Store.js').Store
     url: string | URL
   }
+}
+
+function frameByteLength(value: unknown): number | null {
+  if (value instanceof ArrayBuffer) return value.byteLength
+  if (ArrayBuffer.isView(value)) return value.byteLength
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return value.size
+  if (Array.isArray(value)) {
+    let bytes = 0
+    for (const fragment of value) {
+      const fragmentBytes = frameByteLength(fragment)
+      if (fragmentBytes === null) return null
+      bytes += fragmentBytes
+    }
+    return bytes
+  }
+  if (typeof value !== 'string') return null
+
+  let bytes = 0
+  for (let index = 0; index < value.length; index++) {
+    const codePoint = value.codePointAt(index)!
+    if (codePoint <= 0x7f) bytes += 1
+    else if (codePoint <= 0x7ff) bytes += 2
+    else if (codePoint <= 0xffff) bytes += 3
+    else {
+      bytes += 4
+      index += 1
+    }
+  }
+  return bytes
 }
 
 function normalizeHttpUrl(value: string | URL): string {
