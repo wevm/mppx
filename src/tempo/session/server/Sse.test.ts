@@ -5,10 +5,48 @@ import { ChannelClosedError } from '../../../Errors.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js'
 import type * as ChannelStore from './ChannelStore.js'
-import { formatNeedVoucherEvent, formatReceiptEvent, parseEvent, serve } from './Sse.js'
+import {
+  formatNeedVoucherEvent,
+  formatReceiptEvent,
+  iterateData,
+  parseEvent,
+  serve,
+} from './Sse.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
+
+describe('iterateData', () => {
+  test.each([
+    ['LF', 'data: one\n\ndata: two\n\n'],
+    ['CRLF', 'data: one\r\n\r\ndata: two\r\n\r\n'],
+    ['CR', 'data: one\r\rdata: two\r\r'],
+  ])('parses %s event boundaries', async (_, input) => {
+    const response = new Response(input)
+    const values: string[] = []
+
+    for await (const value of iterateData(response)) values.push(value)
+
+    expect(values).toEqual(['one', 'two'])
+  })
+
+  test('parses a CRLF boundary split across chunks', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: one\r'))
+        controller.enqueue(encoder.encode('\n\r'))
+        controller.enqueue(encoder.encode('\ndata: two\r\n\r\n'))
+        controller.close()
+      },
+    })
+    const values: string[] = []
+
+    for await (const value of iterateData(new Response(stream))) values.push(value)
+
+    expect(values).toEqual(['one', 'two'])
+  })
+})
 
 describe('formatReceiptEvent', () => {
   test('produces valid SSE format', () => {

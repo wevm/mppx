@@ -224,32 +224,53 @@ export async function* iterateData(
   try {
     while (true) {
       const { value, done } = await reader.read()
-      if (done) break
+      if (done) buffer += decoder.decode()
+      else buffer += decoder.decode(value, { stream: true })
 
-      buffer += decoder.decode(value, { stream: true })
-
-      // Split on double-newline SSE event boundaries.
-      const events = buffer.split('\n\n')
-      // Last element may be incomplete — keep in buffer.
-      buffer = events.pop() ?? ''
-
-      for (const event of events) {
+      while (true) {
+        const separator = findSseSeparator(buffer, done)
+        if (!separator) break
+        const event = buffer.slice(0, separator.index)
+        buffer = buffer.slice(separator.index + separator.length)
         if (!event.trim()) continue
-        const data = extractData(event)
+        const data = extractData(event.replace(/\r\n|\r/g, '\n'))
         if (data === null) continue
         if (skip?.(data)) continue
         yield data
       }
+      if (done) break
     }
 
     // Flush remaining buffer.
     if (buffer.trim()) {
-      const data = extractData(buffer)
+      const data = extractData(buffer.replace(/\r\n|\r/g, '\n'))
       if (data !== null && !skip?.(data)) yield data
     }
   } finally {
     reader.releaseLock()
   }
+}
+
+function findSseSeparator(
+  value: string,
+  complete: boolean,
+): { index: number; length: number } | undefined {
+  for (let index = 0; index < value.length; index++) {
+    const first = lineEndingLength(value, index, complete)
+    if (!first) continue
+    const second = lineEndingLength(value, index + first, complete)
+    if (second) return { index, length: first + second }
+    index += first - 1
+  }
+  return undefined
+}
+
+function lineEndingLength(value: string, index: number, complete: boolean): number {
+  if (value[index] === '\n') return 1
+  if (value[index] !== '\r') return 0
+  if (value[index + 1] === '\n') return 2
+  if (index + 1 === value.length && !complete) return 0
+  return 1
 }
 
 /** Type helpers for {@link iterateData}. */
