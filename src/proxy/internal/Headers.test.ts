@@ -18,6 +18,7 @@ describe('scrub', () => {
       'Accept-Payment': 'evm/charge',
       'Content-Type': 'application/json',
       'PAYMENT-RECEIPT': 'receipt',
+      'Payment-Authorization': 'credential',
       'PAYMENT-REQUIRED': 'required',
       'PAYMENT-RESPONSE': 'response',
       'PAYMENT-SIGNATURE': 'signature',
@@ -26,6 +27,7 @@ describe('scrub', () => {
     const result = Headers.scrub(headers)
     expect(result.has('accept-payment')).toBe(false)
     expect(result.has('payment-receipt')).toBe(false)
+    expect(result.has('payment-authorization')).toBe(false)
     expect(result.has('payment-required')).toBe(false)
     expect(result.has('payment-response')).toBe(false)
     expect(result.has('payment-signature')).toBe(false)

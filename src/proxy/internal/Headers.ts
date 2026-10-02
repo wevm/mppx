@@ -13,6 +13,7 @@ const hopByHopHeaders = new Set([
 const paymentHeaders = new Set([
   'accept-payment',
   'authorization',
+  'payment-authorization',
   'payment-receipt',
   'payment-required',
   'payment-response',
