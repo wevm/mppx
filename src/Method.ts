@@ -291,6 +291,9 @@ export type RequestFn<method extends Method> = (
  * a server grant access based on existing application state (for example, an
  * active subscription) without requiring a fresh `Payment` credential.
  *
+ * Authorization does not emit `payment.success`; use method lifecycle hooks for
+ * payments performed during authorization.
+ *
  * **HTTP-only.** The `input` parameter is a Fetch `Request`; non-HTTP transports
  * do not invoke this hook.
  *

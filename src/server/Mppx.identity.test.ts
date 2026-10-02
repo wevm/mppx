@@ -203,8 +203,7 @@ test.each([
   const a = Method.toServer(definition, {
     ...(alias ? ({ alias: 'a' } as const) : {}),
     defaults: { currency: 'A' },
-    authorize: async () =>
-      flow === 'authorize' || flow === 'throwing hook' ? { receipt } : undefined,
+    authorize: async () => (flow === 'authorize' ? { receipt } : undefined),
     verify: async () => receipt,
     onPaymentSuccess: aSuccess,
   })
@@ -221,7 +220,7 @@ test.each([
   mppx.on('*', allEvents)
   const handler = mppx.compose([a, { amount: '1', currency: 'A' }])
   const initial = await handler(new Request('https://example.test'))
-  if (flow === 'verify' || flow === 'standalone') {
+  if (flow !== 'authorize') {
     expect(initial.status).toBe(402)
     if (initial.status !== 402) throw new Error()
     const credential = Credential.from({
@@ -238,7 +237,16 @@ test.each([
       )
       expect(paid.status).toBe(200)
     }
-  } else expect(initial.status).toBe(200)
+  } else {
+    expect(initial.status).toBe(200)
+    expect(globalSuccess).not.toHaveBeenCalled()
+    expect(aSuccess).not.toHaveBeenCalled()
+    expect(bSuccess).not.toHaveBeenCalled()
+    expect(allEvents.mock.calls.filter(([event]) => event.name === 'payment.success')).toHaveLength(
+      0,
+    )
+    return
+  }
   expect(globalSuccess).toHaveBeenCalledTimes(1)
   expect(allEvents.mock.calls.filter(([event]) => event.name === 'payment.success')).toHaveLength(1)
   expect(aSuccess.mock.invocationCallOrder[0]).toBeLessThan(

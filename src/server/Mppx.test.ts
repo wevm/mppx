@@ -1471,7 +1471,7 @@ describe('server events', () => {
     ])
   })
 
-  test('emits payment success when authorize grants access without a credential', async () => {
+  test('does not emit payment success when authorize grants access without a credential', async () => {
     const events: string[] = []
     const serverMethod = Method.toServer(eventCharge, {
       async authorize() {
@@ -1493,7 +1493,7 @@ describe('server events', () => {
     const result = await handler.charge(options())(new Request('https://example.com/resource'))
 
     expect(result.status).toBe(200)
-    expect(events).toEqual(['success:tx-authorized:undefined:undefined'])
+    expect(events).toEqual([])
   })
 
   test('emits payment failure when authorize rejects', async () => {

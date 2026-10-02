@@ -1348,19 +1348,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               request: challenge.request,
             } as never)
             if (authorized) {
-              await events.emit(
-                'payment.success',
-                createPaymentSuccessContext({
-                  capturedRequest,
-                  challenge,
-                  input,
-                  method,
-                  receipt: authorized.receipt,
-                  request: parsedRequest,
-                  requestInput: request,
-                }) as never,
-                method,
-              )
               return success(authorized.receipt, {
                 managementResponse: authorized.response,
               })

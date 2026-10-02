@@ -360,6 +360,8 @@ describe('tempo.subscription', () => {
     })
 
     const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const onPaymentSuccess = vi.fn()
+    mppx.onPaymentSuccess(onPaymentSuccess)
     const challengeResult = await mppx.tempo.subscription({})(
       new Request('https://example.com/resource', {
         headers: { 'X-Subscription-Key': subscriptionKey },
@@ -389,6 +391,7 @@ describe('tempo.subscription', () => {
     )
 
     expect(activated.status).toBe(200)
+    expect(onPaymentSuccess).toHaveBeenCalledTimes(1)
     expect(activationCount).toBe(1)
 
     const replayed = await mppx.tempo.subscription({})(
@@ -417,6 +420,7 @@ describe('tempo.subscription', () => {
     const response = reused.withReceipt(new Response('OK'))
     const receipt = response.headers.get('Payment-Receipt')
     expect(receipt).toBeTruthy()
+    expect(onPaymentSuccess).toHaveBeenCalledTimes(1)
   })
 
   test('automatically creates an access key and submits the activation payment', async () => {
