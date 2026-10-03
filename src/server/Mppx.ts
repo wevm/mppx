@@ -18,6 +18,7 @@ import type * as Receipt from '../Receipt.js'
 import * as x402_Header from '../x402/Header.js'
 import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
+import * as ChallengeMeta from './internal/challengeMeta.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as Scope from './internal/scope.js'
@@ -2171,7 +2172,7 @@ async function resolveRouteChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: parameters.meta,
+    meta: ChallengeMeta.withNonce(parameters.meta),
     realm: effectiveRealm,
     request: request as never,
     secretKey: parameters.secretKey,
@@ -2200,7 +2201,7 @@ function createFallbackChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: parameters.meta,
+    meta: ChallengeMeta.withNonce(parameters.meta),
     realm:
       parameters.realm ??
       (parameters.capturedRequest
@@ -2457,7 +2458,9 @@ function opaqueValuesMatch(
   expected: Record<string, string> | undefined,
   actual: Record<string, string> | undefined,
 ): boolean {
-  return isDeepStrictEqual(expected, actual)
+  // The echoed nonce is authenticated by the challenge HMAC, but is not a
+  // stable route requirement. Every other metadata field remains pinned.
+  return isDeepStrictEqual(ChallengeMeta.routeMeta(expected), ChallengeMeta.routeMeta(actual))
 }
 
 function hydrateCredentialMeta<payload>(
@@ -2506,7 +2509,7 @@ declare namespace MethodFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601) or Date. */
     expires?: z.DatetimeInput | undefined
-    /** Optional server-defined correlation data (serialized as `opaque` in the request). Flat string-to-string map; clients MUST NOT modify. */
+    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce; clients MUST echo opaque unchanged. */
     meta?: Record<string, string> | undefined
     /** Optional route/resource scope bound via reserved challenge metadata. */
     scope?: string | undefined

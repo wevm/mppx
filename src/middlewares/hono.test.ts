@@ -1,6 +1,6 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { Challenge, Credential, Method, Receipt, z } from 'mppx'
+import { Challenge, Credential, Method, PaymentRequest, Receipt, z } from 'mppx'
 import {
   evm as evm_client,
   Mppx as Mppx_client,
@@ -348,7 +348,10 @@ describe('scope binding', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYWxwaGEvOmlkIn0')
+    expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
+      _mppx_scope: 'GET /alpha/:id',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${server.url}/beta/1`, {
@@ -375,7 +378,10 @@ describe('scope binding', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6InNoYXJlZC1zY29wZSJ9')
+    expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
+      _mppx_scope: 'shared-scope',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${server.url}/beta/2`, {

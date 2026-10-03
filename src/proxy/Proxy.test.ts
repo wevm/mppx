@@ -1,4 +1,4 @@
-import { Challenge, Credential, Method, Receipt, z } from 'mppx'
+import { Challenge, Credential, Method, PaymentRequest, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vp/test'
@@ -850,7 +850,10 @@ describe('create', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYXBpL3YxL2FscGhhIn0')
+    expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
+      _mppx_scope: 'GET /api/v1/alpha',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {
@@ -892,7 +895,10 @@ describe('create', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6InNoYXJlZC1zY29wZSJ9')
+    expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
+      _mppx_scope: 'shared-scope',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {
