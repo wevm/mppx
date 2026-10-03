@@ -16,6 +16,7 @@ import * as Expires from '../../../Expires.js'
 import type { MaybePromise } from '../../../internal/types.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
+import * as ChallengeMeta from '../../../server/internal/challengeMeta.js'
 import * as Store from '../../../Store.js'
 import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
@@ -155,6 +156,7 @@ function createBootstrapChallenge(parameters: {
 }) {
   return Challenge.fromMethod(Methods.charge, {
     expires: parameters.expires,
+    meta: ChallengeMeta.withNonce(undefined),
     realm: parameters.realm,
     request: parameters.request,
     secretKey: parameters.secretKey,

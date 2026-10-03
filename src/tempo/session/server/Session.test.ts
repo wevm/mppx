@@ -2509,6 +2509,7 @@ describe('precompile server session unit guardrails', () => {
 
   describe('same-route bootstrap', () => {
     function createBootstrapRoute(parameters: {
+      expires?: string | undefined
       rawStore: Store.AtomicStore
       recipient?: Address | undefined
       resolveChannelId?: ResolveSessionChannelId | undefined
@@ -2530,7 +2531,12 @@ describe('precompile server session unit guardrails', () => {
         ],
         realm: 'api.example.com',
         secretKey: 'test-secret-key-test-secret-key-32',
-      }).session({ amount: '1', decimals: 0, unitType: 'request' })
+      }).session({
+        amount: '1',
+        decimals: 0,
+        ...(parameters.expires !== undefined ? { expires: parameters.expires } : {}),
+        unitType: 'request',
+      })
     }
 
     async function createBootstrapCredential(response: Response) {
@@ -2567,6 +2573,23 @@ describe('precompile server session unit guardrails', () => {
       expect(challenge.intent).toBe('charge')
       expect(challenge.request.amount).toBe('0')
     })
+
+    test.each([undefined, '2099-01-01T00:00:00Z'])(
+      'bootstrap HEAD challenges are unique with expiration %s',
+      async (expires) => {
+        const route = createBootstrapRoute({ rawStore: Store.memory(), expires })
+        const challenges = await Promise.all(
+          Array.from({ length: 5 }, async () =>
+            Challenge.fromResponse(await bootstrapResponse(route)),
+          ),
+        )
+        expect(new Set(challenges.map((challenge) => challenge.id)).size).toBe(5)
+        for (const challenge of challenges)
+          expect(
+            Challenge.verify(challenge, { secretKey: 'test-secret-key-test-secret-key-32' }),
+          ).toBe(true)
+      },
+    )
 
     test('malformed bootstrap payload returns an invalid-payload challenge', async () => {
       const route = createBootstrapRoute({ rawStore: Store.memory() })

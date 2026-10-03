@@ -10,6 +10,7 @@ import * as Credential_ from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Types from '../../evm/Types.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
+import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
 import * as Scope from '../../server/internal/scope.js'
 import * as ServerTransport from '../../server/Transport.js'
 import * as x402_Header from '../Header.js'
@@ -156,8 +157,9 @@ export function createPath(config: ResolvedOptions): Path {
       const isRouteBound = clientNonce !== undefined
       const routeRequiresBinding =
         challenge.digest !== undefined ||
-        challenge.opaque !== undefined ||
-        challenge.meta !== undefined
+        (challenge.meta === undefined
+          ? challenge.opaque !== undefined
+          : ChallengeMeta.routeMeta(challenge.meta) !== undefined)
       // `extensions.mppx` binding is not part of the x402 spec, so a client mppx
       // did not write cannot produce it. Requiring it makes every scoped route —
       // and everything behind `Proxy`, which scopes what it serves — unpayable by
@@ -414,8 +416,13 @@ function routeExtensions(challenge: Challenge.Challenge, input: Request): x402_T
   const scope = Scope.read(challenge.meta)
   if (scope !== undefined) binding[Scope.reservedMetaKey] = scope
   if (challenge.digest !== undefined) binding.digest = challenge.digest
+  const meta = ChallengeMeta.routeMeta(challenge.meta)
   const opaque =
-    challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : undefined)
+    challenge.meta === undefined
+      ? challenge.opaque
+      : meta
+        ? PaymentRequest.serialize(meta)
+        : undefined
   if (opaque !== undefined) binding.opaque = opaque
   return {
     [mppxExtensionKey]: {
