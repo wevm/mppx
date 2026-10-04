@@ -1,6 +1,7 @@
 ---
 title: 'Package check cleanup reinstalls dependencies with the publish manifest'
 severity: 'minor'
+issue: 'wevm/mppx#928'
 ---
 
 ### Expected Behavior

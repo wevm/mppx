@@ -1,6 +1,7 @@
 ---
 title: 'pnpm checks abort while attempting non-interactive dependency repair'
 severity: 'minor'
+issue: 'wevm/mppx#837'
 ---
 
 ## Expected Behavior
