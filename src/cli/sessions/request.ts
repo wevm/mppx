@@ -13,6 +13,7 @@ import type { TempoSessionChallenge } from '../../tempo/session/client/Transport
 import { isEventStream, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
 import { resolvePersistentAccount } from '../account.js'
 import {
+  fetchTokenInfo,
   isTestnet,
   printResponseHeaders,
   resolveChain,
@@ -81,10 +82,6 @@ export function resolveSessionSelection(
   })
 }
 
-function sessionDecimals(challenge: Challenge.Challenge): number {
-  return typeof challenge.request.decimals === 'number' ? challenge.request.decimals : 6
-}
-
 /** @internal Resolves whether the CLI accepts a server-advertised custom escrow. */
 export function resolveAllowCustomEscrow(
   methodOptions: Record<string, string>,
@@ -105,11 +102,11 @@ export function resolveSessionMaxDeposit(
   challenge: Challenge.Challenge,
   methodOptions: Record<string, string>,
   testnet: boolean,
+  decimals: number,
 ): string | undefined {
   if (methodOptions.deposit !== undefined) return methodOptions.deposit
   const suggested = challenge.request.suggestedDeposit
-  if (typeof suggested === 'string')
-    return formatUnits(BigInt(suggested), sessionDecimals(challenge))
+  if (typeof suggested === 'string') return formatUnits(BigInt(suggested), decimals)
   return testnet ? '10' : undefined
 }
 
@@ -176,6 +173,13 @@ export async function runPersistentSessionRequest(
       message: `Challenge requires chainId ${challengeContext.chainId}, but RPC is chainId ${chain.id}.`,
       exitCode: 2,
     })
+
+  const { decimals } = await fetchTokenInfo(
+    client,
+    challengeContext.token,
+    resolvedAccount.account.address,
+    { requireDecimals: true },
+  )
 
   const scope = {
     payer: resolvedAccount.account.address,
@@ -276,11 +280,12 @@ export async function runPersistentSessionRequest(
       client,
       channelStore,
       credentialContext: parameters.credentialContext,
-      decimals: sessionDecimals(parameters.challenge),
+      decimals,
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,
         parameters.methodOptions,
         isTestnet(chain),
+        decimals,
       ),
       fetch: async (input, init) => {
         if (!replayPending) return parameters.fetch(input, init)
