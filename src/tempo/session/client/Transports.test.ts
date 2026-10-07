@@ -129,8 +129,7 @@ describe('HttpManagement', () => {
   }
 
   function authorizationHeader(init: RequestInit | undefined) {
-    const headers = init?.headers as Record<string, string> | undefined
-    return headers?.[Constants.Headers.authorization]
+    return new Headers(init?.headers).get(Constants.Headers.authorization)
   }
 
   describe('precompile session HTTP management helpers', () => {
@@ -467,6 +466,97 @@ describe('HttpManagement', () => {
           target: { challenge: challenge(), channel: channel(), channelId },
         }),
       ).rejects.toThrow('Session close response included a mismatched payment receipt.')
+    })
+
+    describe('challenge with a Payment-Authorization credential header', () => {
+      function headerChallenge(snapshot_?: SessionSnapshot) {
+        return {
+          ...challenge(snapshot_),
+          header: Constants.Headers.paymentAuthorization,
+        } as TempoSessionChallenge
+      }
+
+      function credentialHeaders(init: RequestInit | undefined) {
+        const headers = new Headers(init?.headers)
+        return {
+          authorization: headers.get(Constants.Headers.authorization),
+          paymentAuthorization: headers.get(Constants.Headers.paymentAuthorization),
+        }
+      }
+
+      test('postTopUp sends the credential in the challenge header', async () => {
+        const fetch = vi.fn(
+          async (_input: RequestInfo | URL, _init?: RequestInit) =>
+            new Response(null, { status: 204 }),
+        )
+
+        await postTopUp({
+          additionalDeposit: 3n,
+          challenge: headerChallenge(),
+          channel: channel(),
+          channelId,
+          createSessionCredential: async () => 'top-up-credential',
+          fetch,
+          input: 'https://example.test/resource',
+        })
+
+        expect(credentialHeaders(fetch.mock.calls[0]?.[1])).toEqual({
+          authorization: null,
+          paymentAuthorization: 'top-up-credential',
+        })
+      })
+
+      test('retryHttpPaymentRequired replaces the challenge header and keeps Authorization', async () => {
+        const fetch = vi.fn(
+          async (_input: RequestInfo | URL, _init?: RequestInit) =>
+            new Response('ok', { status: 200 }),
+        )
+
+        await retryHttpPaymentRequired({
+          createSessionCredential: async () => 'voucher-credential',
+          fetch,
+          getChannel: () => channel({ cumulativeAmount: 5n, deposit: 10n }),
+          init: {
+            headers: {
+              Authorization: 'Bearer app-token',
+              'payment-authorization': 'Payment stale-credential',
+            },
+          },
+          input: 'https://example.test/resource',
+          response: response402(headerChallenge(snapshot())),
+          restoreCumulative: async () => {},
+          setChallenge() {},
+          topUpIfNeeded: async () => {},
+        })
+
+        expect(credentialHeaders(fetch.mock.calls[0]?.[1])).toEqual({
+          authorization: 'Bearer app-token',
+          paymentAuthorization: 'voucher-credential',
+        })
+      })
+
+      test('closeHttpSession sends the credential in the challenge header', async () => {
+        const fetch = vi.fn(
+          async (_input: RequestInfo | URL, _init?: RequestInit) =>
+            new Response(null, {
+              status: 200,
+              headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+            }),
+        )
+
+        await closeHttpSession({
+          createSessionCredential: async () => 'close-credential',
+          fetch,
+          lastUrl: 'https://example.test/resource',
+          signedCloseAmount: '5',
+          target: { challenge: headerChallenge(), channel: channel(), channelId },
+        })
+
+        expect(credentialHeaders(fetch.mock.calls[0]?.[1])).toEqual({
+          authorization: null,
+          paymentAuthorization: 'close-credential',
+        })
+      })
     })
 
     test('closeHttpSession rejects a receipt without settlement proof', async () => {

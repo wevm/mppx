@@ -2,6 +2,7 @@ import { Hex } from 'ox'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
+import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
 import * as PaymentCredential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -565,21 +566,25 @@ export function getSessionSnapshot(challenge: TempoSessionChallenge): SessionSna
   )
 }
 
-/** Merges request headers and sets the payment authorization header for a retry. */
+/** Merges request headers and sets the challenge's credential header for a retry. */
 export function requestInitWithAuthorization(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
   credential: string,
+  challenge: TempoSessionChallenge,
 ): RequestInit {
   const requestHeaders = input instanceof Request ? input.headers : undefined
-  return {
-    ...init,
-    headers: {
-      ...Fetch.normalizeHeaders(requestHeaders),
-      ...Fetch.normalizeHeaders(init?.headers),
-      [Constants.Headers.authorization]: credential,
+  return setCredentialHeader(
+    {
+      ...init,
+      headers: {
+        ...Fetch.normalizeHeaders(requestHeaders),
+        ...Fetch.normalizeHeaders(init?.headers),
+      },
     },
-  }
+    Challenge.credentialHeader(challenge),
+    credential,
+  )
 }
 
 /** Returns the exact resource URL used for out-of-band management POSTs, without its fragment. */
@@ -663,7 +668,7 @@ async function postManagementCredential(parameters: {
       method: 'POST',
       ...(parameters.signal ? { signal: parameters.signal } : {}),
       headers: {
-        [Constants.Headers.authorization]: await parameters.createSessionCredential(
+        [Challenge.credentialHeader(challenge)]: await parameters.createSessionCredential(
           challenge,
           parameters.context,
         ),
@@ -720,7 +725,7 @@ export async function retryHttpPaymentRequired(
     })
     retry = await parameters.fetch(
       parameters.input,
-      requestInitWithAuthorization(parameters.input, parameters.init, credential),
+      requestInitWithAuthorization(parameters.input, parameters.init, credential, challenge),
     )
   } catch (error) {
     await restore()
@@ -774,7 +779,7 @@ export async function closeHttpSession(
     })
     return parameters.fetch(parameters.lastUrl!, {
       method: 'POST',
-      headers: { [Constants.Headers.authorization]: credential },
+      headers: { [Challenge.credentialHeader(challenge)]: credential },
     })
   }
 

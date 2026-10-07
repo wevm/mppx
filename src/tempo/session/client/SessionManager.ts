@@ -6,6 +6,7 @@ import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
+import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -486,13 +487,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         challenge: challenge as never,
         context: {},
       })
-      const response = await config.fetch(bootstrapInput, {
-        ...headInit,
-        headers: {
-          ...Fetch.normalizeHeaders(headInit.headers),
-          [Constants.Headers.authorization]: credential,
-        },
-      })
+      const response = await config.fetch(
+        bootstrapInput,
+        setCredentialHeader(headInit, Challenge.credentialHeader(challenge), credential),
+      )
       if (response.ok) return await storeSnapshotHeader(response)
       return undefined
     } catch {

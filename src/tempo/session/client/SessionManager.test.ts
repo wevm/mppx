@@ -644,6 +644,36 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2)
     })
 
+    test('answers a bootstrap challenge in the credential header it selects', async () => {
+      const challenge = {
+        ...makeChargeChallenge(),
+        header: Constants.Headers.paymentAuthorization,
+      } as Challenge.Challenge
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.paymentAuthorization))
+          return Promise.resolve(make402Response(challenge))
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await s.fetch('https://api.example.com/data', {
+        headers: { Authorization: 'Bearer app-token' },
+      })
+
+      expect(mockFetch.mock.calls[1]?.[1]).toMatchObject({ method: 'HEAD' })
+      const bootstrapHeaders = new Headers(mockFetch.mock.calls[1]?.[1]?.headers)
+      expect(bootstrapHeaders.get(Constants.Headers.paymentAuthorization)).toEqual(
+        expect.stringMatching(/^Payment /),
+      )
+      expect(bootstrapHeaders.get(Constants.Headers.authorization)).toBe('Bearer app-token')
+    })
+
     test('falls back to normal fetch when bootstrap is unsupported', async () => {
       const mockFetch = vi
         .fn()
