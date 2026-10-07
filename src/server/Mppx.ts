@@ -1050,7 +1050,7 @@ export declare namespace create {
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */
     secretKey?: string | undefined
-    /** Selects a subset of composed HTTP offers before challenges are issued. Successfully matched credential dispatch bypasses this hook. */
+    /** Selects a subset of composed HTTP offers before challenges are issued. Authenticated Payment credentials bypass this hook; native transport credentials must remain eligible. */
     selectOffers?: transport extends Transport.Http
       ? SelectOffers<FlattenMethods<methods>> | undefined
       : never
@@ -2756,8 +2756,16 @@ function composeHandlers(
       // offer set before the first handler issues its rejection challenge.
     }
 
+    const selectedHandlers = hasOfferPolicy
+      ? await selectOfferHandlers({
+          entries: offerEntries,
+          input,
+          selectOffers: offerSelector,
+        })
+      : handlers
+
     const transportResults = new Map<(typeof handlers)[number], MethodFn.Response<Transport.Http>>()
-    for (const handler of handlers) {
+    for (const handler of selectedHandlers) {
       for (const internal of getConfiguredOffers(handler)) {
         const matchCredential = internal._transport.matchCredential
         if (!matchCredential) continue
@@ -2771,14 +2779,6 @@ function composeHandlers(
         } catch {}
       }
     }
-
-    const selectedHandlers = hasOfferPolicy
-      ? await selectOfferHandlers({
-          entries: offerEntries,
-          input,
-          selectOffers: offerSelector,
-        })
-      : handlers
 
     const transportCredentialHandler = selectedHandlers.find((handler) =>
       getConfiguredOffers(handler).some((internal) =>
