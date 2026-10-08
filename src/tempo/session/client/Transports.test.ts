@@ -25,6 +25,7 @@ import {
   isExpectedSocketReceipt,
   managementInput,
   openSseSession,
+  openWebSocketSession,
   postTopUp,
   prepareWebSocketSession,
   readNeedVoucherEventAmounts,
@@ -1106,6 +1107,58 @@ describe('WsDriver', () => {
   }
 
   describe('WsDriver socket state', () => {
+    test.each(['before creation', 'connecting', 'after open', 'close', 'error'])(
+      'does not authorize when interrupted %s',
+      async (when) => {
+        const controller = new AbortController()
+        class Socket extends EventTarget {
+          readyState = 0
+          send = vi.fn()
+          close = vi.fn()
+        }
+        const socket = new Socket()
+        const WebSocketImpl = vi.fn(function () {
+          return socket
+        })
+        const waitForReceipt = vi.fn()
+        const removeListener = vi.spyOn(controller.signal, 'removeEventListener')
+        if (when === 'before creation') controller.abort()
+        const pending = openWebSocketSession({
+          challenge,
+          credential: Credential.serialize({ challenge, payload: { action: 'open', channelId } }),
+          httpUrl: new URL('https://example.test/socket'),
+          wsUrl: new URL('wss://example.test/socket'),
+          WebSocket: WebSocketImpl as unknown as typeof WebSocket,
+          options: { signal: controller.signal },
+          createSessionCredential: vi.fn(),
+          getChannel: () => null,
+          setSocketSession: vi.fn(),
+          refreshChallenge: vi.fn(),
+          assertVoucherWithinLocalLimit: vi.fn(),
+          acceptReceipt: vi.fn(),
+          rejectCloseReady: vi.fn(),
+          rejectReceipt: vi.fn(),
+          settleCloseReady: vi.fn(),
+          settleReceipt: vi.fn(),
+          topUpIfNeeded: vi.fn(),
+          waitForReceipt,
+        })
+        const rejected = expect(pending).rejects.toThrow()
+        if (when === 'after open') socket.dispatchEvent(new Event('open'))
+        if (when === 'connecting' || when === 'after open') controller.abort()
+        if (when === 'close' || when === 'error') socket.dispatchEvent(new Event(when))
+        await rejected
+        socket.dispatchEvent(new Event('open'))
+        expect(socket.send).not.toHaveBeenCalled()
+        expect(waitForReceipt).not.toHaveBeenCalled()
+        if (when === 'before creation') expect(WebSocketImpl).not.toHaveBeenCalled()
+        else {
+          expect(socket.close).toHaveBeenCalled()
+          expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
+        }
+      },
+    )
+
     test('hydrates socket runtime state from the opening credential', () => {
       const socket = {} as WebSocket
       const credential = Credential.serialize({
@@ -1265,6 +1318,21 @@ describe('WsDriver', () => {
         'fetch:https://example.test/socket?stream=1',
         'credential:test-challenge:0',
       ])
+    })
+
+    test('rejects cancellation while the opening credential is being signed', async () => {
+      const controller = new AbortController()
+      await expect(
+        prepareWebSocketSession({
+          async createSessionCredential() {
+            controller.abort()
+            return 'Payment credential'
+          },
+          fetch: async () => make402Response(makeChallenge()),
+          input: 'wss://example.test/socket',
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow()
     })
 
     test('throws when the HTTP probe does not return a payment challenge', async () => {
