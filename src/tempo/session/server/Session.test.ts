@@ -1521,6 +1521,66 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/channel has a pending close request/)
   })
 
+  test('keeps an expired pending close while the latest block is inside its validity window', async () => {
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    const closeRequestedAt = BigInt(Math.floor(Date.now() / 1000) - 120)
+    await persistPrecompileChannel(store, openPayload, { closeRequestedAt, payee: payer.address })
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
+    const method = session({
+      account: payer,
+      amount: '1',
+      chainId,
+      currency: token,
+      decimals: 0,
+      recipient: payee,
+      store: rawStore,
+      unitType: 'request',
+      getClient: () =>
+        createClient({
+          account: payer,
+          chain: testChain,
+          transport: custom(
+            {
+              async request(args) {
+                if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+                // A lagging RPC whose latest block predates the close's expiry.
+                if (args.method === 'eth_getBlockByNumber')
+                  return {
+                    baseFeePerGas: '0x1',
+                    number: '0x10',
+                    timestamp: `0x${(closeRequestedAt + 10n).toString(16)}`,
+                  }
+                if (args.method === 'eth_call')
+                  return encodeFunctionResult({
+                    abi: escrowAbi,
+                    functionName: 'getChannelState',
+                    result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+                  })
+                throw new Error(`unexpected rpc request: ${args.method}`)
+              },
+            },
+            { retryCount: 0 },
+          ),
+        }),
+    })
+
+    await expect(
+      method.verify({
+        credential: voucherCredential(payload, openPayload.channelId),
+        request: verifyRequest(openPayload.channelId),
+      }),
+    ).rejects.toThrow(/channel has a pending close request/)
+    expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(closeRequestedAt)
+  })
+
   test('accepts valid precompile open with voucher and stores state', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)

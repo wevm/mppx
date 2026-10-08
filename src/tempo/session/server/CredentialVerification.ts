@@ -8,6 +8,7 @@ import {
   type Address,
   type Hex,
 } from 'viem'
+import { getBlock } from 'viem/actions'
 
 import type * as Challenge from '../../../Challenge.js'
 import {
@@ -968,16 +969,7 @@ async function handleVoucherCredential(
     forceRefresh: true,
     lastOnChainVerified,
   })
-  const reconciled =
-    channel.closeRequestedAt === 0n
-      ? channel
-      : ((await store.updateChannel(channelId, (current) =>
-          ChannelStore.reconcileExpiredPendingClose({
-            current,
-            now: Math.floor(Date.now() / 1000),
-            state: channelState,
-          }),
-        )) ?? channel)
+  const reconciled = await reconcileExpiredPendingClose({ channel, client, escrow, store })
   if (channelState.closeRequestedAt !== 0) {
     const closing = await store.updateChannel(channelId, (current) =>
       current
@@ -1026,6 +1018,27 @@ const sendMethods = new Set([
   'eth_sendRawTransactionSync',
   'eth_sendTransaction',
 ])
+
+/** Clears an expired server close marker using channel state read at a block past its validity window. */
+async function reconcileExpiredPendingClose(parameters: {
+  channel: ChannelStore.State
+  client: Chain.TransactionClient
+  escrow: Address
+  store: ChannelStore.ChannelStore
+}): Promise<ChannelStore.State> {
+  const { channel, client, escrow, store } = parameters
+  if (channel.finalized || channel.closeRequestedAt === 0n) return channel
+  const validBefore = ChannelStore.pendingCloseValidBefore(channel.closeRequestedAt)
+  // Skip the chain reads while the close can still land by the server clock.
+  if (BigInt(Math.floor(Date.now() / 1000)) <= validBefore) return channel
+  const block = await getBlock(client, { blockTag: 'latest' })
+  if (block.timestamp <= validBefore) return channel
+  const state = await Chain.getChannelState(client, channel.channelId, escrow, block.number)
+  const reconciled = await store.updateChannel(channel.channelId, (current) =>
+    ChannelStore.reconcileExpiredPendingClose({ blockTimestamp: block.timestamp, current, state }),
+  )
+  return reconciled ?? channel
+}
 
 /** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
 function trackSendAttempts(client: Chain.TransactionClient) {
@@ -1105,6 +1118,7 @@ async function handleCloseCredential(
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
+  await reconcileExpiredPendingClose({ channel, client, escrow, store })
   const now = Math.floor(Date.now() / 1000) || 1
   const pendingCloseStartedAt = BigInt(now)
   let pendingCloseMarked = false
@@ -1112,7 +1126,7 @@ async function handleCloseCredential(
     const next = ChannelStore.markPendingClose({
       closeRequestedAt: pendingCloseStartedAt,
       cumulativeAmount,
-      current: ChannelStore.reconcileExpiredPendingClose({ current, now, state }),
+      current,
       onChainDeposit: state.deposit,
       onChainSettled: state.settled,
     })

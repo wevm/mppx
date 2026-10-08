@@ -491,21 +491,25 @@ export function resolveCloseCaptureAmount(parameters: ResolveCloseCaptureAmountP
 /** Seconds a server close transaction stays valid after its pending-close marker is written. */
 export const pendingCloseValiditySeconds = 25
 
-/** Extra seconds allowed for clock differences between the server and the chain. */
-const pendingCloseClockSkewSeconds = 30
+/** Returns the time after which a server close marked at `closeRequestedAt` can no longer land. */
+export function pendingCloseValidBefore(closeRequestedAt: bigint): bigint {
+  return closeRequestedAt + BigInt(pendingCloseValiditySeconds)
+}
 
-/** Clears a server pending-close marker whose close transaction expired without closing the channel. */
+/**
+ * Clears a server pending-close marker whose close transaction expired without closing the channel.
+ * `state` must be read at a block whose timestamp is `blockTimestamp`.
+ */
 export function reconcileExpiredPendingClose(parameters: {
+  blockTimestamp: bigint
   current: State | null
-  now: number
   state: OnChainChannelState
 }): State | null {
-  const { current, now, state } = parameters
+  const { blockTimestamp, current, state } = parameters
   if (!current || current.finalized || current.closeRequestedAt === 0n) return current
-  // An open channel with no on-chain close request proves the expired close never executed.
+  // A block past the close's validity window would include the close if it ever executed.
+  if (blockTimestamp <= pendingCloseValidBefore(current.closeRequestedAt)) return current
   if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n) return current
-  const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds)
-  if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds)) return current
   return { ...current, closeRequestedAt: 0n }
 }
 
