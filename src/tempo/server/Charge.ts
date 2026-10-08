@@ -634,6 +634,9 @@ export function charge<const parameters extends charge.Parameters>(
 
           let broadcastAttempted = false
           let finalHash: `0x${string}` | undefined
+          // Set only after this request claims the final hash, so cleanup never
+          // releases a marker that another request holds.
+          let claimedFinalHash: `0x${string}` | undefined
           let reservation: SponsorBudget.Handle | undefined
 
           try {
@@ -710,13 +713,13 @@ export function charge<const parameters extends charge.Parameters>(
             )
             finalHash = keccak256(serializedTransaction_final)
 
-            if (
-              finalHash.toLowerCase() !== hash.toLowerCase() &&
-              !(await tryClaimHash(store, finalHash, replayExpires))
-            )
-              throw new VerificationFailedError({
-                reason: 'Transaction hash has already been used',
-              })
+            if (finalHash.toLowerCase() !== hash.toLowerCase()) {
+              if (!(await tryClaimHash(store, finalHash, replayExpires)))
+                throw new VerificationFailedError({
+                  reason: 'Transaction hash has already been used',
+                })
+              claimedFinalHash = finalHash
+            }
 
             if (isFeePayerTx) {
               const sponsor = completedTransaction.sponsor
@@ -814,8 +817,7 @@ export function charge<const parameters extends charge.Parameters>(
           } catch (error) {
             if (!broadcastAttempted) {
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
-              if (finalHash && finalHash.toLowerCase() !== hash.toLowerCase())
-                await releaseHashUse(store, finalHash)
+              if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
               await releaseHashUse(store, hash)
             }
             throw error
