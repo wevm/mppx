@@ -962,6 +962,16 @@ async function handleVoucherCredential(
     forceRefresh: true,
     lastOnChainVerified,
   })
+  const reconciled =
+    channel.closeRequestedAt === 0n
+      ? channel
+      : ((await store.updateChannel(channelId, (current) =>
+          ChannelStore.reconcileExpiredPendingClose({
+            current,
+            now: Math.floor(Date.now() / 1000),
+            state: channelState,
+          }),
+        )) ?? channel)
   if (channelState.closeRequestedAt !== 0) {
     const closing = await store.updateChannel(channelId, (current) =>
       current
@@ -997,7 +1007,7 @@ async function handleVoucherCredential(
     minVoucherDelta,
     requireAdvance: parameters.requireVoucherAdvance,
     challenge,
-    channel,
+    channel: reconciled,
     voucher,
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
@@ -1061,14 +1071,14 @@ async function handleCloseCredential(
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
-  const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
-  const previousCloseRequestedAt = channel.closeRequestedAt
+  const now = Math.floor(Date.now() / 1000) || 1
+  const pendingCloseStartedAt = BigInt(now)
   let pendingCloseMarked = false
   await store.updateChannel(channelId, (current) => {
     const next = ChannelStore.markPendingClose({
       closeRequestedAt: pendingCloseStartedAt,
       cumulativeAmount,
-      current,
+      current: ChannelStore.reconcileExpiredPendingClose({ current, now, state }),
       onChainDeposit: state.deposit,
       onChainSettled: state.settled,
     })
@@ -1079,8 +1089,11 @@ async function handleCloseCredential(
     return next.state
   })
   const account = parameters.account ?? getClientAccount(client)
-  let txHash: Hex | undefined
+  // Pin the close transaction's expiry to the marker so an expired marker proves it can no longer land.
+  const validBefore = now + ChannelStore.pendingCloseValiditySeconds
+  let broadcasting = false
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
+  let txHash: Hex | undefined
   try {
     assertSettlementSender({
       operation: 'close',
@@ -1089,6 +1102,7 @@ async function handleCloseCredential(
       payee: channel.payee,
       sender: account?.address,
     })
+    broadcasting = true
     txHash = await Chain.closeOnChain(
       client,
       channel.descriptor,
@@ -1103,18 +1117,19 @@ async function handleCloseCredential(
             ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
             candidateFeeTokens: [channel.token],
+            validBefore,
           }
-        : undefined,
+        : { validBefore },
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
-    // A broadcast close can still land after a receipt timeout or RPC error, so keep the channel
-    // closing unless no transaction hash was returned or the receipt proved a revert.
-    const closeFailed = txHash === undefined || error instanceof VerificationFailedError
+    // Transport and RPC errors may follow a broadcast, so the marker stays until the close expires
+    // and a later credential reconciles it. Typed verification errors prove the close failed.
+    const closeFailed = !broadcasting || error instanceof VerificationFailedError
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
-          ? { ...current, closeRequestedAt: previousCloseRequestedAt }
+          ? { ...current, closeRequestedAt: 0n }
           : current,
       )
     }

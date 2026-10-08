@@ -1503,7 +1503,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/channel is already finalized/)
 
     await persistPrecompileChannel(store, openPayload, {
-      closeRequestedAt: 1n,
+      closeRequestedAt: BigInt(Math.floor(Date.now() / 1000)),
       payee: payer.address,
     })
     await expect(
@@ -3792,7 +3792,7 @@ describe('precompile server session unit guardrails', () => {
     }
   }
 
-  test('marks pending precompile close before broadcast and restores it when broadcast fails', async () => {
+  test('marks pending precompile close before broadcast and keeps it when broadcast fails', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload()
@@ -3853,11 +3853,13 @@ describe('precompile server session unit guardrails', () => {
       }),
     ).rejects.toThrow(/broadcast failed/)
     expect(observedPending).toBe(true)
-    expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(0n)
+    // A failed broadcast may still have reached the node, so the channel stays closing.
+    expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).not.toBe(0n)
   })
 
   test.each([
-    { failure: 'submission', restored: true },
+    { failure: 'rejected submission', restored: true },
+    { failure: 'submission', restored: false },
     { failure: 'revert', restored: true },
     { failure: 'receipt', restored: false },
   ] as const)(
@@ -3867,6 +3869,8 @@ describe('precompile server session unit guardrails', () => {
       let pendingCloseStartedAt = 0n
       const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
         pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
+        if (failure === 'rejected submission')
+          throw new VerificationFailedError({ reason: 'rejected submission failed' })
         if (failure === 'submission') throw new Error('submission failed')
         return `0x${'ab'.repeat(32)}`
       })
@@ -3886,7 +3890,9 @@ describe('precompile server session unit guardrails', () => {
         expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(
           restored ? 0n : pendingCloseStartedAt,
         )
-        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(failure === 'submission' ? 0 : 1)
+        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(
+          failure === 'submission' || failure === 'rejected submission' ? 0 : 1,
+        )
       } finally {
         closeOnChain.mockRestore()
         waitForSuccessfulReceipt.mockRestore()
@@ -3933,7 +3939,7 @@ describe('precompile server session unit guardrails', () => {
       pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
       expect(pendingCloseStartedAt).not.toBe(0n)
       await mutate(store, openPayload.channelId)
-      throw new Error('submission failed')
+      throw new VerificationFailedError({ reason: 'submission failed' })
     })
 
     try {
