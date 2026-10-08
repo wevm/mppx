@@ -219,7 +219,8 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       Ws_.serve({
         ...options,
         store: ChannelStore.fromStore(store),
-        onChargeCommitted: settleScheduled,
+        // Failed settlements are reported by the session handler; the charged request stays served.
+        onChargeCommitted: (channel) => settleScheduled(channel).catch(() => undefined),
       }),
   }
   function create(currency: typeof first) {

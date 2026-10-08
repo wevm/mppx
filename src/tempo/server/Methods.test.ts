@@ -165,7 +165,7 @@ test.each(
       const error = new Error('Settlement unavailable')
       settle.mockRejectedValue(error)
       await expect(server.tempo.session.settleScheduled(channel)).rejects.toBe(error)
-      await expect(onChargeCommitted(channel)).rejects.toBe(error)
+      await expect(onChargeCommitted(channel)).resolves.toBeUndefined()
     } finally {
       settle.mockRestore()
       serve.mockRestore()
