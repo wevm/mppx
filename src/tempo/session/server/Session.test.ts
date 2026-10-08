@@ -16,6 +16,7 @@ import {
   encodeFunctionData,
   encodeFunctionResult,
   type Hex,
+  HttpRequestError,
   maxUint256,
   zeroAddress,
 } from 'viem'
@@ -25,7 +26,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
-import { VerificationFailedError } from '../../../Errors.js'
+import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
@@ -3859,6 +3860,7 @@ describe('precompile server session unit guardrails', () => {
 
   test.each([
     { failure: 'rejected submission', restored: true },
+    { failure: 'fee-payer policy', restored: true },
     { failure: 'submission', restored: false },
     { failure: 'revert', restored: true },
     { failure: 'receipt', restored: false },
@@ -3871,7 +3873,13 @@ describe('precompile server session unit guardrails', () => {
         pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
         if (failure === 'rejected submission')
           throw new VerificationFailedError({ reason: 'rejected submission failed' })
-        if (failure === 'submission') throw new Error('submission failed')
+        if (failure === 'fee-payer policy')
+          throw new BadRequestError({ reason: 'fee-payer policy failed' })
+        if (failure === 'submission')
+          throw new HttpRequestError({
+            details: 'submission failed',
+            url: 'https://rpc.example.com',
+          })
         return `0x${'ab'.repeat(32)}`
       })
       const waitForSuccessfulReceipt = vi
@@ -3879,7 +3887,7 @@ describe('precompile server session unit guardrails', () => {
         .mockRejectedValue(
           failure === 'revert'
             ? new VerificationFailedError({ reason: 'precompile transaction reverted' })
-            : new Error('receipt failed'),
+            : new HttpRequestError({ details: 'receipt failed', url: 'https://rpc.example.com' }),
         )
 
       try {
@@ -3891,7 +3899,7 @@ describe('precompile server session unit guardrails', () => {
           restored ? 0n : pendingCloseStartedAt,
         )
         expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(
-          failure === 'submission' || failure === 'rejected submission' ? 0 : 1,
+          failure === 'revert' || failure === 'receipt' ? 1 : 0,
         )
       } finally {
         closeOnChain.mockRestore()

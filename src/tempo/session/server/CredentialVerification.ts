@@ -1,4 +1,7 @@
 import {
+  BaseError as viem_BaseError,
+  ContractFunctionRevertedError,
+  ExecutionRevertedError,
   isAddress,
   isAddressEqual,
   zeroAddress,
@@ -1014,6 +1017,14 @@ async function handleVoucherCredential(
   })
 }
 
+function isTransportFailure(error: unknown): boolean {
+  if (!(error instanceof viem_BaseError)) return false
+  return !error.walk(
+    (cause) =>
+      cause instanceof ExecutionRevertedError || cause instanceof ContractFunctionRevertedError,
+  )
+}
+
 async function handleCloseCredential(
   parameters: CloseCredentialActionParameters,
 ): Promise<SessionReceipt> {
@@ -1124,8 +1135,8 @@ async function handleCloseCredential(
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
     // Transport and RPC errors may follow a broadcast, so the marker stays until the close expires
-    // and a later credential reconciles it. Typed verification errors prove the close failed.
-    const closeFailed = !broadcasting || error instanceof VerificationFailedError
+    // and a later credential reconciles it. Any other error proves the close was not sent or reverted.
+    const closeFailed = !broadcasting || !isTransportFailure(error)
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
