@@ -543,18 +543,15 @@ export async function maybeSettleScheduled(
       : undefined,
   })
     .catch(async (error) => {
-      await report(error)
       await release()
+      // The transaction confirmed and collected the charge; only the local record failed.
+      if (error instanceof SettlementCheckpointError) return error.txHash
+      await report(error)
       throw error
     })
     .finally(() => clearInterval(renewal))
-  // Bookkeeping after a confirmed settlement is not a settlement failure, so it is not reported.
-  await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store }).catch(
-    async (error) => {
-      await release()
-      throw error
-    },
-  )
+  // Bookkeeping after a confirmed settlement must not fail the charged request.
+  await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store }).catch(release)
   return txHash
 }
 
@@ -608,21 +605,27 @@ export async function settle(
     throw new VerificationFailedError({
       reason: 'on-chain channel state does not match settle receipt',
     })
-  await store.updateChannel(channelId, (current) =>
-    current
-      ? {
-          ...current,
-          settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
-          lastSettlementAt: new Date().toISOString(),
-          // Charges accepted after the voucher was read are not covered by this transaction.
-          lastSettlementSpent: ChannelStore.keepGreater(
-            current.lastSettlementSpent ?? 0n,
-            channel.spent,
-          ),
-          lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, channel.units),
-        }
-      : current,
-  )
+  let checkpointError: { cause: unknown } | undefined
+  await store
+    .updateChannel(channelId, (current) =>
+      current
+        ? {
+            ...current,
+            settledOnChain:
+              newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
+            lastSettlementAt: new Date().toISOString(),
+            // Charges accepted after the voucher was read are not covered by this transaction.
+            lastSettlementSpent: ChannelStore.keepGreater(
+              current.lastSettlementSpent ?? 0n,
+              channel.spent,
+            ),
+            lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, channel.units),
+          }
+        : current,
+    )
+    .catch((cause) => {
+      checkpointError = { cause }
+    })
   if (options?.onSessionSettlement) {
     await emitSessionSettlement(options.onSessionSettlement, {
       txHash,
@@ -632,7 +635,20 @@ export async function settle(
       delta: newSettled - channel.settledOnChain,
     })
   }
+  if (checkpointError) throw new SettlementCheckpointError({ cause: checkpointError.cause, txHash })
   return txHash
+}
+
+/** Raised when a settlement transaction confirmed but the channel store could not record it. */
+export class SettlementCheckpointError extends Error {
+  override readonly name = 'SettlementCheckpointError'
+  /** Hash of the confirmed settlement transaction. */
+  readonly txHash: Hex
+
+  constructor(options: { cause: unknown; txHash: Hex }) {
+    super(`Settlement ${options.txHash} confirmed but was not recorded.`, { cause: options.cause })
+    this.txHash = options.txHash
+  }
 }
 
 /** Settles multiple precompile-backed session channels with the same validation as {@link settle}. */

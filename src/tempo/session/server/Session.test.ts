@@ -4945,6 +4945,73 @@ describe('onSessionSettlement', () => {
     expect(failures).toEqual([{ message: 'rpc url missing', trigger: 'scheduled' }])
   })
 
+  test('reports a confirmed settlement whose checkpoint fails with its transaction hash', async () => {
+    const settlements: string[] = []
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+    const { settle, SettlementCheckpointError } = await import('./Settlement.js')
+
+    const error = await settle(
+      { ...store, updateChannel: () => Promise.reject(new Error('store unavailable')) },
+      createSettleClient(openPayload.channelId, 100n),
+      openPayload.channelId,
+      { onSessionSettlement: ({ txHash }) => void settlements.push(txHash) },
+    ).catch((error: unknown) => error)
+
+    expect(error).toBeInstanceOf(SettlementCheckpointError)
+    expect(error).toMatchObject({ txHash: `0x${'cc'.repeat(32)}` })
+    expect(settlements).toEqual([`0x${'cc'.repeat(32)}`])
+  })
+
+  test('keeps a scheduled settlement successful when only its checkpoint fails', async () => {
+    const failures: string[] = []
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: '0x1234',
+      },
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+    const { maybeSettleScheduled } = await import('./Settlement.js')
+    let updates = 0
+
+    await expect(
+      maybeSettleScheduled({
+        account: payer,
+        channel: channel!,
+        client: createSettleClient(openPayload.channelId, 500n),
+        onSessionSettlementFailure: ({ error }) => void failures.push((error as Error).message),
+        schedule: { units: 5 },
+        // The lease claim succeeds; the post-confirmation checkpoint write fails.
+        store: {
+          ...store,
+          updateChannel: (channelId, fn) =>
+            ++updates === 2
+              ? Promise.reject(new Error('store unavailable'))
+              : store.updateChannel(channelId, fn),
+        },
+      }),
+    ).resolves.toBe(`0x${'cc'.repeat(32)}`)
+    expect(failures).toEqual([])
+  })
+
   test('reports a scheduled settlement whose lease claim fails', async () => {
     const failures: { message: string; trigger: string }[] = []
     const openPayload = await createOpenPayload()
