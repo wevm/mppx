@@ -4873,6 +4873,45 @@ describe('onSessionSettlement', () => {
     expect(persisted?.lastSettlementSpent).toBeUndefined()
   })
 
+  test('reports a scheduled settlement whose client cannot be resolved', async () => {
+    const failures: { message: string; trigger: string }[] = []
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+    })
+    const payment = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: payer,
+          amount: '1',
+          chainId,
+          currency: token,
+          decimals: 0,
+          getClient() {
+            throw new Error('rpc url missing')
+          },
+          onSessionSettlementFailure: ({ error, trigger }) => {
+            failures.push({ message: (error as Error).message, trigger })
+          },
+          recipient: payee,
+          settlementSchedule: { units: 5 },
+          store: rawStore,
+          unitType: 'request',
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+
+    await expect(payment.session.settleScheduled(channel!)).rejects.toThrow(/rpc url missing/)
+    expect(failures).toEqual([{ message: 'rpc url missing', trigger: 'scheduled' }])
+  })
+
   test('reports a scheduled settlement whose lease claim fails', async () => {
     const failures: { message: string; trigger: string }[] = []
     const openPayload = await createOpenPayload()

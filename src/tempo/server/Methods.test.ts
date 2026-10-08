@@ -1,4 +1,4 @@
-import { createClient, custom } from 'viem'
+import { createClient, custom, HttpRequestError } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoChain } from 'viem/chains'
 import { defineToken } from 'viem/tokens'
@@ -166,6 +166,10 @@ test.each(
       const error = new Error('Settlement unavailable')
       settle.mockRejectedValue(error)
       await expect(server.tempo.session.settleScheduled(channel)).rejects.toBe(error)
+      await expect(onChargeCommitted(channel)).rejects.toBe(error)
+      settle.mockRejectedValue(
+        new HttpRequestError({ status: 502, url: 'https://rpc.example.com' }),
+      )
       await expect(onChargeCommitted(channel)).resolves.toBeUndefined()
       const reverted = new VerificationFailedError({ reason: 'precompile transaction reverted' })
       settle.mockRejectedValue(reverted)

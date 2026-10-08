@@ -1,10 +1,15 @@
-import type { Hex } from 'viem'
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  HttpRequestError,
+  type Hex,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
-import { VerificationFailedError } from '../../../Errors.js'
+import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
 import type * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
@@ -431,12 +436,23 @@ describe('SettlementSchedule', () => {
 })
 
 describe('ignoreRetryableSettlementFailure', () => {
-  test('keeps serving after a retryable settlement failure', () => {
-    expect(ignoreRetryableSettlementFailure(new Error('rpc unavailable'))).toBeUndefined()
+  test('keeps serving after a transport failure', () => {
+    const error = new HttpRequestError({ status: 502, url: 'https://rpc.example.com' })
+    expect(ignoreRetryableSettlementFailure(error)).toBeUndefined()
   })
 
-  test('fails the request when verification proves the charge cannot settle', () => {
-    const error = new VerificationFailedError({ reason: 'precompile transaction reverted' })
+  test.each([
+    ['a verification failure', new VerificationFailedError({ reason: 'transaction reverted' })],
+    ['a sender configuration error', new BadRequestError({ reason: 'sender is not the payee' })],
+    ['a missing account', new Error('Cannot settle precompile channel: no account available.')],
+    [
+      'a simulated revert',
+      new ContractFunctionExecutionError(
+        new ContractFunctionRevertedError({ abi: [], functionName: 'settle' }),
+        { abi: [], functionName: 'settle' },
+      ),
+    ],
+  ])('fails the request after %s', (_label, error) => {
     expect(() => ignoreRetryableSettlementFailure(error)).toThrow(error)
   })
 })

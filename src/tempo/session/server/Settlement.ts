@@ -1,4 +1,7 @@
 import {
+  BaseError as viem_BaseError,
+  ContractFunctionRevertedError,
+  ExecutionRevertedError,
   isAddress,
   isAddressEqual,
   parseUnits,
@@ -527,27 +530,33 @@ export async function maybeSettleScheduled(
       store,
     }).catch(() => undefined)
   }, scheduledSettlementLeaseMs / 2)
-  try {
-    const txHash = await settle(store, parameters.client, channel.channelId, {
-      account: parameters.account,
-      ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
-      ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
-      ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-      onSessionSettlement: parameters.onSessionSettlement
-        ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
-        : undefined,
-    })
-    await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store })
-    return txHash
-  } catch (error) {
-    await report(error)
-    await releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
+  const release = () =>
+    releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
       () => undefined,
     )
-    throw error
-  } finally {
-    clearInterval(renewal)
-  }
+  const txHash = await settle(store, parameters.client, channel.channelId, {
+    account: parameters.account,
+    ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+    ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+    ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+    onSessionSettlement: parameters.onSessionSettlement
+      ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
+      : undefined,
+  })
+    .catch(async (error) => {
+      await report(error)
+      await release()
+      throw error
+    })
+    .finally(() => clearInterval(renewal))
+  // Bookkeeping after a confirmed settlement is not a settlement failure, so it is not reported.
+  await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store }).catch(
+    async (error) => {
+      await release()
+      throw error
+    },
+  )
+  return txHash
 }
 
 /** Settles the highest accepted voucher for a precompile-backed session channel. */
@@ -636,12 +645,20 @@ export async function settleBatch(
 }
 
 /**
- * @internal Keeps a charged request served when its scheduled settlement fails without proof the
- * charge cannot settle; the next settlement retries it. Verification failures, such as a revert, fail the request.
+ * @internal Keeps a charged request served when its scheduled settlement hit a transport or RPC
+ * failure; the next settlement retries it. Reverts and configuration errors fail the request.
  */
 export function ignoreRetryableSettlementFailure(error: unknown): undefined {
-  if (error instanceof VerificationFailedError) throw error
-  return undefined
+  if (isRetryableSettlementFailure(error)) return undefined
+  throw error
+}
+
+function isRetryableSettlementFailure(error: unknown): boolean {
+  if (!(error instanceof viem_BaseError)) return false
+  return !error.walk(
+    (cause) =>
+      cause instanceof ExecutionRevertedError || cause instanceof ContractFunctionRevertedError,
+  )
 }
 
 /** @internal Reports a settlement failure without letting observer errors replace it. */

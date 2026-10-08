@@ -52,6 +52,7 @@ import {
   ignoreRetryableSettlementFailure,
   isSettlementDue,
   maybeSettleScheduled,
+  reportSessionSettlementFailure,
 } from './Settlement.js'
 import {
   resolveSettlementSchedule,
@@ -352,10 +353,21 @@ export function session<const parameters extends session.Parameters>(
   })
   const settleScheduled: SettleChargedSessionChannel = async (channel) => {
     if (!isSettlementDue(channel, settlementSchedule)) return undefined
+    const client = await (async () => getClient({ chainId: channel.chainId }))().catch(
+      async (error) => {
+        await reportSessionSettlementFailure(onSessionSettlementFailure, {
+          chainId: channel.chainId,
+          channelId: channel.channelId,
+          error,
+          trigger: 'scheduled',
+        })
+        throw error
+      },
+    )
     return maybeSettleScheduled({
       account,
       channel,
-      client: await getClient({ chainId: channel.chainId }),
+      client,
       ...(configuredFeePayer ? { feePayer: configuredFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: parameters.feeToken,

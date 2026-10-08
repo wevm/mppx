@@ -1,5 +1,5 @@
 ---
-'mppx': minor
+'mppx': patch
 ---
 
-Changed failed scheduled `tempo/session` settlements to serve the charged request when the failure is retryable; the charge stays for the next settlement. Verification failures, such as a revert, still fail the request.
+Changed `tempo/session` to serve a charged request when its scheduled settlement hit a transport or RPC failure; the next settlement collected the charge. Reverts and configuration errors still failed the request.
