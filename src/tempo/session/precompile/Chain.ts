@@ -397,6 +397,8 @@ export type ChannelTransactionOptions = {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Explicit fee token for the transaction. */
   feeToken?: Address | undefined
+  /** Unix time in seconds after which the expiring-nonce transaction cannot be included. */
+  validBefore?: number | undefined
 }
 
 type ParsedPrecompileCredentialTransaction = {
@@ -599,9 +601,10 @@ async function prepareFeePayerCallTransaction(
     data: Hex
     feeToken?: Address | undefined
     to: Address
+    validBefore?: number | undefined
   },
 ) {
-  const { account, data, feeToken, to } = parameters
+  const { account, data, feeToken, to, validBefore } = parameters
   // viem's stable request type does not expose Tempo fee-payer transaction
   // fields for this call shape. Keep the cast at the boundary.
   return prepareTransactionRequest(client, {
@@ -610,6 +613,7 @@ async function prepareFeePayerCallTransaction(
     feePayer: true,
     nonceKey: 'expiring',
     ...(feeToken ? { feeToken } : {}),
+    ...(validBefore ? { validBefore } : {}),
   } as never)
 }
 
@@ -621,9 +625,10 @@ function sendPrecompileContractCall(
     feePayer?: true | undefined
     feeToken?: Address | undefined
     to: Address
+    validBefore?: number | undefined
   },
 ): Promise<Hex> {
-  const { account, data, feePayer, feeToken, to } = parameters
+  const { account, data, feePayer, feeToken, to, validBefore } = parameters
   // `feeToken` is Tempo-specific and not represented on viem's base
   // transaction request type.
   return sendViemTransaction(client, {
@@ -634,6 +639,7 @@ function sendPrecompileContractCall(
     nonceKey: 'expiring',
     ...(feePayer ? { feePayer } : {}),
     ...(feeToken ? { feeToken } : {}),
+    ...(validBefore ? { validBefore } : {}),
   } as never)
 }
 
@@ -1254,6 +1260,7 @@ async function sendPrecompileTransaction(
       feePayer: true,
       feeToken: options.feeToken,
       to,
+      validBefore: options.validBefore,
     })
   }
 
@@ -1271,6 +1278,7 @@ async function sendPrecompileTransaction(
       data,
       feeToken,
       to,
+      validBefore: options.validBefore,
     })
     assertPrecompileFeePayerPolicy({ prepared, policy: options.feePayerPolicy })
     const serialized = await signTempoTransaction(client, {
@@ -1303,5 +1311,6 @@ async function sendPrecompileTransaction(
     to,
     data,
     feeToken,
+    validBefore: options?.validBefore,
   })
 }

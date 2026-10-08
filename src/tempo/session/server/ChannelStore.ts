@@ -488,6 +488,27 @@ export function resolveCloseCaptureAmount(parameters: ResolveCloseCaptureAmountP
   return captureAmount
 }
 
+/** Seconds a server close transaction stays valid after its pending-close marker is written. */
+export const pendingCloseValiditySeconds = 25
+
+/** Extra seconds allowed for clock differences between the server and the chain. */
+const pendingCloseClockSkewSeconds = 30
+
+/** Clears a server pending-close marker whose close transaction expired without closing the channel. */
+export function reconcileExpiredPendingClose(parameters: {
+  current: State | null
+  now: number
+  state: OnChainChannelState
+}): State | null {
+  const { current, now, state } = parameters
+  if (!current || current.finalized || current.closeRequestedAt === 0n) return current
+  // An open channel with no on-chain close request proves the expired close never executed.
+  if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n) return current
+  const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds)
+  if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds)) return current
+  return { ...current, closeRequestedAt: 0n }
+}
+
 /** Marks local channel state as pending close and returns the bounded capture amount. */
 export function markPendingClose(parameters: MarkPendingCloseParameters): PendingCloseUpdate {
   const { closeRequestedAt, cumulativeAmount, current, onChainSettled, onChainDeposit } = parameters

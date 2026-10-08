@@ -317,6 +317,73 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     expect(settled.args.newSettled).toBe(250n)
   })
 
+  test('accepts vouchers again after a server close expired without closing the channel', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
+    // A close marked two minutes ago whose transaction never landed.
+    const staleCloseRequestedAt = BigInt(Math.floor(Date.now() / 1000) - 120)
+    await store.updateChannel(channelId, () => ({
+      backend: 'precompile',
+      channelId,
+      chainId: chain.id,
+      escrowContract: tip20ChannelEscrow,
+      closeRequestedAt: staleCloseRequestedAt,
+      payer: descriptor.payer,
+      payee: descriptor.payee,
+      token: descriptor.token,
+      authorizedSigner: descriptor.authorizedSigner,
+      deposit,
+      settledOnChain: 0n,
+      highestVoucherAmount: 0n,
+      highestVoucher: null,
+      spent: 0n,
+      units: 0,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+      descriptor,
+      operator: descriptor.operator,
+      salt: descriptor.salt,
+      expiringNonceHash: descriptor.expiringNonceHash,
+    }))
+    const method = session({
+      amount: '100',
+      chainId: chain.id,
+      currency: asset,
+      decimals: 0,
+      recipient: payee.address,
+      store: rawStore,
+      unitType: 'request',
+      getClient: () => client,
+    })
+    const challenge = {
+      id: 'chain-expired-close',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'session',
+      request: sessionRequest(channelId),
+    } as never
+
+    const voucher = await createVoucherPayload(client, payer, descriptor, uint96(300n), chain.id)
+    await method.verify({
+      credential: { challenge, payload: voucher, source: sourceFor() },
+      request: sessionRequest(channelId) as never,
+    })
+    expect(await store.getChannel(channelId)).toMatchObject({
+      closeRequestedAt: 0n,
+      highestVoucherAmount: 300n,
+    })
+
+    const close = await createClosePayload(client, payer, descriptor, uint96(300n), chain.id)
+    const receipt = await method.verify({
+      credential: { challenge, payload: close },
+      request: sessionRequest(channelId) as never,
+    })
+    if (!('txHash' in receipt)) throw new Error('expected close txHash')
+    // A landed close pays out the deposit, which keeps reconciliation from reopening the channel.
+    expect((await getChannelState(client, channelId, tip20ChannelEscrow)).deposit).toBe(0n)
+  })
+
   test('leaves charges accepted during a real settlement due for the next one', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)

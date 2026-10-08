@@ -26,6 +26,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
+import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
@@ -1509,7 +1510,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/channel is already finalized/)
 
     await persistPrecompileChannel(store, openPayload, {
-      closeRequestedAt: 1n,
+      closeRequestedAt: BigInt(Math.floor(Date.now() / 1000)),
       payee: payer.address,
     })
     await expect(
@@ -3862,7 +3863,7 @@ describe('precompile server session unit guardrails', () => {
     }
   })
 
-  test('marks pending precompile close before broadcast and restores it when broadcast fails', async () => {
+  test('marks pending precompile close before broadcast and keeps it when broadcast fails', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload()
@@ -3923,28 +3924,55 @@ describe('precompile server session unit guardrails', () => {
       }),
     ).rejects.toThrow(/broadcast failed/)
     expect(observedPending).toBe(true)
-    expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(0n)
+    // A failed broadcast may still have reached the node, so the channel stays closing.
+    expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).not.toBe(0n)
   })
 
-  test.each(['submission', 'receipt'] as const)(
-    'restores pending precompile close when %s fails',
-    async (failureStage) => {
+  test.each([
+    { failure: 'rejected submission', restored: true },
+    { failure: 'fee-payer policy', restored: true },
+    { failure: 'preparation', restored: true },
+    { failure: 'submission', restored: false },
+    { failure: 'revert', restored: true },
+    { failure: 'receipt', restored: false },
+  ] as const)(
+    'restores pending precompile close after a $failure failure: $restored',
+    async ({ failure, restored }) => {
       const { openPayload, store, verify } = await createCloseRollbackHarness()
-      let observedPending = false
-      const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
-        observedPending = (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
-        if (failureStage === 'submission') throw new Error('submission failed')
+      let pendingCloseStartedAt = 0n
+      const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
+        pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
+        if (failure === 'rejected submission')
+          throw new VerificationFailedError({ reason: 'rejected submission failed' })
+        if (failure === 'fee-payer policy')
+          throw new BadRequestError({ reason: 'fee-payer policy failed' })
+        if (failure === 'preparation') throw new Error('preparation failed')
+        // Hand the transaction to the node before failing or returning its hash.
+        await client
+          .request({ method: 'eth_sendRawTransaction', params: ['0x00'] })
+          .catch(() => undefined)
+        if (failure === 'submission') throw new Error('submission failed')
         return `0x${'ab'.repeat(32)}`
       })
       const waitForSuccessfulReceipt = vi
         .spyOn(Chain, 'waitForSuccessfulReceipt')
-        .mockRejectedValue(new Error('receipt failed'))
+        .mockRejectedValue(
+          failure === 'revert'
+            ? new VerificationFailedError({ reason: 'precompile transaction reverted' })
+            : new Error('receipt failed'),
+        )
 
       try {
-        await expect(verify()).rejects.toThrow(new RegExp(`${failureStage} failed`))
-        expect(observedPending).toBe(true)
-        expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(0n)
-        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(failureStage === 'receipt' ? 1 : 0)
+        await expect(verify()).rejects.toThrow(
+          failure === 'revert' ? /reverted/ : new RegExp(`${failure} failed`),
+        )
+        expect(pendingCloseStartedAt).not.toBe(0n)
+        expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(
+          restored ? 0n : pendingCloseStartedAt,
+        )
+        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(
+          failure === 'revert' || failure === 'receipt' ? 1 : 0,
+        )
       } finally {
         closeOnChain.mockRestore()
         waitForSuccessfulReceipt.mockRestore()
@@ -3991,7 +4019,7 @@ describe('precompile server session unit guardrails', () => {
       pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
       expect(pendingCloseStartedAt).not.toBe(0n)
       await mutate(store, openPayload.channelId)
-      throw new Error('submission failed')
+      throw new VerificationFailedError({ reason: 'submission failed' })
     })
 
     try {

@@ -327,6 +327,38 @@ describe('ChannelStore state updates', () => {
     expect(next.settledOnChain).toBe(25n)
   })
 
+  test.each([
+    ['clears a marker whose close expired on an open channel', {}, 0n],
+    ['keeps a marker inside the validity and clock-skew window', { now: 1_055 }, 1_000n],
+    ['keeps a marker when the chain records a close request', { closeRequestedAt: 1_010 }, 1_000n],
+    ['keeps a marker when the channel deposit was paid out', { deposit: 0n }, 1_000n],
+  ] as const)('reconcileExpiredPendingClose %s', (_label, overrides, expected) => {
+    const options = { closeRequestedAt: 0, deposit: 100n, now: 1_056, ...overrides }
+    const reconciled = ChannelStore.reconcileExpiredPendingClose({
+      current: stateUpdateChannel({ closeRequestedAt: 1_000n }),
+      now: options.now,
+      state: { closeRequestedAt: options.closeRequestedAt, deposit: options.deposit, settled: 10n },
+    })
+
+    expect(reconciled?.closeRequestedAt).toBe(expected)
+  })
+
+  test('reconcileExpiredPendingClose leaves finalized and open channels unchanged', () => {
+    const state = { closeRequestedAt: 0, deposit: 100n, settled: 10n }
+    const finalized = stateUpdateChannel({ closeRequestedAt: 1_000n, finalized: true })
+    const open = stateUpdateChannel()
+
+    expect(
+      ChannelStore.reconcileExpiredPendingClose({ current: finalized, now: 2_000, state }),
+    ).toBe(finalized)
+    expect(ChannelStore.reconcileExpiredPendingClose({ current: open, now: 2_000, state })).toBe(
+      open,
+    )
+    expect(ChannelStore.reconcileExpiredPendingClose({ current: null, now: 2_000, state })).toBe(
+      null,
+    )
+  })
+
   test('markPendingClose returns max(spent, on-chain settled) as capture amount', () => {
     const next = ChannelStore.markPendingClose({
       closeRequestedAt: 11n,
