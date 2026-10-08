@@ -1,5 +1,14 @@
 # mppx
 
+## 0.13.2
+
+### Patch Changes
+
+- ac542e3: Enforced offer eligibility before settling native transport credentials.
+- 3b08fc4: Fixed `tempo/charge` releasing another request's replay marker when a transaction's final hash collided with an already-claimed hash, which let a settled transaction pass replay protection again.
+- 9856cd2: Disabled automatic redirects on credential-bearing fetch retries to prevent payment credential disclosure.
+- 5c81137: Used verified token decimals when enforcing persistent CLI session deposit limits.
+
 ## 0.13.1
 
 ### Patch Changes
