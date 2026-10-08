@@ -1,13 +1,16 @@
 import {
   BaseError as viem_BaseError,
   HttpRequestError,
+  InternalRpcError,
   isAddress,
   isAddressEqual,
   LimitExceededRpcError,
   parseUnits,
   ResourceUnavailableRpcError,
+  RpcRequestError,
   SocketClosedError,
   TimeoutError,
+  WaitForTransactionReceiptTimeoutError,
   WebSocketRequestError,
   zeroAddress,
   type Account as viem_Account,
@@ -519,7 +522,8 @@ export async function maybeSettleScheduled(
     store,
   }).catch(async (error) => {
     await report(error)
-    throw error
+    // Nothing was submitted, so the next settlement can still collect this charge.
+    throw new SettlementLeaseError({ cause: error })
   })
   if (!leaseOwner) return undefined
   const renewal = setInterval(() => {
@@ -544,9 +548,9 @@ export async function maybeSettleScheduled(
   })
     .catch(async (error) => {
       await release()
+      await report(error)
       // The transaction confirmed and collected the charge; only the local record failed.
       if (error instanceof SettlementCheckpointError) return error.txHash
-      await report(error)
       throw error
     })
     .finally(() => clearInterval(renewal))
@@ -600,7 +604,10 @@ export async function settle(
   const { newSettled } = settled
   if (newSettled < amount)
     throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' })
-  const state = await Chain.getChannelState(client, channelId, escrow)
+  // A replica behind the receipt's block would report the pre-settlement state.
+  const state = await Chain.readbackWithRetry(() =>
+    Chain.getChannelState(client, channelId, escrow, receipt.blockNumber),
+  )
   if (state.settled !== newSettled)
     throw new VerificationFailedError({
       reason: 'on-chain channel state does not match settle receipt',
@@ -651,6 +658,15 @@ export class SettlementCheckpointError extends Error {
   }
 }
 
+/** Raised when a scheduled settlement could not claim its lease; no transaction was submitted. */
+export class SettlementLeaseError extends Error {
+  override readonly name = 'SettlementLeaseError'
+
+  constructor(options: { cause: unknown }) {
+    super('Scheduled settlement lease could not be claimed.', { cause: options.cause })
+  }
+}
+
 /** Settles multiple precompile-backed session channels with the same validation as {@link settle}. */
 export async function settleBatch(
   store: SessionStoreInput,
@@ -673,6 +689,7 @@ export function ignoreRetryableSettlementFailure(error: unknown): undefined {
 }
 
 function isRetryableSettlementFailure(error: unknown): boolean {
+  if (error instanceof SettlementLeaseError) return true
   if (!(error instanceof viem_BaseError)) return false
   // Only unavailable or overloaded upstreams clear on retry; node-rejected transactions repeat.
   return Boolean(
@@ -680,10 +697,15 @@ function isRetryableSettlementFailure(error: unknown): boolean {
       (cause) =>
         (cause instanceof HttpRequestError &&
           (cause.status === undefined || cause.status === 429 || cause.status >= 500)) ||
+        // Rate limits some providers return in a JSON-RPC body rather than as HTTP 429.
+        (cause instanceof RpcRequestError && (cause.code === 429 || cause.code === -32007)) ||
+        cause instanceof InternalRpcError ||
         cause instanceof LimitExceededRpcError ||
         cause instanceof ResourceUnavailableRpcError ||
         cause instanceof SocketClosedError ||
         cause instanceof TimeoutError ||
+        // The settlement was broadcast; a later settlement collects the charge if it never lands.
+        cause instanceof WaitForTransactionReceiptTimeoutError ||
         cause instanceof WebSocketRequestError,
     ),
   )

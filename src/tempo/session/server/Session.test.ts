@@ -4418,7 +4418,11 @@ describe('onSessionSettlement', () => {
   function createSettleClient(
     channelId: Hex,
     settledAmount: bigint,
-    options: { broadcastError?: Error | undefined } = {},
+    options: {
+      broadcastError?: Error | undefined
+      /** Settled amount a replica behind the receipt's block reports at `latest`. */
+      latestSettled?: bigint | undefined
+    } = {},
   ) {
     return createClient({
       account: payer,
@@ -4441,10 +4445,15 @@ describe('onSessionSettlement', () => {
             if (args.method === 'eth_getTransactionReceipt')
               return transactionReceipt([settledLog(channelId, settledAmount)])
             if (args.method === 'eth_call') {
+              const block = (args.params as readonly unknown[])[1]
+              const settled =
+                block === 'latest' && options.latestSettled !== undefined
+                  ? options.latestSettled
+                  : settledAmount
               return encodeFunctionResult({
                 abi: escrowAbi,
                 functionName: 'getChannelState',
-                result: { settled: settledAmount, deposit: 1_000n, closeRequestedAt: 0 },
+                result: { settled, deposit: 1_000n, closeRequestedAt: 0 },
               })
             }
             throw new Error(`unexpected rpc request: ${args.method}`)
@@ -4945,6 +4954,30 @@ describe('onSessionSettlement', () => {
     expect(failures).toEqual([{ message: 'rpc url missing', trigger: 'scheduled' }])
   })
 
+  test('reads back settled state at the settlement receipt block', async () => {
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+    const { settle } = await import('./Settlement.js')
+
+    await expect(
+      settle(
+        store,
+        createSettleClient(openPayload.channelId, 100n, { latestSettled: 0n }),
+        openPayload.channelId,
+      ),
+    ).resolves.toBe(`0x${'cc'.repeat(32)}`)
+  })
+
   test('reports a confirmed settlement whose checkpoint fails with its transaction hash', async () => {
     const settlements: string[] = []
     const openPayload = await createOpenPayload()
@@ -4973,7 +5006,7 @@ describe('onSessionSettlement', () => {
     expect(settlements).toEqual([`0x${'cc'.repeat(32)}`])
   })
 
-  test('keeps a scheduled settlement successful when only its checkpoint fails', async () => {
+  test('keeps a scheduled settlement successful and reports it when only its checkpoint fails', async () => {
     const failures: string[] = []
     const openPayload = await createOpenPayload()
     const store = channelStore(Store.memory())
@@ -5009,7 +5042,7 @@ describe('onSessionSettlement', () => {
         },
       }),
     ).resolves.toBe(`0x${'cc'.repeat(32)}`)
-    expect(failures).toEqual([])
+    expect(failures).toEqual([`Settlement 0x${'cc'.repeat(32)} confirmed but was not recorded.`])
   })
 
   test('reports a scheduled settlement whose lease claim fails', async () => {
@@ -5038,7 +5071,10 @@ describe('onSessionSettlement', () => {
           updateChannel: () => Promise.reject(new Error('store unavailable')),
         },
       }),
-    ).rejects.toThrow(/store unavailable/)
+    ).rejects.toMatchObject({
+      name: 'SettlementLeaseError',
+      cause: { message: 'store unavailable' },
+    })
     expect(failures).toEqual([{ message: 'store unavailable', trigger: 'scheduled' }])
   })
 
