@@ -1,5 +1,16 @@
 # mppx
 
+## 0.13.4
+
+### Patch Changes
+
+- a732d24: Fixed `tempo/session` settlement failing after confirmation when a lagging RPC replica served the readback; `settle` read channel state at the receipt's block. Confirmed checkpoint failures were also reported.
+- d27f02d: Fixed `tempo/session` `onSessionSettlement` double-counting a retried settlement after a failed checkpoint; `delta` now comes from the receipt's `deltaPaid`. Exported `SettlementCheckpointError` as `tempo.SettlementCheckpointError` from `mppx/server`.
+- a732d24: Changed `tempo/session` to serve charged requests when a scheduled settlement's lease claim, JSON-RPC rate limit, internal RPC error or receipt wait failed transiently; the next settlement collected the charge.
+- bbbec69: Added a fresh HMAC-bound issuance nonce to server-generated payment challenges while preserving route metadata checks.
+- 53c394a: Prevented CLI validation probes from following redirects.
+- 99b6e08: Prevented WebSocket payment authorization after cancellation and settled interrupted connection attempts.
+
 ## 0.13.3
 
 ### Patch Changes
