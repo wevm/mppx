@@ -49,10 +49,16 @@ import {
   shouldApplyVerifiedHttpAccounting,
   type SettleChargedSessionChannel,
 } from './Settlement.js'
-import { isSettlementDue, maybeSettleScheduled } from './Settlement.js'
+import {
+  ignoreRetryableSettlementFailure,
+  isSettlementDue,
+  maybeSettleScheduled,
+  reportSessionSettlementFailure,
+} from './Settlement.js'
 import {
   resolveSettlementSchedule,
   type OnSessionSettlement,
+  type OnSessionSettlementFailure,
   type SettlementSchedule,
 } from './Settlement.js'
 import * as Ws from './Ws.js'
@@ -60,7 +66,12 @@ import * as Ws from './Ws.js'
 /** Server-side automatic settlement schedule. */
 export type { SettlementSchedule } from './Settlement.js'
 /** Server-side settlement event hook types. */
-export type { OnSessionSettlement, SessionSettlementContext } from './Settlement.js'
+export type {
+  OnSessionSettlement,
+  OnSessionSettlementFailure,
+  SessionSettlementContext,
+  SessionSettlementFailureContext,
+} from './Settlement.js'
 /** Server-side hook types for request-identity channel bootstrap. */
 export type {
   ResolveSessionChannelId,
@@ -329,6 +340,7 @@ export function session<const parameters extends session.Parameters>(
   } = parameters
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   const onSessionSettlement = parameters.onSessionSettlement
+  const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
   const store = ChannelStore.fromStore(rawStore)
   const lastOnChainVerified = new Map<Hex, number>()
@@ -343,22 +355,38 @@ export function session<const parameters extends session.Parameters>(
   })
   const settleScheduled: SettleChargedSessionChannel = async (channel) => {
     if (!isSettlementDue(channel, settlementSchedule)) return undefined
+    const client = await (async () => getClient({ chainId: channel.chainId }))().catch(
+      async (error) => {
+        await reportSessionSettlementFailure(onSessionSettlementFailure, {
+          chainId: channel.chainId,
+          channelId: channel.channelId,
+          error,
+          trigger: 'scheduled',
+        })
+        throw error
+      },
+    )
     return maybeSettleScheduled({
       account,
       channel,
-      client: await getClient({ chainId: channel.chainId }),
+      client,
       ...(configuredFeePayer ? { feePayer: configuredFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: parameters.feeToken,
       onSessionSettlement,
+      onSessionSettlementFailure,
       schedule: settlementSchedule,
       store,
     })
   }
+  // A failed scheduled settlement is reported and retried by the next one; the charged request
+  // stays served because the payer's voucher already covers the charge.
+  const settleCharged: SettleChargedSessionChannel = (channel) =>
+    settleScheduled(channel).catch(ignoreRetryableSettlementFailure)
   const serveWebSocket: session.Extensions['serveWebSocket'] = (options) =>
     Ws.serve({
       ...options,
-      onChargeCommitted: settleScheduled,
+      onChargeCommitted: settleCharged,
       store,
     })
   const bootstrapCharge = ChargeServer.charge({
@@ -375,7 +403,7 @@ export function session<const parameters extends session.Parameters>(
   type SessionTransport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
     ? Transport.sse({
-        settleCharged: settleScheduled,
+        settleCharged,
         store,
         ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
       })
@@ -455,6 +483,7 @@ export function session<const parameters extends session.Parameters>(
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       onSessionSettlement,
+      onSessionSettlementFailure,
       payload,
       requireVoucherAdvance: shouldApplyVerifiedHttpAccounting({
         capturedRequest: envelope?.capturedRequest,
@@ -481,10 +510,11 @@ export function session<const parameters extends session.Parameters>(
           feePayerPolicy: parameters.feePayerPolicy,
           feeToken: parameters.feeToken,
           onSessionSettlement,
+          onSessionSettlementFailure,
           schedule: settlementSchedule,
           store,
           channel,
-        }),
+        }).catch(ignoreRetryableSettlementFailure),
     })
   }
 
@@ -647,6 +677,8 @@ export namespace session {
     escrowContract?: Address | undefined
     /** Callback invoked after any on-chain settlement or close transaction is confirmed. */
     onSessionSettlement?: OnSessionSettlement | undefined
+    /** Callback invoked when a scheduled settlement or close transaction fails. Observer errors are ignored. */
+    onSessionSettlementFailure?: OnSessionSettlementFailure | undefined
     /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
     settlementSchedule?: SettlementSchedule | undefined
 

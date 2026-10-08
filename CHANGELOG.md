@@ -1,5 +1,79 @@
 # mppx
 
+## 0.13.3
+
+### Patch Changes
+
+- 06dc781: Fixed `tempo/session` reopening a channel when a broadcast close failed ambiguously. The pending-close marker stayed until the close transaction expired, and a later voucher or close cleared it once the chain showed the channel still open.
+- 55c3c26: Changed `tempo/session` to serve a charged request when its scheduled settlement hit a transport or RPC failure; the next settlement collected the charge. Reverts and configuration errors still failed the request.
+- c22cf1a: Fixed `tempo/session` failing a charged request when its settlement confirmed but the channel store could not record it. `settle` raised `SettlementCheckpointError` with the transaction hash instead.
+- 6921631: Fixed scheduled `tempo/session` settlement marking charges accepted while the settlement transaction was pending as settled. `settle` recorded the spend and units read with the submitted voucher instead.
+- 55c3c26: Added `onSessionSettlementFailure` to `tempo.session()`, called with the chain, channel, error and trigger (`scheduled` or `close`) when a scheduled settlement or close transaction fails.
+
+## 0.13.2
+
+### Patch Changes
+
+- ac542e3: Enforced offer eligibility before settling native transport credentials.
+- 3b08fc4: Fixed `tempo/charge` releasing another request's replay marker when a transaction's final hash collided with an already-claimed hash, which let a settled transaction pass replay protection again.
+- 9856cd2: Disabled automatic redirects on credential-bearing fetch retries to prevent payment credential disclosure.
+- 5c81137: Used verified token decimals when enforcing persistent CLI session deposit limits.
+
+## 0.13.1
+
+### Patch Changes
+
+- ec6c6cf: Added paired Elysia lifecycle hooks that wrapped actual route responses for streaming metering. Rejected streaming payments registered with only a beforeHandle hook and required Elysia 1.2.0 or newer.
+- 86dddc8: Stopped emitting payment-success events when authorization reused existing access without verifying a new credential.
+- e60b7ea: Settled previously accepted vouchers when terminal voucher processing detected a pending channel close, using the existing shared scheduled-settlement claim. Kept standalone validation free of settlement side effects.
+- cfb4bff: Reserved stream charges atomically in shared channel state and released or expired unused reservations.
+
+## 0.13.0
+
+### Minor Changes
+
+- e6f903f: Required shared replay storage for Stripe Tempo payment methods.
+- 44b9115: Removed the deprecated legacy session client exports.
+
+### Patch Changes
+
+- e73cd68: Fixed Node server responses so streams stopped when clients disconnected.
+- eb888ab: Fixed server request handling so bodies were bounded and backpressured.
+- 22c0633: Fixed proxy requests so payment authorization was not forwarded upstream.
+- beceee5: Fixed proxy responses so payment-specific headers were stripped.
+- 47e2faf: Fixed Stripe proxy requests so caller routing headers were removed.
+- e2bfcf3: Fixed CLI discovery so untrusted origins were rejected.
+- b224b23: Fixed EVM nonce hashing so input fields were framed unambiguously.
+- 4bdad2b: Fixed Tempo SSE parsing so standard line endings were accepted.
+- e66245d: Fixed MCP payments so the selected payment method was used.
+- 8c42db6: Fixed Tempo transaction credentials so proofs were bound to their source account.
+- 23499aa: Fixed composed server methods so credential headers remained scoped to their transports.
+- 3fc6dd4: Fixed x402 verification so route-bound credentials were required by default.
+- 7e6a86a: Fixed CLI credential retries so requests remained pinned to the challenge origin.
+- 7c91998: Fixed CLI challenge handling so mismatched payment realms were rejected.
+- 8bfe2d1: Fixed middleware payment challenges so credentials were bound to routes.
+- 8bfeb03: Fixed manual session streams so terminal charges were committed.
+- 52b88c6: Fixed session charging so the final retry result was validated.
+- adc5c07: Fixed Tempo sessions so expected chain pins were applied.
+- f9c56d8: Fixed Tempo payment proofs so signer accounts were resolved correctly.
+- ad11f54: Fixed subscriptions so pending renewal credentials were rejected.
+- f14f1ee: Fixed CLI token approvals so configured decimals were verified.
+- c301267: Fixed session channel waits so timed-out callers were cancelled.
+- 91eed32: Fixed session WebSocket input so oversized frames were rejected.
+- f823c86: Fixed session management requests so nested operations honored cancellation.
+- 6568964: Fixed session SSE streams so values were pulled with backpressure.
+- d40dfbd: Fixed session WebSocket output so buffered data remained bounded.
+- e77e9c3: Fixed hosted session sponsorship so configured policy was enforced.
+- 9076794: Fixed sponsored access keys so installation required explicit opt-in.
+- dcee2e8: Fixed sponsored subscriptions so fee tokens were restricted to configured tokens.
+- a7eb66a: Fixed x402 compatibility offers so their payment lifecycle remained safe.
+- 25952d3: Fixed cooperative session closes so close credentials were authorized.
+- 909ccc1: Fixed sponsored session calls so supported call payloads were canonicalized.
+- f431415: Fixed session voucher acceptance so channel state was refreshed before validation.
+- 2afa94d: Fixed scheduled session settlements so concurrent workers claimed each settlement atomically.
+- bd96362: Fixed bodyless session responses so payment accounting completed before protected handlers continued.
+- c7968ca: Added optional funding currency metadata to Tempo charge receipts for verified direct, MACH, and DEX auto-swap payment routes.
+
 ## 0.12.0
 
 ### Minor Changes

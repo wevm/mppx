@@ -1,4 +1,6 @@
 import {
+  createClient,
+  custom,
   isAddress,
   isAddressEqual,
   zeroAddress,
@@ -36,6 +38,8 @@ import {
   getClientAccount,
   maybeSettleScheduled,
   type OnSessionSettlement,
+  type OnSessionSettlementFailure,
+  reportSessionSettlementFailure,
 } from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
@@ -359,6 +363,8 @@ export type BroadcastCredentialPayloadParameters = {
   minVoucherDelta: bigint
   /** Callback invoked after an on-chain settlement or close transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** Callback invoked when a scheduled settlement or close transaction fails. */
+  onSessionSettlementFailure?: OnSessionSettlementFailure | undefined
   /** Discriminated session credential payload to verify. */
   payload: SessionCredentialPayload
   /** Whether an open or voucher credential must add new funds for this request. */
@@ -962,6 +968,16 @@ async function handleVoucherCredential(
     forceRefresh: true,
     lastOnChainVerified,
   })
+  const reconciled =
+    channel.closeRequestedAt === 0n
+      ? channel
+      : ((await store.updateChannel(channelId, (current) =>
+          ChannelStore.reconcileExpiredPendingClose({
+            current,
+            now: Math.floor(Date.now() / 1000),
+            state: channelState,
+          }),
+        )) ?? channel)
   if (channelState.closeRequestedAt !== 0) {
     const closing = await store.updateChannel(channelId, (current) =>
       current
@@ -987,6 +1003,7 @@ async function handleVoucherCredential(
         feePayerPolicy: parameters.feePayerPolicy,
         feeToken: parameters.feeToken,
         onSessionSettlement: parameters.onSessionSettlement,
+        onSessionSettlementFailure: parameters.onSessionSettlementFailure,
         schedule: {},
         store,
       })
@@ -997,11 +1014,38 @@ async function handleVoucherCredential(
     minVoucherDelta,
     requireAdvance: parameters.requireVoucherAdvance,
     challenge,
-    channel,
+    channel: reconciled,
     voucher,
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
   })
+}
+
+const sendMethods = new Set([
+  'eth_sendRawTransaction',
+  'eth_sendRawTransactionSync',
+  'eth_sendTransaction',
+])
+
+/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
+function trackSendAttempts(client: Chain.TransactionClient) {
+  const tracked = { attempted: false }
+  const trackedClient = createClient({
+    account: client.account,
+    chain: client.chain,
+    pollingInterval: client.pollingInterval,
+    transport: custom(
+      {
+        request(parameters) {
+          if (sendMethods.has(parameters.method)) tracked.attempted = true
+          return client.request(parameters as never)
+        },
+      },
+      // The wrapped client already owns retries.
+      { retryCount: 0 },
+    ),
+  })
+  return { client: trackedClient, tracked }
 }
 
 async function handleCloseCredential(
@@ -1061,14 +1105,14 @@ async function handleCloseCredential(
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
-  const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
-  const previousCloseRequestedAt = channel.closeRequestedAt
+  const now = Math.floor(Date.now() / 1000) || 1
+  const pendingCloseStartedAt = BigInt(now)
   let pendingCloseMarked = false
   await store.updateChannel(channelId, (current) => {
     const next = ChannelStore.markPendingClose({
       closeRequestedAt: pendingCloseStartedAt,
       cumulativeAmount,
-      current,
+      current: ChannelStore.reconcileExpiredPendingClose({ current, now, state }),
       onChainDeposit: state.deposit,
       onChainSettled: state.settled,
     })
@@ -1079,8 +1123,11 @@ async function handleCloseCredential(
     return next.state
   })
   const account = parameters.account ?? getClientAccount(client)
-  let txHash: Hex | undefined
+  // Pin the close transaction's expiry to the marker so an expired marker proves it can no longer land.
+  const validBefore = now + ChannelStore.pendingCloseValiditySeconds
+  const send = trackSendAttempts(client)
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
+  let txHash: Hex | undefined
   try {
     assertSettlementSender({
       operation: 'close',
@@ -1090,7 +1137,7 @@ async function handleCloseCredential(
       sender: account?.address,
     })
     txHash = await Chain.closeOnChain(
-      client,
+      send.client,
       channel.descriptor,
       cumulativeAmount,
       captureAmount,
@@ -1103,15 +1150,25 @@ async function handleCloseCredential(
             ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
             candidateFeeTokens: [channel.token],
+            validBefore,
           }
-        : undefined,
+        : { validBefore },
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
-    if (pendingCloseMarked) {
+    await reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
+      chainId,
+      channelId,
+      error,
+      trigger: 'close',
+    })
+    // A close whose send RPC was attempted may still land, so it keeps the marker until it expires and
+    // a later credential reconciles it. Verification errors prove a rejection or revert.
+    const closeFailed = !send.tracked.attempted || error instanceof VerificationFailedError
+    if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
-          ? { ...current, closeRequestedAt: previousCloseRequestedAt }
+          ? { ...current, closeRequestedAt: 0n }
           : current,
       )
     }

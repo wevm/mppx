@@ -1,5 +1,5 @@
 import { Hex } from 'ox'
-import { encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
+import { createClient, custom, encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import { tempoNetworkConfig } from '~test/config.js'
@@ -315,6 +315,142 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     const settled = getSingleEvent(receipt, 'Settled')
     expect(settled.args.channelId).toBe(channelId)
     expect(settled.args.newSettled).toBe(250n)
+  })
+
+  test('accepts vouchers again after a server close expired without closing the channel', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
+    // A close marked two minutes ago whose transaction never landed.
+    const staleCloseRequestedAt = BigInt(Math.floor(Date.now() / 1000) - 120)
+    await store.updateChannel(channelId, () => ({
+      backend: 'precompile',
+      channelId,
+      chainId: chain.id,
+      escrowContract: tip20ChannelEscrow,
+      closeRequestedAt: staleCloseRequestedAt,
+      payer: descriptor.payer,
+      payee: descriptor.payee,
+      token: descriptor.token,
+      authorizedSigner: descriptor.authorizedSigner,
+      deposit,
+      settledOnChain: 0n,
+      highestVoucherAmount: 0n,
+      highestVoucher: null,
+      spent: 0n,
+      units: 0,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+      descriptor,
+      operator: descriptor.operator,
+      salt: descriptor.salt,
+      expiringNonceHash: descriptor.expiringNonceHash,
+    }))
+    const method = session({
+      amount: '100',
+      chainId: chain.id,
+      currency: asset,
+      decimals: 0,
+      recipient: payee.address,
+      store: rawStore,
+      unitType: 'request',
+      getClient: () => client,
+    })
+    const challenge = {
+      id: 'chain-expired-close',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'session',
+      request: sessionRequest(channelId),
+    } as never
+
+    const voucher = await createVoucherPayload(client, payer, descriptor, uint96(300n), chain.id)
+    await method.verify({
+      credential: { challenge, payload: voucher, source: sourceFor() },
+      request: sessionRequest(channelId) as never,
+    })
+    expect(await store.getChannel(channelId)).toMatchObject({
+      closeRequestedAt: 0n,
+      highestVoucherAmount: 300n,
+    })
+
+    const close = await createClosePayload(client, payer, descriptor, uint96(300n), chain.id)
+    const receipt = await method.verify({
+      credential: { challenge, payload: close },
+      request: sessionRequest(channelId) as never,
+    })
+    if (!('txHash' in receipt)) throw new Error('expected close txHash')
+    // A landed close pays out the deposit, which keeps reconciliation from reopening the channel.
+    expect((await getChannelState(client, channelId, tip20ChannelEscrow)).deposit).toBe(0n)
+  })
+
+  test('leaves charges accepted during a real settlement due for the next one', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
+
+    const voucher = await createVoucherPayload(client, payer, descriptor, uint96(250n), chain.id)
+    if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
+    await store.updateChannel(channelId, () => ({
+      backend: 'precompile',
+      channelId,
+      chainId: chain.id,
+      escrowContract: tip20ChannelEscrow,
+      closeRequestedAt: 0n,
+      payer: descriptor.payer,
+      payee: descriptor.payee,
+      token: descriptor.token,
+      authorizedSigner: descriptor.authorizedSigner,
+      deposit,
+      settledOnChain: 0n,
+      highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId,
+        cumulativeAmount: 250n,
+        signature: voucher.signature,
+      },
+      spent: 250n,
+      units: 1,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+      descriptor,
+      operator: descriptor.operator,
+      salt: descriptor.salt,
+      expiringNonceHash: descriptor.expiringNonceHash,
+    }))
+
+    // Hold the receipt read so another request is charged while settle() waits for confirmation.
+    const receiptRequested = Promise.withResolvers<void>()
+    const releaseReceipt = Promise.withResolvers<void>()
+    const gatedClient = createClient({
+      account: client.account,
+      chain,
+      transport: custom({
+        async request(parameters) {
+          if (parameters.method === 'eth_getTransactionReceipt') {
+            receiptRequested.resolve()
+            await releaseReceipt.promise
+          }
+          return client.request(parameters as never)
+        },
+      }),
+    })
+    const settlement = settle(store, gatedClient, channelId)
+    await receiptRequested.promise
+    await store.updateChannel(channelId, (current) =>
+      current ? { ...current, spent: 350n, units: 2 } : current,
+    )
+    releaseReceipt.resolve()
+    await settlement
+
+    const settled = await store.getChannel(channelId)
+    expect(settled).toMatchObject({
+      lastSettlementSpent: 250n,
+      lastSettlementUnits: 1,
+      settledOnChain: 250n,
+      spent: 350n,
+      units: 2,
+    })
   })
 
   test('closes a real precompile channel with fee-payer sponsorship', async () => {

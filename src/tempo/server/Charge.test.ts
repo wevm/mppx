@@ -1449,6 +1449,92 @@ describe('tempo', () => {
       },
     )
 
+    test('behavior: keeps a settled final hash claimed after a colliding encoding is rejected', async () => {
+      const broadcastTransactions: Hex.Hex[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(request) {
+            if (request.method === 'eth_sendRawTransactionSync')
+              broadcastTransactions.push(request.params[0] as Hex.Hex)
+            return client.transport.request(request)
+          },
+        }),
+      })
+      const store = Store.memory()
+      const collisionServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => interceptingClient,
+            store,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient: () => client,
+          }),
+        ],
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          collisionServer.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      try {
+        const challengeResponse = await fetch(httpServer.url)
+        const canonicalCredential = await mppx.createCredential(challengeResponse)
+        const credential = Credential.deserialize<{
+          signature: Hex.Hex
+          type: 'transaction'
+        }>(canonicalCredential)
+        const canonicalTransaction = credential.payload.signature
+        const rawCredential = Credential.serialize({
+          ...credential,
+          payload: { ...credential.payload, signature: toRawRecoveryId(canonicalTransaction) },
+        })
+
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: canonicalCredential },
+        })
+        expect(response.status).toBe(200)
+
+        // Different submitted bytes whose canonical final hash is the settled payment's.
+        const collision = await fetch(httpServer.url, {
+          headers: { Authorization: rawCredential },
+        })
+        expect(collision.status).toBe(402)
+        const body = (await collision.json()) as { detail: string }
+        expect(body.detail).toContain('Transaction hash has already been used.')
+
+        // Cleanup must not release the marker the settled payment holds.
+        expect(await store.get(`mppx:charge:${keccak256(canonicalTransaction)}`)).not.toBeNull()
+
+        const replay = await fetch(httpServer.url, {
+          headers: { Authorization: rawCredential },
+        })
+        expect(replay.status).toBe(402)
+        expect(broadcastTransactions).toEqual([canonicalTransaction])
+      } finally {
+        httpServer.close()
+      }
+    })
+
     test('behavior: accepts a pushed machine-token settlement', async () => {
       const hash = `0x${'12'.repeat(32)}` as Hex.Hex
       let challenge: Challenge.Challenge | undefined

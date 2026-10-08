@@ -8,6 +8,7 @@ import {
   settle as settle_,
   settleBatch as settleBatch_,
 } from '../session/server/Session.js'
+import * as Settlement from '../session/server/Settlement.js'
 import type { SessionController as SessionController_ } from '../session/server/Sse.js'
 import * as Ws_ from '../session/server/Ws.js'
 import { charge as charge_ } from './Charge.js'
@@ -146,6 +147,10 @@ export namespace tempo {
   export const settle = settle_
   /** Batch-settle precompile-backed session channels. */
   export const settleBatch = settleBatch_
+  /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
+  export const SettlementCheckpointError = Settlement.SettlementCheckpointError
+  /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
+  export type SettlementCheckpointError = Settlement.SettlementCheckpointError
   /** Types for Tempo session streams. */
   export namespace Sse {
     /** Controller passed to manual-charge SSE generators. */
@@ -219,7 +224,9 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       Ws_.serve({
         ...options,
         store: ChannelStore.fromStore(store),
-        onChargeCommitted: settleScheduled,
+        // Failed settlements are reported by the session handler; the charged request stays served.
+        onChargeCommitted: (channel) =>
+          settleScheduled(channel).catch(Settlement.ignoreRetryableSettlementFailure),
       }),
   }
   function create(currency: typeof first) {

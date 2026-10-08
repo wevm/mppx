@@ -364,9 +364,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
-        response = await baseFetch(
-          paymentInput,
-          transport.setCredential(
+        response = await baseFetch(paymentInput, {
+          ...transport.setCredential(
             {
               ...fetchInit,
               headers: initialRequest.headers,
@@ -374,7 +373,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             credential,
             { challenge: selectedChallenge },
           ),
-        )
+          // Runtimes do not strip custom payment headers on cross-origin redirects.
+          redirect: 'manual',
+        })
         const paymentRequired = await transport.isPaymentRequired(
           response,
           transportRequest as never,
@@ -382,7 +383,13 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         if (!paymentRequired) {
           await settleAttempt(prepared, {
             response,
-            status: response.ok ? 'accepted' : 'rejected',
+            // A redirect does not tell us whether the paid request was accepted.
+            status:
+              response.status >= 300 && response.status < 400
+                ? 'pending'
+                : response.ok
+                  ? 'accepted'
+                  : 'rejected',
           })
           preparedCredential = undefined
         }

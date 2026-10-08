@@ -60,10 +60,22 @@ describe('resolveSessionMaxDeposit', () => {
   } satisfies Challenge.Challenge
 
   test('converts the raw server suggestion to human-readable token units', () => {
-    expect(resolveSessionMaxDeposit(challenge, {}, false)).toBe('7')
+    expect(resolveSessionMaxDeposit(challenge, {}, false, 6)).toBe('7')
   })
 
   test('prefers the human-readable CLI deposit override', () => {
-    expect(resolveSessionMaxDeposit(challenge, { deposit: '10' }, false)).toBe('10')
+    expect(resolveSessionMaxDeposit(challenge, { deposit: '10' }, false, 6)).toBe('10')
   })
+})
+
+test.each([0, 6, 18])('uses trusted precision %i for a server-suggested deposit', (decimals) => {
+  const challenge = {
+    id: 'test',
+    realm: 'test',
+    method: 'tempo',
+    intent: 'session',
+    request: { decimals: 30, suggestedDeposit: '1000000' },
+  } satisfies Challenge.Challenge
+  const expected = ['1000000', '1', '0.000000000001'][[0, 6, 18].indexOf(decimals)]
+  expect(resolveSessionMaxDeposit(challenge, {}, false, decimals)).toBe(expected)
 })

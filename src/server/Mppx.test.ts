@@ -3178,6 +3178,68 @@ describe('compose', () => {
     expect(paymentRequired.accepts.map((accepted) => accepted.amount)).toEqual(['10000', '20000'])
   })
 
+  test.each(['canOffer', 'selectOffers'] as const)(
+    'enforces %s before settling a self-issued x402 offer',
+    async (policy) => {
+      const settle = vi.fn(async (payload: PaymentPayload) => ({
+        network: payload.accepted.network,
+        payer: payerOf(payload),
+        success: true,
+        transaction: `0x${'3'.repeat(64)}`,
+      }))
+      let eligible = true
+      const method = evm.charge({
+        currency: evm.assets.baseSepolia.USDC,
+        recipient: accounts[0].address,
+        ...(policy === 'canOffer' && {
+          canOffer: ({ request }) => eligible || request.amount === '20000',
+        }),
+        x402: {
+          facilitator: {
+            async verify(payload: PaymentPayload) {
+              return { isValid: true, payer: payerOf(payload) }
+            },
+            settle,
+          },
+        },
+      })
+      const mppx = Mppx.create({
+        methods: [method],
+        realm,
+        secretKey,
+        selectOffers: (offers) =>
+          policy !== 'selectOffers' || eligible
+            ? offers
+            : offers.filter((offer) => offer.request.amount === '20000'),
+      })
+      const handle = mppx.compose(
+        ['evm/charge', { amount: '0.01' }],
+        ['evm/charge', { amount: '0.02' }],
+      )
+      const first = await handle(new Request('https://example.com/resource'))
+      if (first.status !== 402) throw new Error('expected challenge')
+      const required = x402_Header.decodePaymentRequired(
+        first.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
+      )
+      const signature = await x402PaymentSignature(
+        required.accepts[0]!,
+        required.resource,
+        required.extensions,
+      )
+      eligible = false
+      const request = () =>
+        new Request('https://example.com/resource', {
+          headers: { [x402_Types.paymentSignatureHeader]: signature },
+        })
+      const denied = await handle(request())
+      expect(denied.status).toBe(402)
+      expect(settle).not.toHaveBeenCalled()
+      eligible = true
+      expect((await handle(request())).status).toBe(200)
+      expect(settle).toHaveBeenCalledOnce()
+    },
+  )
+
   test('dispatches an x402 credential to its matching composed offer', async () => {
     const mppx = Mppx.create({ methods: [x402Method], realm, secretKey })
     const handle = mppx.compose(
@@ -3235,7 +3297,7 @@ describe('compose', () => {
     expect(await response.text()).toBe('paid')
   })
 
-  test('dispatches x402 credentials even when offer selection excludes x402', async () => {
+  test('rejects x402 credentials when offer selection excludes x402', async () => {
     let selectionCount = 0
     const challenger = Mppx.create({ methods: [x402Method], realm, secretKey })
     const challengeResult = await challenger['evm/charge']({ amount: '0.01' })(
@@ -3270,8 +3332,8 @@ describe('compose', () => {
       }),
     )
 
-    expect(result.status).toBe(200)
-    expect(selectionCount).toBe(0)
+    expect(result.status).toBe(402)
+    expect(selectionCount).toBe(1)
   })
 
   test('does not let forged x402 credentials bypass offer selection', async () => {
