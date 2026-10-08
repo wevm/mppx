@@ -38,6 +38,8 @@ import {
   getClientAccount,
   maybeSettleScheduled,
   type OnSessionSettlement,
+  type OnSessionSettlementFailure,
+  reportSessionSettlementFailure,
 } from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
@@ -361,6 +363,8 @@ export type BroadcastCredentialPayloadParameters = {
   minVoucherDelta: bigint
   /** Callback invoked after an on-chain settlement or close transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** Callback invoked when a scheduled settlement or close transaction fails. */
+  onSessionSettlementFailure?: OnSessionSettlementFailure | undefined
   /** Discriminated session credential payload to verify. */
   payload: SessionCredentialPayload
   /** Whether an open or voucher credential must add new funds for this request. */
@@ -999,6 +1003,7 @@ async function handleVoucherCredential(
         feePayerPolicy: parameters.feePayerPolicy,
         feeToken: parameters.feeToken,
         onSessionSettlement: parameters.onSessionSettlement,
+        onSessionSettlementFailure: parameters.onSessionSettlementFailure,
         schedule: {},
         store,
       })
@@ -1151,6 +1156,12 @@ async function handleCloseCredential(
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
+    await reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
+      chainId,
+      channelId,
+      error,
+      trigger: 'close',
+    })
     // A close whose send RPC was attempted may still land, so it keeps the marker until it expires and
     // a later credential reconciles it. Verification errors prove a rejection or revert.
     const closeFailed = !send.tracked.attempted || error instanceof VerificationFailedError

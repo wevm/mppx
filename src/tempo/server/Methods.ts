@@ -8,6 +8,7 @@ import {
   settle as settle_,
   settleBatch as settleBatch_,
 } from '../session/server/Session.js'
+import * as Settlement from '../session/server/Settlement.js'
 import type { SessionController as SessionController_ } from '../session/server/Sse.js'
 import * as Ws_ from '../session/server/Ws.js'
 import { charge as charge_ } from './Charge.js'
@@ -219,7 +220,9 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       Ws_.serve({
         ...options,
         store: ChannelStore.fromStore(store),
-        onChargeCommitted: settleScheduled,
+        // Failed settlements are reported by the session handler; the charged request stays served.
+        onChargeCommitted: (channel) =>
+          settleScheduled(channel).catch(Settlement.ignoreRetryableSettlementFailure),
       }),
   }
   function create(currency: typeof first) {

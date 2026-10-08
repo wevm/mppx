@@ -1,4 +1,4 @@
-import { createClient, custom } from 'viem'
+import { createClient, custom, HttpRequestError } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoChain } from 'viem/chains'
 import { defineToken } from 'viem/tokens'
@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import { VerificationFailedError } from '../../Errors.js'
 import * as Mppx from '../../server/Mppx.js'
 import * as Store from '../../Store.js'
 import { tokens } from '../internal/defaults.js'
@@ -166,6 +167,13 @@ test.each(
       settle.mockRejectedValue(error)
       await expect(server.tempo.session.settleScheduled(channel)).rejects.toBe(error)
       await expect(onChargeCommitted(channel)).rejects.toBe(error)
+      settle.mockRejectedValue(
+        new HttpRequestError({ status: 502, url: 'https://rpc.example.com' }),
+      )
+      await expect(onChargeCommitted(channel)).resolves.toBeUndefined()
+      const reverted = new VerificationFailedError({ reason: 'precompile transaction reverted' })
+      settle.mockRejectedValue(reverted)
+      await expect(onChargeCommitted(channel)).rejects.toBe(reverted)
     } finally {
       settle.mockRestore()
       serve.mockRestore()
