@@ -1,11 +1,8 @@
 import {
-  BaseError as viem_BaseError,
-  HttpRequestError,
+  createClient,
+  custom,
   isAddress,
   isAddressEqual,
-  SocketClosedError,
-  TimeoutError,
-  WebSocketRequestError,
   zeroAddress,
   type Account as viem_Account,
   type Address,
@@ -1025,23 +1022,25 @@ const sendMethods = new Set([
   'eth_sendTransaction',
 ])
 
-/** Returns whether a close that failed before returning a hash may still have been broadcast. */
-function mayHaveBroadcast(error: unknown): boolean {
-  if (!(error instanceof viem_BaseError)) return false
-  const transport = error.walk(
-    (cause) =>
-      cause instanceof HttpRequestError ||
-      cause instanceof SocketClosedError ||
-      cause instanceof TimeoutError ||
-      cause instanceof WebSocketRequestError,
-  )
-  if (!transport) return false
-  // Only HTTP errors record their request; a failure on an unknown method may have been the send.
-  if (!(transport instanceof HttpRequestError)) return true
-  const requests = [transport.body].flat() as readonly ({ method?: unknown } | undefined)[]
-  return requests.some(
-    (request) => request?.method === undefined || sendMethods.has(String(request.method)),
-  )
+/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
+function trackSendAttempts(client: Chain.TransactionClient) {
+  const tracked = { attempted: false }
+  const trackedClient = createClient({
+    account: client.account,
+    chain: client.chain,
+    pollingInterval: client.pollingInterval,
+    transport: custom(
+      {
+        request(parameters) {
+          if (sendMethods.has(parameters.method)) tracked.attempted = true
+          return client.request(parameters as never)
+        },
+      },
+      // The wrapped client already owns retries.
+      { retryCount: 0 },
+    ),
+  })
+  return { client: trackedClient, tracked }
 }
 
 async function handleCloseCredential(
@@ -1121,6 +1120,7 @@ async function handleCloseCredential(
   const account = parameters.account ?? getClientAccount(client)
   // Pin the close transaction's expiry to the marker so an expired marker proves it can no longer land.
   const validBefore = now + ChannelStore.pendingCloseValiditySeconds
+  const send = trackSendAttempts(client)
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   let txHash: Hex | undefined
   try {
@@ -1132,7 +1132,7 @@ async function handleCloseCredential(
       sender: account?.address,
     })
     txHash = await Chain.closeOnChain(
-      client,
+      send.client,
       channel.descriptor,
       cumulativeAmount,
       captureAmount,
@@ -1151,10 +1151,9 @@ async function handleCloseCredential(
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
-    // A close that may have been broadcast keeps the marker until it expires and a later credential
-    // reconciles it. Only a proven revert reopens a close that returned a hash.
-    const closeFailed =
-      txHash === undefined ? !mayHaveBroadcast(error) : error instanceof VerificationFailedError
+    // A close whose send RPC was attempted may still land, so it keeps the marker until it expires and
+    // a later credential reconciles it. Verification errors prove a rejection or revert.
+    const closeFailed = !send.tracked.attempted || error instanceof VerificationFailedError
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt

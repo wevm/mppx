@@ -16,7 +16,6 @@ import {
   encodeFunctionData,
   encodeFunctionResult,
   type Hex,
-  HttpRequestError,
   maxUint256,
   zeroAddress,
 } from 'viem'
@@ -3827,12 +3826,7 @@ describe('precompile server session unit guardrails', () => {
                 if (args.method === 'eth_sendRawTransaction') {
                   observedPending =
                     (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
-                  throw new HttpRequestError({
-                    body: args,
-                    details: 'broadcast failed',
-                    status: 502,
-                    url: 'https://rpc.example.com',
-                  })
+                  throw new Error('broadcast failed')
                 }
                 if (args.method === 'eth_estimateGas') return '0x5208'
                 if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
@@ -3875,26 +3869,18 @@ describe('precompile server session unit guardrails', () => {
     async ({ failure, restored }) => {
       const { openPayload, store, verify } = await createCloseRollbackHarness()
       let pendingCloseStartedAt = 0n
-      const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
+      const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
         pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
         if (failure === 'rejected submission')
           throw new VerificationFailedError({ reason: 'rejected submission failed' })
         if (failure === 'fee-payer policy')
           throw new BadRequestError({ reason: 'fee-payer policy failed' })
-        if (failure === 'preparation')
-          throw new HttpRequestError({
-            body: { method: 'eth_estimateGas' },
-            details: 'preparation failed',
-            status: 502,
-            url: 'https://rpc.example.com',
-          })
-        if (failure === 'submission')
-          throw new HttpRequestError({
-            body: { method: 'eth_sendRawTransaction' },
-            details: 'submission failed',
-            status: 502,
-            url: 'https://rpc.example.com',
-          })
+        if (failure === 'preparation') throw new Error('preparation failed')
+        // Hand the transaction to the node before failing or returning its hash.
+        await client
+          .request({ method: 'eth_sendRawTransaction', params: ['0x00'] })
+          .catch(() => undefined)
+        if (failure === 'submission') throw new Error('submission failed')
         return `0x${'ab'.repeat(32)}`
       })
       const waitForSuccessfulReceipt = vi
@@ -3902,7 +3888,7 @@ describe('precompile server session unit guardrails', () => {
         .mockRejectedValue(
           failure === 'revert'
             ? new VerificationFailedError({ reason: 'precompile transaction reverted' })
-            : new HttpRequestError({ details: 'receipt failed', url: 'https://rpc.example.com' }),
+            : new Error('receipt failed'),
         )
 
       try {
