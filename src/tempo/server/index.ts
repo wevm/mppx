@@ -6,7 +6,9 @@ export { tempo } from './Methods.js'
 export { session, settle, settleBatch } from '../session/server/Session.js'
 export type {
   OnSessionSettlement,
+  OnSessionSettlementFailure,
   SessionSettlementContext,
+  SessionSettlementFailureContext,
   SettlementSchedule,
 } from '../session/server/Session.js'
 export { renew as renewSubscription, subscription } from './Subscription.js'

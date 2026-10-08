@@ -1,7 +1,14 @@
 import {
+  BaseError as viem_BaseError,
+  HttpRequestError,
   isAddress,
   isAddressEqual,
+  LimitExceededRpcError,
   parseUnits,
+  ResourceUnavailableRpcError,
+  SocketClosedError,
+  TimeoutError,
+  WebSocketRequestError,
   zeroAddress,
   type Account as viem_Account,
   type Address,
@@ -158,6 +165,23 @@ export type SessionSettlementContext = Readonly<{
 
 /** Callback invoked after an on-chain settlement or close transaction is confirmed. */
 export type OnSessionSettlement = (context: SessionSettlementContext) => MaybePromise<void>
+
+/** Context emitted when a scheduled settlement or close transaction fails. */
+export type SessionSettlementFailureContext = Readonly<{
+  /** Chain ID of the channel. */
+  chainId: number
+  /** Channel ID whose settlement or close failed. */
+  channelId: Hex
+  /** Error thrown by the settlement or close. */
+  error: unknown
+  /** `close` for a failed close transaction; `scheduled` for a failed scheduled settlement. */
+  trigger: 'close' | 'scheduled'
+}>
+
+/** Callback invoked when a scheduled settlement or close transaction fails. */
+export type OnSessionSettlementFailure = (
+  context: SessionSettlementFailureContext,
+) => MaybePromise<void>
 
 /** Inputs used to mark a channel after automatic scheduled settlement succeeds. */
 export type MarkSettlementCompleteParameters = {
@@ -441,6 +465,8 @@ export type MaybeSettleScheduledParameters = {
   feeToken?: Address | undefined
   /** Callback invoked after the scheduled settlement transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** Callback invoked when the scheduled settlement fails. */
+  onSessionSettlementFailure?: OnSessionSettlementFailure | undefined
   /** Resolved server-owned settlement cadence. */
   schedule: ResolvedSettlementSchedule | undefined
   /** Server-side channel store. */
@@ -480,10 +506,20 @@ export async function maybeSettleScheduled(
 ): Promise<Hex | undefined> {
   const { channel, schedule, store } = parameters
   if (!schedule || !isSettlementDue(channel, schedule)) return undefined
+  const report = (error: unknown) =>
+    reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
+      chainId: channel.chainId,
+      channelId: channel.channelId,
+      error,
+      trigger: 'scheduled',
+    })
   const leaseOwner = await claimScheduledSettlement({
     channelId: channel.channelId,
     schedule,
     store,
+  }).catch(async (error) => {
+    await report(error)
+    throw error
   })
   if (!leaseOwner) return undefined
   const renewal = setInterval(() => {
@@ -493,26 +529,33 @@ export async function maybeSettleScheduled(
       store,
     }).catch(() => undefined)
   }, scheduledSettlementLeaseMs / 2)
-  try {
-    const txHash = await settle(store, parameters.client, channel.channelId, {
-      account: parameters.account,
-      ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
-      ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
-      ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-      onSessionSettlement: parameters.onSessionSettlement
-        ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
-        : undefined,
-    })
-    await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store })
-    return txHash
-  } catch (error) {
-    await releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
+  const release = () =>
+    releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
       () => undefined,
     )
-    throw error
-  } finally {
-    clearInterval(renewal)
-  }
+  const txHash = await settle(store, parameters.client, channel.channelId, {
+    account: parameters.account,
+    ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+    ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+    ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+    onSessionSettlement: parameters.onSessionSettlement
+      ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
+      : undefined,
+  })
+    .catch(async (error) => {
+      await report(error)
+      await release()
+      throw error
+    })
+    .finally(() => clearInterval(renewal))
+  // Bookkeeping after a confirmed settlement is not a settlement failure, so it is not reported.
+  await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store }).catch(
+    async (error) => {
+      await release()
+      throw error
+    },
+  )
+  return txHash
 }
 
 /** Settles the highest accepted voucher for a precompile-backed session channel. */
@@ -602,6 +645,44 @@ export async function settleBatch(
   const hashes: Hex[] = []
   for (const channelId of channelIds) hashes.push(await settle(store, client, channelId, options))
   return hashes
+}
+
+/**
+ * @internal Keeps a charged request served when its scheduled settlement hit a transport or RPC
+ * failure; the next settlement retries it. Reverts and configuration errors fail the request.
+ */
+export function ignoreRetryableSettlementFailure(error: unknown): undefined {
+  if (isRetryableSettlementFailure(error)) return undefined
+  throw error
+}
+
+function isRetryableSettlementFailure(error: unknown): boolean {
+  if (!(error instanceof viem_BaseError)) return false
+  // Only unavailable or overloaded upstreams clear on retry; node-rejected transactions repeat.
+  return Boolean(
+    error.walk(
+      (cause) =>
+        (cause instanceof HttpRequestError &&
+          (cause.status === undefined || cause.status === 429 || cause.status >= 500)) ||
+        cause instanceof LimitExceededRpcError ||
+        cause instanceof ResourceUnavailableRpcError ||
+        cause instanceof SocketClosedError ||
+        cause instanceof TimeoutError ||
+        cause instanceof WebSocketRequestError,
+    ),
+  )
+}
+
+/** @internal Reports a settlement failure without letting observer errors replace it. */
+export async function reportSessionSettlementFailure(
+  onSessionSettlementFailure: OnSessionSettlementFailure | undefined,
+  context: SessionSettlementFailureContext,
+): Promise<void> {
+  try {
+    await onSessionSettlementFailure?.(Object.freeze(context))
+  } catch {
+    // Errors are isolated: observers cannot replace the settlement failure.
+  }
 }
 
 async function emitSessionSettlement(

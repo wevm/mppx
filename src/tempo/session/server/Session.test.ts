@@ -16,6 +16,7 @@ import {
   encodeFunctionData,
   encodeFunctionResult,
   type Hex,
+  HttpRequestError,
   maxUint256,
   zeroAddress,
 } from 'viem'
@@ -97,6 +98,7 @@ function createServerClient(
     receipt?:
       | Record<string, unknown>
       | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
+    sendError?: Error | undefined
     sentReceipt?:
       | Record<string, unknown>
       | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
@@ -116,6 +118,11 @@ function createServerClient(
           if (args.method === 'eth_estimateGas') return '0x5208'
           if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
           if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+          if (
+            options.sendError &&
+            (args.method === 'eth_sendRawTransaction' || args.method === 'eth_sendTransaction')
+          )
+            throw options.sendError
           if (args.method === 'eth_sendRawTransaction') {
             sentTransaction = true
             return `0x${'aa'.repeat(32)}`
@@ -2691,6 +2698,8 @@ describe('precompile server session unit guardrails', () => {
         explicitCharge?: bigint
         maxDeposit?: bigint
         onSessionSettlement?: session.Parameters['onSessionSettlement']
+        onSessionSettlementFailure?: session.Parameters['onSessionSettlementFailure']
+        settlementError?: Error | undefined
         settlementSchedule?: session.Parameters['settlementSchedule']
         unitType?: 'request' | 'token'
       } = {},
@@ -2713,6 +2722,7 @@ describe('precompile server session unit guardrails', () => {
             decimals: 0,
             recipient: payer.address,
             onSessionSettlement: options.onSessionSettlement,
+            onSessionSettlementFailure: options.onSessionSettlementFailure,
             settlementSchedule: options.settlementSchedule,
             sse: true,
             store: rawStore,
@@ -2742,6 +2752,7 @@ describe('precompile server session unit guardrails', () => {
                 })
               }
               return createServerClient([], payer, undefined, {
+                sendError: options.settlementError,
                 sentReceipt: async () => {
                   if (!activeChannelId) throw new Error('missing channel context')
                   const channel = await channelStore(rawStore).getChannel(activeChannelId)
@@ -2918,6 +2929,44 @@ describe('precompile server session unit guardrails', () => {
         ])
       },
     )
+
+    test('streams every chunk and reports failures when scheduled settlement fails', async () => {
+      const failures: Array<{ message: string; trigger: string }> = []
+      const harness = createManagedSseFetch({
+        maxDeposit: 3n,
+        onSessionSettlementFailure({ error, trigger }) {
+          failures.push({ message: (error as Error).message, trigger })
+        },
+        settlementError: new HttpRequestError({
+          details: 'settlement unavailable',
+          status: 502,
+          url: 'https://rpc.example.com',
+        }),
+        settlementSchedule: { units: 2 },
+      })
+      const manager = precompileSessionManager({
+        account: payer,
+        client: createSigningClient(),
+        decimals: 0,
+        fetch: harness.fetch,
+        maxDeposit: '3',
+      })
+
+      const chunks: string[] = []
+      for await (const chunk of await manager.sse('https://api.example.com/stream')) {
+        chunks.push(chunk)
+      }
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(failures).toContainEqual({
+        message: expect.stringContaining('settlement unavailable'),
+        trigger: 'scheduled',
+      })
+      const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
+      expect(persisted).toMatchObject({ spent: 3n, units: 3 })
+      expect(persisted?.lastSettlementUnits).toBeUndefined()
+      expect(persisted?.scheduledSettlementLease).toBeUndefined()
+    })
 
     test('handles empty management POST streams through a Node adapter', async () => {
       const harness = createManagedSseFetch({ maxDeposit: 1n })
@@ -3757,7 +3806,9 @@ describe('precompile server session unit guardrails', () => {
     expect(stored.highestVoucher?.signature).toBe(higherVoucher.signature)
   })
 
-  async function createCloseRollbackHarness() {
+  async function createCloseRollbackHarness(
+    options: { onSessionSettlementFailure?: session.Parameters['onSessionSettlementFailure'] } = {},
+  ) {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload()
@@ -3768,6 +3819,7 @@ describe('precompile server session unit guardrails', () => {
       chainId,
       currency: token,
       decimals: 0,
+      onSessionSettlementFailure: options.onSessionSettlementFailure,
       recipient: payee,
       store: rawStore,
       unitType: 'request',
@@ -3790,6 +3842,25 @@ describe('precompile server session unit guardrails', () => {
         }),
     }
   }
+
+  test('reports a failed precompile close to onSessionSettlementFailure', async () => {
+    const failures: { channelId: Hex; trigger: string }[] = []
+    const { openPayload, verify } = await createCloseRollbackHarness({
+      onSessionSettlementFailure: ({ channelId, trigger }) => {
+        failures.push({ channelId, trigger })
+      },
+    })
+    const closeOnChain = vi
+      .spyOn(Chain, 'closeOnChain')
+      .mockRejectedValue(new Error('submission failed'))
+
+    try {
+      await expect(verify()).rejects.toThrow(/submission failed/)
+      expect(failures).toEqual([{ channelId: openPayload.channelId, trigger: 'close' }])
+    } finally {
+      closeOnChain.mockRestore()
+    }
+  })
 
   test('marks pending precompile close before broadcast and restores it when broadcast fails', async () => {
     const rawStore = Store.memory()
@@ -4316,7 +4387,11 @@ describe('session settlement extensions', () => {
 })
 
 describe('onSessionSettlement', () => {
-  function createSettleClient(channelId: Hex, settledAmount: bigint) {
+  function createSettleClient(
+    channelId: Hex,
+    settledAmount: bigint,
+    options: { broadcastError?: Error | undefined } = {},
+  ) {
     return createClient({
       account: payer,
       chain: testChain,
@@ -4328,6 +4403,11 @@ describe('onSessionSettlement', () => {
             if (args.method === 'eth_estimateGas') return '0x5208'
             if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
             if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (
+              options.broadcastError &&
+              (args.method === 'eth_sendRawTransaction' || args.method === 'eth_sendTransaction')
+            )
+              throw options.broadcastError
             if (args.method === 'eth_sendRawTransaction') return `0x${'cc'.repeat(32)}`
             if (args.method === 'eth_sendTransaction') return `0x${'cc'.repeat(32)}`
             if (args.method === 'eth_getTransactionReceipt')
@@ -4739,5 +4819,165 @@ describe('onSessionSettlement', () => {
         },
       }),
     ).resolves.toBe(`0x${'cc'.repeat(32)}`)
+  })
+
+  test('reports a failed scheduled settlement through the settleScheduled extension', async () => {
+    const failures: { chainId: number; channelId: Hex; message: string; trigger: string }[] = []
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: '0x1234',
+      },
+    })
+    const payment = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: payer,
+          amount: '1',
+          chainId,
+          currency: token,
+          decimals: 0,
+          getClient: () =>
+            createSettleClient(openPayload.channelId, 500n, {
+              broadcastError: new Error('broadcast failed'),
+            }),
+          onSessionSettlementFailure: ({ chainId, channelId, error, trigger }) => {
+            failures.push({ chainId, channelId, message: (error as Error).message, trigger })
+          },
+          recipient: payee,
+          settlementSchedule: { units: 5 },
+          store: rawStore,
+          unitType: 'request',
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+
+    await expect(payment.session.settleScheduled(channel!)).rejects.toThrow(/broadcast failed/)
+
+    expect(failures).toEqual([
+      {
+        chainId,
+        channelId: openPayload.channelId,
+        message: expect.stringContaining('broadcast failed'),
+        trigger: 'scheduled',
+      },
+    ])
+    const persisted = await store.getChannel(openPayload.channelId)
+    expect(persisted?.scheduledSettlementLease).toBeUndefined()
+    expect(persisted?.lastSettlementSpent).toBeUndefined()
+  })
+
+  test('reports a scheduled settlement whose client cannot be resolved', async () => {
+    const failures: { message: string; trigger: string }[] = []
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+    })
+    const payment = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: payer,
+          amount: '1',
+          chainId,
+          currency: token,
+          decimals: 0,
+          getClient() {
+            throw new Error('rpc url missing')
+          },
+          onSessionSettlementFailure: ({ error, trigger }) => {
+            failures.push({ message: (error as Error).message, trigger })
+          },
+          recipient: payee,
+          settlementSchedule: { units: 5 },
+          store: rawStore,
+          unitType: 'request',
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+
+    await expect(payment.session.settleScheduled(channel!)).rejects.toThrow(/rpc url missing/)
+    expect(failures).toEqual([{ message: 'rpc url missing', trigger: 'scheduled' }])
+  })
+
+  test('reports a scheduled settlement whose lease claim fails', async () => {
+    const failures: { message: string; trigger: string }[] = []
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+    const { maybeSettleScheduled } = await import('./Settlement.js')
+
+    await expect(
+      maybeSettleScheduled({
+        account: payer,
+        channel: channel!,
+        client: createSettleClient(openPayload.channelId, 500n),
+        onSessionSettlementFailure: ({ error, trigger }) => {
+          failures.push({ message: (error as Error).message, trigger })
+        },
+        schedule: { units: 5 },
+        store: {
+          ...store,
+          updateChannel: () => Promise.reject(new Error('store unavailable')),
+        },
+      }),
+    ).rejects.toThrow(/store unavailable/)
+    expect(failures).toEqual([{ message: 'store unavailable', trigger: 'scheduled' }])
+  })
+
+  test('rethrows a failed scheduled settlement when the failure observer throws', async () => {
+    const rawStore = Store.memory()
+    const openPayload = await createOpenPayload()
+    const store = channelStore(rawStore)
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: '0x1234',
+      },
+    })
+    const { maybeSettleScheduled } = await import('./Settlement.js')
+    const channel = await store.getChannel(openPayload.channelId)
+
+    await expect(
+      maybeSettleScheduled({
+        account: payer,
+        channel: channel!,
+        client: createSettleClient(openPayload.channelId, 500n, {
+          broadcastError: new Error('broadcast failed'),
+        }),
+        onSessionSettlementFailure: () => {
+          throw new Error('observer exploded')
+        },
+        schedule: { units: 5 },
+        store,
+      }),
+    ).rejects.toThrow(/broadcast failed/)
   })
 })

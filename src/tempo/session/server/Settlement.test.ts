@@ -1,9 +1,17 @@
-import type { Hex } from 'viem'
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  HttpRequestError,
+  RpcRequestError,
+  TimeoutError,
+  type Hex,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
+import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
 import type * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
@@ -11,6 +19,7 @@ import * as ChannelStore from './ChannelStore.js'
 import {
   applyVerifiedHttpAccounting,
   claimScheduledSettlement,
+  ignoreRetryableSettlementFailure,
   isSettlementDue,
   markSettlementComplete,
   readRequestFeePayer,
@@ -445,5 +454,38 @@ describe('SettlementSchedule', () => {
       expect(settled).toMatchObject({ lastSettlementSpent: 250n, lastSettlementUnits: 6 })
       expect(resolveSettlementProgress(settled)).toMatchObject({ amount: 200n, units: 2 })
     })
+  })
+})
+
+describe('ignoreRetryableSettlementFailure', () => {
+  test.each([
+    ['an upstream 502', new HttpRequestError({ status: 502, url: 'https://rpc.example.com' })],
+    ['a timeout', new TimeoutError({ body: {}, url: 'https://rpc.example.com' })],
+  ])('keeps serving after %s', (_label, error) => {
+    expect(ignoreRetryableSettlementFailure(error)).toBeUndefined()
+  })
+
+  test.each([
+    ['a verification failure', new VerificationFailedError({ reason: 'transaction reverted' })],
+    ['a sender configuration error', new BadRequestError({ reason: 'sender is not the payee' })],
+    ['a missing account', new Error('Cannot settle precompile channel: no account available.')],
+    ['a forbidden upstream', new HttpRequestError({ status: 403, url: 'https://rpc.example.com' })],
+    [
+      'insufficient funds',
+      new RpcRequestError({
+        body: { method: 'eth_sendRawTransaction' },
+        error: { code: -32000, message: 'insufficient funds for gas * price + value' },
+        url: 'https://rpc.example.com',
+      }),
+    ],
+    [
+      'a simulated revert',
+      new ContractFunctionExecutionError(
+        new ContractFunctionRevertedError({ abi: [], functionName: 'settle' }),
+        { abi: [], functionName: 'settle' },
+      ),
+    ],
+  ])('fails the request after %s', (_label, error) => {
+    expect(() => ignoreRetryableSettlementFailure(error)).toThrow(error)
   })
 })
