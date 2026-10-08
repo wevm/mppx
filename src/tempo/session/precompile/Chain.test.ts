@@ -1579,9 +1579,12 @@ describe('ChainReceiptValidation', () => {
   })
 
   test('reads typed settlement receipt fields', () => {
-    expect(Chain.readSettledReceiptFields({ args: { newSettled: 300n } })).toEqual({
-      newSettled: 300n,
-    })
+    expect(Chain.readSettledReceiptFields({ args: { deltaPaid: 100n, newSettled: 300n } })).toEqual(
+      {
+        deltaPaid: 100n,
+        newSettled: 300n,
+      },
+    )
   })
 
   test('reads typed ChannelClosed receipt fields', () => {
@@ -1647,9 +1650,9 @@ describe('ChainReceiptValidation', () => {
       }),
     ).toThrow('TopUp newDeposit exceeds uint96 range')
 
-    expect(() => Chain.readSettledReceiptFields({ args: { newSettled: '300' } })).toThrow(
-      'Settled newSettled missing from receipt event',
-    )
+    expect(() =>
+      Chain.readSettledReceiptFields({ args: { deltaPaid: 100n, newSettled: '300' } }),
+    ).toThrow('Settled newSettled missing from receipt event')
 
     expect(() =>
       Chain.readChannelClosedReceiptFields({

@@ -95,6 +95,8 @@ export type TopUpReceiptFields = {
 
 /** Typed fields decoded from a Settled receipt event. */
 export type SettledReceiptFields = {
+  /** Amount this settlement paid to the payee. */
+  deltaPaid: bigint
   /** New cumulative amount settled on-chain. */
   newSettled: bigint
 }
@@ -148,6 +150,7 @@ export function readTopUpReceiptFields(event: ReceiptEventWithArgs): TopUpReceip
 /** Reads and validates typed fields from a Settled receipt event. */
 export function readSettledReceiptFields(event: ReceiptEventWithArgs): SettledReceiptFields {
   return {
+    deltaPaid: readUint96(event.args.deltaPaid, 'Settled deltaPaid'),
     newSettled: readUint96(event.args.newSettled, 'Settled newSettled'),
   }
 }
