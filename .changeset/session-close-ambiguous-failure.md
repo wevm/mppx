@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Fixed `tempo/session` reopening a channel when a broadcast close failed ambiguously. The pending-close marker now stays until the close transaction expires, and a later voucher or close clears it once the chain shows the channel still open.
+Fixed `tempo/session` reopening a channel when a broadcast close failed ambiguously. The pending-close marker stayed until the close transaction expired, and a later voucher or close cleared it once the chain showed the channel still open.
