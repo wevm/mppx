@@ -16,6 +16,7 @@ import {
   encodeFunctionData,
   encodeFunctionResult,
   type Hex,
+  HttpRequestError,
   maxUint256,
   zeroAddress,
 } from 'viem'
@@ -2936,7 +2937,11 @@ describe('precompile server session unit guardrails', () => {
         onSessionSettlementFailure({ error, trigger }) {
           failures.push({ message: (error as Error).message, trigger })
         },
-        settlementError: new Error('settlement unavailable'),
+        settlementError: new HttpRequestError({
+          details: 'settlement unavailable',
+          status: 502,
+          url: 'https://rpc.example.com',
+        }),
         settlementSchedule: { units: 2 },
       })
       const manager = precompileSessionManager({

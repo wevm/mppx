@@ -1,10 +1,14 @@
 import {
   BaseError as viem_BaseError,
-  ContractFunctionRevertedError,
-  ExecutionRevertedError,
+  HttpRequestError,
   isAddress,
   isAddressEqual,
+  LimitExceededRpcError,
   parseUnits,
+  ResourceUnavailableRpcError,
+  SocketClosedError,
+  TimeoutError,
+  WebSocketRequestError,
   zeroAddress,
   type Account as viem_Account,
   type Address,
@@ -655,9 +659,18 @@ export function ignoreRetryableSettlementFailure(error: unknown): undefined {
 
 function isRetryableSettlementFailure(error: unknown): boolean {
   if (!(error instanceof viem_BaseError)) return false
-  return !error.walk(
-    (cause) =>
-      cause instanceof ExecutionRevertedError || cause instanceof ContractFunctionRevertedError,
+  // Only unavailable or overloaded upstreams clear on retry; node-rejected transactions repeat.
+  return Boolean(
+    error.walk(
+      (cause) =>
+        (cause instanceof HttpRequestError &&
+          (cause.status === undefined || cause.status === 429 || cause.status >= 500)) ||
+        cause instanceof LimitExceededRpcError ||
+        cause instanceof ResourceUnavailableRpcError ||
+        cause instanceof SocketClosedError ||
+        cause instanceof TimeoutError ||
+        cause instanceof WebSocketRequestError,
+    ),
   )
 }
 

@@ -2,6 +2,8 @@ import {
   ContractFunctionExecutionError,
   ContractFunctionRevertedError,
   HttpRequestError,
+  RpcRequestError,
+  TimeoutError,
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -436,8 +438,10 @@ describe('SettlementSchedule', () => {
 })
 
 describe('ignoreRetryableSettlementFailure', () => {
-  test('keeps serving after a transport failure', () => {
-    const error = new HttpRequestError({ status: 502, url: 'https://rpc.example.com' })
+  test.each([
+    ['an upstream 502', new HttpRequestError({ status: 502, url: 'https://rpc.example.com' })],
+    ['a timeout', new TimeoutError({ body: {}, url: 'https://rpc.example.com' })],
+  ])('keeps serving after %s', (_label, error) => {
     expect(ignoreRetryableSettlementFailure(error)).toBeUndefined()
   })
 
@@ -445,6 +449,15 @@ describe('ignoreRetryableSettlementFailure', () => {
     ['a verification failure', new VerificationFailedError({ reason: 'transaction reverted' })],
     ['a sender configuration error', new BadRequestError({ reason: 'sender is not the payee' })],
     ['a missing account', new Error('Cannot settle precompile channel: no account available.')],
+    ['a forbidden upstream', new HttpRequestError({ status: 403, url: 'https://rpc.example.com' })],
+    [
+      'insufficient funds',
+      new RpcRequestError({
+        body: { method: 'eth_sendRawTransaction' },
+        error: { code: -32000, message: 'insufficient funds for gas * price + value' },
+        url: 'https://rpc.example.com',
+      }),
+    ],
     [
       'a simulated revert',
       new ContractFunctionExecutionError(
