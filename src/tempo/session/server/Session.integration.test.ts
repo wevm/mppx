@@ -317,6 +317,59 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     expect(settled.args.newSettled).toBe(250n)
   })
 
+  test('leaves charges accepted during a real settlement due for the next one', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
+
+    const voucher = await createVoucherPayload(client, payer, descriptor, uint96(250n), chain.id)
+    if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
+    await store.updateChannel(channelId, () => ({
+      backend: 'precompile',
+      channelId,
+      chainId: chain.id,
+      escrowContract: tip20ChannelEscrow,
+      closeRequestedAt: 0n,
+      payer: descriptor.payer,
+      payee: descriptor.payee,
+      token: descriptor.token,
+      authorizedSigner: descriptor.authorizedSigner,
+      deposit,
+      settledOnChain: 0n,
+      highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId,
+        cumulativeAmount: 250n,
+        signature: voucher.signature,
+      },
+      spent: 250n,
+      units: 1,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+      descriptor,
+      operator: descriptor.operator,
+      salt: descriptor.salt,
+      expiringNonceHash: descriptor.expiringNonceHash,
+    }))
+
+    const settlement = settle(store, client, channelId)
+    // Charge another request after settle() has read the channel and while the receipt is pending.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await store.updateChannel(channelId, (current) =>
+      current ? { ...current, spent: 350n, units: 2 } : current,
+    )
+    await settlement
+
+    const settled = await store.getChannel(channelId)
+    expect(settled).toMatchObject({
+      lastSettlementSpent: 250n,
+      lastSettlementUnits: 1,
+      settledOnChain: 250n,
+      spent: 350n,
+      units: 2,
+    })
+  })
+
   test('closes a real precompile channel with fee-payer sponsorship', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
