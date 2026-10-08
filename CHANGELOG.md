@@ -1,5 +1,15 @@
 # mppx
 
+## 0.13.3
+
+### Patch Changes
+
+- 06dc781: Fixed `tempo/session` reopening a channel when a broadcast close failed ambiguously. The pending-close marker stayed until the close transaction expired, and a later voucher or close cleared it once the chain showed the channel still open.
+- 55c3c26: Changed `tempo/session` to serve a charged request when its scheduled settlement hit a transport or RPC failure; the next settlement collected the charge. Reverts and configuration errors still failed the request.
+- c22cf1a: Fixed `tempo/session` failing a charged request when its settlement confirmed but the channel store could not record it. `settle` raised `SettlementCheckpointError` with the transaction hash instead.
+- 6921631: Fixed scheduled `tempo/session` settlement marking charges accepted while the settlement transaction was pending as settled. `settle` recorded the spend and units read with the submitted voucher instead.
+- 55c3c26: Added `onSessionSettlementFailure` to `tempo.session()`, called with the chain, channel, error and trigger (`scheduled` or `close`) when a scheduled settlement or close transaction fails.
+
 ## 0.13.2
 
 ### Patch Changes
