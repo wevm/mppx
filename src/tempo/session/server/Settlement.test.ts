@@ -2,8 +2,10 @@ import {
   ContractFunctionExecutionError,
   ContractFunctionRevertedError,
   HttpRequestError,
+  InternalRpcError,
   RpcRequestError,
   TimeoutError,
+  WaitForTransactionReceiptTimeoutError,
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -28,6 +30,7 @@ import {
   resolveCredentialFeePayer,
   resolveRequestFeePayer,
   resolveSettlementProgress,
+  SettlementLeaseError,
 } from './Settlement.js'
 
 describe('FeePayerResolution', () => {
@@ -461,6 +464,29 @@ describe('ignoreRetryableSettlementFailure', () => {
   test.each([
     ['an upstream 502', new HttpRequestError({ status: 502, url: 'https://rpc.example.com' })],
     ['a timeout', new TimeoutError({ body: {}, url: 'https://rpc.example.com' })],
+    [
+      'an internal JSON-RPC error',
+      new InternalRpcError(
+        new RpcRequestError({
+          body: { method: 'eth_sendRawTransaction' },
+          error: { code: -32603, message: 'internal error' },
+          url: 'https://rpc.example.com',
+        }),
+      ),
+    ],
+    [
+      'a JSON-RPC 429',
+      new RpcRequestError({
+        body: { method: 'eth_sendRawTransaction' },
+        error: { code: 429, message: 'rate limited' },
+        url: 'https://rpc.example.com',
+      }),
+    ],
+    [
+      'a receipt wait timeout',
+      new WaitForTransactionReceiptTimeoutError({ hash: `0x${'cc'.repeat(32)}` }),
+    ],
+    ['an unclaimed lease', new SettlementLeaseError({ cause: new Error('store overloaded') })],
   ])('keeps serving after %s', (_label, error) => {
     expect(ignoreRetryableSettlementFailure(error)).toBeUndefined()
   })
@@ -484,6 +510,14 @@ describe('ignoreRetryableSettlementFailure', () => {
         new ContractFunctionRevertedError({ abi: [], functionName: 'settle' }),
         { abi: [], functionName: 'settle' },
       ),
+    ],
+    [
+      'a non-standard -32007 error',
+      new RpcRequestError({
+        body: { method: 'eth_sendRawTransaction' },
+        error: { code: -32007, message: 'transaction rejected' },
+        url: 'https://rpc.example.com',
+      }),
     ],
   ])('fails the request after %s', (_label, error) => {
     expect(() => ignoreRetryableSettlementFailure(error)).toThrow(error)
