@@ -147,6 +147,10 @@ export namespace tempo {
   export const settle = settle_
   /** Batch-settle precompile-backed session channels. */
   export const settleBatch = settleBatch_
+  /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
+  export const SettlementCheckpointError = Settlement.SettlementCheckpointError
+  /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
+  export type SettlementCheckpointError = Settlement.SettlementCheckpointError
   /** Types for Tempo session streams. */
   export namespace Sse {
     /** Controller passed to manual-charge SSE generators. */

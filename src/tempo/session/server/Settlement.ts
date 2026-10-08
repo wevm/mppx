@@ -597,7 +597,7 @@ export async function settle(
   )
   const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
-  const { newSettled } = settled
+  const { deltaPaid, newSettled } = settled
   if (newSettled < amount)
     throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' })
   const state = await Chain.getChannelState(client, channelId, escrow)
@@ -632,7 +632,8 @@ export async function settle(
       channelId,
       trigger: 'settle',
       amount: newSettled,
-      delta: newSettled - channel.settledOnChain,
+      // The stored checkpoint can be stale after a failed write; the receipt is authoritative.
+      delta: deltaPaid,
     })
   }
   if (checkpointError) throw new SettlementCheckpointError({ cause: checkpointError.cause, txHash })
