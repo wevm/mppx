@@ -25,6 +25,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
+import { VerificationFailedError } from '../../../Errors.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
@@ -3855,25 +3856,37 @@ describe('precompile server session unit guardrails', () => {
     expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(0n)
   })
 
-  test.each(['submission', 'receipt'] as const)(
-    'restores pending precompile close when %s fails',
-    async (failureStage) => {
+  test.each([
+    { failure: 'submission', restored: true },
+    { failure: 'revert', restored: true },
+    { failure: 'receipt', restored: false },
+  ] as const)(
+    'restores pending precompile close after a $failure failure: $restored',
+    async ({ failure, restored }) => {
       const { openPayload, store, verify } = await createCloseRollbackHarness()
-      let observedPending = false
+      let pendingCloseStartedAt = 0n
       const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
-        observedPending = (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
-        if (failureStage === 'submission') throw new Error('submission failed')
+        pendingCloseStartedAt = (await store.getChannel(openPayload.channelId))!.closeRequestedAt
+        if (failure === 'submission') throw new Error('submission failed')
         return `0x${'ab'.repeat(32)}`
       })
       const waitForSuccessfulReceipt = vi
         .spyOn(Chain, 'waitForSuccessfulReceipt')
-        .mockRejectedValue(new Error('receipt failed'))
+        .mockRejectedValue(
+          failure === 'revert'
+            ? new VerificationFailedError({ reason: 'precompile transaction reverted' })
+            : new Error('receipt failed'),
+        )
 
       try {
-        await expect(verify()).rejects.toThrow(new RegExp(`${failureStage} failed`))
-        expect(observedPending).toBe(true)
-        expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(0n)
-        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(failureStage === 'receipt' ? 1 : 0)
+        await expect(verify()).rejects.toThrow(
+          failure === 'revert' ? /reverted/ : new RegExp(`${failure} failed`),
+        )
+        expect(pendingCloseStartedAt).not.toBe(0n)
+        expect((await store.getChannel(openPayload.channelId))!.closeRequestedAt).toBe(
+          restored ? 0n : pendingCloseStartedAt,
+        )
+        expect(waitForSuccessfulReceipt).toHaveBeenCalledTimes(failure === 'submission' ? 0 : 1)
       } finally {
         closeOnChain.mockRestore()
         waitForSuccessfulReceipt.mockRestore()

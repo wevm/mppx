@@ -1108,7 +1108,10 @@ async function handleCloseCredential(
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
-    if (pendingCloseMarked) {
+    // A broadcast close can still land after a receipt timeout or RPC error, so keep the channel
+    // closing unless no transaction hash was returned or the receipt proved a revert.
+    const closeFailed = txHash === undefined || error instanceof VerificationFailedError
+    if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
           ? { ...current, closeRequestedAt: previousCloseRequestedAt }
