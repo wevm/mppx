@@ -12,6 +12,7 @@ import {
   applyVerifiedHttpAccounting,
   claimScheduledSettlement,
   isSettlementDue,
+  markSettlementComplete,
   readRequestFeePayer,
   renewScheduledSettlement,
   releaseScheduledSettlement,
@@ -424,6 +425,25 @@ describe('SettlementSchedule', () => {
       expect(
         (await store.getChannel(channelId))!.scheduledSettlementLease!.expiresAt,
       ).toBeGreaterThan(previousExpiry)
+    })
+
+    test('keeps charges made during a settlement due for the next one', async () => {
+      const store = ChannelStore.fromStore(Store.memory())
+      await store.updateChannel(channelId, () =>
+        channel({ lastSettlementSpent: 250n, lastSettlementUnits: 6 }),
+      )
+      const owner = await claimScheduledSettlement({ channelId, schedule: { units: 1 }, store })
+      if (!owner) throw new Error('expected settlement claim')
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, spent: 450n, units: 8 } : current,
+      )
+
+      await markSettlementComplete({ channelId, leaseOwner: owner, store })
+
+      const settled = (await store.getChannel(channelId))!
+      expect(settled.scheduledSettlementLease).toBeUndefined()
+      expect(settled).toMatchObject({ lastSettlementSpent: 250n, lastSettlementUnits: 6 })
+      expect(resolveSettlementProgress(settled)).toMatchObject({ amount: 200n, units: 2 })
     })
   })
 })

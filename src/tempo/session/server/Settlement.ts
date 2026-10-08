@@ -234,19 +234,14 @@ export function isSettlementDue(
   return false
 }
 
-/** Records the channel spend/unit counters that a scheduled settlement captured. */
+/** Releases a completed scheduled settlement lease; {@link settle} records the settled counters. */
 export async function markSettlementComplete(parameters: MarkSettlementCompleteParameters) {
   const { channelId, leaseOwner, store, settledAt = new Date().toISOString() } = parameters
   await store.updateChannel(channelId, (current) => {
     if (!current) return current
     if (current.scheduledSettlementLease?.owner !== leaseOwner) return current
     const { scheduledSettlementLease: _, ...channel } = current
-    return {
-      ...channel,
-      lastSettlementAt: settledAt,
-      lastSettlementSpent: current.spent,
-      lastSettlementUnits: current.units,
-    }
+    return { ...channel, lastSettlementAt: settledAt }
   })
 }
 
@@ -576,8 +571,12 @@ export async function settle(
           ...current,
           settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
           lastSettlementAt: new Date().toISOString(),
-          lastSettlementSpent: current.spent,
-          lastSettlementUnits: current.units,
+          // Charges accepted after the voucher was read are not covered by this transaction.
+          lastSettlementSpent: ChannelStore.keepGreater(
+            current.lastSettlementSpent ?? 0n,
+            channel.spent,
+          ),
+          lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, channel.units),
         }
       : current,
   )
