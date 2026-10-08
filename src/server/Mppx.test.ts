@@ -1,6 +1,16 @@
 import * as http from 'node:http'
 
-import { Challenge, Constants, Credential, Errors, Mcp, Method, Receipt, z } from 'mppx'
+import {
+  Challenge,
+  Constants,
+  Credential,
+  Errors,
+  Mcp,
+  Method,
+  PaymentRequest,
+  Receipt,
+  z,
+} from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -3913,8 +3923,14 @@ describe('compose', () => {
 
     const challenges = Challenge.fromResponseList(firstResult.challenge)
     expect(challenges).toHaveLength(2)
-    expect(challenges[0]?.opaque).toBe('eyJyb3V0ZSI6ImEifQ')
-    expect(challenges[1]?.opaque).toBe('eyJyb3V0ZSI6ImIifQ')
+    expect(PaymentRequest.deserialize(challenges[0]!.opaque!)).toEqual({
+      route: 'a',
+      _mppx_nonce: expect.any(String),
+    })
+    expect(PaymentRequest.deserialize(challenges[1]!.opaque!)).toEqual({
+      route: 'b',
+      _mppx_nonce: expect.any(String),
+    })
 
     const secondChallenge = challenges[1]!
     const credential = Credential.from({
@@ -4701,8 +4717,14 @@ describe('cross-route credential replay via scope binding flaw', () => {
     const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
     const routeBChallenge = Challenge.fromResponse(routeBChallengeResult.challenge)
 
-    expect(routeAChallenge.opaque).toBe('eyJyb3V0ZSI6ImEifQ')
-    expect(routeBChallenge.opaque).toBe('eyJyb3V0ZSI6ImIifQ')
+    expect(PaymentRequest.deserialize(routeAChallenge.opaque!)).toEqual({
+      route: 'a',
+      _mppx_nonce: expect.any(String),
+    })
+    expect(PaymentRequest.deserialize(routeBChallenge.opaque!)).toEqual({
+      route: 'b',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({
       challenge: routeAChallenge,
@@ -4782,7 +4804,10 @@ describe('cross-route credential replay via scope binding flaw', () => {
     if (routeAChallengeResult.status !== 402) throw new Error()
 
     const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
-    expect(routeAChallenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYSJ9')
+    expect(PaymentRequest.deserialize(routeAChallenge.opaque!)).toEqual({
+      _mppx_scope: 'GET /a',
+      _mppx_nonce: expect.any(String),
+    })
 
     const credential = Credential.from({
       challenge: routeAChallenge,
@@ -6045,7 +6070,7 @@ describe('challenge', () => {
     })
 
     expect(challenge.description).toBe('Order #123')
-    expect(challenge.meta).toEqual({ checkout_id: 'chk_abc' })
+    expect(challenge.meta).toEqual({ checkout_id: 'chk_abc', _mppx_nonce: expect.any(String) })
   })
 
   test('challenge binds scope via reserved opaque metadata', async () => {
@@ -6060,7 +6085,7 @@ describe('challenge', () => {
       scope: 'GET /premium',
     })
 
-    expect(challenge.meta).toEqual({ _mppx_scope: 'GET /premium' })
+    expect(challenge.meta).toEqual({ _mppx_scope: 'GET /premium', _mppx_nonce: expect.any(String) })
   })
 
   test('scope throws when it conflicts with reserved meta scope', async () => {

@@ -132,13 +132,19 @@ describe('MPP compatibility challenges', () => {
       const response = await app.fetch(new Request(`https://example.com${path}`))
       return Challenge.fromResponseList(response)
         .filter((challenge) => !ChallengeBrand.is(challenge))
-        .map((challenge) => ({ method: challenge.method, opaque: challenge.opaque }))
+        .map((challenge) => ({
+          method: challenge.method,
+          meta: PaymentRequest.deserialize(challenge.opaque!),
+        }))
     }
 
-    const scopeA = PaymentRequest.serialize({ _mppx_scope: 'https://example.com/a' })
-    const scopeB = PaymentRequest.serialize({ _mppx_scope: 'https://example.com/b' })
-    await expect(challengeScopes('/a')).resolves.toEqual([{ method: 'evm', opaque: scopeA }])
-    await expect(challengeScopes('/b')).resolves.toEqual([{ method: 'evm', opaque: scopeB }])
+    for (const path of ['/a', '/b'])
+      await expect(challengeScopes(path)).resolves.toEqual([
+        {
+          method: 'evm',
+          meta: { _mppx_scope: `https://example.com${path}`, _mppx_nonce: expect.any(String) },
+        },
+      ])
   })
 
   test('forwards Next.js route context through MPP and x402 payments', async () => {
