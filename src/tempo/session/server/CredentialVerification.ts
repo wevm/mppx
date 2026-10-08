@@ -1,9 +1,11 @@
 import {
   BaseError as viem_BaseError,
-  ContractFunctionRevertedError,
-  ExecutionRevertedError,
+  HttpRequestError,
   isAddress,
   isAddressEqual,
+  SocketClosedError,
+  TimeoutError,
+  WebSocketRequestError,
   zeroAddress,
   type Account as viem_Account,
   type Address,
@@ -1017,11 +1019,28 @@ async function handleVoucherCredential(
   })
 }
 
-function isTransportFailure(error: unknown): boolean {
+const sendMethods = new Set([
+  'eth_sendRawTransaction',
+  'eth_sendRawTransactionSync',
+  'eth_sendTransaction',
+])
+
+/** Returns whether a close that failed before returning a hash may still have been broadcast. */
+function mayHaveBroadcast(error: unknown): boolean {
   if (!(error instanceof viem_BaseError)) return false
-  return !error.walk(
+  const transport = error.walk(
     (cause) =>
-      cause instanceof ExecutionRevertedError || cause instanceof ContractFunctionRevertedError,
+      cause instanceof HttpRequestError ||
+      cause instanceof SocketClosedError ||
+      cause instanceof TimeoutError ||
+      cause instanceof WebSocketRequestError,
+  )
+  if (!transport) return false
+  // Only HTTP errors record their request; a failure on an unknown method may have been the send.
+  if (!(transport instanceof HttpRequestError)) return true
+  const requests = [transport.body].flat() as readonly ({ method?: unknown } | undefined)[]
+  return requests.some(
+    (request) => request?.method === undefined || sendMethods.has(String(request.method)),
   )
 }
 
@@ -1102,7 +1121,6 @@ async function handleCloseCredential(
   const account = parameters.account ?? getClientAccount(client)
   // Pin the close transaction's expiry to the marker so an expired marker proves it can no longer land.
   const validBefore = now + ChannelStore.pendingCloseValiditySeconds
-  let broadcasting = false
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   let txHash: Hex | undefined
   try {
@@ -1113,7 +1131,6 @@ async function handleCloseCredential(
       payee: channel.payee,
       sender: account?.address,
     })
-    broadcasting = true
     txHash = await Chain.closeOnChain(
       client,
       channel.descriptor,
@@ -1134,9 +1151,10 @@ async function handleCloseCredential(
     )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
-    // Transport and RPC errors may follow a broadcast, so the marker stays until the close expires
-    // and a later credential reconciles it. Any other error proves the close was not sent or reverted.
-    const closeFailed = !broadcasting || !isTransportFailure(error)
+    // A close that may have been broadcast keeps the marker until it expires and a later credential
+    // reconciles it. Only a proven revert reopens a close that returned a hash.
+    const closeFailed =
+      txHash === undefined ? !mayHaveBroadcast(error) : error instanceof VerificationFailedError
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt

@@ -3827,7 +3827,12 @@ describe('precompile server session unit guardrails', () => {
                 if (args.method === 'eth_sendRawTransaction') {
                   observedPending =
                     (await store.getChannel(openPayload.channelId))!.closeRequestedAt !== 0n
-                  throw new Error('broadcast failed')
+                  throw new HttpRequestError({
+                    body: args,
+                    details: 'broadcast failed',
+                    status: 502,
+                    url: 'https://rpc.example.com',
+                  })
                 }
                 if (args.method === 'eth_estimateGas') return '0x5208'
                 if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
@@ -3861,6 +3866,7 @@ describe('precompile server session unit guardrails', () => {
   test.each([
     { failure: 'rejected submission', restored: true },
     { failure: 'fee-payer policy', restored: true },
+    { failure: 'preparation', restored: true },
     { failure: 'submission', restored: false },
     { failure: 'revert', restored: true },
     { failure: 'receipt', restored: false },
@@ -3875,9 +3881,18 @@ describe('precompile server session unit guardrails', () => {
           throw new VerificationFailedError({ reason: 'rejected submission failed' })
         if (failure === 'fee-payer policy')
           throw new BadRequestError({ reason: 'fee-payer policy failed' })
+        if (failure === 'preparation')
+          throw new HttpRequestError({
+            body: { method: 'eth_estimateGas' },
+            details: 'preparation failed',
+            status: 502,
+            url: 'https://rpc.example.com',
+          })
         if (failure === 'submission')
           throw new HttpRequestError({
+            body: { method: 'eth_sendRawTransaction' },
             details: 'submission failed',
+            status: 502,
             url: 'https://rpc.example.com',
           })
         return `0x${'ab'.repeat(32)}`
