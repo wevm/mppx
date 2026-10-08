@@ -483,14 +483,6 @@ describe('ignoreRetryableSettlementFailure', () => {
       }),
     ],
     [
-      'a JSON-RPC -32007 rate limit',
-      new RpcRequestError({
-        body: { method: 'eth_sendRawTransaction' },
-        error: { code: -32007, message: 'rate limited' },
-        url: 'https://rpc.example.com',
-      }),
-    ],
-    [
       'a receipt wait timeout',
       new WaitForTransactionReceiptTimeoutError({ hash: `0x${'cc'.repeat(32)}` }),
     ],
@@ -518,6 +510,14 @@ describe('ignoreRetryableSettlementFailure', () => {
         new ContractFunctionRevertedError({ abi: [], functionName: 'settle' }),
         { abi: [], functionName: 'settle' },
       ),
+    ],
+    [
+      'a non-standard -32007 error',
+      new RpcRequestError({
+        body: { method: 'eth_sendRawTransaction' },
+        error: { code: -32007, message: 'transaction rejected' },
+        url: 'https://rpc.example.com',
+      }),
     ],
   ])('fails the request after %s', (_label, error) => {
     expect(() => ignoreRetryableSettlementFailure(error)).toThrow(error)

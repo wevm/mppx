@@ -699,7 +699,7 @@ function isRetryableSettlementFailure(error: unknown): boolean {
         (cause instanceof HttpRequestError &&
           (cause.status === undefined || cause.status === 429 || cause.status >= 500)) ||
         // Rate limits some providers return in a JSON-RPC body rather than as HTTP 429.
-        (cause instanceof RpcRequestError && (cause.code === 429 || cause.code === -32007)) ||
+        (cause instanceof RpcRequestError && cause.code === 429) ||
         cause instanceof InternalRpcError ||
         cause instanceof LimitExceededRpcError ||
         cause instanceof ResourceUnavailableRpcError ||
