@@ -15,8 +15,8 @@
     "@types/node": "^26.2.0",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "mppx": "latest",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "typescript": "catalog:",
-    "vite": "^8.3.0"
+    "vite": "^8.3.1"
   }
 }

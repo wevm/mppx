@@ -10,14 +10,14 @@
   "dependencies": {
     "@remix-run/node-fetch-server": "^0.14.0",
     "@types/node": "^26.2.0",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.18.2",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "isows": "^1.0.7",
     "mppx": "workspace:*",
     "tsx": "^4.23.15",
     "typescript": "catalog:",
     "viem": "catalog:",
-    "vite": "^8.3.0",
-    "ws": "^8.21.3"
+    "vite": "^8.3.1",
+    "ws": "^8.22.0"
   }
 }
