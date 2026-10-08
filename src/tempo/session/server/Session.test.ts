@@ -458,12 +458,12 @@ function openedLog(
   }
 }
 
-function settledLog(channelId: Hex, newSettled: bigint) {
+function settledLog(channelId: Hex, newSettled: bigint, deltaPaid = newSettled) {
   return {
     address: tip20ChannelEscrow,
     data: encodeAbiParameters(
       [{ type: 'uint96' }, { type: 'uint96' }, { type: 'uint96' }],
-      [newSettled, newSettled, newSettled],
+      [newSettled, deltaPaid, newSettled],
     ),
     topics: encodeEventTopics({
       abi: escrowAbi,
@@ -4420,6 +4420,7 @@ describe('onSessionSettlement', () => {
     settledAmount: bigint,
     options: {
       broadcastError?: Error | undefined
+      deltaPaid?: bigint | undefined
       /** Settled amount a replica behind the receipt's block reports at `latest`. */
       latestSettled?: bigint | undefined
     } = {},
@@ -4443,7 +4444,9 @@ describe('onSessionSettlement', () => {
             if (args.method === 'eth_sendRawTransaction') return `0x${'cc'.repeat(32)}`
             if (args.method === 'eth_sendTransaction') return `0x${'cc'.repeat(32)}`
             if (args.method === 'eth_getTransactionReceipt')
-              return transactionReceipt([settledLog(channelId, settledAmount)])
+              return transactionReceipt([
+                settledLog(channelId, settledAmount, options.deltaPaid ?? settledAmount),
+              ])
             if (args.method === 'eth_call') {
               const block = (args.params as readonly unknown[])[1]
               const settled =
@@ -4566,7 +4569,7 @@ describe('onSessionSettlement', () => {
     })
 
     const { maybeSettleScheduled } = await import('./Settlement.js')
-    const client = createSettleClient(openPayload.channelId, 500n)
+    const client = createSettleClient(openPayload.channelId, 500n, { deltaPaid: 300n })
     const channel = await store.getChannel(openPayload.channelId)
 
     await maybeSettleScheduled({
@@ -4713,7 +4716,7 @@ describe('onSessionSettlement', () => {
     })
 
     const { settle } = await import('./Session.js')
-    const client = createSettleClient(openPayload.channelId, 300n)
+    const client = createSettleClient(openPayload.channelId, 300n, { deltaPaid: 100n })
     await settle(store, client, openPayload.channelId, {
       onSessionSettlement: (ctx) => {
         events.push({ trigger: ctx.trigger, amount: ctx.amount, delta: ctx.delta })
@@ -5002,8 +5005,36 @@ describe('onSessionSettlement', () => {
     ).catch((error: unknown) => error)
 
     expect(error).toBeInstanceOf(SettlementCheckpointError)
+    expect(error).toBeInstanceOf(tempo_server.SettlementCheckpointError)
     expect(error).toMatchObject({ txHash: `0x${'cc'.repeat(32)}` })
     expect(settlements).toEqual([`0x${'cc'.repeat(32)}`])
+  })
+
+  test('reports the receipt delta when the stored settlement checkpoint is stale', async () => {
+    const deltas: bigint[] = []
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    // The store missed an earlier settlement of 60; this transaction pays only the remaining 40.
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+    const { settle } = await import('./Settlement.js')
+
+    await settle(
+      store,
+      createSettleClient(openPayload.channelId, 100n, { deltaPaid: 40n }),
+      openPayload.channelId,
+      { onSessionSettlement: ({ delta }) => void deltas.push(delta) },
+    )
+
+    expect(deltas).toEqual([40n])
   })
 
   test('keeps a scheduled settlement successful and reports it when only its checkpoint fails', async () => {
