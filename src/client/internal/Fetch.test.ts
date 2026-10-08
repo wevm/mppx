@@ -1607,6 +1607,81 @@ describe('Fetch.from: 402 retry path', () => {
     expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
   })
 
+  test.each([
+    { bodyState: 'readable', observed: false },
+    { bodyState: 'readable', observed: true },
+    { bodyState: 'consumed', observed: false },
+    { bodyState: 'consumed', observed: true },
+    { bodyState: 'locked', observed: false },
+    { bodyState: 'locked', observed: true },
+  ])(
+    'preserves payment errors with a $bodyState response body (observed: $observed)',
+    async ({ bodyState, observed }) => {
+      const error = new Error('payment handling failed')
+      const response = new Response('payment required', {
+        headers: { 'X-Test': 'original' },
+        status: 402,
+        statusText: 'Payment Required',
+      })
+      const mockFetch = vi.fn(async () => response)
+      const eventDispatcher = Fetch.createEventDispatcher()
+      const onFailure = vi.fn((payload: Fetch.PaymentFailedPayload) => {
+        payload.response?.headers.set('X-Observer', 'true')
+        throw new Error('observer failed')
+      })
+      const onEvent = vi.fn()
+      if (observed) {
+        eventDispatcher.on('payment.failed', onFailure)
+        eventDispatcher.on('*', onEvent)
+      }
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      const fetch = Fetch.from({
+        eventDispatcher,
+        fetch: mockFetch,
+        methods: [],
+        transport: {
+          name: 'test',
+          isPaymentRequired: () => true,
+          async getChallenges(response: Response) {
+            if (bodyState === 'consumed') await response.text()
+            if (bodyState === 'locked') reader = response.body!.getReader()
+            throw error
+          },
+          setCredential: (request: RequestInit) => request,
+        },
+      })
+
+      try {
+        await expect(fetch('https://example.com/api')).rejects.toBe(error)
+        expect(mockFetch).toHaveBeenCalledTimes(1)
+        expect(response.headers.get('X-Test')).toBe('original')
+        expect(response.headers.has('X-Observer')).toBe(false)
+        expect(response.bodyUsed).toBe(bodyState === 'consumed')
+        if (bodyState === 'locked') expect(response.body?.locked).toBe(true)
+        if (observed) {
+          expect(onFailure).toHaveBeenCalledTimes(1)
+          const payload = onFailure.mock.calls[0]![0]
+          expect(payload.error).toBe(error)
+          expect(payload.response).not.toBe(response)
+          expect(payload.response?.status).toBe(402)
+          expect(payload.response?.statusText).toBe('Payment Required')
+          expect(payload.response?.headers.get('X-Test')).toBe('original')
+          expect(payload.response?.headers.get('X-Observer')).toBe('true')
+          expect(onEvent).toHaveBeenCalledExactlyOnceWith({
+            name: 'payment.failed',
+            payload,
+          })
+          if (bodyState === 'readable') {
+            await expect(payload.response?.text()).resolves.toBe('payment required')
+            await expect(response.text()).resolves.toBe('payment required')
+          } else expect(payload.response?.body).toBeNull()
+        }
+      } finally {
+        reader?.releaseLock()
+      }
+    },
+  )
+
   test('preserves existing headers on retry', async () => {
     let callCount = 0
     const calls: { init: RequestInit | undefined }[] = []

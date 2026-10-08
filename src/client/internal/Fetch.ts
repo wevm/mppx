@@ -848,7 +848,18 @@ function snapshotMethod<method extends Method.AnyClient>(method: method): method
 }
 
 function snapshotResponse<response>(response: response): response {
-  if (response instanceof Response) return response.clone() as response
+  if (response instanceof Response) {
+    try {
+      return response.clone() as response
+    } catch {
+      // Consumed or locked bodies cannot be cloned; retain isolated status and headers.
+      return new Response(null, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      }) as response
+    }
+  }
   return snapshotValue(response)
 }
 
