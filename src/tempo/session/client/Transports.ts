@@ -1289,11 +1289,12 @@ export async function probeWebSocketSession(
 export async function prepareWebSocketSession(
   parameters: PrepareWebSocketSessionParameters,
 ): Promise<PreparedWebSocketSession> {
+  parameters.signal?.throwIfAborted()
   const probed = await probeWebSocketSession(parameters)
-  return {
-    ...probed,
-    credential: await parameters.createSessionCredential(probed.challenge, {}),
-  }
+  parameters.signal?.throwIfAborted()
+  const credential = await parameters.createSessionCredential(probed.challenge, {})
+  parameters.signal?.throwIfAborted()
+  return { ...probed, credential }
 }
 
 /** Creates the initial runtime state for a paid WebSocket from its opening credential. */
@@ -1364,6 +1365,8 @@ export async function openWebSocketSession(
   parameters: OpenWebSocketSessionParameters,
 ): Promise<SessionManagedWebSocket> {
   const { challenge, credential, options, WebSocket: WebSocketImpl, wsUrl } = parameters
+  const signal = options?.signal
+  signal?.throwIfAborted()
   const rawSocket = new WebSocketImpl(wsUrl, options?.protocols)
   const socketState = createActiveSocketSession({
     challenge,
@@ -1383,7 +1386,13 @@ export async function openWebSocketSession(
       rawSocket.close(ClientWebSocketProtocolErrorCloseCode, message)
     }
   }
+  const onAbort = () => {
+    parameters.rejectReceipt(new Error('WebSocket payment flow aborted.'))
+    parameters.rejectCloseReady(new Error('WebSocket payment flow aborted.'))
+    rawSocket.close()
+  }
   rawSocket.addEventListener('close', (event) => {
+    signal?.removeEventListener('abort', onAbort)
     socketState.socket = null
     socketState.expectedCloseAmount = null
     parameters.rejectReceipt(new Error('WebSocket closed before the payment flow completed.'))
@@ -1410,17 +1419,16 @@ export async function openWebSocketSession(
       socketState,
     })
   })
-  options?.signal?.addEventListener(
-    'abort',
-    () => {
-      parameters.rejectReceipt(new Error('WebSocket payment flow aborted.'))
-      parameters.rejectCloseReady(new Error('WebSocket payment flow aborted.'))
-      rawSocket.close()
-    },
-    { once: true },
-  )
+  signal?.addEventListener('abort', onAbort, { once: true })
 
-  await waitForSocketOpen(rawSocket, managedSocket.emit, wsUrl)
+  try {
+    await waitForSocketOpen(rawSocket, managedSocket.emit, wsUrl, signal)
+    signal?.throwIfAborted()
+  } catch (error) {
+    signal?.removeEventListener('abort', onAbort)
+    rawSocket.close()
+    throw error
+  }
   rawSocket.send(Ws.formatAuthorizationMessage(credential))
   await parameters.waitForReceipt()
   return managedSocket.socket
@@ -1428,19 +1436,37 @@ export async function openWebSocketSession(
 
 type ManagedEmit = ReturnType<typeof createManagedSocket>['emit']
 
-function waitForSocketOpen(rawSocket: WebSocket, managedEmit: ManagedEmit, wsUrl: URL) {
+function waitForSocketOpen(
+  rawSocket: WebSocket,
+  managedEmit: ManagedEmit,
+  wsUrl: URL,
+  signal?: AbortSignal,
+) {
   return new Promise<void>((resolve, reject) => {
-    const onOpen = () => {
+    const cleanup = () => {
+      rawSocket.removeEventListener('open', onOpen)
       rawSocket.removeEventListener('error', onError)
+      rawSocket.removeEventListener('close', onError)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const onOpen = () => {
+      cleanup()
       managedEmit('open', { type: 'open' })
       resolve()
     }
     const onError = () => {
-      rawSocket.removeEventListener('open', onOpen)
+      cleanup()
       reject(new Error(`WebSocket connection to ${wsUrl} failed to open.`))
+    }
+    const onAbort = () => {
+      cleanup()
+      reject(signal?.reason)
     }
     rawSocket.addEventListener('open', onOpen, { once: true })
     rawSocket.addEventListener('error', onError, { once: true })
+    rawSocket.addEventListener('close', onError, { once: true })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
 }
 
