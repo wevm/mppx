@@ -4873,6 +4873,36 @@ describe('onSessionSettlement', () => {
     expect(persisted?.lastSettlementSpent).toBeUndefined()
   })
 
+  test('reports a scheduled settlement whose lease claim fails', async () => {
+    const failures: { message: string; trigger: string }[] = []
+    const openPayload = await createOpenPayload()
+    const store = channelStore(Store.memory())
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 500n,
+      units: 10,
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+    const { maybeSettleScheduled } = await import('./Settlement.js')
+
+    await expect(
+      maybeSettleScheduled({
+        account: payer,
+        channel: channel!,
+        client: createSettleClient(openPayload.channelId, 500n),
+        onSessionSettlementFailure: ({ error, trigger }) => {
+          failures.push({ message: (error as Error).message, trigger })
+        },
+        schedule: { units: 5 },
+        store: {
+          ...store,
+          updateChannel: () => Promise.reject(new Error('store unavailable')),
+        },
+      }),
+    ).rejects.toThrow(/store unavailable/)
+    expect(failures).toEqual([{ message: 'store unavailable', trigger: 'scheduled' }])
+  })
+
   test('rethrows a failed scheduled settlement when the failure observer throws', async () => {
     const rawStore = Store.memory()
     const openPayload = await createOpenPayload()

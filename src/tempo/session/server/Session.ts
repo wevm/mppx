@@ -48,7 +48,11 @@ import {
   shouldApplyVerifiedHttpAccounting,
   type SettleChargedSessionChannel,
 } from './Settlement.js'
-import { isSettlementDue, maybeSettleScheduled } from './Settlement.js'
+import {
+  ignoreRetryableSettlementFailure,
+  isSettlementDue,
+  maybeSettleScheduled,
+} from './Settlement.js'
 import {
   resolveSettlementSchedule,
   type OnSessionSettlement,
@@ -364,7 +368,7 @@ export function session<const parameters extends session.Parameters>(
   // A failed scheduled settlement is reported and retried by the next one; the charged request
   // stays served because the payer's voucher already covers the charge.
   const settleCharged: SettleChargedSessionChannel = (channel) =>
-    settleScheduled(channel).catch(() => undefined)
+    settleScheduled(channel).catch(ignoreRetryableSettlementFailure)
   const serveWebSocket: session.Extensions['serveWebSocket'] = (options) =>
     Ws.serve({
       ...options,
@@ -496,7 +500,7 @@ export function session<const parameters extends session.Parameters>(
           schedule: settlementSchedule,
           store,
           channel,
-        }).catch(() => undefined),
+        }).catch(ignoreRetryableSettlementFailure),
     })
   }
 

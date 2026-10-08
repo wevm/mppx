@@ -504,10 +504,20 @@ export async function maybeSettleScheduled(
 ): Promise<Hex | undefined> {
   const { channel, schedule, store } = parameters
   if (!schedule || !isSettlementDue(channel, schedule)) return undefined
+  const report = (error: unknown) =>
+    reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
+      chainId: channel.chainId,
+      channelId: channel.channelId,
+      error,
+      trigger: 'scheduled',
+    })
   const leaseOwner = await claimScheduledSettlement({
     channelId: channel.channelId,
     schedule,
     store,
+  }).catch(async (error) => {
+    await report(error)
+    throw error
   })
   if (!leaseOwner) return undefined
   const renewal = setInterval(() => {
@@ -530,12 +540,7 @@ export async function maybeSettleScheduled(
     await markSettlementComplete({ channelId: channel.channelId, leaseOwner, store })
     return txHash
   } catch (error) {
-    await reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
-      chainId: channel.chainId,
-      channelId: channel.channelId,
-      error,
-      trigger: 'scheduled',
-    })
+    await report(error)
     await releaseScheduledSettlement({ channelId: channel.channelId, leaseOwner, store }).catch(
       () => undefined,
     )
@@ -628,6 +633,15 @@ export async function settleBatch(
   const hashes: Hex[] = []
   for (const channelId of channelIds) hashes.push(await settle(store, client, channelId, options))
   return hashes
+}
+
+/**
+ * @internal Keeps a charged request served when its scheduled settlement fails without proof the
+ * charge cannot settle; the next settlement retries it. Verification failures, such as a revert, fail the request.
+ */
+export function ignoreRetryableSettlementFailure(error: unknown): undefined {
+  if (error instanceof VerificationFailedError) throw error
+  return undefined
 }
 
 /** @internal Reports a settlement failure without letting observer errors replace it. */

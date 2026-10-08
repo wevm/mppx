@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
+import { VerificationFailedError } from '../../../Errors.js'
 import type * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
@@ -11,6 +12,7 @@ import * as ChannelStore from './ChannelStore.js'
 import {
   applyVerifiedHttpAccounting,
   claimScheduledSettlement,
+  ignoreRetryableSettlementFailure,
   isSettlementDue,
   readRequestFeePayer,
   renewScheduledSettlement,
@@ -425,5 +427,16 @@ describe('SettlementSchedule', () => {
         (await store.getChannel(channelId))!.scheduledSettlementLease!.expiresAt,
       ).toBeGreaterThan(previousExpiry)
     })
+  })
+})
+
+describe('ignoreRetryableSettlementFailure', () => {
+  test('keeps serving after a retryable settlement failure', () => {
+    expect(ignoreRetryableSettlementFailure(new Error('rpc unavailable'))).toBeUndefined()
+  })
+
+  test('fails the request when verification proves the charge cannot settle', () => {
+    const error = new VerificationFailedError({ reason: 'precompile transaction reverted' })
+    expect(() => ignoreRetryableSettlementFailure(error)).toThrow(error)
   })
 })
