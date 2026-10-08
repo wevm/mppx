@@ -1,5 +1,5 @@
 import { Hex } from 'ox'
-import { encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
+import { createClient, custom, encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import { tempoNetworkConfig } from '~test/config.js'
@@ -352,12 +352,28 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       expiringNonceHash: descriptor.expiringNonceHash,
     }))
 
-    const settlement = settle(store, client, channelId)
-    // Charge another request after settle() has read the channel and while the receipt is pending.
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // Hold the receipt read so another request is charged while settle() waits for confirmation.
+    const receiptRequested = Promise.withResolvers<void>()
+    const releaseReceipt = Promise.withResolvers<void>()
+    const gatedClient = createClient({
+      account: client.account,
+      chain,
+      transport: custom({
+        async request(parameters) {
+          if (parameters.method === 'eth_getTransactionReceipt') {
+            receiptRequested.resolve()
+            await releaseReceipt.promise
+          }
+          return client.request(parameters as never)
+        },
+      }),
+    })
+    const settlement = settle(store, gatedClient, channelId)
+    await receiptRequested.promise
     await store.updateChannel(channelId, (current) =>
       current ? { ...current, spent: 350n, units: 2 } : current,
     )
+    releaseReceipt.resolve()
     await settlement
 
     const settled = await store.getChannel(channelId)
