@@ -454,6 +454,60 @@ describe('http (MCP-over-HTTP)', () => {
       headers: { 'content-type': 'text/event-stream' },
     })
 
+  test.each(['application/json', 'text/event-stream'])(
+    'bounds %s inspection without consuming the caller response',
+    async (contentType) => {
+      const encoder = new TextEncoder()
+      const prefix = contentType === 'application/json' ? ' ' : ':'
+      const chunk = encoder.encode(prefix.repeat(16 * 1024))
+      let produced = 0
+      const response = new Response(
+        new ReadableStream(
+          {
+            pull(controller) {
+              produced += chunk.byteLength
+              controller.enqueue(chunk)
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { headers: { 'content-type': contentType, 'content-length': '1' } },
+      )
+      const transport = Transport.http()
+      expect(await transport.isPaymentRequired(response, jsonRpcRequest)).toBe(false)
+      expect(produced).toBeLessThanOrEqual(1024 * 1024 + 3 * chunk.byteLength)
+      const inspected = produced
+      expect(await transport.getChallenges(response, jsonRpcRequest)).toEqual([])
+      expect(produced).toBe(inspected)
+      expect(response.bodyUsed).toBe(false)
+      const reader = response.body!.getReader()
+      expect((await reader.read()).value).toEqual(chunk)
+      await reader.cancel()
+    },
+  )
+
+  test.each(['application/json', 'text/event-stream'])(
+    'skips declared oversized %s responses',
+    async (contentType) => {
+      const pull = vi.fn()
+      const response = new Response(new ReadableStream({ pull }, { highWaterMark: 0 }), {
+        headers: { 'content-type': contentType, 'content-length': String(1024 * 1024 + 1) },
+      })
+      expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(false)
+      expect(pull).not.toHaveBeenCalled()
+      await response.body!.cancel()
+    },
+  )
+
+  test.each([-1, 0, 1])('enforces the JSON inspection byte boundary (%i)', async (extra) => {
+    const message = JSON.stringify(errorMessage)
+    const body =
+      ' '.repeat(1024 * 1024 - new TextEncoder().encode(message).length + extra) + message
+    const response = new Response(body, { headers: { 'content-type': 'application/json' } })
+    expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(extra <= 0)
+    expect(await response.text()).toBe(body)
+  })
+
   test('detects -32042 in a JSON body (JSON-RPC request)', async () => {
     expect(await Transport.http().isPaymentRequired(jsonBody(), jsonRpcRequest)).toBe(true)
   })

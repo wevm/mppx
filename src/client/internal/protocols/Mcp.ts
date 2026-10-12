@@ -19,6 +19,9 @@ function jsonRpcRequestId(body: unknown): number | string | undefined {
   }
 }
 
+// Bound automatic inspection; the caller retains the original response stream.
+const maxInspectionBytes = 1024 * 1024
+
 const responseCache = new WeakMap<Response, Promise<Mcp.Response | undefined>>()
 
 type CorePaymentRequiredData = NonNullable<Mcp.ErrorObject['data']>
@@ -110,6 +113,7 @@ async function parseSseJsonRpcResponse(response: Response): Promise<Mcp.Response
   if (!reader) return undefined
 
   const decoder = new TextDecoder()
+  let received = 0
   let dataEventSeen = false
   let message: Mcp.Response | undefined
   const parser = createParser({
@@ -132,9 +136,34 @@ async function parseSseJsonRpcResponse(response: Response): Promise<Mcp.Response
         parser.reset({ consume: true })
         return message
       }
+      received += value.byteLength
+      if (received > maxInspectionBytes) return undefined
       parser.feed(decoder.decode(value, { stream: true }))
     }
   } finally {
+    void reader.cancel().catch(() => {})
+  }
+}
+
+/** Reads only a bounded JSON response, leaving the caller's stream untouched. */
+async function parseJsonResponse(response: Response): Promise<Mcp.Response | undefined> {
+  const reader = response.clone().body?.getReader()
+  if (!reader) return undefined
+  const decoder = new TextDecoder()
+  let received = 0
+  let text = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return parseMessage(JSON.parse(text + decoder.decode()))
+      received += value.byteLength
+      if (received > maxInspectionBytes) return undefined
+      text += decoder.decode(value, { stream: true })
+    }
+  } catch {
+    return undefined
+  } finally {
+    // A tee's cancellation can wait for the original stream; do not await it.
     void reader.cancel().catch(() => {})
   }
 }
@@ -145,12 +174,8 @@ function parseJsonRpcResponse(response: Response): Promise<Mcp.Response | undefi
   if (cached) return cached
   const promise = (async (): Promise<Mcp.Response | undefined> => {
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-    if (contentType.includes('application/json'))
-      return response
-        .clone()
-        .json()
-        .then(parseMessage)
-        .catch(() => undefined)
+    if (Number(response.headers.get('content-length')) > maxInspectionBytes) return undefined
+    if (contentType.includes('application/json')) return parseJsonResponse(response)
     if (contentType.includes('text/event-stream')) return parseSseJsonRpcResponse(response)
     return undefined
   })()
