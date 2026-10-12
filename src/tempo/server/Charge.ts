@@ -674,6 +674,13 @@ export function charge<const parameters extends charge.Parameters>(
                     return { feePayer: feePayerAccount.address, transaction: sponsored }
                   },
                 })
+                FeePayer.assertTransactionPolicy({
+                  challengeExpires: expires,
+                  chainId: chainId ?? client.chain!.id,
+                  details: { amount, currency, recipient },
+                  policy: transactionFeePayerPolicy,
+                  transaction: completed.transaction as never,
+                })
                 return {
                   serializedTransaction: await signTransaction(
                     client,
@@ -771,6 +778,15 @@ export function charge<const parameters extends charge.Parameters>(
             )
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost before broadcast',
+              })
+
+            if (isFeePayerTx)
+              FeePayer.assertTransactionPolicy({
+                challengeExpires: expires,
+                chainId: chainId ?? client.chain!.id,
+                details: { amount, currency, recipient },
+                policy: transactionFeePayerPolicy,
+                transaction,
               })
 
             broadcastAttempted = true

@@ -671,6 +671,11 @@ export function assertTransactionPolicy(parameters: {
       validBefore: String(validBeforeValue),
     })
 
+  if (validBeforeValue < Math.ceil(now.getTime() / 1_000) + 15)
+    fail('fee-sponsored transaction needs at least 15 seconds of remaining validity', {
+      validBefore: String(validBeforeValue),
+    })
+
   const challengeExpirySeconds = challengeExpires
     ? Math.floor(new Date(challengeExpires).getTime() / 1_000)
     : undefined

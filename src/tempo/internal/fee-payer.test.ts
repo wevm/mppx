@@ -9,6 +9,7 @@ import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as defaults from './defaults.js'
 import {
   assertAllowedFeeToken,
+  assertTransactionPolicy,
   callScopes,
   defaultAllowedFeeTokens,
   FeePayerValidationError,
@@ -981,6 +982,25 @@ describe('prepareSponsoredTransaction', () => {
     signature: { r: 1n, s: 1n, yParity: 0 } as any,
     validBefore: Math.floor(Date.now() / 1_000) + 300,
   } as const
+
+  test.each([
+    [0, 14, false],
+    [0, 15, true],
+    [1, 15, false],
+    [1, 16, true],
+    [999, 16, true],
+  ])('minimum validity at offset %i and remaining %i', (milliseconds, remaining, accepted) => {
+    const now = new Date(2_000_000_000_000 + milliseconds)
+    const validate = () =>
+      assertTransactionPolicy({
+        chainId: 42431,
+        details,
+        now,
+        transaction: { ...baseTransaction, validBefore: 2_000_000_000 + remaining } as any,
+      })
+    if (accepted) expect(validate).not.toThrow()
+    else expect(validate).toThrow('at least 15 seconds')
+  })
 
   test('accepts bounded sponsored transaction fields', () => {
     expect(() =>
