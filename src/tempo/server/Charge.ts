@@ -5,6 +5,7 @@ import {
   keccak256,
   parseEventLogs,
   type TransactionReceipt,
+  WaitForTransactionReceiptTimeoutError,
 } from 'viem'
 import {
   getTransaction,
@@ -796,14 +797,18 @@ export function charge<const parameters extends charge.Parameters>(
               const deadline = Date.now() + confirmationTimeoutMs
               let receipt: TransactionReceipt
               try {
-                receipt = await sendRawTransactionSync(client, {
-                  serializedTransaction: serializedTransaction_final,
-                  timeout: confirmationTimeoutMs,
-                })
+                receipt = await withDeadline(
+                  sendRawTransactionSync(client, {
+                    serializedTransaction: serializedTransaction_final,
+                    timeout: confirmationTimeoutMs,
+                  }),
+                  deadline,
+                  new WaitForTransactionReceiptTimeoutError({ hash: finalHash }),
+                )
               } catch (broadcastError) {
-                // The node may have accepted the transaction before its RPC reply failed
-                // (e.g. a timeout or "already known"), so wait for its receipt until the
-                // deadline, allowing at least one poll after a late failure.
+                if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
+                // The node may have accepted the transaction, so poll for its receipt with
+                // the remaining budget, allowing at least one poll after a late failure.
                 try {
                   receipt = await waitForTransactionReceipt(client, {
                     checkReplacement: false,
@@ -903,9 +908,11 @@ export declare namespace charge {
     allowedFeeTokens?: readonly `0x${string}`[] | undefined
     /**
      * Milliseconds to wait for a charge transaction receipt when
-     * `waitForConfirmation` is `true`. If the synchronous broadcast fails with
-     * an unknown outcome (e.g. an RPC timeout or "already known"), mppx polls
-     * for the receipt until this deadline before surfacing the broadcast error.
+     * `waitForConfirmation` is `true`. The synchronous broadcast is cut off at
+     * this deadline. If it fails with an unknown outcome (e.g. a timeout, a lost
+     * connection, or "already known"), mppx polls for the receipt until the
+     * deadline before surfacing the broadcast error. Definitive rejections fail
+     * immediately.
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
@@ -1479,6 +1486,58 @@ async function isActiveAccessKey(
     return !metadata.isRevoked && metadata.expiry > nowSeconds
   } catch {
     return false
+  }
+}
+
+const ambiguousErrorNames = new Set([
+  'AbortError',
+  'SocketClosedError',
+  'TimeoutError',
+  'WaitForTransactionReceiptTimeoutError',
+])
+
+/**
+ * Whether a failed synchronous broadcast may still have reached the mempool,
+ * so its receipt is worth polling for. Every other error is a definitive
+ * rejection (e.g. method not found, invalid params, insufficient funds).
+ *
+ * Ambiguous outcomes, matched anywhere in the `cause` chain:
+ * - Timeouts and aborts: errors named `TimeoutError` or `AbortError`, or the
+ *   local confirmation deadline (`WaitForTransactionReceiptTimeoutError`).
+ * - Lost connections: `SocketClosedError`, or an `HttpRequestError` with no
+ *   status (network failure) or a 5xx status.
+ * - JSON-RPC code `4`: the EIP-7966 timeout for a pooled, unconfirmed transaction.
+ * - Messages matching "already known" or "known transaction": already pooled.
+ */
+function isAmbiguousBroadcastError(error: unknown): boolean {
+  for (let cause = error; cause; cause = (cause as { cause?: unknown }).cause) {
+    if (typeof cause !== 'object') return false
+    const { code, message, name, status } = cause as Record<string, unknown>
+    if (name === 'HttpRequestError') return status === undefined || Number(status) >= 500
+    if (ambiguousErrorNames.has(name as string)) return true
+    if (code === 4) return true
+    if (typeof message === 'string' && /already ?known|known transaction/i.test(message))
+      return true
+  }
+  return false
+}
+
+/** Rejects with `error` if `promise` has not settled by `deadline` (epoch ms). */
+async function withDeadline<value>(
+  promise: Promise<value>,
+  deadline: number,
+  error: Error,
+): Promise<value> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(error), deadline - Date.now())
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
   }
 }
 

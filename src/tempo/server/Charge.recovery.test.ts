@@ -1,13 +1,18 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx, tempo } from 'mppx/server'
 import {
+  type BaseError,
   createClient,
   custom,
   encodeAbiParameters,
   encodeEventTopics,
   encodeFunctionData,
+  HttpRequestError,
   keccak256,
   maxUint256,
+  SocketClosedError,
+  TimeoutError,
+  WaitForTransactionReceiptTimeoutError,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
@@ -18,24 +23,48 @@ import { expect, test, vi } from 'vp/test'
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 
-const replyError = { code: -32000, message: 'Broadcast reply unavailable' }
+const url = 'https://rpc.example.com'
+// Ambiguous: the transaction may be pooled, so its receipt is polled for.
 const alreadyKnown = { code: -32000, message: 'already known' }
-const timedOut = { code: 4, message: 'Transaction was not confirmed within 200ms' }
+const knownTransaction = { code: -32000, message: 'known transaction: 0x12' }
+const syncTimeout = { code: 4, message: 'Transaction was added to the mempool but not confirmed' }
+const transportTimeout = new TimeoutError({ body: {}, url })
+const aborted = new DOMException('The operation was aborted.', 'AbortError')
+const networkFailure = new HttpRequestError({ cause: new Error('socket hang up'), url })
+const gateway = new HttpRequestError({ status: 502, url })
+const socketClosed = new SocketClosedError({ url })
+// Definitive: the node rejected the request, so no receipt is polled for.
+const methodNotFound = { code: -32601, message: 'method not found' }
+const invalidParams = { code: -32602, message: 'invalid params' }
+const insufficientFunds = { code: -32000, message: 'insufficient funds for gas * price + value' }
+const invalidSignature = { code: -32000, message: 'invalid signature' }
+const rateLimited = new HttpRequestError({ status: 429, url })
 
 test.each([
-  { name: 'included', sponsored: false, outcome: 'included', error: replyError },
-  { name: 'sponsored', sponsored: true, outcome: 'included', error: replyError },
-  { name: 'already known pending', sponsored: false, outcome: 'pending', error: alreadyKnown },
-  { name: 'timeout pending', sponsored: false, outcome: 'pending', error: timedOut },
-  { name: 'sponsored timeout pending', sponsored: true, outcome: 'pending', error: timedOut },
-  { name: 'missing receipt', sponsored: false, outcome: 'missing', error: replyError },
-  { name: 'already known missing', sponsored: false, outcome: 'missing', error: alreadyKnown },
-  { name: 'timeout missing', sponsored: false, outcome: 'missing', error: timedOut },
-  { name: 'receipt lookup error', sponsored: false, outcome: 'lookup-error', error: replyError },
-  { name: 'reverted receipt', sponsored: false, outcome: 'reverted', error: replyError },
-  { name: 'wrong transfer', sponsored: false, outcome: 'wrong-transfer', error: replyError },
-  { name: 'wrong hash', sponsored: false, outcome: 'wrong-hash', error: replyError },
-  { name: 'normal broadcast', sponsored: false, outcome: 'normal', error: replyError },
+  { name: 'included', sponsored: false, outcome: 'included', error: gateway },
+  { name: 'sponsored', sponsored: true, outcome: 'included', error: gateway },
+  { name: 'sponsored pending', sponsored: true, outcome: 'pending', error: syncTimeout },
+  { name: 'missing receipt', sponsored: false, outcome: 'missing', error: alreadyKnown },
+  { name: 'lookup error', sponsored: false, outcome: 'lookup-error', error: gateway },
+  { name: 'reverted receipt', sponsored: false, outcome: 'reverted', error: gateway },
+  { name: 'wrong transfer', sponsored: false, outcome: 'wrong-transfer', error: gateway },
+  { name: 'wrong hash', sponsored: false, outcome: 'wrong-hash', error: gateway },
+  { name: 'normal broadcast', sponsored: false, outcome: 'normal', error: gateway },
+  { name: 'already known', sponsored: false, outcome: 'pending', error: alreadyKnown },
+  { name: 'known transaction', sponsored: false, outcome: 'pending', error: knownTransaction },
+  { name: 'sync timeout', sponsored: false, outcome: 'pending', error: syncTimeout },
+  { name: 'transport timeout', sponsored: false, outcome: 'pending', error: transportTimeout },
+  { name: 'aborted', sponsored: false, outcome: 'pending', error: aborted },
+  { name: 'network failure', sponsored: false, outcome: 'pending', error: networkFailure },
+  { name: 'gateway error', sponsored: false, outcome: 'pending', error: gateway },
+  { name: 'socket closed', sponsored: false, outcome: 'pending', error: socketClosed },
+  { name: 'local deadline', sponsored: false, outcome: 'included', error: 'hang' },
+  { name: 'local deadline missing', sponsored: false, outcome: 'missing', error: 'hang' },
+  { name: 'method not found', sponsored: false, outcome: 'rejected', error: methodNotFound },
+  { name: 'invalid params', sponsored: false, outcome: 'rejected', error: invalidParams },
+  { name: 'insufficient funds', sponsored: false, outcome: 'rejected', error: insufficientFunds },
+  { name: 'invalid signature', sponsored: false, outcome: 'rejected', error: invalidSignature },
+  { name: 'rate limited', sponsored: false, outcome: 'rejected', error: rateLimited },
 ] as const)('synchronous charge recovery: $name', async ({ sponsored, outcome, error }) => {
   const payer = privateKeyToAccount(`0x${'01'.repeat(32)}`)
   const sponsor = privateKeyToAccount(`0x${'02'.repeat(32)}`)
@@ -66,7 +95,9 @@ test.each([
           if (method === 'eth_sendRawTransactionSync') {
             syncParams = params
             finalHash = keccak256(params[0])
-            if (outcome !== 'normal') throw error
+            if (outcome === 'normal') {
+            } else if (error === 'hang') return new Promise(() => {})
+            else throw error
           } else if (method === 'eth_getTransactionReceipt') {
             lookupHashes.push(params[0])
             if (outcome === 'missing') return null
@@ -166,19 +197,19 @@ test.each([
     const receipt = await server.broadcastCredential(credential)
     expect(receipt).toMatchObject({ status: 'success', reference: finalHash! })
     expect(onPaymentSuccess).toHaveBeenCalledOnce()
-  } else if (outcome === 'missing' || outcome === 'lookup-error') {
-    await expect(server.broadcastCredential(credential)).rejects.toMatchObject({
-      details: error.message,
-    })
+  } else if (outcome === 'missing' || outcome === 'lookup-error' || outcome === 'rejected') {
+    const thrown = (await server.broadcastCredential(credential).catch((e) => e)) as BaseError
+    if (error === 'hang') expect(thrown).toBeInstanceOf(WaitForTransactionReceiptTimeoutError)
+    else expect(thrown.walk((cause) => cause === error)).toBe(error)
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   } else {
     await expect(server.broadcastCredential(credential)).rejects.toThrow()
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   }
   expect(syncParams[1]).toBe(confirmationTimeoutMs)
-  expect(new Set(lookupHashes)).toEqual(new Set(outcome === 'normal' ? [] : [finalHash!]))
+  const polled = outcome !== 'normal' && outcome !== 'rejected'
+  expect(new Set(lookupHashes)).toEqual(new Set(polled ? [finalHash!] : []))
   if (outcome === 'pending') expect(lookupHashes).toHaveLength(3)
-  if (outcome === 'missing') expect(lookupHashes.length).toBeGreaterThan(1)
   if (sponsored) expect(finalHash!).not.toBe(keccak256(signature))
   await expect(server.broadcastCredential(credential)).rejects.toThrow(
     'Transaction hash has already been used',
