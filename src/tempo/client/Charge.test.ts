@@ -1040,8 +1040,11 @@ describe('tempo.charge client', () => {
       vi.resetModules()
       let signings = 0
       const signTransaction = vi.fn(async () => `0x76${(signings++).toString(16).padStart(4, '0')}`)
+      const prepareTransactionRequest = vi.fn(
+        async (_client: unknown, _parameters: Record<string, unknown>) => ({}),
+      )
       vi.doMock('viem/actions', () => ({
-        prepareTransactionRequest: vi.fn(async () => ({})),
+        prepareTransactionRequest,
         sendCallsSync: vi.fn(),
         signTransaction,
         signTypedData: vi.fn(),
@@ -1053,7 +1056,7 @@ describe('tempo.charge client', () => {
         transport: http('http://127.0.0.1'),
       })
       const method = chargeWithMockedActions({ account, getClient: () => client, ...options })
-      return { method, signTransaction }
+      return { method, prepareTransactionRequest, signTransaction }
     }
 
     afterEach(() => {
@@ -1123,6 +1126,24 @@ describe('tempo.charge client', () => {
       await method.createCredential({ challenge: challenge('cached', expires), context: {} })
 
       expect(signTransaction).toHaveBeenCalledTimes(signings)
+    })
+
+    test('expires an entry at the signed validBefore', async () => {
+      const { method, prepareTransactionRequest, signTransaction } = await setup()
+      vi.useFakeTimers({ now: (base + 0.8) * 1000, toFake: ['Date'] })
+      prepareTransactionRequest.mockImplementationOnce(async () => {
+        // Signing crosses a whole-second boundary.
+        vi.setSystemTime(Date.now() + 500)
+        return {}
+      })
+
+      await method.createCredential({ challenge: challenge(), context: {} })
+      const validBefore = prepareTransactionRequest.mock.calls[0]?.[1].validBefore as number
+      vi.setSystemTime(validBefore * 1000)
+      await method.createCredential({ challenge: challenge(), context: {} })
+
+      expect(validBefore).toBe(base + 25)
+      expect(signTransaction).toHaveBeenCalledTimes(2)
     })
 
     test('enforces client policy before returning a cached credential', async () => {
