@@ -13,6 +13,7 @@ import {
   sendRawTransactionSync,
   signTransaction,
   verifyTypedData,
+  waitForTransactionReceipt,
   call as viem_call,
 } from 'viem/actions'
 import { Abis, Actions, Transaction } from 'viem/tempo'
@@ -62,6 +63,7 @@ export function charge<const parameters extends charge.Parameters>(
     machineTokenEnabled,
     allowedFeeTokens: configuredAllowedFeeTokens,
     amount,
+    confirmationTimeoutMs = 30_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     description,
@@ -791,15 +793,23 @@ export function charge<const parameters extends charge.Parameters>(
 
             broadcastAttempted = true
             if (waitForConfirmation) {
+              const deadline = Date.now() + confirmationTimeoutMs
               let receipt: TransactionReceipt
               try {
                 receipt = await sendRawTransactionSync(client, {
                   serializedTransaction: serializedTransaction_final,
+                  timeout: confirmationTimeoutMs,
                 })
               } catch (broadcastError) {
-                // The node may have included the transaction before its RPC reply failed.
+                // The node may have accepted the transaction before its RPC reply failed
+                // (e.g. a timeout or "already known"), so wait for its receipt until the
+                // deadline, allowing at least one poll after a late failure.
                 try {
-                  receipt = await getTransactionReceipt(client, { hash: finalHash })
+                  receipt = await waitForTransactionReceipt(client, {
+                    checkReplacement: false,
+                    hash: finalHash,
+                    timeout: Math.max(deadline - Date.now(), client.pollingInterval),
+                  })
                 } catch {
                   throw broadcastError
                 }
@@ -891,6 +901,14 @@ export declare namespace charge {
      * checks still apply. This does not change the payment currency or sessions.
      */
     allowedFeeTokens?: readonly `0x${string}`[] | undefined
+    /**
+     * Milliseconds to wait for a charge transaction receipt when
+     * `waitForConfirmation` is `true`. If the synchronous broadcast fails with
+     * an unknown outcome (e.g. an RPC timeout or "already known"), mppx polls
+     * for the receipt until this deadline before surfacing the broadcast error.
+     * @default 30_000
+     */
+    confirmationTimeoutMs?: number | undefined
     /** Enables first-party machine-token funding through the canonical swapper. */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */

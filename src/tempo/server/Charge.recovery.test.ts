@@ -18,24 +18,35 @@ import { expect, test, vi } from 'vp/test'
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 
+const replyError = { code: -32000, message: 'Broadcast reply unavailable' }
+const alreadyKnown = { code: -32000, message: 'already known' }
+const timedOut = { code: 4, message: 'Transaction was not confirmed within 200ms' }
+
 test.each([
-  { name: 'included', sponsored: false, outcome: 'included' },
-  { name: 'sponsored', sponsored: true, outcome: 'included' },
-  { name: 'missing receipt', sponsored: false, outcome: 'missing' },
-  { name: 'receipt lookup error', sponsored: false, outcome: 'lookup-error' },
-  { name: 'reverted receipt', sponsored: false, outcome: 'reverted' },
-  { name: 'wrong transfer', sponsored: false, outcome: 'wrong-transfer' },
-  { name: 'wrong hash', sponsored: false, outcome: 'wrong-hash' },
-  { name: 'normal broadcast', sponsored: false, outcome: 'normal' },
-] as const)('synchronous charge recovery: $name', async ({ sponsored, outcome }) => {
+  { name: 'included', sponsored: false, outcome: 'included', error: replyError },
+  { name: 'sponsored', sponsored: true, outcome: 'included', error: replyError },
+  { name: 'already known pending', sponsored: false, outcome: 'pending', error: alreadyKnown },
+  { name: 'timeout pending', sponsored: false, outcome: 'pending', error: timedOut },
+  { name: 'sponsored timeout pending', sponsored: true, outcome: 'pending', error: timedOut },
+  { name: 'missing receipt', sponsored: false, outcome: 'missing', error: replyError },
+  { name: 'already known missing', sponsored: false, outcome: 'missing', error: alreadyKnown },
+  { name: 'timeout missing', sponsored: false, outcome: 'missing', error: timedOut },
+  { name: 'receipt lookup error', sponsored: false, outcome: 'lookup-error', error: replyError },
+  { name: 'reverted receipt', sponsored: false, outcome: 'reverted', error: replyError },
+  { name: 'wrong transfer', sponsored: false, outcome: 'wrong-transfer', error: replyError },
+  { name: 'wrong hash', sponsored: false, outcome: 'wrong-hash', error: replyError },
+  { name: 'normal broadcast', sponsored: false, outcome: 'normal', error: replyError },
+] as const)('synchronous charge recovery: $name', async ({ sponsored, outcome, error }) => {
   const payer = privateKeyToAccount(`0x${'01'.repeat(32)}`)
   const sponsor = privateKeyToAccount(`0x${'02'.repeat(32)}`)
   const recipient = '0x2222222222222222222222222222222222222222'
   const currency = '0x20c0000000000000000000000000000000000001'
   const otherHash = `0x${'12'.repeat(32)}` as const
-  const broadcastError = { code: -32000, message: 'Broadcast reply unavailable' }
+  const confirmationTimeoutMs = 200
   const calls: string[] = []
   const lookupHashes: string[] = []
+  let blockNumber = 0
+  let syncParams: unknown[] = []
   const onPaymentSuccess = vi.fn()
   const store = Store.memory()
   let finalHash: `0x${string}`
@@ -44,18 +55,22 @@ test.each([
   const client = createClient({
     account: payer,
     chain: tempoModerato,
+    pollingInterval: 10,
     transport: custom(
       {
         async request({ method, params }) {
           calls.push(method)
           if (method === 'eth_chainId') return `0x${tempoModerato.id.toString(16)}`
           if (method === 'eth_call') return '0x'
+          if (method === 'eth_blockNumber') return `0x${(++blockNumber).toString(16)}`
           if (method === 'eth_sendRawTransactionSync') {
+            syncParams = params
             finalHash = keccak256(params[0])
-            if (outcome !== 'normal') throw broadcastError
+            if (outcome !== 'normal') throw error
           } else if (method === 'eth_getTransactionReceipt') {
             lookupHashes.push(params[0])
             if (outcome === 'missing') return null
+            if (outcome === 'pending' && lookupHashes.length < 3) return null
             if (outcome === 'lookup-error') throw new Error('Lookup unavailable')
           } else throw new Error(`Unexpected RPC method: ${method}`)
 
@@ -106,6 +121,7 @@ test.each([
     methods: [
       tempo.charge({
         account: recipient,
+        confirmationTimeoutMs,
         currency,
         ...(sponsored
           ? { feePayer: sponsor, feeToken: currency, allowedFeeTokens: [currency] }
@@ -146,21 +162,23 @@ test.each([
     Credential.from({ challenge, payload: { signature, type: 'transaction' } }),
   )
 
-  if (outcome === 'included' || outcome === 'normal') {
+  if (outcome === 'included' || outcome === 'pending' || outcome === 'normal') {
     const receipt = await server.broadcastCredential(credential)
     expect(receipt).toMatchObject({ status: 'success', reference: finalHash! })
     expect(onPaymentSuccess).toHaveBeenCalledOnce()
   } else if (outcome === 'missing' || outcome === 'lookup-error') {
     await expect(server.broadcastCredential(credential)).rejects.toMatchObject({
-      code: broadcastError.code,
-      details: broadcastError.message,
+      details: error.message,
     })
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   } else {
     await expect(server.broadcastCredential(credential)).rejects.toThrow()
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   }
-  expect(lookupHashes).toEqual(outcome === 'normal' ? [] : [finalHash!])
+  expect(syncParams[1]).toBe(confirmationTimeoutMs)
+  expect(new Set(lookupHashes)).toEqual(new Set(outcome === 'normal' ? [] : [finalHash!]))
+  if (outcome === 'pending') expect(lookupHashes).toHaveLength(3)
+  if (outcome === 'missing') expect(lookupHashes.length).toBeGreaterThan(1)
   if (sponsored) expect(finalHash!).not.toBe(keccak256(signature))
   await expect(server.broadcastCredential(credential)).rejects.toThrow(
     'Transaction hash has already been used',
