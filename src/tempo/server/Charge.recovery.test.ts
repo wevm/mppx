@@ -66,6 +66,7 @@ async function setup(parameters: {
   confirmationTimeoutMs?: number | undefined
   /** Thrown by broadcasts unless the outcome is `normal`; `hang` never settles. */
   error?: unknown
+  sponsorBudgetStore?: Store.AtomicStore | undefined
   sponsored: boolean
   /** Seconds from now until the transaction's `validBefore`. */
   validFor?: number | undefined
@@ -74,6 +75,7 @@ async function setup(parameters: {
   const {
     confirmationTimeoutMs = 200,
     error = gateway,
+    sponsorBudgetStore,
     sponsored,
     validFor = 25,
     waitForConfirmation,
@@ -181,6 +183,7 @@ async function setup(parameters: {
           : {}),
         getClient: () => client,
         onPaymentSuccess,
+        ...(sponsorBudgetStore ? { sponsorBudget: { store: sponsorBudgetStore } } : {}),
         store,
         testnet: true,
         waitForConfirmation,
@@ -223,6 +226,7 @@ async function setup(parameters: {
     onPaymentSuccess,
     sends: () => calls.filter((method) => method.startsWith('eth_sendRawTransaction')).length,
     signature,
+    signatureHashKey: `mppx:charge:${keccak256(signature)}`,
     sponsorBudgetKey: `mppx:charge:sponsor-budget:${tempoModerato.id}:${sponsor.address.toLowerCase()}`,
     state,
     store,
@@ -381,5 +385,50 @@ test.each<{
     await expectReplayed(broadcast())
     expect(onPaymentSuccess).toHaveBeenCalledOnce()
     expect(sends()).toBe(2)
+  },
+)
+
+const budgetFailure = new Error('Budget store unavailable')
+
+test.each([
+  // Updates: reserve, broadcasting, pending (fails).
+  { name: 'pending transition after broadcast', failFrom: 3, error: gateway, sends: 1 },
+  // Updates: reserve, broadcasting (fails), release (fails).
+  { name: 'release before broadcast', failFrom: 2, error: budgetFailure, sends: 0 },
+])(
+  'releases charge claims when sponsor budget cleanup fails: $name',
+  async ({ error, failFrom, sends: expectedSends }) => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const budget = Store.memory()
+    let updates = 0
+    let failUpdatesFrom = failFrom
+    const sponsorBudgetStore = {
+      ...budget,
+      update: (async (key, fn) => {
+        if (++updates >= failUpdatesFrom) throw budgetFailure
+        return budget.update(key, fn)
+      }) satisfies Store.Update,
+    }
+    const { broadcast, onPaymentSuccess, sends, signatureHashKey, state, store } = await setup({
+      sponsorBudgetStore,
+      sponsored: true,
+    })
+    state.outcome = 'lookup-error'
+
+    expect(causedBy(await broadcast().catch((error: unknown) => error), error)).toBe(true)
+    expect(consoleError).toHaveBeenCalledWith('mppx: sponsor budget cleanup error', budgetFailure)
+    expect(await store.get(signatureHashKey)).toBeNull()
+    expect(sends()).toBe(expectedSends)
+
+    failUpdatesFrom = Number.POSITIVE_INFINITY
+    state.outcome = 'included'
+    // The claims are free; the uncleaned reservation holds the fee until it expires.
+    const retry = await broadcast().catch((error: unknown) => error)
+    expect(retry).not.toBeInstanceOf(Errors.CredentialReplayedError)
+    expect(retry).toMatchObject({
+      message: expect.stringContaining('Sponsored transaction already has a budget reservation'),
+    })
+    expect(onPaymentSuccess).not.toHaveBeenCalled()
+    consoleError.mockRestore()
   },
 )
