@@ -1,7 +1,6 @@
+import { Attribution } from 'mppx/tempo'
 import { Bytes, Hash, Hex } from 'ox'
 import { describe, expect, test } from 'vp/test'
-
-import * as Attribution from './Attribution.js'
 
 describe('Attribution', () => {
   describe('tag', () => {
@@ -239,6 +238,18 @@ describe('Attribution', () => {
       expect(result.serverFingerprint.toLowerCase()).toBe(expectedServer.toLowerCase())
     })
 
+    test('nonce matches keccak256(challengeId)[0..6]', () => {
+      const result = Attribution.decode(
+        Attribution.encode({ challengeId: 'challenge-123', serverId: 'api.example.com' }),
+      )!
+      const expectedNonce = Hex.slice(
+        Hash.keccak256(Bytes.fromString('challenge-123'), { as: 'Hex' }),
+        0,
+        7,
+      )
+      expect(result.nonce.toLowerCase()).toBe(expectedNonce.toLowerCase())
+    })
+
     test('returns null for wrong version via decode', () => {
       const memo = Attribution.encode({
         challengeId: 'test-challenge-1',
@@ -246,25 +257,6 @@ describe('Attribution', () => {
       })
       const corrupted = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.decode(corrupted)).toBeNull()
-    })
-  })
-
-  describe('challengeNonce', () => {
-    test('returns 7 bytes', () => {
-      const nonce = Attribution.challengeNonce('challenge-123')
-      expect(nonce.length).toBe(7)
-    })
-
-    test('is deterministic', () => {
-      const a = Attribution.challengeNonce('challenge-123')
-      const b = Attribution.challengeNonce('challenge-123')
-      expect(Hex.fromBytes(a)).toBe(Hex.fromBytes(b))
-    })
-
-    test('differs for different challengeIds', () => {
-      const a = Attribution.challengeNonce('challenge-123')
-      const b = Attribution.challengeNonce('challenge-456')
-      expect(Hex.fromBytes(a)).not.toBe(Hex.fromBytes(b))
     })
   })
 

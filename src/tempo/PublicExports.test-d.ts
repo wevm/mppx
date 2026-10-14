@@ -28,6 +28,15 @@ import type { RawAmountString } from './session/precompile/index.js'
 import type { SettlementSchedule as SessionSettlementSchedule } from './session/server/index.js'
 import type { SessionController } from './session/server/Sse.js'
 
+test('tempo public barrel exposes attribution memo helpers', () => {
+  expectTypeOf(Tempo.Attribution.decode).toBeFunction()
+  expectTypeOf(Tempo.Attribution.encode).toBeFunction()
+  expectTypeOf(Tempo.Attribution.isMppMemo).toBeFunction()
+  expectTypeOf(Tempo.Attribution.verifyChallengeBinding).toBeFunction()
+  expectTypeOf(Tempo.Attribution.verifyServer).toBeFunction()
+  expectTypeOf<typeof Tempo.Attribution>().not.toHaveProperty('challengeNonce')
+})
+
 test('tempo session public barrels expose manager and schedule interfaces', () => {
   expectTypeOf<typeof Tempo>().not.toHaveProperty('mach')
   expectTypeOf(Tempo.machineTokenDeployments).toBeObject()

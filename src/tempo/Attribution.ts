@@ -18,6 +18,8 @@ import { Bytes, Hash, Hex } from 'ox'
  *
  * The TAG prefix makes MPP transactions trivially distinguishable
  * from arbitrary memos via `TransferWithMemo` event topic filtering.
+ * The Tempo charge client uses the challenge `realm` as `serverId`, so
+ * `verifyServer(memo, realm)` matches on-chain transfers to a server.
  *
  * @module
  */
@@ -43,12 +45,12 @@ function fingerprint(value: string): Uint8Array {
 /**
  * Encodes an MPP attribution memo as a `bytes32` hex string.
  *
- * @param parameters - The serverId (server identity) and optional clientId.
+ * @param parameters - The challengeId, serverId (server identity), and optional clientId.
  * @returns A `0x`-prefixed 64-char hex string (32 bytes).
  *
  * @example
  * ```ts
- * import * as Attribution from './Attribution.js'
+ * import { Attribution } from 'mppx/tempo'
  *
  * const memo = Attribution.encode({ challengeId: 'challenge-123', clientId: 'my-app', serverId: 'api.example.com' })
  * ```
@@ -89,7 +91,7 @@ export declare namespace encode {
  *
  * @example
  * ```ts
- * import * as Attribution from './Attribution.js'
+ * import { Attribution } from 'mppx/tempo'
  *
  * Attribution.isMppMemo(Attribution.encode({ challengeId: 'challenge-123', serverId: 'api.example.com' })) // true
  * Attribution.isMppMemo('0x0000...0000')      // false
@@ -110,6 +112,15 @@ export function isMppMemo(memo: `0x${string}`): boolean {
  * @param memo - A `0x`-prefixed hex string (bytes32).
  * @param serverId - The expected server identity.
  * @returns `true` if the memo has a valid MPP tag and matching server fingerprint.
+ *
+ * @example
+ * ```ts
+ * import { Attribution } from 'mppx/tempo'
+ *
+ * const memo = Attribution.encode({ challengeId: 'challenge-123', serverId: 'api.example.com' })
+ * Attribution.verifyServer(memo, 'api.example.com')   // true
+ * Attribution.verifyServer(memo, 'other.example.com') // false
+ * ```
  */
 export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
   if (!isMppMemo(memo)) return false
@@ -126,7 +137,7 @@ export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
  *
  * @example
  * ```ts
- * import * as Attribution from './Attribution.js'
+ * import { Attribution } from 'mppx/tempo'
  *
  * const memo = Attribution.encode({ challengeId: 'challenge-123', clientId: 'my-app', serverId: 'api.example.com' })
  * const decoded = Attribution.decode(memo)
@@ -163,7 +174,7 @@ export declare namespace decode {
  * Computes the 7-byte challenge-bound nonce: keccak256(challengeId)[0..6].
  * @internal
  */
-export function challengeNonce(challengeId: string): Uint8Array {
+function challengeNonce(challengeId: string): Uint8Array {
   const hash = Hash.keccak256(Bytes.fromString(challengeId), { as: 'Hex' })
   return Hex.toBytes(Hex.slice(hash, 0, 7))
 }
@@ -176,6 +187,15 @@ export function challengeNonce(challengeId: string): Uint8Array {
  * @param memo - A `0x`-prefixed hex string (bytes32).
  * @param challengeId - The expected challenge ID.
  * @returns `true` if the memo has a valid MPP tag and matching challenge nonce.
+ *
+ * @example
+ * ```ts
+ * import { Attribution } from 'mppx/tempo'
+ *
+ * const memo = Attribution.encode({ challengeId: 'challenge-123', serverId: 'api.example.com' })
+ * Attribution.verifyChallengeBinding(memo, 'challenge-123') // true
+ * Attribution.verifyChallengeBinding(memo, 'challenge-456') // false
+ * ```
  */
 export function verifyChallengeBinding(memo: `0x${string}`, challengeId: string): boolean {
   const decoded = decode(memo)
