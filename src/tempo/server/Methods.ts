@@ -1,4 +1,5 @@
 import type { NoExtraKeys } from '../../internal/types.js'
+import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import {
