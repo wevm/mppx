@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Credential, Errors } from 'mppx'
 import { Mppx, tempo } from 'mppx/server'
 import {
   createClient,
@@ -162,8 +162,12 @@ test.each([
   }
   expect(lookupHashes).toEqual(outcome === 'normal' ? [] : [finalHash!])
   if (sponsored) expect(finalHash!).not.toBe(keccak256(signature))
-  await expect(server.broadcastCredential(credential)).rejects.toThrow(
-    'Transaction hash has already been used',
-  )
+  const replay = await server.broadcastCredential(credential).catch((error: unknown) => error)
+  expect(replay).toBeInstanceOf(Errors.CredentialReplayedError)
+  expect(replay).toMatchObject({
+    message: 'Payment verification failed: Transaction hash has already been used.',
+    status: 402,
+    type: 'https://paymentauth.org/problems/verification-failed',
+  })
   expect(calls.filter((method) => method === 'eth_sendRawTransactionSync')).toHaveLength(1)
 })

@@ -1531,6 +1531,99 @@ describe('server events', () => {
     expect(events).toEqual(['failed:VerificationFailedError:null'])
   })
 
+  test.each(['authorize', 'getCredential', 'verify'] as const)(
+    'exposes the cause of unexpected %s failures to hooks without leaking it',
+    async (site) => {
+      const cause = new Error('request to https://rpc.example.com/?key=secret-key failed')
+      const failures: Errors.PaymentError[] = []
+      const serverMethod = Method.toServer(eventCharge, {
+        ...(site === 'authorize' && {
+          async authorize() {
+            throw cause
+          },
+        }),
+        async verify() {
+          throw cause
+        },
+      })
+      const http = Transport.http()
+      const transport =
+        site === 'getCredential'
+          ? Transport.from({
+              ...http,
+              name: 'leaking-http',
+              getCredential() {
+                throw cause
+              },
+            })
+          : http
+      const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+      handler.onPaymentFailed((context) => {
+        failures.push(context.error)
+      })
+      const handle = handler.charge(options())
+
+      const headers = new Headers()
+      if (site === 'getCredential') headers.set('Authorization', 'Payment invalid')
+      if (site === 'verify') {
+        const first = await handle(new Request('https://example.com/resource'))
+        if (first.status !== 402) throw new Error()
+        const challenge = Challenge.fromResponse(first.challenge)
+        headers.set(
+          'Authorization',
+          Credential.serialize(Credential.from({ challenge, payload: { token: 'valid' } })),
+        )
+      }
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const result = await handle(new Request('https://example.com/resource', { headers })).finally(
+        () => consoleError.mockRestore(),
+      )
+
+      expect(failures).toHaveLength(1)
+      expect(failures[0]).toBeInstanceOf(Errors.InternalPaymentError)
+      expect(failures[0]!.cause).toBe(cause)
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      expect(result.challenge.status).toBe(500)
+      const body = await result.challenge.text()
+      expect(body).not.toContain('secret-key')
+      expect(body).not.toContain('rpc.example.com')
+      expect(JSON.parse(body)).not.toHaveProperty('cause')
+      expect(JSON.parse(body)).toMatchObject({
+        detail: 'An internal payment error occurred.',
+        type: 'https://paymentauth.org/problems/internal-payment-error',
+      })
+    },
+  )
+
+  test('exposes the cause of unexpected standalone verification failures to hooks', async () => {
+    const cause = new Error('rpc unavailable')
+    const failures: Errors.PaymentError[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        throw cause
+      },
+    })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+    handler.onPaymentFailed((context) => {
+      failures.push(context.error)
+    })
+
+    const first = await handler.charge(options())(new Request('https://example.com/resource'))
+    if (first.status !== 402) throw new Error()
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'valid' },
+    })
+
+    await expect(handler.verifyCredential(credential, { request: options() })).rejects.toBe(cause)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toBeInstanceOf(Errors.InternalPaymentError)
+    expect(failures[0]!.cause).toBe(cause)
+  })
+
   test('emits events from standalone verifyCredential', async () => {
     const events: string[] = []
     const capturedRequest = {

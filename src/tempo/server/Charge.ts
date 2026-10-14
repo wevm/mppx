@@ -18,7 +18,7 @@ import {
 import { Abis, Actions, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
-import { PaymentError, VerificationFailedError } from '../../Errors.js'
+import { CredentialReplayedError, PaymentError, VerificationFailedError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -582,7 +582,7 @@ export function charge<const parameters extends charge.Parameters>(
         case 'hash': {
           const { hash, receipt } = validated
           if (!(await tryClaimHash(store, hash, replayExpires))) {
-            throw new VerificationFailedError({
+            throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
             })
           }
@@ -606,7 +606,7 @@ export function charge<const parameters extends charge.Parameters>(
 
         case 'proof': {
           if (proofStore && !(await tryClaimProof(proofStore, challenge.id, replayExpires))) {
-            throw new VerificationFailedError({
+            throw new CredentialReplayedError({
               reason: 'Proof credential has already been used',
             })
           }
@@ -627,7 +627,7 @@ export function charge<const parameters extends charge.Parameters>(
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
           if (!(await tryClaimHash(store, hash, replayExpires))) {
-            throw new VerificationFailedError({
+            throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
             })
           }
@@ -722,7 +722,7 @@ export function charge<const parameters extends charge.Parameters>(
 
             if (finalHash.toLowerCase() !== hash.toLowerCase()) {
               if (!(await tryClaimHash(store, finalHash, replayExpires)))
-                throw new VerificationFailedError({
+                throw new CredentialReplayedError({
                   reason: 'Transaction hash has already been used',
                 })
               claimedFinalHash = finalHash

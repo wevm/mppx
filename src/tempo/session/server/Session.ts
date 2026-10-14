@@ -289,7 +289,9 @@ async function handleBootstrapPreflight(
   } catch (error) {
     return respondBootstrapChallenge(
       challenge,
-      error instanceof Errors.PaymentError ? error : new Errors.InternalPaymentError(),
+      error instanceof Errors.PaymentError
+        ? error
+        : new Errors.InternalPaymentError({ cause: error }),
     )
   }
 

@@ -918,7 +918,8 @@ export function create<
       const broadcast = mi.broadcast ?? mi.verify
       receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
-      const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
+      const error =
+        e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError({ cause: e })
       await emitStandalonePaymentFailed({
         challenge: prepared.credential.challenge,
         credential: parsedCredential,
@@ -1294,7 +1295,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             ? credentialError
             : reason
               ? new Errors.MalformedCredentialError({ reason })
-              : new Errors.InternalPaymentError()
+              : new Errors.InternalPaymentError({ cause: credentialError })
         await emitPaymentFailed({
           challenge,
           credential: null,
@@ -1373,7 +1374,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           } catch (e) {
             if (!(e instanceof Errors.PaymentError))
               console.error('mppx: internal authorization error', e)
-            const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
+            const error =
+              e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError({ cause: e })
             await emitPaymentFailed({
               challenge,
               credential: null,
@@ -1561,7 +1563,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       } catch (e) {
         if (!(e instanceof Errors.PaymentError))
           console.error('mppx: internal verification error', e)
-        const error = e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError()
+        const error =
+          e instanceof Errors.PaymentError ? e : new Errors.InternalPaymentError({ cause: e })
         await emitPaymentFailed({
           challenge,
           credential: parsedCredential,
@@ -1922,6 +1925,7 @@ function snapshotError<error extends Errors.PaymentError | undefined>(error: err
   if (!error) return error
   const snapshot = Object.assign(Object.create(Object.getPrototypeOf(error)), error)
   Object.defineProperties(snapshot, {
+    ...('cause' in error && { cause: { value: error.cause, enumerable: false } }),
     message: { value: error.message, enumerable: false },
     name: { value: error.name, enumerable: false },
   })
