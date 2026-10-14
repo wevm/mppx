@@ -395,23 +395,26 @@ describe('individual intent currency offers', () => {
   )
 })
 
-test.each([tempo.charge, tempo.common])(
+test.each([false, true])(
   'sibling currency offers enforce aggregate sponsor capacity',
-  async (factory) => {
+  async (common) => {
     const charge = vi.spyOn(Charge, 'charge')
     try {
-      const methods = factory({ ...config })
+      const methods = common ? tempo.common(config) : tempo.charge(config)
       const stores = charge.mock.calls
         .filter((_, index) => methods.includes(charge.mock.results[index]!.value))
         .map(([parameters]) => {
+          if (!parameters) throw new Error('Missing charge parameters')
           const budget = parameters.sponsorBudget
           // This is the same fallback used by Charge when no budget store is set.
-          return Store.from((budget && budget.store) ?? parameters.store ?? Store.memory())
+          return Store.from(
+            (budget === false ? undefined : budget?.store) ?? parameters.store ?? Store.memory(),
+          ) as Parameters<typeof SponsorBudget.reserve>[0]
         })
       expect(stores).toHaveLength(2)
       const parameters = {
         chainId: 4217,
-        sponsor: recipient,
+        sponsor: recipient as `0x${string}`,
         owner: 'owner',
         fee: 1n,
         maxReservations: 1,
@@ -445,19 +448,21 @@ test.each([tempo.charge, tempo.common])(
   },
 )
 
-test.each([tempo.charge, tempo.common])(
+test.each([false, true])(
   'currency offers preserve explicit budget storage and opt-out',
-  (factory) => {
+  (common) => {
     const charge = vi.spyOn(Charge, 'charge')
     const store = Store.memory()
     const budgetStore = Store.memory()
     try {
       for (const sponsorBudget of [undefined, { store: budgetStore }, false] as const) {
         charge.mockClear()
-        const methods = factory({ ...config, store, sponsorBudget })
+        const parameters = { ...config, store, sponsorBudget }
+        const methods = common ? tempo.common(parameters) : tempo.charge(parameters)
         for (const [parameters] of charge.mock.calls.filter((_, index) =>
           methods.includes(charge.mock.results[index]!.value),
         )) {
+          if (!parameters) throw new Error('Missing charge parameters')
           expect(parameters.store).toBe(store)
           if (sponsorBudget === false) expect(parameters.sponsorBudget).toBe(false)
           else
