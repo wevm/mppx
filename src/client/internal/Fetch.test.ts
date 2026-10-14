@@ -1623,6 +1623,65 @@ describe('Fetch.from: 402 retry path', () => {
     },
   )
 
+  test.each([
+    ['fully buffered', 'settle failed', false],
+    ['truncated', 'x'.repeat(100_000), true],
+  ])('keeps the observable fields of a %s 5xx response', async (_name, body, truncated) => {
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers.authorization) {
+        res.writeHead(402, { 'WWW-Authenticate': make402().headers.get('WWW-Authenticate')! })
+        res.end()
+        return
+      }
+      res.writeHead(500, 'Settlement Failed', {
+        'Content-Type': 'text/plain',
+        'X-Request-Id': 'abc',
+      })
+      res.end(body)
+    })
+    try {
+      let original: Response | undefined
+      const eventDispatcher = Fetch.createEventDispatcher()
+      eventDispatcher.on('payment.failed', () => {})
+      const fetch = Fetch.from({
+        eventDispatcher,
+        fetch: async (input, init) => {
+          const response = await globalThis.fetch(input, init)
+          if (new Headers(init?.headers).has('Authorization')) original = response
+          return response
+        },
+        methods: [noopMethod],
+      })
+
+      const response = await fetch(`${httpServer.url}/paid`)
+
+      expect(original).toBeDefined()
+      expect(response === original).toBe(!truncated)
+      expect({
+        redirected: response.redirected,
+        status: response.status,
+        statusText: response.statusText,
+        type: response.type,
+        url: response.url,
+      }).toEqual({
+        redirected: original!.redirected,
+        status: original!.status,
+        statusText: original!.statusText,
+        type: original!.type,
+        url: original!.url,
+      })
+      const expectedHeaders = new Headers(original!.headers)
+      if (truncated) {
+        expectedHeaders.delete('content-length')
+        expectedHeaders.set('Mppx-Body-Truncated', 'true')
+      }
+      expect(Object.fromEntries(response.headers)).toEqual(Object.fromEntries(expectedHeaders))
+      expect(await response.text()).toBe(truncated ? body.slice(0, 64 * 1024) : body)
+    } finally {
+      httpServer.close()
+    }
+  })
+
   test('reports a 5xx body read failure and rethrows it', async () => {
     const cause = new TypeError('terminated')
     const failures: unknown[] = []

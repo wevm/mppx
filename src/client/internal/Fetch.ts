@@ -40,14 +40,15 @@ let originalFetch: typeof globalThis.fetch | undefined
 const eventObserverChecks = new WeakMap<object, (name: keyof ClientEventMap) => boolean>()
 
 /**
- * Buffers a paid-retry error body within a size and time bound, then cancels the
- * rest so its connection is released. The body is diagnostic only: one larger than
- * 64 KiB, or still arriving after 2 seconds, is cut to what arrived and marked with
- * an `Mppx-Body-Truncated: true` header.
+ * Buffers a paid-retry error body within a size and time bound so its connection is
+ * released. A complete body stays in the original response. The body is diagnostic
+ * only: one larger than 64 KiB, or still arriving after 2 seconds, is cancelled and
+ * replaced with what arrived, marked with an `Mppx-Body-Truncated: true` header.
  */
 async function bufferErrorBody(response: Response): Promise<Response> {
-  const reader = response.body?.getReader()
-  if (!reader) return response
+  if (!response.body) return response
+  // Reading a clone pulls the shared source, buffering it in the original response.
+  const reader = response.clone().body!.getReader()
   const chunks: Uint8Array<ArrayBuffer>[] = []
   let received = 0
   let truncated = false
@@ -68,18 +69,23 @@ async function bufferErrorBody(response: Response): Promise<Response> {
     }
   } finally {
     clearTimeout(timeout)
+    // A tee's cancellation can wait for the other branch; do not await it.
     void reader.cancel().catch(() => {})
   }
+  if (!truncated) return response
+  // Cancelling both branches cancels the source and releases the connection.
+  void response.body.cancel().catch(() => {})
   const headers = new Headers(response.headers)
-  if (truncated) {
-    headers.delete('content-length')
-    headers.set(bodyTruncatedHeader, 'true')
-  }
-  return new Response(new Blob(chunks).slice(0, maxErrorBodyBytes), {
+  headers.delete('content-length')
+  headers.set(bodyTruncatedHeader, 'true')
+  const truncatedResponse = new Response(new Blob(chunks).slice(0, maxErrorBodyBytes), {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
+  for (const key of ['redirected', 'type', 'url'] as const)
+    Object.defineProperty(truncatedResponse, key, { value: response[key] })
+  return truncatedResponse
 }
 
 async function settleAttempt(
