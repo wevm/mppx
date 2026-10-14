@@ -1185,13 +1185,35 @@ describe('recipient allowlist', () => {
 })
 
 describe('amount cap', () => {
+  const atomicError = 'Tempo charge amount exceeds maxAtomicAmount.'
+  const displayError = 'Tempo charge amount exceeds maxAmount.'
+  const decimalsError = 'Tempo charge maxAmount requires currency decimals.'
+
+  // The challenge charges 1 token (1_000_000 base units at 6 decimals).
   test.each([
-    { name: 'below cap', maxAmount: 1_000_001n, accepted: true },
-    { name: 'equal to cap', maxAmount: 1_000_000n, accepted: true },
-    { name: 'above cap', maxAmount: 999_999n, accepted: false },
-    { name: 'zero cap', maxAmount: 0n, accepted: false },
-    { name: 'no cap', maxAmount: undefined, accepted: true },
-  ])('$name', async ({ maxAmount, accepted }) => {
+    { name: 'atomic below cap', options: { maxAtomicAmount: '1000001' }, error: undefined },
+    { name: 'atomic equal to cap', options: { maxAtomicAmount: '1000000' }, error: undefined },
+    { name: 'atomic above cap', options: { maxAtomicAmount: '999999' }, error: atomicError },
+    { name: 'atomic zero cap', options: { maxAtomicAmount: '0' }, error: atomicError },
+    {
+      name: 'display below cap',
+      options: { decimals: 6, maxAmount: '1.000001' },
+      error: undefined,
+    },
+    { name: 'display equal to cap', options: { decimals: 6, maxAmount: '1' }, error: undefined },
+    {
+      name: 'display above cap',
+      options: { decimals: 6, maxAmount: '0.999999' },
+      error: displayError,
+    },
+    { name: 'display cap without decimals', options: { maxAmount: '2' }, error: decimalsError },
+    {
+      name: 'atomic cap with passing display cap',
+      options: { decimals: 6, maxAmount: '2', maxAtomicAmount: '999999' },
+      error: atomicError,
+    },
+    { name: 'no cap', options: {}, error: undefined },
+  ])('$name', async ({ options, error }) => {
     vi.resetModules()
     const prepareTransactionRequest = vi.fn(async () => ({}))
     const signTransaction = vi.fn(async () => '0xdeadbeef')
@@ -1212,8 +1234,8 @@ describe('amount cap', () => {
       const method = mockedCharge({
         account,
         getClient: () => client,
-        maxAmount,
         resolveAccount,
+        ...options,
       })
       const result = method.createCredential({
         challenge: createChallenge({
@@ -1223,19 +1245,17 @@ describe('amount cap', () => {
         }),
         context: {},
       })
-      if (accepted) {
+      if (error) {
+        await expect(result).rejects.toThrow(error)
+        expect(resolveAccount).not.toHaveBeenCalled()
+        expect(prepareTransactionRequest).not.toHaveBeenCalled()
+        expect(signTransaction).not.toHaveBeenCalled()
+      } else {
         expect(Credential.deserialize(await result).payload).toEqual({
           signature: '0xdeadbeef',
           type: 'transaction',
         })
         expect(signTransaction).toHaveBeenCalledOnce()
-      } else {
-        await expect(result).rejects.toThrow(
-          `Charge amount 1000000 exceeds maxAmount ${maxAmount}.`,
-        )
-        expect(resolveAccount).not.toHaveBeenCalled()
-        expect(prepareTransactionRequest).not.toHaveBeenCalled()
-        expect(signTransaction).not.toHaveBeenCalled()
       }
     } finally {
       vi.doUnmock('viem/actions')
@@ -1251,7 +1271,7 @@ describe('amount cap', () => {
       chain: { ...tempoLocalnet, id: 42431 },
       transport: http('http://127.0.0.1'),
     })
-    const method = charge({ account: signer, getClient: () => client, maxAmount: 0n })
+    const method = charge({ account: signer, getClient: () => client, maxAtomicAmount: '0' })
     const credential = await method.createCredential({ challenge: createChallenge(), context: {} })
     expect(Credential.deserialize(credential).payload).toMatchObject({ type: 'proof' })
     expect(signTypedData).toHaveBeenCalledOnce()

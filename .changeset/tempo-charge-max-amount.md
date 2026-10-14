@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added `maxAmount` to the `tempo.charge()` client to reject challenges whose amount, in base units, exceeds the cap before signing.
+Added `maxAmount` (display units, parsed with `decimals`) and `maxAtomicAmount` (base units) to the `tempo.charge()` client, matching the EVM charge client, to reject challenges above the cap before signing.

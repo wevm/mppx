@@ -1,5 +1,5 @@
 import type * as Hex from 'ox/Hex'
-import type { Address } from 'viem'
+import { type Address, parseUnits } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
@@ -114,8 +114,18 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
-      if (parameters.maxAmount !== undefined && BigInt(amount) > parameters.maxAmount)
-        throw new Error(`Charge amount ${amount} exceeds maxAmount ${parameters.maxAmount}.`)
+      if (
+        parameters.maxAtomicAmount !== undefined &&
+        BigInt(amount) > BigInt(parameters.maxAtomicAmount)
+      )
+        throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
+
+      if (parameters.maxAmount !== undefined) {
+        if (parameters.decimals === undefined)
+          throw new Error('Tempo charge maxAmount requires currency decimals.')
+        if (BigInt(amount) > parseUnits(parameters.maxAmount, parameters.decimals))
+          throw new Error('Tempo charge amount exceeds maxAmount.')
+      }
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -338,15 +348,22 @@ export declare namespace charge {
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
-     * Maximum amount this client will pay for a single charge, in base units of
-     * the challenge currency (TIP-20 tokens use 6 decimals, so `1_000_000n` is 1
-     * token). Compared against the challenge `amount`, which includes splits;
-     * challenges above the cap are rejected before any signing.
-     *
-     * The cap applies to each credential, not to the total paid across payment
-     * retries of one request.
+     * Token decimals used to parse `maxAmount`. Required with `maxAmount` because
+     * challenges do not carry currency decimals. TIP-20 tokens use 6.
      */
-    maxAmount?: bigint | undefined
+    decimals?: number | undefined
+    /**
+     * Maximum display-unit amount (e.g. `'1.5'`) the client is willing to pay per
+     * charge, parsed with `decimals`. Compared against the challenge amount, which
+     * includes splits; larger challenges are rejected before signing. Applies per
+     * credential, not cumulatively across payment retries.
+     */
+    maxAmount?: string | undefined
+    /**
+     * Maximum atomic amount (base units, e.g. `'1500000'` for 1.5 of a 6-decimal
+     * token) the client is willing to pay per charge. Checked like `maxAmount`.
+     */
+    maxAtomicAmount?: string | undefined
     /**
      * Controls how the charge transaction is submitted.
      *
