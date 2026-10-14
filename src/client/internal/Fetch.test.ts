@@ -1574,6 +1574,128 @@ describe('Fetch.from: 402 retry path', () => {
     })
   })
 
+  test.each([
+    ['a complete body', ['settle failed'], true, 'settle failed', false],
+    ['a large body', ['x'.repeat(40_000), 'x'.repeat(40_000)], false, 'x'.repeat(64 * 1024), true],
+    ['a slow body', ['partial'], false, 'partial', true],
+  ])(
+    'buffers %s within bounds before payment.failed observers',
+    async (_name, chunks, complete, expected, truncated) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        let cancelled = false
+        const failures: Fetch.PaymentFailedPayload[] = []
+        const eventDispatcher = Fetch.createEventDispatcher()
+        eventDispatcher.on('payment.failed', (payload) => {
+          failures.push(payload)
+        })
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk))
+            if (complete) controller.close()
+          },
+          cancel() {
+            cancelled = true
+          },
+        })
+        const fetch = Fetch.from({
+          eventDispatcher,
+          fetch: async (_input, init) =>
+            new Headers(init?.headers).has('Authorization')
+              ? new Response(body, { headers: { 'Content-Length': '100000' }, status: 500 })
+              : make402(),
+          methods: [noopMethod],
+        })
+
+        const result = fetch('https://example.com/api')
+        await vi.advanceTimersByTimeAsync(2_000)
+        const response = await result
+
+        expect(await response.text()).toBe(expected)
+        expect(response.headers.get('Mppx-Body-Truncated')).toBe(truncated ? 'true' : null)
+        expect(response.headers.has('Content-Length')).toBe(!truncated)
+        expect(cancelled).toBe(!complete)
+        expect(failures).toHaveLength(1)
+        expect(await failures[0]!.response?.text()).toBe(expected)
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  test('reports a 5xx body read failure and rethrows it', async () => {
+    const cause = new TypeError('terminated')
+    const failures: unknown[] = []
+    const eventDispatcher = Fetch.createEventDispatcher()
+    eventDispatcher.on('payment.failed', (payload) => {
+      failures.push(payload.error)
+    })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(cause)
+      },
+    })
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: async (_input, init) =>
+        new Headers(init?.headers).has('Authorization')
+          ? new Response(body, { status: 500 })
+          : make402(),
+      methods: [noopMethod],
+    })
+
+    await expect(fetch('https://example.com/api')).rejects.toBe(cause)
+    expect(failures).toEqual([expect.any(Errors.PaymentOutcomeUnknownError)])
+    expect(failures[0]).toMatchObject({ cause, credential: 'credential' })
+  })
+
+  test('releases a held 5xx connection before observers reconcile through it', async () => {
+    // One-connection pool: a response holds the connection until its body is cancelled.
+    let held = false
+    const waiters: (() => void)[] = []
+    const release = () => {
+      held = false
+      waiters.shift()?.()
+    }
+    const pooledFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      while (held) await new Promise<void>((resolve) => waiters.push(resolve))
+      held = true
+      if (input.toString().endsWith('/reconcile')) {
+        release()
+        return new Response('reconciled')
+      }
+      if (!new Headers(init?.headers).has('Authorization')) {
+        release()
+        return make402()
+      }
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(100_000))
+          },
+          cancel: release,
+        }),
+        { status: 500 },
+      )
+    }
+    const reconciled: string[] = []
+    const eventDispatcher = Fetch.createEventDispatcher()
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: pooledFetch as typeof globalThis.fetch,
+      methods: [noopMethod],
+    })
+    eventDispatcher.on('payment.failed', async () => {
+      reconciled.push(await (await fetch('https://example.com/reconcile')).text())
+    })
+
+    const response = await fetch('https://example.com/paid')
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Mppx-Body-Truncated')).toBe('true')
+    expect(reconciled).toEqual(['reconciled'])
+  })
+
   test('ignores empty challenge event credentials and continues handlers', async () => {
     const createCredential = vi.fn(async () => 'method-credential')
     const method = { ...noopMethod, createCredential }

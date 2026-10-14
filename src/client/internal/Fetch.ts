@@ -15,6 +15,10 @@ import * as MethodResponse from './MethodResponse.js'
 // an unrelated fetch installed by user code or another library.
 const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
 const defaultMaxPaymentRetries = 3
+const maxErrorBodyBytes = 64 * 1024
+const errorBodyTimeoutMs = 2_000
+/** Response header set when a paid-retry error body was cut off by {@link bufferErrorBody}. */
+const bodyTruncatedHeader = 'Mppx-Body-Truncated'
 
 type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
@@ -34,6 +38,49 @@ type PreparedCredential = {
 
 let originalFetch: typeof globalThis.fetch | undefined
 const eventObserverChecks = new WeakMap<object, (name: keyof ClientEventMap) => boolean>()
+
+/**
+ * Buffers a paid-retry error body within a size and time bound, then cancels the
+ * rest so its connection is released. The body is diagnostic only: one larger than
+ * 64 KiB, or still arriving after 2 seconds, is cut to what arrived and marked with
+ * an `Mppx-Body-Truncated: true` header.
+ */
+async function bufferErrorBody(response: Response): Promise<Response> {
+  const reader = response.body?.getReader()
+  if (!reader) return response
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  let received = 0
+  let truncated = false
+  const timeout = setTimeout(() => {
+    truncated = true
+    void reader.cancel().catch(() => {})
+  }, errorBodyTimeoutMs)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      received += value.byteLength
+      if (received > maxErrorBodyBytes) {
+        truncated = true
+        break
+      }
+    }
+  } finally {
+    clearTimeout(timeout)
+    void reader.cancel().catch(() => {})
+  }
+  const headers = new Headers(response.headers)
+  if (truncated) {
+    headers.delete('content-length')
+    headers.set(bodyTruncatedHeader, 'true')
+  }
+  return new Response(new Blob(chunks).slice(0, maxErrorBodyBytes), {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  })
+}
 
 async function settleAttempt(
   prepared: PreparedCredential | undefined,
@@ -367,6 +414,13 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
+        const unknownOutcome = (cause?: unknown) =>
+          new PaymentOutcomeUnknownError({
+            cause,
+            challenge: selectedChallenge,
+            credential,
+            transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
+          })
         try {
           response = await baseFetch(paymentInput, {
             ...transport.setCredential(
@@ -381,12 +435,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             redirect: 'manual',
           })
         } catch (cause) {
-          outcomeUnknown = new PaymentOutcomeUnknownError({
-            cause,
-            challenge: selectedChallenge,
-            credential,
-            transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
-          })
+          outcomeUnknown = unknownOutcome(cause)
           throw cause
         }
         const paymentRequired = await transport.isPaymentRequired(
@@ -422,23 +471,33 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         if (!paymentRequired) {
           // The server may have settled before failing: report the credential for
           // reconciliation and return the response. Retrying could pay twice.
-          if (response.status >= 500 && hasEventObservers(events, 'payment.failed'))
+          if (response.status >= 500 && hasEventObservers(events, 'payment.failed')) {
+            try {
+              // Release the connection before observers can make requests through it.
+              response = await bufferErrorBody(response)
+            } catch (cause) {
+              outcomeUnknown = unknownOutcome(cause)
+              // The failed body cannot be cloned for observers; keep its status and headers.
+              response = new Response(null, {
+                headers: response.headers,
+                status: response.status,
+                statusText: response.statusText,
+              })
+              throw cause
+            }
             await events.emit(
               'payment.failed',
               createPaymentFailedPayload({
                 challenge: selectedChallenge,
                 challenges,
-                error: new PaymentOutcomeUnknownError({
-                  challenge: selectedChallenge,
-                  credential,
-                  transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
-                }),
+                error: unknownOutcome(),
                 init,
                 input,
                 method: selected.method,
                 response,
               }),
             )
+          }
           if (!response.ok) return response
           return MethodResponse.handle(selected.method, {
             challenge: selectedChallenge,
