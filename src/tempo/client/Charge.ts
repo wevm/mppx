@@ -1,5 +1,6 @@
 import type * as Hex from 'ox/Hex'
-import { type Address, parseUnits } from 'viem'
+import { TxEnvelopeTempo } from 'ox/tempo'
+import { type Address, keccak256, parseUnits } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
@@ -10,6 +11,7 @@ import {
 import { Actions } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
+import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
@@ -315,7 +317,29 @@ export function charge(parameters: charge.Parameters = {}) {
     }
     return promise
   }
-  return { ...method, createCredential }
+  return MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash)
+}
+
+/**
+ * Returns the final hash of an unsponsored, sender-signed 0x76 transaction credential.
+ *
+ * Sponsored transactions (0x78 envelopes or 0x76 awaiting a fee payer) return
+ * `undefined` because the fee payer's co-signature changes the final hash.
+ */
+function transactionHash(credential: string): Hex.Hex | undefined {
+  const { payload } = Credential.deserialize<{ signature?: unknown; type?: unknown }>(credential)
+  const serialized = payload.signature
+  if (
+    payload.type !== 'transaction' ||
+    typeof serialized !== 'string' ||
+    !serialized.startsWith(TxEnvelopeTempo.serializedType)
+  )
+    return undefined
+  const transaction = TxEnvelopeTempo.deserialize(serialized as TxEnvelopeTempo.Serialized)
+  if (!transaction.signature || transaction.feePayerSignature === null) return undefined
+  // Reject trailing or non-canonical bytes, which never identify an on-chain transaction.
+  if (TxEnvelopeTempo.serialize(transaction) !== serialized) return undefined
+  return keccak256(serialized as Hex.Hex)
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */

@@ -1,5 +1,6 @@
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
+import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
@@ -407,6 +408,25 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             }),
           )
         if (!paymentRequired) {
+          // The server may have settled before failing: report the credential for
+          // reconciliation and return the response. Retrying could pay twice.
+          if (response.status >= 500 && hasEventObservers(events, 'payment.failed'))
+            await events.emit(
+              'payment.failed',
+              createPaymentFailedPayload({
+                challenge: selectedChallenge,
+                challenges,
+                error: new PaymentOutcomeUnknownError({
+                  challenge: selectedChallenge,
+                  credential,
+                  transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
+                }),
+                init,
+                input,
+                method: selected.method,
+                response,
+              }),
+            )
           if (!response.ok) return response
           return MethodResponse.handle(selected.method, {
             challenge: selectedChallenge,

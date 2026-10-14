@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vp/test'
 
+import * as Challenge from './Challenge.js'
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -17,6 +18,7 @@ import {
   PaymentExpiredError,
   PaymentInsufficientError,
   PaymentMethodUnsupportedError,
+  PaymentOutcomeUnknownError,
   PaymentRequiredError,
   SignerMismatchError,
   VerificationFailedError,
@@ -225,6 +227,32 @@ describe('PaymentExpiredError', () => {
           "type": "https://paymentauth.org/problems/payment-expired",
         }
       `)
+  })
+})
+
+describe('PaymentOutcomeUnknownError', () => {
+  test('default', () => {
+    const challenge = Challenge.from({
+      id: 'abc',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: { amount: '1' },
+    })
+    const error = new PaymentOutcomeUnknownError({
+      challenge,
+      credential: 'Payment abc',
+      transactionHash: '0x01',
+    })
+    expect(errorSnapshot(error)).toMatchInlineSnapshot(`
+      {
+        "message": "Payment outcome is unknown after sending a credential for challenge "abc". Do not blindly retry.",
+        "name": "PaymentOutcomeUnknownError",
+        "status": 402,
+        "type": "https://paymentauth.org/problems/payment-outcome-unknown",
+      }
+    `)
+    expect(error).toMatchObject({ challenge, credential: 'Payment abc', transactionHash: '0x01' })
   })
 })
 

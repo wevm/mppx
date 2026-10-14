@@ -1,3 +1,5 @@
+import type * as Challenge from './Challenge.js'
+
 /** Default hint messages for payment errors. */
 export const Hints = {
   paymentRequired:
@@ -240,6 +242,46 @@ export declare namespace PaymentExpiredError {
   type Options = {
     /** ISO 8601 expiration timestamp. */
     expires?: string
+  }
+}
+
+/**
+ * A credential was sent, but the payment result could not be confirmed.
+ *
+ * Reconcile with `credential` (and `transactionHash` when the method can derive it)
+ * instead of retrying, which could pay twice.
+ */
+export class PaymentOutcomeUnknownError extends PaymentError {
+  override readonly name = 'PaymentOutcomeUnknownError'
+  readonly title = 'Payment Outcome Unknown'
+  readonly type = 'https://paymentauth.org/problems/payment-outcome-unknown'
+
+  /** Challenge the credential paid for. */
+  readonly challenge: Challenge.Challenge
+  /** Serialized credential sent with the paid request. */
+  readonly credential: string
+  /** On-chain hash the payment will have if it settled, when derivable from the credential. */
+  readonly transactionHash: string | undefined
+
+  constructor(options: PaymentOutcomeUnknownError.Options) {
+    const { challenge, credential, transactionHash } = options
+    super(
+      `Payment outcome is unknown after sending a credential for challenge "${challenge.id}". Do not blindly retry.`,
+    )
+    this.challenge = challenge
+    this.credential = credential
+    this.transactionHash = transactionHash
+  }
+}
+
+export declare namespace PaymentOutcomeUnknownError {
+  type Options = {
+    /** Challenge the credential paid for. */
+    challenge: Challenge.Challenge
+    /** Serialized credential sent with the paid request. */
+    credential: string
+    /** On-chain hash the payment will have if it settled. */
+    transactionHash?: string | undefined
   }
 }
 

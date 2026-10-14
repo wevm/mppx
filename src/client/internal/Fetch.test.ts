@@ -1465,6 +1465,81 @@ describe('Fetch.from: 402 retry path', () => {
     expect(events).toEqual([])
   })
 
+  test.each([
+    [200, ['payment.response']],
+    [201, ['payment.response']],
+    [400, []],
+    [404, []],
+    [500, ['payment.failed']],
+    [502, ['payment.failed']],
+    [503, ['payment.failed']],
+  ])('reports a %i paid retry as %j without retrying', async (status, expected) => {
+    const method = MethodResponse.registerTransactionHash(
+      { ...noopMethod },
+      (credential) => `hash:${credential}`,
+    )
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Headers(init?.headers).has('Authorization') ? new Response(null, { status }) : make402(),
+    )
+    const events: string[] = []
+    const failures: Fetch.PaymentFailedPayload<[typeof method]>[] = []
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('*', (event) => {
+      if (event.name.startsWith('payment.')) events.push(event.name)
+    })
+    eventDispatcher.on('payment.failed', (payload) => {
+      failures.push(payload)
+    })
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [method],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(status)
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(events).toEqual(expected)
+    for (const failure of failures) {
+      expect(failure.error).toBeInstanceOf(Errors.PaymentOutcomeUnknownError)
+      expect(failure.error).toMatchObject({
+        challenge: { id: 'abc' },
+        credential: 'credential',
+        transactionHash: 'hash:credential',
+      })
+      expect(failure.response?.status).toBe(status)
+    }
+  })
+
+  test.each([
+    ['is not registered', (method: object) => method],
+    [
+      'throws',
+      (method: object) =>
+        MethodResponse.registerTransactionHash(method as never, () => {
+          throw new Error('malformed')
+        }),
+    ],
+  ])('reports a 5xx paid retry when hash derivation %s', async (_name, register) => {
+    const method = register({ ...noopMethod }) as typeof noopMethod
+    let calls = 0
+    const failures: unknown[] = []
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('payment.failed', (payload) => {
+      failures.push(payload.error)
+    })
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: async () => (++calls === 1 ? make402() : new Response(null, { status: 500 })),
+      methods: [method],
+    })
+
+    expect((await fetch('https://example.com/api')).status).toBe(500)
+    expect(failures).toEqual([expect.any(Errors.PaymentOutcomeUnknownError)])
+    expect(failures[0]).toMatchObject({ credential: 'credential', transactionHash: undefined })
+  })
+
   test('ignores empty challenge event credentials and continues handlers', async () => {
     const createCredential = vi.fn(async () => 'method-credential')
     const method = { ...noopMethod, createCredential }

@@ -1,11 +1,13 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx } from 'mppx/client'
-import { type Address, createClient, http, isAddressEqual } from 'viem'
+import { TxEnvelopeTempo } from 'ox/tempo'
+import { type Address, createClient, http, isAddressEqual, keccak256 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
 import { Account, Addresses, Secp256k1 } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 import { charge } from './Charge.js'
@@ -1101,6 +1103,61 @@ describe('tempo.charge client', () => {
         status: 'rejected',
       })
       expect(signTransaction).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('transaction hash', () => {
+    const envelope = TxEnvelopeTempo.from({
+      calls: [{ data: '0x', to: recipient }],
+      chainId: 42431,
+      gas: 100_000n,
+      maxFeePerGas: 1n,
+      maxPriorityFeePerGas: 1n,
+      nonce: 0n,
+    })
+    const signature = Secp256k1.sign({
+      payload: TxEnvelopeTempo.getSignPayload(envelope),
+      privateKey: '0x0000000000000000000000000000000000000000000000000000000000000001',
+    })
+    const unsponsored = TxEnvelopeTempo.serialize(envelope, { signature })
+    const cosigned = TxEnvelopeTempo.serialize(
+      TxEnvelopeTempo.from({ ...envelope, feePayerSignature: signature }),
+      { signature },
+    )
+    const awaitingFeePayer = TxEnvelopeTempo.from({ ...envelope, feePayerSignature: null })
+
+    test.each([
+      ['unsponsored', { signature: unsponsored, type: 'transaction' }, keccak256(unsponsored)],
+      ['fee payer co-signed', { signature: cosigned, type: 'transaction' }, keccak256(cosigned)],
+      [
+        'sponsored envelope',
+        {
+          signature: TxEnvelopeTempo.serialize(awaitingFeePayer, { format: 'feePayer', signature }),
+          type: 'transaction',
+        },
+        undefined,
+      ],
+      [
+        'awaiting fee payer',
+        {
+          signature: TxEnvelopeTempo.serialize(awaitingFeePayer, { signature }),
+          type: 'transaction',
+        },
+        undefined,
+      ],
+      [
+        'unsigned',
+        { signature: TxEnvelopeTempo.serialize(envelope), type: 'transaction' },
+        undefined,
+      ],
+      ['trailing bytes', { signature: `${unsponsored}00`, type: 'transaction' }, undefined],
+      ['malformed', { signature: '0x76ff', type: 'transaction' }, undefined],
+      ['non-Tempo', { signature: '0x02c0', type: 'transaction' }, undefined],
+      ['hash', { hash: '0xabc', type: 'hash' }, undefined],
+    ])('derives %s credentials', (_name, payload, expected) => {
+      const credential = Credential.serialize({ challenge: createChallenge(), payload })
+
+      expect(MethodResponse.getTransactionHash(charge(), credential)).toBe(expected)
     })
   })
 
