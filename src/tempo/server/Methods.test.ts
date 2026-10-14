@@ -14,7 +14,9 @@ import * as Proof from '../internal/proof.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
 import * as Settlement from '../session/server/Settlement.js'
 import * as Ws from '../session/server/Ws.js'
+import * as Charge from './Charge.js'
 import { tempo } from './Methods.js'
+import * as SponsorBudget from './SponsorBudget.js'
 
 const recipient = '0x1234567890123456789012345678901234567890'
 const rpc = vi.fn(() => {
@@ -392,3 +394,80 @@ describe('individual intent currency offers', () => {
     },
   )
 })
+
+test.each([tempo.charge, tempo.common])(
+  'sibling currency offers enforce aggregate sponsor capacity',
+  async (factory) => {
+    const charge = vi.spyOn(Charge, 'charge')
+    try {
+      const methods = factory({ ...config })
+      const stores = charge.mock.calls
+        .filter((_, index) => methods.includes(charge.mock.results[index]!.value))
+        .map(([parameters]) => {
+          const budget = parameters.sponsorBudget
+          // This is the same fallback used by Charge when no budget store is set.
+          return Store.from((budget && budget.store) ?? parameters.store ?? Store.memory())
+        })
+      expect(stores).toHaveLength(2)
+      const parameters = {
+        chainId: 4217,
+        sponsor: recipient,
+        owner: 'owner',
+        fee: 1n,
+        maxReservations: 1,
+        maxTotalFee: 1n,
+        expiresAt: Date.now() + 60_000,
+        waitUntil: Date.now() + 60_000,
+        transactionHash: `0x${'11'.repeat(32)}` as `0x${string}`,
+        getReceipt: async () => {
+          throw new Error('pending')
+        },
+      }
+      const first = await SponsorBudget.reserve(stores[0]!, { ...parameters, id: 'currency-a' })
+      await expect(
+        SponsorBudget.reserve(stores[1]!, {
+          ...parameters,
+          id: 'currency-b',
+          waitUntil: Date.now() + 20,
+        }),
+      ).rejects.toThrow('waiting for sponsor budget')
+      await SponsorBudget.release(stores[0]!, first)
+      await expect(
+        SponsorBudget.reserve(stores[1]!, {
+          ...parameters,
+          id: 'currency-b',
+          waitUntil: Date.now() + 1000,
+        }),
+      ).resolves.toMatchObject({ id: 'currency-b' })
+    } finally {
+      charge.mockRestore()
+    }
+  },
+)
+
+test.each([tempo.charge, tempo.common])(
+  'currency offers preserve explicit budget storage and opt-out',
+  (factory) => {
+    const charge = vi.spyOn(Charge, 'charge')
+    const store = Store.memory()
+    const budgetStore = Store.memory()
+    try {
+      for (const sponsorBudget of [undefined, { store: budgetStore }, false] as const) {
+        charge.mockClear()
+        const methods = factory({ ...config, store, sponsorBudget })
+        for (const [parameters] of charge.mock.calls.filter((_, index) =>
+          methods.includes(charge.mock.results[index]!.value),
+        )) {
+          expect(parameters.store).toBe(store)
+          if (sponsorBudget === false) expect(parameters.sponsorBudget).toBe(false)
+          else
+            expect(parameters.sponsorBudget && parameters.sponsorBudget.store).toBe(
+              sponsorBudget?.store ?? store,
+            )
+        }
+      }
+    } finally {
+      charge.mockRestore()
+    }
+  },
+)

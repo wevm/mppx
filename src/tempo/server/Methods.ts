@@ -82,11 +82,12 @@ export function tempo<const parameters extends tempo.Parameters>(
   }
   const { currencies: _currencies, ...shared } = parameters ?? {}
   const [first, ...rest] = Currencies.resolve(parameters ?? {})
+  const sponsorBudget = sharedSponsorBudget(parameters)
   const sessions = sessionOffers(
     parameters as NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>> | undefined,
   )
   function createMethods(currency: typeof first, index: number) {
-    const configured = { ...shared, ...currency } as unknown as Omit<
+    const configured = { ...shared, ...currency, sponsorBudget } as unknown as Omit<
       parameters,
       'currency' | 'currencies' | 'decimals' | 'chainId'
     > &
@@ -187,14 +188,24 @@ function resolveCurrencies(parameters: {
   })
 }
 
+/** Shares sponsor exposure across sibling offers without changing replay-store policy. */
+function sharedSponsorBudget(parameters: Pick<charge_.Parameters, 'store' | 'sponsorBudget'> = {}) {
+  if (parameters.sponsorBudget === false) return false
+  return {
+    ...parameters.sponsorBudget,
+    store: parameters.sponsorBudget?.store ?? parameters.store ?? Store.memory(),
+  }
+}
+
 /** Creates OUSD-first charge offers, with explicit currency lists replacing the defaults. */
 function chargeOffers<const parameters extends CurrencyParameters<charge_.Parameters>>(
   parameters?: NoExtraKeys<parameters, CurrencyParameters<charge_.Parameters>>,
 ) {
   const { currencies: _currencies, ...shared } = parameters ?? {}
   const [first, ...rest] = resolveCurrencies(parameters ?? {})
+  const sponsorBudget = sharedSponsorBudget(parameters)
   function create(currency: typeof first) {
-    const configured = { ...shared, ...currency } as unknown as Omit<
+    const configured = { ...shared, ...currency, sponsorBudget } as unknown as Omit<
       parameters,
       'currencies' | 'currency' | 'decimals' | 'chainId'
     > &
