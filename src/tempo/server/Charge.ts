@@ -794,26 +794,37 @@ export function charge<const parameters extends charge.Parameters>(
 
             broadcastAttempted = true
             if (waitForConfirmation) {
-              const deadline = Date.now() + confirmationTimeoutMs
+              const start = Date.now()
+              // The sync send gets at most 2/3 of the budget, reserving the rest for recovery.
+              const sendTimeoutMs = Math.floor((confirmationTimeoutMs * 2) / 3)
+              // Receipt polling stops at the deadline, or once an expiring transaction
+              // can no longer be included.
+              const receiptDeadline = Math.min(
+                start + confirmationTimeoutMs,
+                transaction.validBefore === undefined
+                  ? Number.POSITIVE_INFINITY
+                  : transaction.validBefore * 1_000 + 2_000,
+              )
               let receipt: TransactionReceipt
               try {
                 receipt = await withDeadline(
                   sendRawTransactionSync(client, {
                     serializedTransaction: serializedTransaction_final,
-                    timeout: confirmationTimeoutMs,
+                    timeout: sendTimeoutMs,
                   }),
-                  deadline,
+                  start + sendTimeoutMs,
                   new WaitForTransactionReceiptTimeoutError({ hash: finalHash }),
                 )
               } catch (broadcastError) {
                 if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
-                // The node may have accepted the transaction, so poll for its receipt with
-                // the remaining budget, allowing at least one poll after a late failure.
+                // The node may have accepted the transaction, so poll for its receipt.
+                const timeout = receiptDeadline - Date.now()
+                if (timeout <= 0) throw broadcastError
                 try {
                   receipt = await waitForTransactionReceipt(client, {
                     checkReplacement: false,
                     hash: finalHash,
-                    timeout: Math.max(deadline - Date.now(), client.pollingInterval),
+                    timeout,
                   })
                 } catch {
                   throw broadcastError
@@ -908,11 +919,12 @@ export declare namespace charge {
     allowedFeeTokens?: readonly `0x${string}`[] | undefined
     /**
      * Milliseconds to wait for a charge transaction receipt when
-     * `waitForConfirmation` is `true`. The synchronous broadcast is cut off at
-     * this deadline. If it fails with an unknown outcome (e.g. a timeout, a lost
-     * connection, or "already known"), mppx polls for the receipt until the
-     * deadline before surfacing the broadcast error. Definitive rejections fail
-     * immediately.
+     * `waitForConfirmation` is `true`. The synchronous broadcast may use at most
+     * two thirds of this budget. If it fails with an unknown outcome (e.g. a
+     * timeout, a lost connection, or "already known"), mppx polls for the
+     * receipt until the deadline, or until 2 seconds after the transaction's
+     * `validBefore`, before surfacing the broadcast error. Definitive rejections
+     * fail immediately.
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
