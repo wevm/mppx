@@ -277,6 +277,7 @@ describe('preparePayment', () => {
       snapshots.push(response)
     })
     mppx.onCredentialCreated(({ response }) => {
+      if (!response) throw new Error('Missing payment response context')
       snapshots.push(response)
     })
     const prepared = await mppx.preparePayment(response, {
