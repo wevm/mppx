@@ -1469,6 +1469,7 @@ describe('Fetch.from: 402 retry path', () => {
     [200, ['payment.response']],
     [201, ['payment.response']],
     [400, []],
+    [403, []],
     [404, []],
     [500, ['payment.failed']],
     [502, ['payment.failed']],
@@ -1510,6 +1511,30 @@ describe('Fetch.from: 402 retry path', () => {
       })
       expect(failure.response?.status).toBe(status)
     }
+  })
+
+  test('does not report a 403 credential replay as an unknown outcome', async () => {
+    const replayed = new Errors.CredentialReplayedError()
+    const events: string[] = []
+    const eventDispatcher = Fetch.createEventDispatcher()
+    eventDispatcher.on('*', (event) => {
+      events.push(event.name)
+    })
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: async (_input, init) =>
+        new Headers(init?.headers).has('Authorization')
+          ? Response.json(replayed.toProblemDetails(), { status: replayed.status })
+          : make402(),
+      methods: [noopMethod],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(403)
+    expect(response.headers.has('WWW-Authenticate')).toBe(false)
+    expect(await response.json()).toMatchObject({ status: 403 })
+    expect(events).toEqual(['challenge.received', 'credential.created'])
   })
 
   test.each([
