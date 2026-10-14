@@ -32,15 +32,6 @@ export type ChargeContext = {
   mode?: Methods.ChargeMode | undefined
 }
 
-/** Default `validBefore` window for expiring-nonce charge transactions. */
-const validBeforeSeconds = 25
-/** Maximum number of challenges whose credentials are cached per charge client. */
-const maxCachedCredentials = 256
-
-type CreateCredentialParameters = Parameters<
-  Method.CreateCredentialFn<typeof Methods.charge, ChargeContext>
->[0]
-
 const chargeContextSchema = z.object({
   account: z.optional(z.custom<ChargeContext['account']>()),
   autoSwap: z.optional(z.custom<ChargeContext['autoSwap']>()),
@@ -79,9 +70,8 @@ export function charge(parameters: charge.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
-  const signOnce = createCredentialCache()
 
-  return Method.toClient(Methods.charge, {
+  const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
     canHandleChallenge({ challenge }) {
       try {
@@ -93,288 +83,239 @@ export function charge(parameters: charge.Parameters = {}) {
     },
     context: chargeContextSchema,
 
-    // Sign each challenge at most once per signer, so a repeated challenge cannot
-    // yield two independently settleable transactions.
-    async createCredential(options) {
-      // Enforce client policy before returning a cached credential, too.
-      assertChallengePolicy(parameters, caps, options.challenge.request)
-      const account = options.context?.account ?? parameters.account
-      const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase()
-      return signOnce(`${signer ?? ''}:${options.challenge.id}`, () =>
-        createChargeCredential(options),
-      )
-    },
-  })
+    async createCredential({ challenge, context }) {
+      assertChallengePolicy(parameters, caps, challenge.request)
+      // Sign on the pinned chain when the challenge omits a chain ID.
+      const challengeChainId = challenge.request.methodDetails?.chainId
+      const resolvedChainId =
+        challengeChainId ??
+        parameters.expectedChainId ??
+        (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined)
+      const client = await getClient({ chainId: resolvedChainId })
+      Client.assertChainId(client, resolvedChainId)
+      const chainId = resolvedChainId ?? client.chain?.id
+      Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
+      if (chainId === undefined)
+        throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
-  /** Signs a charge credential, returning it with the transaction's `validBefore`. */
-  async function createChargeCredential({
-    challenge,
-    context,
-  }: CreateCredentialParameters): Promise<{ credential: string; validBefore: number }> {
-    // Sign on the pinned chain when the challenge omits a chain ID.
-    const challengeChainId = challenge.request.methodDetails?.chainId
-    const resolvedChainId =
-      challengeChainId ??
-      parameters.expectedChainId ??
-      (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined)
-    const client = await getClient({ chainId: resolvedChainId })
-    Client.assertChainId(client, resolvedChainId)
-    const chainId = resolvedChainId ?? client.chain?.id
-    Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
-    if (chainId === undefined)
-      throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
-
-    const { request } = challenge
-    const { amount, methodDetails } = request
-    const supportedModes = (methodDetails?.supportedModes as
-      | readonly Methods.ChargeMode[]
-      | undefined) ?? ['pull', 'push']
-    const defaultAccount = getAccount(client, context)
-    const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
-      (await parameters.resolveAccount?.({
-        account: defaultAccount,
-        chainId,
-        operation,
-      })) ?? defaultAccount
-
-    // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
-    if (BigInt(amount) === 0n) {
-      const account = await resolveAccount({ kind: 'signPaymentProof' })
-      const signature = await signTypedData(client, {
-        account,
-        // `account` here is the signing account; the proof's bound payer is
-        // `account.address` (echoed in the credential `source` below).
-        ...Proof.typedData({
-          account: account.address,
+      const { request } = challenge
+      const { amount, methodDetails } = request
+      const supportedModes = (methodDetails?.supportedModes as
+        | readonly Methods.ChargeMode[]
+        | undefined) ?? ['pull', 'push']
+      const defaultAccount = getAccount(client, context)
+      const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
+        (await parameters.resolveAccount?.({
+          account: defaultAccount,
           chainId,
-          challengeId: challenge.id,
-          realm: challenge.realm,
-        }),
-      })
-      return {
-        credential: Credential.serialize({
+          operation,
+        })) ?? defaultAccount
+
+      // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
+      if (BigInt(amount) === 0n) {
+        const account = await resolveAccount({ kind: 'signPaymentProof' })
+        const signature = await signTypedData(client, {
+          account,
+          // `account` here is the signing account; the proof's bound payer is
+          // `account.address` (echoed in the credential `source` below).
+          ...Proof.typedData({
+            account: account.address,
+            chainId,
+            challengeId: challenge.id,
+            realm: challenge.realm,
+          }),
+        })
+        return Credential.serialize({
           challenge,
           payload: { signature, type: 'proof' },
           source: Proof.proofSource({ address: account.address, chainId }),
-        }),
-        validBefore: getValidBefore(challenge.expires),
-      }
-    }
-
-    const currency = request.currency as Address
-    const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency })
-    const memo = Attribution.encode({
-      challengeId: challenge.id,
-      clientId,
-      serverId: challenge.realm,
-    })
-    const transfers = Charge_internal.getTransfers({
-      amount,
-      methodDetails: {
-        ...methodDetails,
-        memo,
-      },
-      recipient: request.recipient as Address,
-    })
-    const transferCalls = transfers.map((transfer): AccountResolution.ResolveAccountCall =>
-      Actions.token.transfer.call(client, {
-        amount: BigInt(transfer.amount),
-        ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
-        to: transfer.recipient as Address,
-        token: currency,
-      }),
-    )
-
-    const autoSwap = AutoSwap.resolve(
-      context?.autoSwap ?? parameters.autoSwap,
-      AutoSwap.defaultCurrencies,
-    )
-    const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
-
-    const machineTokenCandidate = machineTokenEnabled
-      ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
-      : undefined
-    let account = defaultAccount
-    let machineTokenRoute: typeof machineTokenCandidate
-    if (machineTokenCandidate) {
-      const machineTokenAccount = await (async () => {
-        try {
-          return await resolveAccount({
-            calls: machineTokenCandidate.calls,
-            kind: 'executeCalls',
-          })
-        } catch {
-          // A machine-token route is optional. A scoped account that cannot
-          // execute it may still be able to satisfy the direct payment.
-          return undefined
-        }
-      })()
-      if (machineTokenAccount) {
-        machineTokenRoute = await MachineTokenCharge.findRoute(client, {
-          account: machineTokenAccount.address,
-          chainId,
-          currency,
-          transfers,
         })
-        if (machineTokenRoute) account = machineTokenAccount
       }
-    }
 
-    let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
-    if (!machineTokenRoute) {
-      account = await resolveAccount({
-        kind: 'executeCalls',
-        ...(autoSwap ? {} : { calls: transferCalls }),
+      const currency = request.currency as Address
+      const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency })
+      const memo = Attribution.encode({
+        challengeId: challenge.id,
+        clientId,
+        serverId: challenge.realm,
       })
-      swapCalls = autoSwap
-        ? await AutoSwap.findCalls(client, {
-            account: account.address,
-            amountOut: BigInt(amount),
-            tokenOut: currency,
-            tokenIn: autoSwap.tokenIn,
-            slippage: autoSwap.slippage,
-          })
-        : undefined
-    }
+      const transfers = Charge_internal.getTransfers({
+        amount,
+        methodDetails: {
+          ...methodDetails,
+          memo,
+        },
+        recipient: request.recipient as Address,
+      })
+      const transferCalls = transfers.map((transfer): AccountResolution.ResolveAccountCall =>
+        Actions.token.transfer.call(client, {
+          amount: BigInt(transfer.amount),
+          ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
+          to: transfer.recipient as Address,
+          token: currency,
+        }),
+      )
 
-    const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
-    const allowedFeeTokens = defaultFeeTokens(chainId)
-    const feeToken =
-      machineTokenRoute || isMachineTokenCurrency
-        ? await resolveFeeToken({
-            account: account.address,
-            allowedTokens: allowedFeeTokens,
-            candidateTokens: allowedFeeTokens,
-            client,
-            prioritizeCandidates: true,
-          })
-        : undefined
+      const autoSwap = AutoSwap.resolve(
+        context?.autoSwap ?? parameters.autoSwap,
+        AutoSwap.defaultCurrencies,
+      )
+      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
-    const mode = (() => {
-      const explicitMode = context?.mode ?? parameters.mode
-      if (explicitMode) {
-        if (!supportedModes.includes(explicitMode))
-          throw new Error(`Challenge does not support ${explicitMode} mode.`)
-        return explicitMode
+      const machineTokenCandidate = machineTokenEnabled
+        ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
+        : undefined
+      let account = defaultAccount
+      let machineTokenRoute: typeof machineTokenCandidate
+      if (machineTokenCandidate) {
+        const machineTokenAccount = await (async () => {
+          try {
+            return await resolveAccount({
+              calls: machineTokenCandidate.calls,
+              kind: 'executeCalls',
+            })
+          } catch {
+            // A machine-token route is optional. A scoped account that cannot
+            // execute it may still be able to satisfy the direct payment.
+            return undefined
+          }
+        })()
+        if (machineTokenAccount) {
+          machineTokenRoute = await MachineTokenCharge.findRoute(client, {
+            account: machineTokenAccount.address,
+            chainId,
+            currency,
+            transfers,
+          })
+          if (machineTokenRoute) account = machineTokenAccount
+        }
       }
 
-      const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull'
-      if (supportedModes.includes(preferredMode)) return preferredMode
-      return supportedModes[0]!
-    })()
-
-    const validBefore = getValidBefore(challenge.expires)
-
-    if (mode === 'push') {
-      const { receipts } =
-        account.type === 'local'
-          ? {
-              receipts: [
-                await sendTransactionSync(client, {
-                  account,
-                  calls,
-                  ...(feeToken ? { feeToken } : {}),
-                  nonceKey: 'expiring',
-                  validBefore,
-                } as never),
-              ],
-            }
-          : await sendCallsSync(client, {
-              account,
-              ...(feeToken ? { capabilities: { feeToken } } : {}),
-              calls: calls as never,
-              experimental_fallback: calls.length === 1,
-              forceAtomic: calls.length > 1,
+      let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
+      if (!machineTokenRoute) {
+        account = await resolveAccount({
+          kind: 'executeCalls',
+          ...(autoSwap ? {} : { calls: transferCalls }),
+        })
+        swapCalls = autoSwap
+          ? await AutoSwap.findCalls(client, {
+              account: account.address,
+              amountOut: BigInt(amount),
+              tokenOut: currency,
+              tokenIn: autoSwap.tokenIn,
+              slippage: autoSwap.slippage,
             })
-      const hash = receipts?.[0]?.transactionHash
-      if (!hash) throw new Error('No transaction receipt returned.')
-      return {
-        credential: Credential.serialize({
+          : undefined
+      }
+
+      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
+      const allowedFeeTokens = defaultFeeTokens(chainId)
+      const feeToken =
+        machineTokenRoute || isMachineTokenCurrency
+          ? await resolveFeeToken({
+              account: account.address,
+              allowedTokens: allowedFeeTokens,
+              candidateTokens: allowedFeeTokens,
+              client,
+              prioritizeCandidates: true,
+            })
+          : undefined
+
+      const mode = (() => {
+        const explicitMode = context?.mode ?? parameters.mode
+        if (explicitMode) {
+          if (!supportedModes.includes(explicitMode))
+            throw new Error(`Challenge does not support ${explicitMode} mode.`)
+          return explicitMode
+        }
+
+        const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull'
+        if (supportedModes.includes(preferredMode)) return preferredMode
+        return supportedModes[0]!
+      })()
+
+      const validBefore = (() => {
+        const defaultExpiry = Math.floor(Date.now() / 1000) + 25
+        if (!challenge.expires) return defaultExpiry
+        // `validBefore` is an exclusive whole-second bound, so cap at the second
+        // after a (possibly fractional) expiry to stay valid as long as the challenge.
+        const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000) + 1
+        return Math.min(defaultExpiry, challengeExpiry)
+      })()
+
+      if (mode === 'push') {
+        const { receipts } =
+          account.type === 'local'
+            ? {
+                receipts: [
+                  await sendTransactionSync(client, {
+                    account,
+                    calls,
+                    ...(feeToken ? { feeToken } : {}),
+                    nonceKey: 'expiring',
+                    validBefore,
+                  } as never),
+                ],
+              }
+            : await sendCallsSync(client, {
+                account,
+                ...(feeToken ? { capabilities: { feeToken } } : {}),
+                calls: calls as never,
+                experimental_fallback: calls.length === 1,
+                forceAtomic: calls.length > 1,
+              })
+        const hash = receipts?.[0]?.transactionHash
+        if (!hash) throw new Error('No transaction receipt returned.')
+        return Credential.serialize({
           challenge,
           payload: { hash, type: 'hash' },
           source: Proof.proofSource({ address: account.address, chainId }),
-        }),
-        validBefore,
+        })
       }
-    }
 
-    const prepared = await prepareTransactionRequest(client, {
-      account,
-      calls,
-      ...(feeToken ? { feeToken } : {}),
-      nonceKey: 'expiring',
-      validBefore,
-    } as never)
-    // Estimate before enabling fee-payer mode so Tempo includes sender
-    // signature and access-key verification costs in the gas budget.
-    prepared.gas = (prepared.gas ?? 0n) + 5_000n
-    if (methodDetails?.feePayer) {
-      const sponsored = prepared as Record<string, unknown>
-      delete sponsored.feePayerSignature
-      delete sponsored.feeToken
-      sponsored.feePayer = true
-    }
-    const signature = await signTransaction(client, prepared as never)
+      const prepared = await prepareTransactionRequest(client, {
+        account,
+        calls,
+        ...(feeToken ? { feeToken } : {}),
+        nonceKey: 'expiring',
+        validBefore,
+      } as never)
+      // Estimate before enabling fee-payer mode so Tempo includes sender
+      // signature and access-key verification costs in the gas budget.
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      if (methodDetails?.feePayer) {
+        const sponsored = prepared as Record<string, unknown>
+        delete sponsored.feePayerSignature
+        delete sponsored.feeToken
+        sponsored.feePayer = true
+      }
+      const signature = await signTransaction(client, prepared as never)
 
-    return {
-      credential: Credential.serialize({
+      return Credential.serialize({
         challenge,
         payload: { signature, type: 'transaction' },
         source: Proof.proofSource({ address: account.address, chainId }),
-      }),
-      validBefore,
+      })
+    },
+  })
+
+  // Share an in-flight signing so concurrent calls for one challenge cannot yield
+  // two independently settleable transactions. Settled signings are not reused.
+  const signing = new Map<string, Promise<string>>()
+  const createCredential: typeof method.createCredential = async (options) => {
+    // Enforce client policy on every call, including ones joining a signing.
+    assertChallengePolicy(parameters, caps, options.challenge.request)
+    const account = options.context?.account ?? parameters.account
+    const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase()
+    const key = `${signer ?? ''}:${options.challenge.id}`
+    let promise = signing.get(key)
+    if (!promise) {
+      promise = method.createCredential(options).finally(() => signing.delete(key))
+      signing.set(key, promise)
     }
+    return promise
   }
-}
-
-/**
- * Returns an expiring-nonce `validBefore` capped at the challenge expiry.
- *
- * `validBefore` is an exclusive whole-second bound, so the cap is the second
- * after the (possibly fractional) expiry. The transaction then stays valid for
- * as long as the challenge does.
- */
-function getValidBefore(expires: string | undefined): number {
-  const validBefore = Math.floor(Date.now() / 1000) + validBeforeSeconds
-  if (!expires) return validBefore
-  const challengeExpiry = Math.floor(new Date(expires).getTime() / 1000)
-  if (!Number.isFinite(challengeExpiry)) return validBefore
-  return Math.min(validBefore, challengeExpiry + 1)
-}
-
-/**
- * Caches credentials by signer and challenge. Repeated and concurrent calls share
- * one credential until its transaction's `validBefore` passes, after which the
- * transaction can no longer settle. Failed attempts are not cached.
- */
-function createCredentialCache() {
-  type Entry = { expiresAt?: number | undefined; promise: Promise<string> }
-  const entries = new Map<string, Entry>()
-
-  return (key: string, create: () => Promise<{ credential: string; validBefore: number }>) => {
-    const now = Date.now()
-    for (const [k, entry] of entries)
-      if (entry.expiresAt !== undefined && entry.expiresAt <= now) entries.delete(k)
-
-    const cached = entries.get(key)
-    if (cached) return cached.promise
-
-    const entry: Entry = {
-      promise: create().then(
-        ({ credential, validBefore }) => {
-          entry.expiresAt = validBefore * 1000
-          return credential
-        },
-        (error) => {
-          if (entries.get(key) === entry) entries.delete(key)
-          throw error
-        },
-      ),
-    }
-    entries.set(key, entry)
-    if (entries.size > maxCachedCredentials) entries.delete(entries.keys().next().value as string)
-    return entry.promise
-  }
+  return { ...method, createCredential }
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
