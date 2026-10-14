@@ -66,10 +66,10 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
 
   return Method.toClient(Methods.charge, {
-    // Skip over-cap offers during selection so an affordable offer can be chosen.
+    // Skip offers that violate client policy so an acceptable offer can be chosen.
     canHandleChallenge({ challenge }) {
       try {
-        assertAmountCaps(caps, String(challenge.request.amount))
+        assertChallengePolicy(parameters, caps, challenge.request as ChargeRequest)
         return true
       } catch {
         return false
@@ -78,19 +78,9 @@ export function charge(parameters: charge.Parameters = {}) {
     context: chargeContextSchema,
 
     async createCredential({ challenge, context }) {
-      // Chain pinning: reject a challenge whose chain ID conflicts with the
-      // pinned one, and sign on the pin when the challenge omits a chain ID.
+      assertChallengePolicy(parameters, caps, challenge.request)
+      // Sign on the pinned chain when the challenge omits a chain ID.
       const challengeChainId = challenge.request.methodDetails?.chainId
-      if (
-        parameters.expectedChainId !== undefined &&
-        challengeChainId !== undefined &&
-        challengeChainId !== parameters.expectedChainId
-      )
-        throw new Error(
-          `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`,
-        )
-      if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
-        Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
       const resolvedChainId =
         challengeChainId ??
         parameters.expectedChainId ??
@@ -114,21 +104,6 @@ export function charge(parameters: charge.Parameters = {}) {
           chainId,
           operation,
         })) ?? defaultAccount
-
-      if (parameters.expectedRecipients) {
-        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
-        if (!request.recipient || !allowed.has(request.recipient.toLowerCase()))
-          throw new Error(`Unexpected primary recipient: ${request.recipient}`)
-        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
-        if (splits) {
-          for (const split of splits) {
-            if (!allowed.has(split.recipient.toLowerCase()))
-              throw new Error(`Unexpected split recipient: ${split.recipient}`)
-          }
-        }
-      }
-
-      assertAmountCaps(caps, amount)
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -330,11 +305,45 @@ function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefi
   return parseUnits(maxAmount, decimals)
 }
 
-/** Rejects a base-unit charge amount above the configured spend caps. */
-function assertAmountCaps(
+type ChargeRequest = z.output<typeof Methods.charge.schema.request>
+
+/**
+ * Rejects a challenge whose chain, recipients, or amount violate the client policy.
+ * Runs during challenge selection and again before any client, account, or signing work.
+ */
+function assertChallengePolicy(
+  parameters: charge.Parameters,
   caps: { maxAmount: bigint | undefined; maxAtomicAmount: bigint | undefined },
-  amount: string,
+  request: ChargeRequest,
 ) {
+  const { amount, methodDetails, recipient } = request
+
+  // Chain pinning: reject a challenge whose chain ID conflicts with the pinned one.
+  const challengeChainId = methodDetails?.chainId
+  if (
+    parameters.expectedChainId !== undefined &&
+    challengeChainId !== undefined &&
+    challengeChainId !== parameters.expectedChainId
+  )
+    throw new Error(
+      `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`,
+    )
+  if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
+    Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
+
+  if (parameters.expectedRecipients) {
+    const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+    if (!recipient || !allowed.has(recipient.toLowerCase()))
+      throw new Error(`Unexpected primary recipient: ${recipient}`)
+    const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
+    if (splits) {
+      for (const split of splits) {
+        if (!allowed.has(split.recipient.toLowerCase()))
+          throw new Error(`Unexpected split recipient: ${split.recipient}`)
+      }
+    }
+  }
+
   if (caps.maxAtomicAmount !== undefined && BigInt(amount) > caps.maxAtomicAmount)
     throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
   if (caps.maxAmount !== undefined && BigInt(amount) > caps.maxAmount)

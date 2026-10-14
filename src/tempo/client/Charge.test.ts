@@ -1281,47 +1281,6 @@ describe('amount cap', () => {
     else expect(create).not.toThrow()
   })
 
-  test.each([
-    {
-      name: 'atomic cap skips an over-cap offer',
-      options: { maxAtomicAmount: '1000000' },
-      amounts: ['2', '0.5'],
-      selected: '500000',
-    },
-    {
-      name: 'atomic cap rejects all over-cap offers',
-      options: { maxAtomicAmount: '1000000' },
-      amounts: ['2', '3'],
-      selected: undefined,
-    },
-    {
-      name: 'display cap skips an over-cap offer',
-      options: { decimals: 6, maxAmount: '1' },
-      amounts: ['2', '0.5'],
-      selected: '500000',
-    },
-    {
-      name: 'display cap rejects all over-cap offers',
-      options: { decimals: 6, maxAmount: '1' },
-      amounts: ['2', '3'],
-      selected: undefined,
-    },
-  ])('$name during selection', async ({ options, amounts, selected }) => {
-    const mppx = Mppx.create({ methods: [charge({ account, ...options })], polyfill: false })
-    const challenges = amounts.map((amount, index) => ({
-      ...createChallenge({ amount }),
-      id: `offer-${index}`,
-    }))
-    const prepared = mppx.preparePayment(
-      new Response(null, {
-        headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
-        status: 402,
-      }),
-    )
-    if (selected) expect((await prepared).challenge.request.amount).toBe(selected)
-    else await expect(prepared).rejects.toThrow('No method found for challenges')
-  })
-
   test('accepts zero-amount proofs under a zero cap', async () => {
     const signer = { ...account }
     const signTypedData = vi.spyOn(signer, 'signTypedData')
@@ -1334,6 +1293,83 @@ describe('amount cap', () => {
     const credential = await method.createCredential({ challenge: createChallenge(), context: {} })
     expect(Credential.deserialize(credential).payload).toMatchObject({ type: 'proof' })
     expect(signTypedData).toHaveBeenCalledOnce()
+  })
+})
+
+describe('challenge selection policy', () => {
+  test.each([
+    {
+      name: 'atomic cap skips an over-cap offer',
+      options: { maxAtomicAmount: '1000000' },
+      offers: [{ amount: '2' }, { amount: '0.5' }],
+      selected: 1,
+    },
+    {
+      name: 'atomic cap rejects all over-cap offers',
+      options: { maxAtomicAmount: '1000000' },
+      offers: [{ amount: '2' }, { amount: '3' }],
+      selected: undefined,
+    },
+    {
+      name: 'display cap skips an over-cap offer',
+      options: { decimals: 6, maxAmount: '1' },
+      offers: [{ amount: '2' }, { amount: '0.5' }],
+      selected: 1,
+    },
+    {
+      name: 'display cap rejects all over-cap offers',
+      options: { decimals: 6, maxAmount: '1' },
+      offers: [{ amount: '2' }, { amount: '3' }],
+      selected: undefined,
+    },
+    {
+      name: 'recipient allowlist skips a disallowed primary recipient',
+      options: { expectedRecipients: [recipient] },
+      offers: [{ recipient: currency }, { recipient }],
+      selected: 1,
+    },
+    {
+      name: 'recipient allowlist skips a disallowed split recipient',
+      options: { expectedRecipients: [recipient] },
+      offers: [{ amount: '1', splits: [{ recipient: currency, amount: '0.1' }] }, { amount: '1' }],
+      selected: 1,
+    },
+    {
+      name: 'recipient allowlist rejects all disallowed offers',
+      options: { expectedRecipients: [recipient] },
+      offers: [{ recipient: currency }, { recipient: currency }],
+      selected: undefined,
+    },
+    {
+      name: 'chain pin skips a mismatched chain',
+      options: { expectedChainId: 42431 },
+      offers: [{ chainId: 4217 }, { chainId: 42431 }],
+      selected: 1,
+    },
+    {
+      name: 'chain allowlist rejects all disallowed chains',
+      options: { allowedChainIds: [4217] },
+      offers: [{ chainId: 42431 }, { chainId: 1 }],
+      selected: undefined,
+    },
+  ])('$name', async ({ options, offers, selected }) => {
+    const mppx = Mppx.create({
+      methods: [charge({ account, ...(options as charge.Parameters) })],
+      polyfill: false,
+    })
+    const challenges = offers.map((offer, index) => ({
+      ...createChallenge(offer),
+      id: `offer-${index}`,
+    }))
+    const prepared = mppx.preparePayment(
+      new Response(null, {
+        headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
+        status: 402,
+      }),
+    )
+    if (selected === undefined)
+      await expect(prepared).rejects.toThrow('No method found for challenges')
+    else expect((await prepared).challenge.id).toBe(`offer-${selected}`)
   })
 })
 
