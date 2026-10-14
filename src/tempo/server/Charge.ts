@@ -550,6 +550,7 @@ export function charge<const parameters extends charge.Parameters>(
         details: validated.details,
         intent: 'charge',
         method: 'tempo',
+        payer: validated.details.sender,
         request: context.resolvedRequest,
         source: credential.source,
       }

@@ -443,6 +443,50 @@ describe('tempo', () => {
     })
   })
 
+  describe('payer', () => {
+    test.each([
+      { mode: 'push', type: 'hash' },
+      { mode: 'pull', type: 'transaction' },
+    ] as const)('exposes the sender on payment success for $type credentials', async ({ mode }) => {
+      const payers: (string | undefined)[] = []
+      const payerServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => client,
+            onPaymentSuccess: ({ payer }) => void payers.push(payer),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      payerServer.onPaymentSuccess(({ payer }) => void payers.push(payer))
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [tempo_client({ account: accounts[1], mode, getClient: () => client })],
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          payerServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      try {
+        const response = await mppx.fetch(httpServer.url)
+        expect(response.status).toBe(200)
+        expect(payers.map((payer) => payer?.toLowerCase())).toEqual([
+          accounts[1].address.toLowerCase(),
+          accounts[1].address.toLowerCase(),
+        ])
+      } finally {
+        httpServer.close()
+      }
+    })
+  })
+
   describe('intent: charge; type: hash', () => {
     test('default', async () => {
       const mppx = Mppx_client.create({

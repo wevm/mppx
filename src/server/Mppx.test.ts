@@ -1731,6 +1731,59 @@ describe('server events', () => {
     expect(result.reference).toBe('tx-error')
   })
 
+  test.each([
+    { name: 'validate reports a payer', payer: '0x00000000000000000000000000000000000000aa' },
+    { name: 'validate omits a payer', payer: undefined },
+    { name: 'legacy verify', payer: undefined, legacy: true },
+  ])('payment success exposes the verified payer: $name', async ({ payer, legacy }) => {
+    const contexts: { payer?: string | undefined }[] = []
+    const serverMethod = legacy
+      ? Method.toServer(eventCharge, {
+          onPaymentSuccess: (context) => void contexts.push(context),
+          async verify() {
+            return receipt('tx-payer')
+          },
+        })
+      : Method.toServer(eventCharge, {
+          onPaymentSuccess: (context) => void contexts.push(context),
+          async validate({ credential, request }) {
+            return {
+              challenge: credential.challenge,
+              credential,
+              details: {},
+              intent: 'charge',
+              method: 'mock',
+              ...(payer !== undefined && { payer }),
+              request,
+            }
+          },
+          async broadcast() {
+            return receipt('tx-payer')
+          },
+        })
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+    handler.onPaymentSuccess((context) => void contexts.push(context))
+    const handle = handler.charge(options())
+
+    const first = await handle(new Request('https://example.com/resource'))
+    if (first.status !== 402) throw new Error('expected payment challenge')
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'valid' },
+    })
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    await handler.broadcastCredential(credential, { request: options() })
+
+    expect(contexts).toHaveLength(4)
+    expect(contexts.map((context) => context.payer)).toEqual(Array(4).fill(payer))
+    expect(contexts.every((context) => 'payer' in context)).toBe(payer !== undefined)
+  })
+
   test('emits payment failure from standalone verifyCredential failures', async () => {
     const events: string[] = []
     const capturedRequest = {

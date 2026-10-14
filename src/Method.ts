@@ -173,6 +173,14 @@ export type Validation<method extends Method = Method, details = unknown> = Read
   /** The validated payment method, repeated for convenient dispatch. */
   method: method['name']
   /**
+   * Payer identity established by method-specific validation, when the method
+   * can determine one (for example, the Tempo address that sent the payment).
+   *
+   * Unlike `source`, this is derived from the verified credential payload.
+   * Its format is method-specific.
+   */
+  payer?: string | undefined
+  /**
    * The validated method request after the method's schema transforms.
    *
    * For `Mppx.validateCredential()` with route options, this is the
@@ -250,6 +258,8 @@ export type OnPaymentSuccessFn<method extends Method> = (parameters: {
       >
     | undefined
   input?: globalThis.Request
+  /** Payer identity verified by the method, when available. See {@link Validation.payer}. */
+  payer?: string | undefined
   receipt: DeepReadonly<Receipt.Receipt>
   /** Canonical payment request included in the challenge. */
   request: DeepReadonly<z.output<method['schema']['request']>>
