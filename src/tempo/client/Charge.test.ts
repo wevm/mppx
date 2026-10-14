@@ -1036,7 +1036,7 @@ describe('tempo.charge client', () => {
       ...(expires ? { expires } : {}),
     })
 
-    async function setup() {
+    async function setup(options: Partial<Parameters<typeof charge>[0]> = {}) {
       vi.resetModules()
       let signings = 0
       const signTransaction = vi.fn(async () => `0x76${(signings++).toString(16).padStart(4, '0')}`)
@@ -1052,7 +1052,7 @@ describe('tempo.charge client', () => {
         chain: { ...tempoLocalnet, id: 42431 },
         transport: http('http://127.0.0.1'),
       })
-      const method = chargeWithMockedActions({ account, getClient: () => client })
+      const method = chargeWithMockedActions({ account, getClient: () => client, ...options })
       return { method, signTransaction }
     }
 
@@ -1123,6 +1123,26 @@ describe('tempo.charge client', () => {
       await method.createCredential({ challenge: challenge('cached', expires), context: {} })
 
       expect(signTransaction).toHaveBeenCalledTimes(signings)
+    })
+
+    test('enforces client policy before returning a cached credential', async () => {
+      const { method, signTransaction } = await setup({ expectedRecipients: [recipient] })
+      await method.createCredential({ challenge: challenge(), context: {} })
+
+      const redirected = challenge()
+      await expect(
+        method.createCredential({
+          challenge: {
+            ...redirected,
+            request: {
+              ...redirected.request,
+              recipient: '0x4444444444444444444444444444444444444444',
+            },
+          },
+          context: {},
+        }),
+      ).rejects.toThrow('Unexpected primary recipient')
+      expect(signTransaction).toHaveBeenCalledOnce()
     })
 
     test('does not cache a failed signing', async () => {
