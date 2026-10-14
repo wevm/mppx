@@ -53,6 +53,11 @@ const chargeContextSchema = z.object({
  */
 export function charge(parameters: charge.Parameters = {}) {
   const { clientId } = parameters
+  const caps = {
+    maxAmount: parseMaxAmount(parameters.maxAmount, parameters.decimals),
+    maxAtomicAmount:
+      parameters.maxAtomicAmount === undefined ? undefined : BigInt(parameters.maxAtomicAmount),
+  }
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -64,7 +69,7 @@ export function charge(parameters: charge.Parameters = {}) {
     // Skip over-cap offers during selection so an affordable offer can be chosen.
     canHandleChallenge({ challenge }) {
       try {
-        assertAmountCaps(parameters, String(challenge.request.amount))
+        assertAmountCaps(caps, String(challenge.request.amount))
         return true
       } catch {
         return false
@@ -123,7 +128,7 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
-      assertAmountCaps(parameters, amount)
+      assertAmountCaps(caps, amount)
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -312,20 +317,28 @@ export function charge(parameters: charge.Parameters = {}) {
   })
 }
 
-/** Rejects a base-unit charge amount above the configured spend caps. */
-function assertAmountCaps(parameters: charge.Parameters, amount: string) {
-  if (
-    parameters.maxAtomicAmount !== undefined &&
-    BigInt(amount) > BigInt(parameters.maxAtomicAmount)
-  )
-    throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
+/** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
+function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefined) {
+  if (maxAmount === undefined) return undefined
+  if (decimals === undefined) throw new Error('Tempo charge maxAmount requires currency decimals.')
+  // `parseUnits` rounds excess fractional digits, which could loosen the cap.
+  const fraction = maxAmount.split('.')[1]?.replace(/0+$/, '') ?? ''
+  if (fraction.length > decimals)
+    throw new Error(
+      `Tempo charge maxAmount ${maxAmount} has more fractional digits than ${decimals} decimals allow.`,
+    )
+  return parseUnits(maxAmount, decimals)
+}
 
-  if (parameters.maxAmount !== undefined) {
-    if (parameters.decimals === undefined)
-      throw new Error('Tempo charge maxAmount requires currency decimals.')
-    if (BigInt(amount) > parseUnits(parameters.maxAmount, parameters.decimals))
-      throw new Error('Tempo charge amount exceeds maxAmount.')
-  }
+/** Rejects a base-unit charge amount above the configured spend caps. */
+function assertAmountCaps(
+  caps: { maxAmount: bigint | undefined; maxAtomicAmount: bigint | undefined },
+  amount: string,
+) {
+  if (caps.maxAtomicAmount !== undefined && BigInt(amount) > caps.maxAtomicAmount)
+    throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
+  if (caps.maxAmount !== undefined && BigInt(amount) > caps.maxAmount)
+    throw new Error('Tempo charge amount exceeds maxAmount.')
 }
 
 export declare namespace charge {
@@ -368,9 +381,11 @@ export declare namespace charge {
     decimals?: number | undefined
     /**
      * Maximum display-unit amount (e.g. `'1.5'`) the client is willing to pay per
-     * charge, parsed with `decimals`. Compared against the challenge amount, which
-     * includes splits; larger challenges are rejected before signing. Applies per
-     * credential, not cumulatively across payment retries.
+     * charge, parsed with `decimals`. Values with more fractional digits than
+     * `decimals` are rejected rather than rounded. Compared against the challenge
+     * amount, which includes splits; larger offers are skipped during selection and
+     * rejected before signing. Applies per credential, not cumulatively across
+     * payment retries.
      */
     maxAmount?: string | undefined
     /**

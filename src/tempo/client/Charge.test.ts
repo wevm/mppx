@@ -1207,7 +1207,6 @@ describe('amount cap', () => {
       options: { decimals: 6, maxAmount: '0.999999' },
       error: displayError,
     },
-    { name: 'display cap without decimals', options: { maxAmount: '2' }, error: decimalsError },
     {
       name: 'atomic cap with passing display cap',
       options: { decimals: 6, maxAmount: '2', maxAtomicAmount: '999999' },
@@ -1262,6 +1261,24 @@ describe('amount cap', () => {
       vi.doUnmock('viem/actions')
       vi.resetModules()
     }
+  })
+
+  test.each([
+    { name: 'display cap without decimals', options: { maxAmount: '2' }, error: decimalsError },
+    {
+      name: 'display cap finer than decimals',
+      options: { decimals: 6, maxAmount: '1.0000005' },
+      error: 'Tempo charge maxAmount 1.0000005 has more fractional digits than 6 decimals allow.',
+    },
+    {
+      name: 'display cap with trailing zeros',
+      options: { decimals: 6, maxAmount: '1.0000000' },
+      error: undefined,
+    },
+  ])('$name at config time', ({ options, error }) => {
+    const create = () => charge({ account, ...options })
+    if (error) expect(create).toThrow(error)
+    else expect(create).not.toThrow()
   })
 
   test.each([
