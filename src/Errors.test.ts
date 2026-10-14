@@ -157,23 +157,25 @@ describe('CredentialReplayedError', () => {
       {
         "message": "Payment verification failed: Credential has already been used.",
         "name": "CredentialReplayedError",
-        "status": 402,
+        "status": 403,
         "type": "https://paymentauth.org/problems/verification-failed",
       }
     `)
   })
 
-  test.each(['Transaction hash has already been used', 'Proof credential has already been used'])(
-    'matches VerificationFailedError problem details: %s',
-    (reason) => {
-      const error = new CredentialReplayedError({ reason })
+  test.each([
+    'Transaction hash has already been used',
+    'Proof credential has already been used',
+    'memo is not bound to this challenge',
+  ])('differs from VerificationFailedError problem details only in status: %s', (reason) => {
+    const error = new CredentialReplayedError({ reason })
 
-      expect(error).toBeInstanceOf(VerificationFailedError)
-      expect(error.toProblemDetails('challenge-id')).toEqual(
-        new VerificationFailedError({ reason }).toProblemDetails('challenge-id'),
-      )
-    },
-  )
+    expect(error).toBeInstanceOf(VerificationFailedError)
+    expect(error.toProblemDetails('challenge-id')).toEqual({
+      ...new VerificationFailedError({ reason }).toProblemDetails('challenge-id'),
+      status: 403,
+    })
+  })
 })
 
 describe('InternalPaymentError', () => {

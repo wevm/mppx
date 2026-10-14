@@ -1479,33 +1479,32 @@ function assertChallengeBoundMemo(
   matchedLogs: readonly TransferLog[],
   parameters: { challengeId: string; realm: string },
 ) {
-  assertChallengeBoundMemos(
-    matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined)),
-    parameters,
-  )
+  const memos = matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined))
+  // The transfer already settled to the recipient, so another payment would not help.
+  if (!isChallengeBound(memos, parameters))
+    throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
 }
 
 function assertChallengeBoundCallMemo(
   matchedCalls: readonly { memo?: string | undefined }[],
   parameters: { challengeId: string; realm: string },
 ) {
-  assertChallengeBoundMemos(
-    matchedCalls.map((call) => call.memo as `0x${string}` | undefined),
-    parameters,
-  )
+  const memos = matchedCalls.map((call) => call.memo as `0x${string}` | undefined)
+  if (!isChallengeBound(memos, parameters))
+    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
 /**
- * Requires a challenge-bound attribution memo and rejects conflicting attribution
- * on matched payment transfers. Otherwise, a split payment could authorize another
+ * Whether matched payment transfers carry a challenge-bound attribution memo and
+ * no conflicting attribution. Otherwise, a split payment could authorize another
  * challenge after the first challenge's replay marker expires. Unmatched transfers
  * cannot establish the binding; plain transfers and non-MPP memos remain allowed.
  * @internal
  */
-function assertChallengeBoundMemos(
+function isChallengeBound(
   memos: readonly (`0x${string}` | undefined)[],
   parameters: { challengeId: string; realm: string },
-) {
+): boolean {
   let bound = false
   for (const memo of memos) {
     if (!memo || !Attribution.isMppMemo(memo)) continue
@@ -1513,15 +1512,10 @@ function assertChallengeBoundMemos(
       !Attribution.verifyServer(memo, parameters.realm) ||
       !Attribution.verifyChallengeBinding(memo, parameters.challengeId)
     )
-      throw new MismatchError(
-        'Payment verification failed: memo is not bound to this challenge.',
-        {},
-      )
+      return false
     bound = true
   }
-
-  if (!bound)
-    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
+  return bound
 }
 
 /** @internal */

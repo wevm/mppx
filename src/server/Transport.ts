@@ -173,6 +173,17 @@ export function http(options: http.Options = {}): Http {
     async respondChallenge(options) {
       const { challenge, error, input } = options
 
+      // A 403 means the payment was valid but cannot pay for this request.
+      // Omit the challenge so clients do not pay again.
+      if (error?.status === 403)
+        return new Response(JSON.stringify(error.toProblemDetails()), {
+          status: error.status,
+          headers: {
+            'Cache-Control': 'no-store',
+            'Content-Type': 'application/problem+json',
+          },
+        })
+
       if (options.html && new URL(input.url).searchParams.has(Html.params.serviceWorker))
         return new Response(serviceWorker, {
           status: 200,

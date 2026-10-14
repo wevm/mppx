@@ -166,7 +166,7 @@ test.each([
   expect(replay).toBeInstanceOf(Errors.CredentialReplayedError)
   expect(replay).toMatchObject({
     message: 'Payment verification failed: Transaction hash has already been used.',
-    status: 402,
+    status: 403,
     type: 'https://paymentauth.org/problems/verification-failed',
   })
   expect(calls.filter((method) => method === 'eth_sendRawTransactionSync')).toHaveLength(1)

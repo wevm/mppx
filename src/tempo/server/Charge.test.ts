@@ -751,7 +751,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -828,7 +829,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -997,7 +999,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1072,7 +1075,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1441,7 +1445,8 @@ describe('tempo', () => {
           const replay = await fetch(httpServer.url, {
             headers: { Authorization: canonicalCredential },
           })
-          expect(replay.status).toBe(402)
+          expect(replay.status).toBe(403)
+          expect(replay.headers.has('WWW-Authenticate')).toBe(false)
           expect(broadcastTransactions).toHaveLength(1)
         } finally {
           httpServer.close()
@@ -1518,7 +1523,8 @@ describe('tempo', () => {
         const collision = await fetch(httpServer.url, {
           headers: { Authorization: rawCredential },
         })
-        expect(collision.status).toBe(402)
+        expect(collision.status).toBe(403)
+        expect(collision.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await collision.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
 
@@ -1528,7 +1534,8 @@ describe('tempo', () => {
         const replay = await fetch(httpServer.url, {
           headers: { Authorization: rawCredential },
         })
-        expect(replay.status).toBe(402)
+        expect(replay.status).toBe(403)
+        expect(replay.headers.has('WWW-Authenticate')).toBe(false)
         expect(broadcastTransactions).toEqual([canonicalTransaction])
       } finally {
         httpServer.close()
@@ -1807,7 +1814,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(replayCredential) },
       })
-      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.status).toBe(403)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Transaction hash has already been used.')
 
@@ -1951,7 +1959,10 @@ describe('tempo', () => {
         fetch(httpServer.url, { headers: { Authorization: credential2 } }),
       ])
 
-      expect([resA.status, resB.status].sort()).toEqual([200, 402])
+      expect([resA.status, resB.status].sort()).toEqual([200, 403])
+      expect([resA, resB].find((res) => res.status === 403)!.headers.has('WWW-Authenticate')).toBe(
+        false,
+      )
 
       httpServer.close()
     })
@@ -4329,7 +4340,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.status).toBe(403)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Proof credential has already been used.')
 
@@ -4393,7 +4405,10 @@ describe('tempo', () => {
         fetch(httpServer.url, { headers: { Authorization: credential } }),
       ])
 
-      expect([resA.status, resB.status].sort()).toEqual([200, 402])
+      expect([resA.status, resB.status].sort()).toEqual([200, 403])
+      expect([resA, resB].find((res) => res.status === 403)!.headers.has('WWW-Authenticate')).toBe(
+        false,
+      )
 
       httpServer.close()
     })
@@ -4472,7 +4487,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(`${httpServer.url}/b`, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.status).toBe(403)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Proof credential has already been used.')
 
@@ -6442,7 +6458,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
@@ -6500,7 +6517,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
@@ -6544,7 +6562,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
@@ -6644,7 +6663,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(402)
+        expect(response.status).toBe(403)
+        expect(response.headers.has('WWW-Authenticate')).toBe(false)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('memo is not bound to this challenge')
       }

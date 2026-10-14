@@ -153,11 +153,17 @@ export declare namespace VerificationFailedError {
 }
 
 /**
- * Credential was already used. Shares the verification-failed status and
- * problem type, so the response is unchanged.
+ * The payment behind a credential is already used or bound elsewhere: the
+ * credential was consumed by an earlier request, is being settled by a
+ * concurrent one, or its settled transfer is bound to another challenge.
+ *
+ * Answered with 403 and no challenge (the payment was valid, but policy
+ * denies access), since a fresh 402 challenge would invite an auto-paying
+ * client to pay again. The problem type stays `verification-failed`.
  */
 export class CredentialReplayedError extends VerificationFailedError {
   override readonly name = 'CredentialReplayedError'
+  override readonly status = 403
 
   constructor(options: CredentialReplayedError.Options = {}) {
     const { reason = 'Credential has already been used' } = options

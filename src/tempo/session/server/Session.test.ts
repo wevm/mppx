@@ -2709,7 +2709,8 @@ describe('precompile server session unit guardrails', () => {
       expect((await bootstrapResponse(route, authorization)).status).toBe(204)
       const replay = await bootstrapResponse(route, authorization)
 
-      expect(replay.status).toBe(402)
+      expect(replay.status).toBe(403)
+      expect(replay.headers.has('WWW-Authenticate')).toBe(false)
       expect(resolveChannelId).toHaveBeenCalledOnce()
     })
   })

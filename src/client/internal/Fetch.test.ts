@@ -1,6 +1,10 @@
 import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
 import { evm, tempo } from 'mppx/client'
-import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import {
+  Mppx as Mppx_server,
+  tempo as tempo_server,
+  Transport as Transport_server,
+} from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { Base64 } from 'ox'
 import type { Account } from 'viem'
@@ -2050,6 +2054,51 @@ describe('Fetch.from: 402 retry path', () => {
     expect(
       calls.slice(1).map((call) => new Headers(call.init?.headers).get('Authorization')),
     ).toEqual(['credential-first', 'credential-second', 'credential-third'])
+  })
+
+  test.each([
+    {
+      name: 'replayed credential',
+      error: new Errors.CredentialReplayedError({
+        reason: 'Transaction hash has already been used',
+      }),
+      status: 403,
+      payments: 1,
+    },
+    {
+      name: 'memo bound to another challenge',
+      error: new Errors.CredentialReplayedError({ reason: 'memo is not bound to this challenge' }),
+      status: 403,
+      payments: 1,
+    },
+    {
+      name: 'verification failure',
+      error: new Errors.VerificationFailedError({ reason: 'amount mismatch' }),
+      status: 402,
+      payments: 3,
+    },
+  ])('does not pay again after a final $status ($name)', async ({ error, status, payments }) => {
+    const createCredential = vi.fn(async () => 'credential')
+    const transport = Transport_server.http()
+    let requests = 0
+    const mockFetch: typeof globalThis.fetch = async (input) => {
+      requests++
+      if (requests === 1) return make402({ id: 'first' })
+      return transport.respondChallenge({
+        challenge: Challenge.fromResponse(make402({ id: `retry-${requests}` })),
+        error,
+        input: new Request(input as string),
+      })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(status)
+    expect(createCredential).toHaveBeenCalledTimes(payments)
   })
 
   test('invalidates a prepared credential across a generic challenge', async () => {

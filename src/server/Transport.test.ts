@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vp/test'
 
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 import {
+  CredentialReplayedError,
   InternalPaymentError,
   InvalidPayloadError,
   MalformedCredentialError,
@@ -405,6 +406,50 @@ describe('http', () => {
       const body = await response.json()
       expect(body.type).toBe('https://paymentauth.org/problems/session/channel-finalized')
       expect(body.status).toBe(410)
+    })
+
+    test.each([
+      {
+        name: 'verification failure',
+        error: new VerificationFailedError({ reason: 'amount mismatch' }),
+        status: 402,
+        challenged: true,
+      },
+      {
+        name: 'replayed credential',
+        error: new CredentialReplayedError({ reason: 'Transaction hash has already been used' }),
+        status: 403,
+        challenged: false,
+      },
+      {
+        name: 'memo bound to another challenge',
+        error: new CredentialReplayedError({ reason: 'memo is not bound to this challenge' }),
+        status: 403,
+        challenged: false,
+      },
+    ])('$name returns $status (challenged=$challenged)', async ({ error, status, challenged }) => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', { headers: { Accept: 'text/html' } })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        error,
+        html: {
+          config: {},
+          content: '<script src="/pay.js"></script>',
+          formatAmount: () => '$10.00',
+          text: undefined,
+          theme: undefined,
+        },
+      })
+
+      expect(response.status).toBe(status)
+      expect(response.headers.has('WWW-Authenticate')).toBe(challenged)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      if (challenged) return
+      expect(response.headers.get('Content-Type')).toBe('application/problem+json')
+      expect(await response.json()).toEqual(error.toProblemDetails())
     })
   })
 
