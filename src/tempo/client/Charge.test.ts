@@ -1108,7 +1108,13 @@ describe('tempo.charge client', () => {
       { label: 'evicted after expiry', expires: at(base + 10.5), elapsed: 11, signings: 2 },
       { label: 'kept in window', expires: undefined, elapsed: 24, signings: 1 },
       { label: 'evicted after window', expires: undefined, elapsed: 25, signings: 2 },
-    ])('expires entries with the challenge: $label', async ({ expires, elapsed, signings }) => {
+      {
+        label: 'evicted after window before expiry',
+        expires: at(base + 60),
+        elapsed: 25,
+        signings: 2,
+      },
+    ])('expires entries with the transaction: $label', async ({ expires, elapsed, signings }) => {
       const { method, signTransaction } = await setup()
       vi.useFakeTimers({ now: base * 1000, toFake: ['Date'] })
 

@@ -240,12 +240,7 @@ export function charge(parameters: charge.Parameters = {}) {
         return supportedModes[0]!
       })()
 
-      const validBefore = (() => {
-        const defaultExpiry = Math.floor(Date.now() / 1000) + validBeforeSeconds
-        const challengeExpiry = expiryBound(challenge.expires)
-        if (challengeExpiry === undefined) return defaultExpiry
-        return Math.min(defaultExpiry, challengeExpiry)
-      })()
+      const validBefore = getValidBefore(challenge.expires)
 
       if (mode === 'push') {
         const { receipts } =
@@ -318,21 +313,24 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 /**
- * Returns the second after a (possibly fractional) challenge expiry, if any.
+ * Returns an expiring-nonce `validBefore` capped at the challenge expiry.
  *
- * `validBefore` is an exclusive whole-second bound, so capping it here keeps a
- * transaction valid for as long as its challenge.
+ * `validBefore` is an exclusive whole-second bound, so the cap is the second
+ * after the (possibly fractional) expiry. The transaction then stays valid for
+ * as long as the challenge does.
  */
-function expiryBound(expires: string | undefined): number | undefined {
-  if (!expires) return undefined
-  const seconds = Math.floor(new Date(expires).getTime() / 1000)
-  return Number.isFinite(seconds) ? seconds + 1 : undefined
+function getValidBefore(expires: string | undefined): number {
+  const validBefore = Math.floor(Date.now() / 1000) + validBeforeSeconds
+  if (!expires) return validBefore
+  const challengeExpiry = Math.floor(new Date(expires).getTime() / 1000)
+  if (!Number.isFinite(challengeExpiry)) return validBefore
+  return Math.min(validBefore, challengeExpiry + 1)
 }
 
 /**
  * Caches credentials by signer and challenge. Repeated and concurrent calls share
- * one credential until the challenge expires (or, without an expiry, until the
- * default `validBefore` window closes). Failed attempts are not cached.
+ * one credential until its transaction's `validBefore` passes, after which the
+ * transaction can no longer settle. Failed attempts are not cached.
  */
 function createCredentialCache() {
   type Entry = { expiresAt?: number | undefined; promise: Promise<string> }
@@ -349,9 +347,8 @@ function createCredentialCache() {
     const entry: Entry = {
       promise: create().then(
         (credential) => {
-          const bound = expiryBound(expires)
-          entry.expiresAt =
-            bound === undefined ? Date.now() + validBeforeSeconds * 1000 : bound * 1000
+          // Computed after signing, so it never precedes the transaction's own.
+          entry.expiresAt = getValidBefore(expires) * 1000
           return credential
         },
         (error) => {
