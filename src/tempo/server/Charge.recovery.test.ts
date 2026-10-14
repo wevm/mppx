@@ -62,6 +62,7 @@ test.each([
   { name: 'local deadline', sponsored: false, outcome: 'pending', error: 'hang' },
   { name: 'local deadline missing', sponsored: false, outcome: 'missing', error: 'hang' },
   { name: 'expired', sponsored: false, outcome: 'expired', error: alreadyKnown },
+  { name: 'expired mined', sponsored: false, outcome: 'expired-mined', error: alreadyKnown },
   { name: 'expiring', sponsored: false, outcome: 'expiring', error: alreadyKnown },
   { name: 'method not found', sponsored: false, outcome: 'rejected', error: methodNotFound },
   { name: 'invalid params', sponsored: false, outcome: 'rejected', error: invalidParams },
@@ -76,7 +77,7 @@ test.each([
   const currency = '0x20c0000000000000000000000000000000000001'
   const otherHash = `0x${'12'.repeat(32)}` as const
   // Expiry cases use a long budget so `validBefore` bounds the receipt wait instead.
-  const expiry = outcome === 'expired' || outcome === 'expiring'
+  const expiry = outcome === 'expired' || outcome === 'expired-mined' || outcome === 'expiring'
   const confirmationTimeoutMs = expiry ? 10_000 : 200
   const calls: string[] = []
   const lookupHashes: string[] = []
@@ -106,7 +107,8 @@ test.each([
             else throw error
           } else if (method === 'eth_getTransactionReceipt') {
             lookupHashes.push(params[0])
-            if (outcome === 'missing' || expiry) return null
+            if (outcome === 'missing' || outcome === 'expired' || outcome === 'expiring')
+              return null
             if (outcome === 'pending' && lookupHashes.length < 3) return null
             if (outcome === 'lookup-error') throw new Error('Lookup unavailable')
           } else throw new Error(`Unexpected RPC method: ${method}`)
@@ -195,13 +197,18 @@ test.each([
     nonce: 0,
     validBefore:
       Math.floor(Date.now() / 1_000) +
-      (outcome === 'expired' ? -3 : outcome === 'expiring' ? 1 : 25),
+      (outcome === 'expired' || outcome === 'expired-mined' ? -3 : outcome === 'expiring' ? 1 : 25),
   })
   const credential = Credential.serialize(
     Credential.from({ challenge, payload: { signature, type: 'transaction' } }),
   )
 
-  if (outcome === 'included' || outcome === 'pending' || outcome === 'normal') {
+  if (
+    outcome === 'included' ||
+    outcome === 'pending' ||
+    outcome === 'normal' ||
+    outcome === 'expired-mined'
+  ) {
     const receipt = await server.broadcastCredential(credential)
     expect(receipt).toMatchObject({ status: 'success', reference: finalHash! })
     expect(onPaymentSuccess).toHaveBeenCalledOnce()
@@ -209,7 +216,8 @@ test.each([
     outcome === 'missing' ||
     outcome === 'lookup-error' ||
     outcome === 'rejected' ||
-    expiry
+    outcome === 'expired' ||
+    outcome === 'expiring'
   ) {
     const started = Date.now()
     const thrown = (await server.broadcastCredential(credential).catch((e) => e)) as BaseError
@@ -222,9 +230,10 @@ test.each([
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   }
   expect(syncParams[1]).toBe(Math.floor((confirmationTimeoutMs * 2) / 3))
-  const polled = outcome !== 'normal' && outcome !== 'rejected' && outcome !== 'expired'
+  const polled = outcome !== 'normal' && outcome !== 'rejected'
   expect(new Set(lookupHashes)).toEqual(new Set(polled ? [finalHash!] : []))
   if (outcome === 'pending') expect(lookupHashes).toHaveLength(3)
+  if (outcome === 'expired' || outcome === 'expired-mined') expect(lookupHashes).toHaveLength(1)
   if (sponsored) expect(finalHash!).not.toBe(keccak256(signature))
   await expect(server.broadcastCredential(credential)).rejects.toThrow(
     'Transaction hash has already been used',

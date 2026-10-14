@@ -797,14 +797,12 @@ export function charge<const parameters extends charge.Parameters>(
               const start = Date.now()
               // The sync send gets at most 2/3 of the budget, reserving the rest for recovery.
               const sendTimeoutMs = Math.floor((confirmationTimeoutMs * 2) / 3)
-              // Receipt polling stops at the deadline, or once an expiring transaction
-              // can no longer be included.
-              const receiptDeadline = Math.min(
-                start + confirmationTimeoutMs,
+              const deadline = start + confirmationTimeoutMs
+              // An expiring transaction can no longer be included after this point.
+              const validUntil =
                 transaction.validBefore === undefined
                   ? Number.POSITIVE_INFINITY
-                  : transaction.validBefore * 1_000 + 2_000,
-              )
+                  : transaction.validBefore * 1_000 + 2_000
               let receipt: TransactionReceipt
               try {
                 receipt = await withDeadline(
@@ -818,17 +816,24 @@ export function charge<const parameters extends charge.Parameters>(
               } catch (broadcastError) {
                 if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
                 // The node may have accepted the transaction, so poll for its receipt.
-                const timeout = receiptDeadline - Date.now()
-                if (timeout <= 0) throw broadcastError
-                try {
-                  receipt = await waitForTransactionReceipt(client, {
+                const timeout = Math.min(deadline, validUntil) - Date.now()
+                let recovered: TransactionReceipt | undefined
+                if (timeout > 0)
+                  recovered = await waitForTransactionReceipt(client, {
                     checkReplacement: false,
                     hash: finalHash,
                     timeout,
-                  })
-                } catch {
-                  throw broadcastError
-                }
+                  }).catch(() => undefined)
+                // When the validity cap ends polling, a transaction mined just before
+                // `validBefore` may only now be visible, so look it up exactly once more.
+                if (!recovered && validUntil < deadline)
+                  recovered = await withDeadline(
+                    getTransactionReceipt(client, { hash: finalHash }),
+                    Math.max(deadline, Date.now() + client.pollingInterval),
+                    broadcastError,
+                  ).catch(() => undefined)
+                if (!recovered) throw broadcastError
+                receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
@@ -923,8 +928,8 @@ export declare namespace charge {
      * two thirds of this budget. If it fails with an unknown outcome (e.g. a
      * timeout, a lost connection, or "already known"), mppx polls for the
      * receipt until the deadline, or until 2 seconds after the transaction's
-     * `validBefore`, before surfacing the broadcast error. Definitive rejections
-     * fail immediately.
+     * `validBefore` followed by one final lookup, before surfacing the broadcast
+     * error. Definitive rejections fail immediately.
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
@@ -1539,7 +1544,7 @@ function isAmbiguousBroadcastError(error: unknown): boolean {
 async function withDeadline<value>(
   promise: Promise<value>,
   deadline: number,
-  error: Error,
+  error: unknown,
 ): Promise<value> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
