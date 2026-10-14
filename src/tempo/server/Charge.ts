@@ -277,7 +277,20 @@ export function charge<const parameters extends charge.Parameters>(
       challengeId: challenge.id,
       realm: challenge.realm,
     })
-    return { receipt, sender, transfers }
+    // The payer is the account the matched transfers debited, not the submitter.
+    // Settlement-contract transfers are funded by the transaction sender.
+    const payers = new Set(
+      matchedLogs.map(({ args }) =>
+        (settlementSenders.some((settlementSender) =>
+          TempoAddress.isEqual(settlementSender, args.from),
+        )
+          ? receipt.from
+          : args.from
+        ).toLowerCase(),
+      ),
+    )
+    const payer = payers.size === 1 ? [...payers][0] : undefined
+    return { payer, receipt, sender, transfers }
   }
 
   async function validateProofCredential(
@@ -401,7 +414,7 @@ export function charge<const parameters extends charge.Parameters>(
   ) {
     switch (context.payload.type) {
       case 'hash': {
-        const { receipt, sender, transfers } = await validateHashCredential(
+        const { payer, receipt, sender, transfers } = await validateHashCredential(
           credential,
           context.payload,
           context,
@@ -409,6 +422,7 @@ export function charge<const parameters extends charge.Parameters>(
         return {
           details: { mode: 'push' as const, sender, transfers },
           hash: context.payload.hash as `0x${string}`,
+          payer,
           receipt,
           type: 'hash' as const,
         }
@@ -416,7 +430,11 @@ export function charge<const parameters extends charge.Parameters>(
 
       case 'proof': {
         const { sender } = await validateProofCredential(credential, context.payload, context)
-        return { details: { mode: 'proof' as const, sender }, type: 'proof' as const }
+        return {
+          details: { mode: 'proof' as const, sender },
+          payer: sender,
+          type: 'proof' as const,
+        }
       }
 
       case 'transaction': {
@@ -437,6 +455,7 @@ export function charge<const parameters extends charge.Parameters>(
           },
           fundingCurrency,
           isFeePayerTx,
+          payer: transaction.from as `0x${string}`,
           serializedTransaction,
           settlementSenders,
           transaction,
@@ -550,7 +569,7 @@ export function charge<const parameters extends charge.Parameters>(
         details: validated.details,
         intent: 'charge',
         method: 'tempo',
-        payer: validated.details.sender,
+        payer: validated.payer,
         request: context.resolvedRequest,
         source: credential.source,
       }

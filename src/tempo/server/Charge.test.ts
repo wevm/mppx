@@ -203,6 +203,44 @@ function machineTokenReceipt(parameters: {
   }
 }
 
+function transferReceipt(parameters: {
+  from: Hex.Hex
+  hash: Hex.Hex
+  transfers: readonly { amount: bigint; from: Hex.Hex; memo: Hex.Hex; to: Hex.Hex }[]
+}) {
+  const blockHash = `0x${'ef'.repeat(32)}` as const
+  return {
+    blockHash,
+    blockNumber: '0x1',
+    contractAddress: null,
+    cumulativeGasUsed: '0x1',
+    effectiveGasPrice: '0x1',
+    from: parameters.from,
+    gasUsed: '0x1',
+    logs: parameters.transfers.map(({ amount, from, memo, to }, index) => ({
+      address: asset,
+      blockHash,
+      blockNumber: '0x1',
+      data: encodeAbiParameters([{ type: 'uint256' }], [amount]),
+      logIndex: `0x${index.toString(16)}`,
+      removed: false,
+      topics: encodeEventTopics({
+        abi: Abis.tip20,
+        args: { from, memo, to },
+        eventName: 'TransferWithMemo',
+      }),
+      transactionHash: parameters.hash,
+      transactionIndex: '0x0',
+    })),
+    logsBloom: `0x${'00'.repeat(256)}`,
+    status: '0x1',
+    to: asset,
+    transactionHash: parameters.hash,
+    transactionIndex: '0x0',
+    type: '0x76',
+  }
+}
+
 type ProofAccessKeyContext = {
   accessKey: ReturnType<typeof Account.fromSecp256k1>
   rootAccount: (typeof accounts)[number]
@@ -485,6 +523,61 @@ describe('tempo', () => {
         httpServer.close()
       }
     })
+    test.each([
+      { name: 'direct', submitter: 1, senders: [1, 1], payer: 1 },
+      { name: 'relayed', submitter: 2, senders: [1, 1], payer: 1 },
+      { name: 'mixed-sender', submitter: 1, senders: [1, 2], payer: undefined },
+    ] as const)(
+      'reports the debited account for $name hash credentials',
+      async ({ payer, senders, submitter }) => {
+        const hash = `0x${'ab'.repeat(32)}` as const
+        let receipt: ReturnType<typeof transferReceipt> | undefined
+        const receiptClient = createClient({
+          chain,
+          transport: custom({
+            async request({ method }) {
+              if (method === 'eth_chainId') return `0x${chain.id.toString(16)}`
+              if (method === 'eth_getTransactionReceipt' && receipt) return receipt
+              throw new Error(`Unexpected payer test RPC method: ${method}`)
+            },
+          }),
+        })
+        const payerServer = Mppx_server.create({
+          methods: [
+            tempo_server.charge({
+              account: accounts[0],
+              currency: asset,
+              getClient: () => receiptClient,
+              validateSender: () => true,
+            }),
+          ],
+          realm,
+          secretKey,
+        })
+        const challenge = await payerServer.challenge.tempo.charge({
+          amount: '1',
+          decimals: 6,
+          splits: [{ amount: '0.2', recipient: accounts[3].address }],
+        })
+        const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+        receipt = transferReceipt({
+          from: accounts[submitter].address,
+          hash,
+          transfers: [
+            { amount: 800_000n, from: accounts[senders[0]].address, memo, to: accounts[0].address },
+            { amount: 200_000n, from: accounts[senders[1]].address, memo, to: accounts[3].address },
+          ],
+        })
+
+        const validation = await payerServer.validateCredential(
+          Credential.from({ challenge, payload: { hash, type: 'hash' } }),
+        )
+
+        expect(validation.payer).toBe(
+          payer === undefined ? undefined : accounts[payer].address.toLowerCase(),
+        )
+      },
+    )
   })
 
   describe('intent: charge; type: hash', () => {
@@ -1657,6 +1750,10 @@ describe('tempo', () => {
         challenge,
         payload: { hash, type: 'hash' as const },
         source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+      })
+      // The settlement contract sends the final transfer; the payer is the account it swapped for.
+      await expect(relayServer.validateCredential(credential)).resolves.toMatchObject({
+        payer: accounts[1].address.toLowerCase(),
       })
       const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
       expect(receipt.reference).toBe(hash)
