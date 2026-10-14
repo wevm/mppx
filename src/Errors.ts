@@ -263,7 +263,7 @@ export class PaymentOutcomeUnknownError extends PaymentError {
   /** On-chain hash the payment will have if it settled, when derivable from the credential. */
   readonly transactionHash: string | undefined
   /** Error thrown by the paid request, when it failed without a response. */
-  override readonly cause: unknown
+  readonly cause: unknown
 
   constructor(options: PaymentOutcomeUnknownError.Options) {
     const { cause, challenge, credential, transactionHash } = options
