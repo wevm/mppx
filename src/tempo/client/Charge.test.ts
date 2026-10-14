@@ -1,4 +1,5 @@
 import { Challenge, Credential } from 'mppx'
+import { Mppx } from 'mppx/client'
 import { type Address, createClient, http, isAddressEqual } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
@@ -1261,6 +1262,47 @@ describe('amount cap', () => {
       vi.doUnmock('viem/actions')
       vi.resetModules()
     }
+  })
+
+  test.each([
+    {
+      name: 'atomic cap skips an over-cap offer',
+      options: { maxAtomicAmount: '1000000' },
+      amounts: ['2', '0.5'],
+      selected: '500000',
+    },
+    {
+      name: 'atomic cap rejects all over-cap offers',
+      options: { maxAtomicAmount: '1000000' },
+      amounts: ['2', '3'],
+      selected: undefined,
+    },
+    {
+      name: 'display cap skips an over-cap offer',
+      options: { decimals: 6, maxAmount: '1' },
+      amounts: ['2', '0.5'],
+      selected: '500000',
+    },
+    {
+      name: 'display cap rejects all over-cap offers',
+      options: { decimals: 6, maxAmount: '1' },
+      amounts: ['2', '3'],
+      selected: undefined,
+    },
+  ])('$name during selection', async ({ options, amounts, selected }) => {
+    const mppx = Mppx.create({ methods: [charge({ account, ...options })], polyfill: false })
+    const challenges = amounts.map((amount, index) => ({
+      ...createChallenge({ amount }),
+      id: `offer-${index}`,
+    }))
+    const prepared = mppx.preparePayment(
+      new Response(null, {
+        headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
+        status: 402,
+      }),
+    )
+    if (selected) expect((await prepared).challenge.request.amount).toBe(selected)
+    else await expect(prepared).rejects.toThrow('No method found for challenges')
   })
 
   test('accepts zero-amount proofs under a zero cap', async () => {

@@ -61,6 +61,15 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
 
   return Method.toClient(Methods.charge, {
+    // Skip over-cap offers during selection so an affordable offer can be chosen.
+    canHandleChallenge({ challenge }) {
+      try {
+        assertAmountCaps(parameters, String(challenge.request.amount))
+        return true
+      } catch {
+        return false
+      }
+    },
     context: chargeContextSchema,
 
     async createCredential({ challenge, context }) {
@@ -114,18 +123,7 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
-      if (
-        parameters.maxAtomicAmount !== undefined &&
-        BigInt(amount) > BigInt(parameters.maxAtomicAmount)
-      )
-        throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
-
-      if (parameters.maxAmount !== undefined) {
-        if (parameters.decimals === undefined)
-          throw new Error('Tempo charge maxAmount requires currency decimals.')
-        if (BigInt(amount) > parseUnits(parameters.maxAmount, parameters.decimals))
-          throw new Error('Tempo charge amount exceeds maxAmount.')
-      }
+      assertAmountCaps(parameters, amount)
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -312,6 +310,22 @@ export function charge(parameters: charge.Parameters = {}) {
       })
     },
   })
+}
+
+/** Rejects a base-unit charge amount above the configured spend caps. */
+function assertAmountCaps(parameters: charge.Parameters, amount: string) {
+  if (
+    parameters.maxAtomicAmount !== undefined &&
+    BigInt(amount) > BigInt(parameters.maxAtomicAmount)
+  )
+    throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
+
+  if (parameters.maxAmount !== undefined) {
+    if (parameters.decimals === undefined)
+      throw new Error('Tempo charge maxAmount requires currency decimals.')
+    if (BigInt(amount) > parseUnits(parameters.maxAmount, parameters.decimals))
+      throw new Error('Tempo charge amount exceeds maxAmount.')
+  }
 }
 
 export declare namespace charge {
