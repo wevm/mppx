@@ -32,6 +32,11 @@ export type ChargeContext = {
   mode?: Methods.ChargeMode | undefined
 }
 
+/** Default `validBefore` window for expiring-nonce charge transactions. */
+const validBeforeSeconds = 25
+/** Maximum number of challenges whose credentials are cached per charge client. */
+const maxCachedCredentials = 256
+
 const chargeContextSchema = z.object({
   account: z.optional(z.custom<ChargeContext['account']>()),
   autoSwap: z.optional(z.custom<ChargeContext['autoSwap']>()),
@@ -70,8 +75,9 @@ export function charge(parameters: charge.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
+  const signOnce = createCredentialCache()
 
-  return Method.toClient(Methods.charge, {
+  const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
     canHandleChallenge({ challenge }) {
       try {
@@ -235,11 +241,9 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       const validBefore = (() => {
-        const defaultExpiry = Math.floor(Date.now() / 1000) + 25
-        if (!challenge.expires) return defaultExpiry
-        // `validBefore` is an exclusive whole-second bound, so cap at the second
-        // after a (possibly fractional) expiry to stay valid as long as the challenge.
-        const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000) + 1
+        const defaultExpiry = Math.floor(Date.now() / 1000) + validBeforeSeconds
+        const challengeExpiry = expiryBound(challenge.expires)
+        if (challengeExpiry === undefined) return defaultExpiry
         return Math.min(defaultExpiry, challengeExpiry)
       })()
 
@@ -298,6 +302,68 @@ export function charge(parameters: charge.Parameters = {}) {
       })
     },
   })
+
+  // Sign each challenge at most once per signer, so a repeated challenge cannot
+  // yield two independently settleable transactions.
+  const createCredential: typeof method.createCredential = async (options) => {
+    // Enforce client policy before returning a cached credential, too.
+    assertChallengePolicy(parameters, caps, options.challenge.request)
+    const account = options.context?.account ?? parameters.account
+    const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase()
+    return signOnce(`${signer ?? ''}:${options.challenge.id}`, options.challenge.expires, () =>
+      method.createCredential(options),
+    )
+  }
+  return { ...method, createCredential }
+}
+
+/**
+ * Returns the second after a (possibly fractional) challenge expiry, if any.
+ *
+ * `validBefore` is an exclusive whole-second bound, so capping it here keeps a
+ * transaction valid for as long as its challenge.
+ */
+function expiryBound(expires: string | undefined): number | undefined {
+  if (!expires) return undefined
+  const seconds = Math.floor(new Date(expires).getTime() / 1000)
+  return Number.isFinite(seconds) ? seconds + 1 : undefined
+}
+
+/**
+ * Caches credentials by signer and challenge. Repeated and concurrent calls share
+ * one credential until the challenge expires (or, without an expiry, until the
+ * default `validBefore` window closes). Failed attempts are not cached.
+ */
+function createCredentialCache() {
+  type Entry = { expiresAt?: number | undefined; promise: Promise<string> }
+  const entries = new Map<string, Entry>()
+
+  return (key: string, expires: string | undefined, create: () => Promise<string>) => {
+    const now = Date.now()
+    for (const [k, entry] of entries)
+      if (entry.expiresAt !== undefined && entry.expiresAt <= now) entries.delete(k)
+
+    const cached = entries.get(key)
+    if (cached) return cached.promise
+
+    const entry: Entry = {
+      promise: create().then(
+        (credential) => {
+          const bound = expiryBound(expires)
+          entry.expiresAt =
+            bound === undefined ? Date.now() + validBeforeSeconds * 1000 : bound * 1000
+          return credential
+        },
+        (error) => {
+          if (entries.get(key) === entry) entries.delete(key)
+          throw error
+        },
+      ),
+    }
+    entries.set(key, entry)
+    if (entries.size > maxCachedCredentials) entries.delete(entries.keys().next().value as string)
+    return entry.promise
+  }
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */

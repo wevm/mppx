@@ -4,7 +4,7 @@ import { type Address, createClient, http, isAddressEqual } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
 import { Account, Addresses, Secp256k1 } from 'viem/tempo'
-import { describe, expect, test, vi } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
@@ -550,13 +550,16 @@ describe('tempo.charge client', () => {
 
       hasMachineTokens = false
       await method.createCredential({
-        challenge: createChallenge({
-          amount: '1',
-          chainId,
-          feePayer: true,
-          machineTokenEnabled: true,
-          supportedModes: ['pull', 'push'],
-        }),
+        challenge: {
+          ...createChallenge({
+            amount: '1',
+            chainId,
+            feePayer: true,
+            machineTokenEnabled: true,
+            supportedModes: ['pull', 'push'],
+          }),
+          id: 'second-challenge-id',
+        },
         context: {},
       })
       expect(findAutoSwapCalls).toHaveBeenCalledOnce()
@@ -1021,6 +1024,123 @@ describe('tempo.charge client', () => {
         vi.doUnmock('viem/actions')
         vi.resetModules()
       }
+    })
+  })
+
+  describe('credential cache', () => {
+    const base = 1_800_000_000
+    const at = (seconds: number) => new Date(seconds * 1000).toISOString()
+    const challenge = (id = 'cached', expires?: string) => ({
+      ...createChallenge({ amount: '1', chainId: 42431, supportedModes: ['pull'] }),
+      id,
+      ...(expires ? { expires } : {}),
+    })
+
+    async function setup() {
+      vi.resetModules()
+      let signings = 0
+      const signTransaction = vi.fn(async () => `0x76${(signings++).toString(16).padStart(4, '0')}`)
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest: vi.fn(async () => ({})),
+        sendCallsSync: vi.fn(),
+        signTransaction,
+        signTypedData: vi.fn(),
+      }))
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: 42431 },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({ account, getClient: () => client })
+      return { method, signTransaction }
+    }
+
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    })
+
+    test.each([{ concurrent: false }, { concurrent: true }])(
+      'signs the same challenge once (concurrent: $concurrent)',
+      async ({ concurrent }) => {
+        const { method, signTransaction } = await setup()
+        const create = () => method.createCredential({ challenge: challenge(), context: {} })
+
+        const [first, second] = concurrent
+          ? await Promise.all([create(), create()])
+          : [await create(), await create()]
+
+        expect(signTransaction).toHaveBeenCalledOnce()
+        expect(second).toBe(first)
+      },
+    )
+
+    test.each([
+      { change: 'challenge', context: {}, id: 'other' },
+      {
+        change: 'signer',
+        context: {
+          account: privateKeyToAccount(
+            '0x0000000000000000000000000000000000000000000000000000000000000002',
+          ),
+        },
+        id: 'cached',
+      },
+    ])('signs a different $change again', async ({ context, id }) => {
+      const { method, signTransaction } = await setup()
+
+      const first = await method.createCredential({ challenge: challenge(), context: {} })
+      const second = await method.createCredential({ challenge: challenge(id), context })
+
+      expect(signTransaction).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    })
+
+    test.each([
+      {
+        label: 'kept through fractional expiry',
+        expires: at(base + 10.5),
+        elapsed: 10.9,
+        signings: 1,
+      },
+      { label: 'evicted after expiry', expires: at(base + 10.5), elapsed: 11, signings: 2 },
+      { label: 'kept in window', expires: undefined, elapsed: 24, signings: 1 },
+      { label: 'evicted after window', expires: undefined, elapsed: 25, signings: 2 },
+    ])('expires entries with the challenge: $label', async ({ expires, elapsed, signings }) => {
+      const { method, signTransaction } = await setup()
+      vi.useFakeTimers({ now: base * 1000, toFake: ['Date'] })
+
+      await method.createCredential({ challenge: challenge('cached', expires), context: {} })
+      vi.setSystemTime((base + elapsed) * 1000)
+      await method.createCredential({ challenge: challenge('cached', expires), context: {} })
+
+      expect(signTransaction).toHaveBeenCalledTimes(signings)
+    })
+
+    test('does not cache a failed signing', async () => {
+      const { method, signTransaction } = await setup()
+      signTransaction.mockRejectedValueOnce(new Error('rpc down'))
+
+      await expect(
+        method.createCredential({ challenge: challenge(), context: {} }),
+      ).rejects.toThrow('rpc down')
+      await method.createCredential({ challenge: challenge(), context: {} })
+
+      expect(signTransaction).toHaveBeenCalledTimes(2)
+    })
+
+    test('bounds the number of cached challenges', async () => {
+      const { method, signTransaction } = await setup()
+
+      for (let i = 0; i <= 256; i++)
+        await method.createCredential({ challenge: challenge(`challenge-${i}`), context: {} })
+      await method.createCredential({ challenge: challenge('challenge-256'), context: {} })
+      expect(signTransaction).toHaveBeenCalledTimes(257)
+      await method.createCredential({ challenge: challenge('challenge-0'), context: {} })
+
+      expect(signTransaction).toHaveBeenCalledTimes(258)
     })
   })
 
