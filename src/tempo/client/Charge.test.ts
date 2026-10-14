@@ -15,6 +15,7 @@ const account = privateKeyToAccount(
 )
 const currency = '0x3333333333333333333333333333333333333333'
 const recipient = '0x2222222222222222222222222222222222222222'
+const otherCurrency = '0x4444444444444444444444444444444444444444'
 
 type ChargeRequest = ReturnType<typeof Methods.charge.schema.request.parse>
 
@@ -1189,6 +1190,7 @@ describe('amount cap', () => {
   const atomicError = 'Tempo charge amount exceeds maxAtomicAmount.'
   const displayError = 'Tempo charge amount exceeds maxAmount.'
   const decimalsError = 'Tempo charge maxAmount requires currency decimals.'
+  const currenciesError = 'Tempo charge maxAmount and maxAtomicAmount require currencies.'
 
   // The challenge charges 1 token (1_000_000 base units at 6 decimals).
   test.each([
@@ -1213,6 +1215,11 @@ describe('amount cap', () => {
       error: atomicError,
     },
     { name: 'no cap', options: {}, error: undefined },
+    {
+      name: 'unlisted currency',
+      options: { currencies: [otherCurrency] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
   ])('$name', async ({ options, error }) => {
     vi.resetModules()
     const prepareTransactionRequest = vi.fn(async () => ({}))
@@ -1235,7 +1242,8 @@ describe('amount cap', () => {
         account,
         getClient: () => client,
         resolveAccount,
-        ...options,
+        currencies: [currency],
+        ...(options as charge.Parameters),
       })
       const result = method.createCredential({
         challenge: createChallenge({
@@ -1264,6 +1272,16 @@ describe('amount cap', () => {
   })
 
   test.each([
+    {
+      name: 'atomic cap without currencies',
+      options: { currencies: undefined, maxAtomicAmount: '1' },
+      error: currenciesError,
+    },
+    {
+      name: 'display cap without currencies',
+      options: { currencies: undefined, decimals: 6, maxAmount: '1' },
+      error: currenciesError,
+    },
     { name: 'display cap without decimals', options: { maxAmount: '2' }, error: decimalsError },
     {
       name: 'display cap finer than decimals',
@@ -1276,7 +1294,7 @@ describe('amount cap', () => {
       error: undefined,
     },
   ])('$name at config time', ({ options, error }) => {
-    const create = () => charge({ account, ...options })
+    const create = () => charge({ account, currencies: [currency], ...options })
     if (error) expect(create).toThrow(error)
     else expect(create).not.toThrow()
   })
@@ -1289,7 +1307,12 @@ describe('amount cap', () => {
       chain: { ...tempoLocalnet, id: 42431 },
       transport: http('http://127.0.0.1'),
     })
-    const method = charge({ account: signer, getClient: () => client, maxAtomicAmount: '0' })
+    const method = charge({
+      account: signer,
+      currencies: [currency],
+      getClient: () => client,
+      maxAtomicAmount: '0',
+    })
     const credential = await method.createCredential({ challenge: createChallenge(), context: {} })
     expect(Credential.deserialize(credential).payload).toMatchObject({ type: 'proof' })
     expect(signTypedData).toHaveBeenCalledOnce()
@@ -1300,26 +1323,44 @@ describe('challenge selection policy', () => {
   test.each([
     {
       name: 'atomic cap skips an over-cap offer',
-      options: { maxAtomicAmount: '1000000' },
+      options: { currencies: [currency], maxAtomicAmount: '1000000' },
       offers: [{ amount: '2' }, { amount: '0.5' }],
       selected: 1,
     },
     {
       name: 'atomic cap rejects all over-cap offers',
-      options: { maxAtomicAmount: '1000000' },
+      options: { currencies: [currency], maxAtomicAmount: '1000000' },
       offers: [{ amount: '2' }, { amount: '3' }],
       selected: undefined,
     },
     {
       name: 'display cap skips an over-cap offer',
-      options: { decimals: 6, maxAmount: '1' },
+      options: { currencies: [currency], decimals: 6, maxAmount: '1' },
       offers: [{ amount: '2' }, { amount: '0.5' }],
       selected: 1,
     },
     {
       name: 'display cap rejects all over-cap offers',
-      options: { decimals: 6, maxAmount: '1' },
+      options: { currencies: [currency], decimals: 6, maxAmount: '1' },
       offers: [{ amount: '2' }, { amount: '3' }],
+      selected: undefined,
+    },
+    {
+      name: 'currency allowlist skips a wrong-currency offer',
+      options: { currencies: [currency], maxAtomicAmount: '1000000' },
+      offers: [
+        { amount: '0.5', currency: otherCurrency },
+        { amount: '0.5', currency },
+      ],
+      selected: 1,
+    },
+    {
+      name: 'currency allowlist rejects all wrong-currency offers',
+      options: { currencies: [currency], maxAtomicAmount: '1000000' },
+      offers: [
+        { amount: '0.5', currency: otherCurrency },
+        { amount: '0.5', currency: otherCurrency },
+      ],
       selected: undefined,
     },
     {

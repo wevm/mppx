@@ -53,6 +53,12 @@ const chargeContextSchema = z.object({
  */
 export function charge(parameters: charge.Parameters = {}) {
   const { clientId } = parameters
+  // Caps are denominated in the challenge currency, so they require a currency pin.
+  if (
+    (parameters.maxAmount !== undefined || parameters.maxAtomicAmount !== undefined) &&
+    parameters.currencies === undefined
+  )
+    throw new Error('Tempo charge maxAmount and maxAtomicAmount require currencies.')
   const caps = {
     maxAmount: parseMaxAmount(parameters.maxAmount, parameters.decimals),
     maxAtomicAmount:
@@ -308,7 +314,7 @@ function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefi
 type ChargeRequest = z.output<typeof Methods.charge.schema.request>
 
 /**
- * Rejects a challenge whose chain, recipients, or amount violate the client policy.
+ * Rejects a challenge whose chain, currency, recipients, or amount violate the client policy.
  * Runs during challenge selection and again before any client, account, or signing work.
  */
 function assertChallengePolicy(
@@ -330,6 +336,12 @@ function assertChallengePolicy(
     )
   if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
     Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
+
+  if (
+    parameters.currencies &&
+    !parameters.currencies.some((c) => c.toLowerCase() === request.currency.toLowerCase())
+  )
+    throw new Error(`Tempo charge currency is not allowed: ${request.currency}.`)
 
   if (parameters.expectedRecipients) {
     const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
@@ -384,7 +396,14 @@ export declare namespace charge {
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
-     * Decimals of the challenge currency, used to parse `maxAmount`. Required with
+     * Allowlist of TIP-20 currency addresses this client will pay in, compared
+     * case-insensitively. Offers in other currencies are skipped during selection
+     * and rejected before signing; an empty list rejects all. Required with
+     * `maxAmount` or `maxAtomicAmount`, which are denominated in the challenge currency.
+     */
+    currencies?: readonly Address[] | undefined
+    /**
+     * Decimals of the `currencies`, used to parse `maxAmount`. Required with
      * `maxAmount` because challenges do not carry currency decimals.
      */
     decimals?: number | undefined
@@ -394,13 +413,13 @@ export declare namespace charge {
      * `decimals` are rejected rather than rounded. Compared against the challenge
      * amount, which includes splits; larger offers are skipped during selection and
      * rejected before signing. Applies per credential, not cumulatively across
-     * payment retries.
+     * payment retries. Requires `currencies`.
      */
     maxAmount?: string | undefined
     /**
      * Maximum amount the client is willing to pay per charge, in raw base units of
      * the challenge currency (compared directly with the challenge `amount`).
-     * Checked like `maxAmount`.
+     * Checked like `maxAmount`. Requires `currencies`.
      */
     maxAtomicAmount?: string | undefined
     /**
