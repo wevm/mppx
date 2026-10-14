@@ -28,8 +28,15 @@ export abstract class PaymentError extends Error {
   readonly hint: string | undefined
 
   protected constructor(message: string, options: PaymentError.Options = {}) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause })
+    super(message)
     this.details = options.details
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (options.cause !== undefined)
+      Object.defineProperty(this, 'cause', {
+        configurable: true,
+        value: options.cause,
+        writable: true,
+      })
   }
 
   /** Converts the error to RFC 9457 Problem Details format. */
