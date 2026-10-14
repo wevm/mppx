@@ -91,6 +91,8 @@ export type Mppx<
   transport: transport
   /**
    * Selects a payment challenge without creating its credential.
+   * Native HTTP responses in payment events preserve status and headers only;
+   * the caller retains ownership of the original response body.
    *
    * @example
    * ```ts
@@ -835,16 +837,14 @@ function snapshotMethod<method extends Method.AnyClient>(method: method): method
 
 function snapshotResponse<response>(response: response): response {
   if (response instanceof Response) {
-    try {
-      return response.clone() as response
-    } catch {
-      // A consumed body cannot be cloned, but status and headers are sufficient for event context.
-      return new Response(null, {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      }) as response
-    }
+    if (response.body === null) return response.clone() as response
+    // Event context can outlive an SSE response. Retaining a clone would queue
+    // every chunk consumed by the caller on an unread body branch.
+    return new Response(null, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    }) as response
   }
   return snapshotValue(response)
 }

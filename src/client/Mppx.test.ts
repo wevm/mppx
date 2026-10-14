@@ -245,6 +245,64 @@ describe('preparePayment', () => {
     expect(Credential.deserialize(credential).challenge.request.amount).toBe('100')
   })
 
+  test('behavior: retained MCP preparation keeps metadata without a streaming body', async () => {
+    const { method } = paymentMethod()
+    const mppx = Mppx.create({ methods: [method], polyfill: false })
+    const challenge = paymentChallenge('stream-context')
+    const encoder = new TextEncoder()
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                jsonrpc: '2.0',
+                id: 1,
+                error: {
+                  code: Mcp.paymentRequiredCode,
+                  message: 'Payment Required',
+                  data: { challenges: [challenge] },
+                },
+              })}\n\n`,
+            ),
+          )
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream', 'x-context': 'preserved' } },
+    )
+    const snapshots: Response[] = []
+    mppx.onChallengeReceived(({ response }) => {
+      snapshots.push(response)
+    })
+    mppx.onCredentialCreated(({ response }) => {
+      snapshots.push(response)
+    })
+    const prepared = await mppx.preparePayment(response, {
+      request: {
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
+        headers: { accept: 'application/json, text/event-stream' },
+        method: 'POST',
+      },
+    })
+    const reader = response.body!.getReader()
+    await reader.read()
+    for (let index = 0; index < 8; index++) {
+      controller.enqueue(new Uint8Array(64 * 1024))
+      expect((await reader.read()).value?.byteLength).toBe(64 * 1024)
+    }
+    await prepared.createCredential()
+    expect(snapshots).toHaveLength(2)
+    for (const snapshot of snapshots) {
+      expect(snapshot.body).toBeNull()
+      expect(snapshot.status).toBe(200)
+      expect(snapshot.headers.get('x-context')).toBe('preserved')
+    }
+    controller.close()
+    await reader.cancel()
+  })
+
   test('behavior: forwards request context for MCP-over-HTTP', async () => {
     const { method } = paymentMethod()
     const mppx = Mppx.create({ methods: [method], polyfill: false })
