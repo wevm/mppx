@@ -964,6 +964,66 @@ describe('tempo.charge client', () => {
     }
   })
 
+  describe('validBefore', () => {
+    const base = 1_800_000_000
+    const at = (seconds: number) => new Date(seconds * 1000).toISOString()
+
+    test.each([
+      { label: 'no challenge expiry', now: base, expires: undefined, expected: base + 25 },
+      { label: 'expiry after the window', now: base, expires: at(base + 60), expected: base + 25 },
+      { label: 'expiry inside the window', now: base, expires: at(base + 10), expected: base + 11 },
+      { label: 'fractional expiry', now: base, expires: at(base + 10.5), expected: base + 11 },
+      { label: 'sub-second expiry', now: base + 0.2, expires: at(base + 0.5), expected: base + 1 },
+      { label: 'expiry is now', now: base + 0.5, expires: at(base + 0.5), expected: base + 1 },
+      { label: 'whole-second expiry is now', now: base, expires: at(base), expected: base + 1 },
+      {
+        label: 'millisecond expiry',
+        now: base + 0.998,
+        expires: at(base + 0.999),
+        expected: base + 1,
+      },
+    ])('caps at the challenge expiry: $label', async ({ now, expires, expected }) => {
+      vi.resetModules()
+      vi.useFakeTimers({ now: now * 1000, toFake: ['Date'] })
+      const prepareTransactionRequest = vi.fn(
+        async (_client: unknown, _parameters: Record<string, unknown>) => ({}),
+      )
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest,
+        sendCallsSync: vi.fn(),
+        signTransaction: vi.fn(async () => '0xdeadbeef'),
+        signTypedData: vi.fn(),
+      }))
+
+      try {
+        const { charge: chargeWithMockedActions } = await import('./Charge.js')
+        const client = createClient({
+          account,
+          chain: { ...tempoLocalnet, id: 42431 },
+          transport: http('http://127.0.0.1'),
+        })
+        const method = chargeWithMockedActions({ account, getClient: () => client })
+
+        await method.createCredential({
+          challenge: {
+            ...createChallenge({ amount: '1', chainId: 42431, supportedModes: ['pull'] }),
+            ...(expires ? { expires } : {}),
+          },
+          context: {},
+        })
+
+        const parameters = prepareTransactionRequest.mock.calls[0]?.[1]
+        expect(parameters).toMatchObject({ nonceKey: 'expiring', validBefore: expected })
+        // Still valid at signing time, even when the challenge expires this second.
+        expect(parameters?.validBefore).toBeGreaterThan(now)
+      } finally {
+        vi.useRealTimers()
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
+  })
+
   describe('chain pinning', () => {
     test('rejects a resolved client whose chain conflicts with the pin', async () => {
       const method = charge({ account, expectedChainId: 4217, getClient: () => client })

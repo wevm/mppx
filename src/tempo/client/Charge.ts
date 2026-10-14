@@ -237,7 +237,9 @@ export function charge(parameters: charge.Parameters = {}) {
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + 25
         if (!challenge.expires) return defaultExpiry
-        const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000)
+        // `validBefore` is an exclusive whole-second bound, so cap at the second
+        // after a (possibly fractional) expiry to stay valid as long as the challenge.
+        const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000) + 1
         return Math.min(defaultExpiry, challengeExpiry)
       })()
 
