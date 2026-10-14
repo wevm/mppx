@@ -114,6 +114,9 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
+      if (parameters.maxAmount !== undefined && BigInt(amount) > parameters.maxAmount)
+        throw new Error(`Charge amount ${amount} exceeds maxAmount ${parameters.maxAmount}.`)
+
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
         const account = await resolveAccount({ kind: 'signPaymentProof' })
@@ -334,6 +337,16 @@ export declare namespace charge {
      * recipient and every split recipient must be included in this list.
      */
     expectedRecipients?: readonly Address[] | undefined
+    /**
+     * Maximum amount this client will pay for a single charge, in base units of
+     * the challenge currency (TIP-20 tokens use 6 decimals, so `1_000_000n` is 1
+     * token). Compared against the challenge `amount`, which includes splits;
+     * challenges above the cap are rejected before any signing.
+     *
+     * The cap applies to each credential, not to the total paid across payment
+     * retries of one request.
+     */
+    maxAmount?: bigint | undefined
     /**
      * Controls how the charge transaction is submitted.
      *

@@ -1184,6 +1184,80 @@ describe('recipient allowlist', () => {
   })
 })
 
+describe('amount cap', () => {
+  test.each([
+    { name: 'below cap', maxAmount: 1_000_001n, accepted: true },
+    { name: 'equal to cap', maxAmount: 1_000_000n, accepted: true },
+    { name: 'above cap', maxAmount: 999_999n, accepted: false },
+    { name: 'zero cap', maxAmount: 0n, accepted: false },
+    { name: 'no cap', maxAmount: undefined, accepted: true },
+  ])('$name', async ({ maxAmount, accepted }) => {
+    vi.resetModules()
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      signTransaction,
+      sendCallsSync: vi.fn(),
+      signTypedData: vi.fn(),
+    }))
+    try {
+      const { charge: mockedCharge } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: 42431 },
+        transport: http('http://127.0.0.1'),
+      })
+      const resolveAccount = vi.fn(() => account)
+      const method = mockedCharge({
+        account,
+        getClient: () => client,
+        maxAmount,
+        resolveAccount,
+      })
+      const result = method.createCredential({
+        challenge: createChallenge({
+          amount: '1',
+          splits: [{ recipient: currency, amount: '0.4' }],
+          supportedModes: ['pull'],
+        }),
+        context: {},
+      })
+      if (accepted) {
+        expect(Credential.deserialize(await result).payload).toEqual({
+          signature: '0xdeadbeef',
+          type: 'transaction',
+        })
+        expect(signTransaction).toHaveBeenCalledOnce()
+      } else {
+        await expect(result).rejects.toThrow(
+          `Charge amount 1000000 exceeds maxAmount ${maxAmount}.`,
+        )
+        expect(resolveAccount).not.toHaveBeenCalled()
+        expect(prepareTransactionRequest).not.toHaveBeenCalled()
+        expect(signTransaction).not.toHaveBeenCalled()
+      }
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
+  test('accepts zero-amount proofs under a zero cap', async () => {
+    const signer = { ...account }
+    const signTypedData = vi.spyOn(signer, 'signTypedData')
+    const client = createClient({
+      account: signer,
+      chain: { ...tempoLocalnet, id: 42431 },
+      transport: http('http://127.0.0.1'),
+    })
+    const method = charge({ account: signer, getClient: () => client, maxAmount: 0n })
+    const credential = await method.createCredential({ challenge: createChallenge(), context: {} })
+    expect(Credential.deserialize(credential).payload).toMatchObject({ type: 'proof' })
+    expect(signTypedData).toHaveBeenCalledOnce()
+  })
+})
+
 describe('zero-amount recipient policy', () => {
   test.each([{ allowed: [] }, { allowed: [currency] }, { allowed: [recipient] }])(
     'enforces allowlist %j before proof signing',
