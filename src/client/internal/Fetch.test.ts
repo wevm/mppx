@@ -1540,6 +1540,40 @@ describe('Fetch.from: 402 retry path', () => {
     expect(failures[0]).toMatchObject({ credential: 'credential', transactionHash: undefined })
   })
 
+  test.each([
+    ['a network error', new TypeError('fetch failed')],
+    ['an abort', new DOMException('The operation was aborted.', 'AbortError')],
+  ])('reports %s on the paid retry and rethrows it', async (_name, cause) => {
+    const method = MethodResponse.registerTransactionHash(
+      { ...noopMethod },
+      (credential) => `hash:${credential}`,
+    )
+    let calls = 0
+    const failures: unknown[] = []
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('payment.failed', (payload) => {
+      failures.push(payload.error)
+    })
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: async () => {
+        if (++calls === 1) return make402()
+        throw cause
+      },
+      methods: [method],
+    })
+
+    await expect(fetch('https://example.com/api')).rejects.toBe(cause)
+    expect(calls).toBe(2)
+    expect(failures).toEqual([expect.any(Errors.PaymentOutcomeUnknownError)])
+    expect(failures[0]).toMatchObject({
+      cause,
+      challenge: { id: 'abc' },
+      credential: 'credential',
+      transactionHash: 'hash:credential',
+    })
+  })
+
   test('ignores empty challenge event credentials and continues handlers', async () => {
     const createCredential = vi.fn(async () => 'method-credential')
     const method = { ...noopMethod, createCredential }

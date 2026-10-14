@@ -236,6 +236,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let challenges: readonly Challenge.Challenge[] | undefined
     let mi: methods[number] | undefined
     let preparedCredential: PreparedCredential | undefined
+    // Set when the paid request throws after the credential was sent.
+    let outcomeUnknown: PaymentOutcomeUnknownError | undefined
 
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
@@ -365,18 +367,28 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
-        response = await baseFetch(paymentInput, {
-          ...transport.setCredential(
-            {
-              ...fetchInit,
-              headers: initialRequest.headers,
-            },
+        try {
+          response = await baseFetch(paymentInput, {
+            ...transport.setCredential(
+              {
+                ...fetchInit,
+                headers: initialRequest.headers,
+              },
+              credential,
+              { challenge: selectedChallenge },
+            ),
+            // Runtimes do not strip custom payment headers on cross-origin redirects.
+            redirect: 'manual',
+          })
+        } catch (cause) {
+          outcomeUnknown = new PaymentOutcomeUnknownError({
+            cause,
+            challenge: selectedChallenge,
             credential,
-            { challenge: selectedChallenge },
-          ),
-          // Runtimes do not strip custom payment headers on cross-origin redirects.
-          redirect: 'manual',
-        })
+            transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
+          })
+          throw cause
+        }
         const paymentRequired = await transport.isPaymentRequired(
           response,
           transportRequest as never,
@@ -465,7 +477,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         createPaymentFailedPayload({
           challenge,
           challenges,
-          error,
+          // Observers get the credential to reconcile; callers keep the original error.
+          error: outcomeUnknown ?? error,
           init,
           input,
           method: mi,

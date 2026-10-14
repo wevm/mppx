@@ -262,12 +262,15 @@ export class PaymentOutcomeUnknownError extends PaymentError {
   readonly credential: string
   /** On-chain hash the payment will have if it settled, when derivable from the credential. */
   readonly transactionHash: string | undefined
+  /** Error thrown by the paid request, when it failed without a response. */
+  override readonly cause: unknown
 
   constructor(options: PaymentOutcomeUnknownError.Options) {
-    const { challenge, credential, transactionHash } = options
+    const { cause, challenge, credential, transactionHash } = options
     super(
       `Payment outcome is unknown after sending a credential for challenge "${challenge.id}". Do not blindly retry.`,
     )
+    this.cause = cause
     this.challenge = challenge
     this.credential = credential
     this.transactionHash = transactionHash
@@ -276,6 +279,8 @@ export class PaymentOutcomeUnknownError extends PaymentError {
 
 export declare namespace PaymentOutcomeUnknownError {
   type Options = {
+    /** Error thrown by the paid request, when it failed without a response. */
+    cause?: unknown
     /** Challenge the credential paid for. */
     challenge: Challenge.Challenge
     /** Serialized credential sent with the paid request. */

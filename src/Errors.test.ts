@@ -239,7 +239,9 @@ describe('PaymentOutcomeUnknownError', () => {
       realm: 'api.example.com',
       request: { amount: '1' },
     })
+    const cause = new TypeError('fetch failed')
     const error = new PaymentOutcomeUnknownError({
+      cause,
       challenge,
       credential: 'Payment abc',
       transactionHash: '0x01',
@@ -252,7 +254,12 @@ describe('PaymentOutcomeUnknownError', () => {
         "type": "https://paymentauth.org/problems/payment-outcome-unknown",
       }
     `)
-    expect(error).toMatchObject({ challenge, credential: 'Payment abc', transactionHash: '0x01' })
+    expect(error).toMatchObject({
+      cause,
+      challenge,
+      credential: 'Payment abc',
+      transactionHash: '0x01',
+    })
   })
 })
 
