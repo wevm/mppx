@@ -1153,7 +1153,16 @@ describe('tempo.charge client', () => {
       ['trailing bytes', { signature: `${unsponsored}00`, type: 'transaction' }, undefined],
       ['malformed', { signature: '0x76ff', type: 'transaction' }, undefined],
       ['non-Tempo', { signature: '0x02c0', type: 'transaction' }, undefined],
-      ['hash', { hash: '0xabc', type: 'hash' }, undefined],
+      [
+        'push',
+        {
+          hash: '0xabababababababababababababababababababababababababababababababab',
+          type: 'hash',
+        },
+        '0xabababababababababababababababababababababababababababababababab',
+      ],
+      ['malformed push', { hash: '0xabc', type: 'hash' }, undefined],
+      ['proof', { signature: '0x01', type: 'proof' }, undefined],
     ])('derives %s credentials', (_name, payload, expected) => {
       const credential = Credential.serialize({ challenge: createChallenge(), payload })
 

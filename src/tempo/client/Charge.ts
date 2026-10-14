@@ -321,25 +321,28 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 /**
- * Returns the final hash of an unsponsored, sender-signed 0x76 transaction credential.
+ * Returns the final transaction hash of a credential, when known before settlement.
  *
- * Sponsored transactions (0x78 envelopes or 0x76 awaiting a fee payer) return
- * `undefined` because the fee payer's co-signature changes the final hash.
+ * Push credentials carry the broadcast hash; pull credentials hash a canonical,
+ * sender-signed 0x76 transaction. Sponsored transactions (0x78 envelopes or 0x76
+ * awaiting a fee payer) return `undefined` because the fee payer's co-signature
+ * changes the final hash.
  */
 function transactionHash(credential: string): Hex.Hex | undefined {
-  const { payload } = Credential.deserialize<{ signature?: unknown; type?: unknown }>(credential)
-  const serialized = payload.signature
-  if (
-    payload.type !== 'transaction' ||
-    typeof serialized !== 'string' ||
-    !serialized.startsWith(TxEnvelopeTempo.serializedType)
+  const parsed = Methods.charge.schema.credential.payload.safeParse(
+    Credential.deserialize(credential).payload,
   )
+  if (!parsed.success) return undefined
+  const payload = parsed.data
+  if (payload.type === 'hash') return payload.hash as Hex.Hex
+  const serialized = payload.signature as TxEnvelopeTempo.Serialized
+  if (payload.type !== 'transaction' || !serialized.startsWith(TxEnvelopeTempo.serializedType))
     return undefined
-  const transaction = TxEnvelopeTempo.deserialize(serialized as TxEnvelopeTempo.Serialized)
+  const transaction = TxEnvelopeTempo.deserialize(serialized)
   if (!transaction.signature || transaction.feePayerSignature === null) return undefined
   // Reject trailing or non-canonical bytes, which never identify an on-chain transaction.
   if (TxEnvelopeTempo.serialize(transaction) !== serialized) return undefined
-  return keccak256(serialized as Hex.Hex)
+  return keccak256(serialized)
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
