@@ -14,10 +14,12 @@ const realm = 'example.test'
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 async function fixture(protocol: 'mpp' | 'x402') {
+  const payers: (string | undefined)[] = []
   const settlements: Types.PaymentPayload[] = []
   const state = { valid: true, verifications: 0 }
   const method = evm.charge({
     currency: evm.assets.base.USDC,
+    onPaymentSuccess: ({ payer }) => void payers.push(payer),
     recipient,
     x402: {
       facilitator: {
@@ -33,6 +35,7 @@ async function fixture(protocol: 'mpp' | 'x402') {
     },
   })
   const server = Mppx.create({ methods: [method], realm, secretKey })
+  server.onPaymentSuccess(({ payer }) => void payers.push(payer))
   const request = new Request('https://example.test/paid')
   const route = server.charge({ amount: '0.25', scope: 'job' })
   const offered = await route(request)
@@ -74,7 +77,7 @@ async function fixture(protocol: 'mpp' | 'x402') {
       input: paidRequest,
     })
   }
-  return { credential, prepared, protocol, routeOptions, server, settlements, state }
+  return { credential, payers, prepared, protocol, routeOptions, server, settlements, state }
 }
 
 describe.each(['mpp', 'x402'] as const)('EVM validation lifecycle (%s)', (protocol) => {
@@ -109,5 +112,19 @@ describe.each(['mpp', 'x402'] as const)('EVM validation lifecycle (%s)', (protoc
     ).rejects.toThrow('Authorization is no longer spendable')
     expect(context.state.verifications).toBe(2)
     expect(context.settlements).toEqual([])
+  })
+
+  test('exposes the recovered payer on payment success', async () => {
+    const context = await fixture(protocol)
+    const header = protocol === 'mpp' ? 'Authorization' : Types.paymentSignatureHeader
+    const paid = await context.server.charge({ amount: '0.25', scope: 'job' })(
+      new Request('https://example.test/paid', {
+        headers: { [header]: await context.prepared.createCredential() },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    await context.server.broadcastCredential(await context.credential(), context.routeOptions)
+
+    expect(context.payers).toEqual(Array(4).fill(account.address))
   })
 })

@@ -100,12 +100,14 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       }
       await config.validate?.(authorization)
 
+      const payer = getAddress(payload.from)
       return {
         challenge: credential.challenge,
         credential,
-        details: { payer: getAddress(payload.from) },
+        details: { payer },
         intent: Methods.charge.intent,
         method: Methods.charge.name,
+        payer,
         request: credential.challenge.request,
         source,
       }
