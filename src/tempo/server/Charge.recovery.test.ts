@@ -39,6 +39,7 @@ const invalidParams = { code: -32602, message: 'invalid params' }
 const insufficientFunds = { code: -32000, message: 'insufficient funds for gas * price + value' }
 const invalidSignature = { code: -32000, message: 'invalid signature' }
 const rateLimited = new HttpRequestError({ status: 429, url })
+const unknownType = { code: -32000, message: 'unknown transaction type' }
 
 test.each([
   { name: 'included', sponsored: false, outcome: 'included', error: gateway },
@@ -65,6 +66,7 @@ test.each([
   { name: 'insufficient funds', sponsored: false, outcome: 'rejected', error: insufficientFunds },
   { name: 'invalid signature', sponsored: false, outcome: 'rejected', error: invalidSignature },
   { name: 'rate limited', sponsored: false, outcome: 'rejected', error: rateLimited },
+  { name: 'unknown transaction type', sponsored: false, outcome: 'rejected', error: unknownType },
 ] as const)('synchronous charge recovery: $name', async ({ sponsored, outcome, error }) => {
   const payer = privateKeyToAccount(`0x${'01'.repeat(32)}`)
   const sponsor = privateKeyToAccount(`0x${'02'.repeat(32)}`)

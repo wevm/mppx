@@ -1507,7 +1507,8 @@ const ambiguousErrorNames = new Set([
  * - Lost connections: `SocketClosedError`, or an `HttpRequestError` with no
  *   status (network failure) or a 5xx status.
  * - JSON-RPC code `4`: the EIP-7966 timeout for a pooled, unconfirmed transaction.
- * - Messages matching "already known" or "known transaction": already pooled.
+ * - Messages containing the words "already known" or "known transaction": already
+ *   pooled ("unknown transaction type" does not match).
  */
 function isAmbiguousBroadcastError(error: unknown): boolean {
   for (let cause = error; cause; cause = (cause as { cause?: unknown }).cause) {
@@ -1516,7 +1517,7 @@ function isAmbiguousBroadcastError(error: unknown): boolean {
     if (name === 'HttpRequestError') return status === undefined || Number(status) >= 500
     if (ambiguousErrorNames.has(name as string)) return true
     if (code === 4) return true
-    if (typeof message === 'string' && /already ?known|known transaction/i.test(message))
+    if (typeof message === 'string' && /\balready ?known\b|\bknown transaction\b/i.test(message))
       return true
   }
   return false
