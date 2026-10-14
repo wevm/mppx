@@ -18,6 +18,7 @@ import {
   type Hex,
   HttpRequestError,
   maxUint256,
+  RpcRequestError,
   zeroAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -4447,16 +4448,32 @@ describe('onSessionSettlement', () => {
       deltaPaid?: bigint | undefined
       /** Settled amount a replica behind the receipt's block reports at `latest`. */
       latestSettled?: bigint | undefined
+      /** Reverts the settle's gas estimate this many times, like a replica behind the open. */
+      preparationReverts?: number | undefined
+      /** Records each RPC method the client sends. */
+      requests?: string[] | undefined
     } = {},
   ) {
+    let preparationReverts = options.preparationReverts ?? 0
     return createClient({
       account: payer,
       chain: testChain,
       transport: custom(
         {
           async request(args) {
+            options.requests?.push(args.method)
             if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
             if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas' && preparationReverts-- > 0)
+              throw new RpcRequestError({
+                body: args,
+                error: {
+                  code: 3,
+                  message:
+                    'execution reverted: TIP20 channel reserve error: ChannelNotFound(ChannelNotFound)',
+                },
+                url: 'http://localhost',
+              })
             if (args.method === 'eth_estimateGas') return '0x5208'
             if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
             if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
@@ -4526,6 +4543,79 @@ describe('onSessionSettlement', () => {
       amount: 100n,
       delta: 100n,
     })
+  })
+
+  test('retries a settle whose preparation reverts on a replica behind the open', async () => {
+    const store = Store.memory()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(channelStore(store), openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+
+    const { settle } = await import('./Session.js')
+    const requests: string[] = []
+    const client = createSettleClient(openPayload.channelId, 100n, {
+      preparationReverts: 2,
+      requests,
+    })
+
+    await expect(settle(store, client, openPayload.channelId)).resolves.toBe(`0x${'cc'.repeat(32)}`)
+    expect(requests.filter((method) => method === 'eth_estimateGas')).toHaveLength(3)
+    expect(requests.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
+  })
+
+  test('fails a settle whose preparation keeps reverting', async () => {
+    const store = Store.memory()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(channelStore(store), openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+
+    const { settle } = await import('./Session.js')
+    const client = createSettleClient(openPayload.channelId, 100n, {
+      preparationReverts: Number.POSITIVE_INFINITY,
+    })
+
+    await expect(settle(store, client, openPayload.channelId)).rejects.toThrow('ChannelNotFound')
+  })
+
+  test('does not retry a settle whose broadcast fails', async () => {
+    const store = Store.memory()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(channelStore(store), openPayload, {
+      payee: payer.address,
+      spent: 100n,
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: '0x1234',
+      },
+    })
+    const requests: string[] = []
+    const client = createSettleClient(openPayload.channelId, 100n, {
+      broadcastError: new Error('broadcast failed'),
+      requests,
+    })
+
+    const { settle } = await import('./Session.js')
+
+    await expect(settle(store, client, openPayload.channelId)).rejects.toThrow('broadcast failed')
+    expect(requests.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
   })
 
   test('fires onSessionSettlement for auto-scheduled settlements', async () => {

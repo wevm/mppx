@@ -1,5 +1,6 @@
 import {
   BaseError as viem_BaseError,
+  ExecutionRevertedError,
   HttpRequestError,
   InternalRpcError,
   isAddress,
@@ -583,21 +584,28 @@ export async function settle(
     sender: account?.address,
   })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const txHash = await Chain.settleOnChain(
-    client,
-    channel.descriptor,
-    amount,
-    channel.highestVoucher.signature,
-    escrow,
-    account
-      ? {
-          account,
-          ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
-          ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-          ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
-          candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
-        }
-      : undefined,
+  const { signature } = channel.highestVoucher
+  // A replica behind the open or top-up that admitted this voucher rejects the settle while
+  // preparing it (e.g. `ChannelNotFound`); nothing was broadcast, so retry until it catches up.
+  const txHash = await Chain.readbackWithRetry(
+    () =>
+      Chain.settleOnChain(
+        client,
+        channel.descriptor,
+        amount,
+        signature,
+        escrow,
+        account
+          ? {
+              account,
+              ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+              ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+              ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+              candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+            }
+          : undefined,
+      ),
+    { shouldRetry: isExecutionRevert },
   )
   const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
@@ -687,6 +695,14 @@ export async function settleBatch(
 export function ignoreRetryableSettlementFailure(error: unknown): undefined {
   if (isRetryableSettlementFailure(error)) return undefined
   throw error
+}
+
+/** Whether a settlement failed because the node's execution reverted it. */
+function isExecutionRevert(error: unknown): boolean {
+  return (
+    error instanceof viem_BaseError &&
+    Boolean(error.walk((cause) => cause instanceof ExecutionRevertedError))
+  )
 }
 
 function isRetryableSettlementFailure(error: unknown): boolean {

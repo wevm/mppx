@@ -353,6 +353,8 @@ export type ReadbackRetryOptions = {
   retries?: number | undefined
   /** Delay between attempts, in milliseconds. @default 250 */
   delayMs?: number | undefined
+  /** Whether a failed attempt may be retried. @default every failure */
+  shouldRetry?: ((error: unknown) => boolean) | undefined
 }
 
 /**
@@ -375,13 +377,14 @@ export async function readbackWithRetry<T>(
   read: () => Promise<T>,
   options: ReadbackRetryOptions = {},
 ): Promise<T> {
-  const { retries = 5, delayMs = 250 } = options
+  const { retries = 5, delayMs = 250, shouldRetry = () => true } = options
   let lastError: unknown
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await read()
     } catch (error) {
       lastError = error
+      if (!shouldRetry(error)) break
       if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, delayMs))
     }
   }
