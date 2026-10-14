@@ -348,8 +348,8 @@ export declare namespace charge {
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
-     * Token decimals used to parse `maxAmount`. Required with `maxAmount` because
-     * challenges do not carry currency decimals. TIP-20 tokens use 6.
+     * Decimals of the challenge currency, used to parse `maxAmount`. Required with
+     * `maxAmount` because challenges do not carry currency decimals.
      */
     decimals?: number | undefined
     /**
@@ -360,8 +360,9 @@ export declare namespace charge {
      */
     maxAmount?: string | undefined
     /**
-     * Maximum atomic amount (base units, e.g. `'1500000'` for 1.5 of a 6-decimal
-     * token) the client is willing to pay per charge. Checked like `maxAmount`.
+     * Maximum amount the client is willing to pay per charge, in raw base units of
+     * the challenge currency (compared directly with the challenge `amount`).
+     * Checked like `maxAmount`.
      */
     maxAtomicAmount?: string | undefined
     /**
