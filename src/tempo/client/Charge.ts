@@ -100,18 +100,17 @@ export function charge(parameters: charge.Parameters = {}) {
       assertChallengePolicy(parameters, caps, options.challenge.request)
       const account = options.context?.account ?? parameters.account
       const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase()
-      return signOnce(
-        `${signer ?? ''}:${options.challenge.id}`,
-        options.challenge.expires,
-        (validBefore) => createChargeCredential(options, validBefore),
+      return signOnce(`${signer ?? ''}:${options.challenge.id}`, () =>
+        createChargeCredential(options),
       )
     },
   })
 
-  async function createChargeCredential(
-    { challenge, context }: CreateCredentialParameters,
-    validBefore: number,
-  ): Promise<string> {
+  /** Signs a charge credential, returning it with the transaction's `validBefore`. */
+  async function createChargeCredential({
+    challenge,
+    context,
+  }: CreateCredentialParameters): Promise<{ credential: string; validBefore: number }> {
     // Sign on the pinned chain when the challenge omits a chain ID.
     const challengeChainId = challenge.request.methodDetails?.chainId
     const resolvedChainId =
@@ -152,11 +151,14 @@ export function charge(parameters: charge.Parameters = {}) {
           realm: challenge.realm,
         }),
       })
-      return Credential.serialize({
-        challenge,
-        payload: { signature, type: 'proof' },
-        source: Proof.proofSource({ address: account.address, chainId }),
-      })
+      return {
+        credential: Credential.serialize({
+          challenge,
+          payload: { signature, type: 'proof' },
+          source: Proof.proofSource({ address: account.address, chainId }),
+        }),
+        validBefore: getValidBefore(challenge.expires),
+      }
     }
 
     const currency = request.currency as Address
@@ -261,6 +263,8 @@ export function charge(parameters: charge.Parameters = {}) {
       return supportedModes[0]!
     })()
 
+    const validBefore = getValidBefore(challenge.expires)
+
     if (mode === 'push') {
       const { receipts } =
         account.type === 'local'
@@ -284,11 +288,14 @@ export function charge(parameters: charge.Parameters = {}) {
             })
       const hash = receipts?.[0]?.transactionHash
       if (!hash) throw new Error('No transaction receipt returned.')
-      return Credential.serialize({
-        challenge,
-        payload: { hash, type: 'hash' },
-        source: Proof.proofSource({ address: account.address, chainId }),
-      })
+      return {
+        credential: Credential.serialize({
+          challenge,
+          payload: { hash, type: 'hash' },
+          source: Proof.proofSource({ address: account.address, chainId }),
+        }),
+        validBefore,
+      }
     }
 
     const prepared = await prepareTransactionRequest(client, {
@@ -309,11 +316,14 @@ export function charge(parameters: charge.Parameters = {}) {
     }
     const signature = await signTransaction(client, prepared as never)
 
-    return Credential.serialize({
-      challenge,
-      payload: { signature, type: 'transaction' },
-      source: Proof.proofSource({ address: account.address, chainId }),
-    })
+    return {
+      credential: Credential.serialize({
+        challenge,
+        payload: { signature, type: 'transaction' },
+        source: Proof.proofSource({ address: account.address, chainId }),
+      }),
+      validBefore,
+    }
   }
 }
 
@@ -341,11 +351,7 @@ function createCredentialCache() {
   type Entry = { expiresAt?: number | undefined; promise: Promise<string> }
   const entries = new Map<string, Entry>()
 
-  return (
-    key: string,
-    expires: string | undefined,
-    create: (validBefore: number) => Promise<string>,
-  ) => {
+  return (key: string, create: () => Promise<{ credential: string; validBefore: number }>) => {
     const now = Date.now()
     for (const [k, entry] of entries)
       if (entry.expiresAt !== undefined && entry.expiresAt <= now) entries.delete(k)
@@ -353,10 +359,9 @@ function createCredentialCache() {
     const cached = entries.get(key)
     if (cached) return cached.promise
 
-    const validBefore = getValidBefore(expires)
     const entry: Entry = {
-      promise: create(validBefore).then(
-        (credential) => {
+      promise: create().then(
+        ({ credential, validBefore }) => {
           entry.expiresAt = validBefore * 1000
           return credential
         },
