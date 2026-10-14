@@ -47,6 +47,7 @@ import type {
   SubscriptionRecord,
   SubscriptionReceipt as SubscriptionReceiptValue,
 } from '../subscription/Types.js'
+import { fallbackStore } from './internal/fallback-store.js'
 
 type SubscriptionRequest = ReturnType<typeof Methods.subscription.schema.request.parse>
 type RenewalHandler = NonNullable<subscription.Parameters['renew']>
@@ -60,7 +61,7 @@ export function subscription<const parameters extends subscription.Parameters>(
   p: NoExtraKeys<parameters, subscription.Parameters>,
 ) {
   const parameters = p as parameters
-  const rawStore = (parameters.store ?? Store.memory()) as Store.AtomicStore<
+  const rawStore = (parameters.store ?? fallbackStore('tempo.subscription')) as Store.AtomicStore<
     Record<string, unknown>
   >
   if (typeof rawStore.update !== 'function') {

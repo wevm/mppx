@@ -25,6 +25,7 @@ import * as FeePayer from '../../internal/fee-payer.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
+import { fallbackStore } from '../../server/internal/fallback-store.js'
 import * as Transport from '../../server/internal/transport.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import {
@@ -334,7 +335,7 @@ export function session<const parameters extends session.Parameters>(
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     operator,
-    store: rawStore = Store.memory(),
+    store: rawStore = fallbackStore('tempo.session'),
     suggestedDeposit,
     unitType,
   } = parameters

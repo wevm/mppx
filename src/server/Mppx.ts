@@ -11,6 +11,7 @@ import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
 import type { DeepReadonly, MaybePromise } from '../internal/types.js'
+import { warnOnce } from '../internal/warnOnce.js'
 import * as Mcp from '../Mcp.js'
 import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
@@ -2108,13 +2109,6 @@ export function isMissingReceiptResponseError(
 
 function normalizeExpires(expires: z.DatetimeInput | undefined): string | undefined {
   return expires === undefined ? undefined : z.toDatetimeString(expires)
-}
-
-const _warned = new Set<string>()
-function warnOnce(key: string, message: string) {
-  if (_warned.has(key)) return
-  _warned.add(key)
-  console.warn(`[mppx] ${message}`)
 }
 
 /** Extracts hostname from the captured request URL, falling back to a default. */

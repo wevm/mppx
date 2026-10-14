@@ -1,5 +1,4 @@
 import type { NoExtraKeys } from '../../internal/types.js'
-import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import {
@@ -12,6 +11,7 @@ import * as Settlement from '../session/server/Settlement.js'
 import type { SessionController as SessionController_ } from '../session/server/Sse.js'
 import * as Ws_ from '../session/server/Ws.js'
 import { charge as charge_ } from './Charge.js'
+import { fallbackStore } from './internal/fallback-store.js'
 import type * as Relay_ from './Relay.js'
 import { renew as renewSubscription_, subscription as subscription_ } from './Subscription.js'
 
@@ -210,7 +210,7 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
 ) {
   const { currencies: _currencies, ...shared } = parameters ?? {}
   const [first, ...rest] = resolveCurrencies(parameters ?? {})
-  const store = parameters?.store ?? Store.memory()
+  const store = parameters?.store ?? fallbackStore('tempo.session')
   const settlements = new Map<string, session_.Extensions['settleScheduled']>()
   const key = (chainId: number, currency: string) => `${chainId}:${currency.toLowerCase()}`
   const settleScheduled: session_.Extensions['settleScheduled'] = (channel) => {
@@ -248,7 +248,7 @@ function subscriptionOffers<const parameters extends CurrencyParameters<subscrip
 ) {
   const { currencies: _currencies, ...shared } = parameters
   const [first, ...rest] = resolveCurrencies(parameters)
-  const store = parameters.store ?? Store.memory()
+  const store = parameters.store ?? fallbackStore('tempo.subscription')
   function create(currency: typeof first) {
     const configured = { ...shared, ...currency, store } as unknown as Omit<
       parameters,

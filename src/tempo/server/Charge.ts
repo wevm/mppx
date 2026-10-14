@@ -38,6 +38,7 @@ import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { fallbackStore } from './internal/fallback-store.js'
 import { html as htmlContent } from './internal/html.gen.js'
 import * as Relay from './Relay.js'
 import * as SponsorBudget from './SponsorBudget.js'
@@ -79,7 +80,8 @@ export function charge<const parameters extends charge.Parameters>(
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
-  const rawStore = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
+  const rawStore = (parameters.store ??
+    fallbackStore('tempo.charge')) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,
