@@ -399,6 +399,7 @@ export function session<const parameters extends session.Parameters>(
   // Stream checks have a bounded TTL even when callers disable validation caching.
   // Cache only successful reads; RPC failures must stop delivery.
   const beforeStreamCharge = async (channelId: Hex) => {
+    channelId = ChannelStore.normalizeChannelId(channelId)
     const channel = await store.getChannel(channelId)
     if (!channel || channel.finalized || channel.closeRequestedAt !== 0n)
       throw new Errors.ChannelClosedError({ reason: 'stream channel is closed' })
