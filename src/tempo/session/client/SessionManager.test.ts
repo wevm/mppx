@@ -1498,8 +1498,13 @@ describe('Session', () => {
         for (const result of settled)
           if (result.status === 'rejected')
             expect(result.reason.message).toContain('payment outcome unknown')
+        await expect(h.manager.topUp('5')).rejects.toThrow('reconcile the pending payment')
+        await expect(h.consume(new AbortController().signal)).rejects.toThrow(
+          'reconcile the pending payment',
+        )
         h.release()
         await vi.advanceTimersByTimeAsync(0)
+        await expect(h.manager.topUp('5')).rejects.toThrow('reconcile the pending payment')
         expect(h.posted).toHaveLength(1)
         expect(h.manager.state).toMatchObject({ deposit: '5000000' })
       } finally {

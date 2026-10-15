@@ -594,10 +594,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   let pendingTopUp: Promise<unknown> | undefined
+  let uncertainFunding: Error | undefined
 
   // Keep funding decisions and their deposit updates atomic within this manager.
   // Waiters share failures instead of immediately retrying an uncertain payment.
   async function withTopUpLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (uncertainFunding) throw uncertainFunding
     for (;;) {
       const pending = pendingTopUp
       if (!pending) break
@@ -619,10 +621,18 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       }
     }
     signal?.throwIfAborted()
+    if (uncertainFunding) throw uncertainFunding
     const pending = operation()
     pendingTopUp = pending
     try {
       return await pending
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError')
+        uncertainFunding = new Error(
+          'Session funding outcome is unknown; reconcile the pending payment before creating a new session manager.',
+          { cause: error },
+        )
+      throw error
     } finally {
       if (pendingTopUp === pending) pendingTopUp = undefined
     }
