@@ -1,5 +1,20 @@
 # mppx
 
+## 0.13.6
+
+### Patch Changes
+
+- 7827823: Bounded session management POSTs to 30 seconds so stalled endpoints cannot hold funding waiters indefinitely. Timed-out payments report an unknown outcome and ignore late responses.
+
+  Persisted uncertain top-up state in the channel store after dispatched management requests timed out, failed, or were cancelled and blocked new deposits, including from replacement managers. Callers must reconcile the pending transaction against trusted chain state before clearing that state.
+
+- 4de6876: Bounded payment authorization values to 64 KiB before scheme extraction and decoding.
+- 80f9a76: Rechecked sponsored subscription and session transaction deadlines before signing and submission. Aligned validity-window rounding and rejected maximum windows below the required 15 seconds.
+- 3f95f89: Fixed the EVM CLI plugin to use the selected account when signing payments.
+- 22e5b42: Limited automatic swaps to the missing balance and bounded spending independently of DEX quotes. Added an explicit maxAmountIn budget for non-parity token pairs; defaults assumed 1:1 token units plus slippage. Sponsored charge validation accepted partial acquisition up to the payment amount.
+- 78d0a04: Serialized session-manager top-ups and refreshed the active deposit before subsequent funding decisions, preventing concurrent automatic requests from exceeding the configured deposit limit.
+- d4dddfc: Checked on-chain escrow during managed SSE and WebSocket streams and stopped delivery when escrow closed or checks failed.
+
 ## 0.13.5
 
 ### Patch Changes
