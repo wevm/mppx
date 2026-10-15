@@ -320,6 +320,30 @@ describe('serve', () => {
     expect(channel!.units).toBe(3)
   })
 
+  test('emits the final receipt without another escrow check after all charges were delivered', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 3000000n)
+    let delivered = false
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      beforeCharge() {
+        if (delivered) throw new Error('escrow unavailable after delivery')
+      },
+      generate: async function* (stream) {
+        await stream.charge()
+        yield 'paid content'
+        delivered = true
+      },
+    })
+    const output = await readStream(stream)
+    expect(output).toContain('data: paid content')
+    expect(output).toContain('event: payment-receipt')
+    expect((await storage.getChannel(channelId))!.spent).toBe(1000000n)
+  })
+
   test('uses a prepaid unit for the first generated value', async () => {
     const storage = memoryStore()
     const committed: Array<{ spent: bigint; units: number }> = []

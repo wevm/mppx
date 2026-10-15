@@ -133,7 +133,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
         const { done, value } = await iterator.next()
         if (signal.aborted) break
         if (done) {
-          if (manual) await commit()
+          if (manual && pending) await commit()
           break
         }
         if (!manual) await charge()
