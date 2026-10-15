@@ -658,17 +658,45 @@ async function postManagementCredential(parameters: {
   input: RequestInfo | URL
   signal?: AbortSignal | undefined
 }): Promise<Response> {
-  const post = async (challenge: TempoSessionChallenge) =>
-    parameters.fetch(managementInput(parameters.input), {
-      method: 'POST',
-      ...(parameters.signal ? { signal: parameters.signal } : {}),
-      headers: {
-        [Constants.Headers.authorization]: await parameters.createSessionCredential(
-          challenge,
-          parameters.context,
+  const post = async (challenge: TempoSessionChallenge) => {
+    parameters.signal?.throwIfAborted()
+    const authorization = await parameters.createSessionCredential(challenge, parameters.context)
+    parameters.signal?.throwIfAborted()
+    const controller = new AbortController()
+    const abort = () => controller.abort(parameters.signal?.reason)
+    parameters.signal?.addEventListener('abort', abort, { once: true })
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException(
+            'Session management request timed out; payment outcome unknown',
+            'TimeoutError',
+          ),
         ),
-      },
+      30_000,
+    )
+    let onAbort!: () => void
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(controller.signal.reason)
+      controller.signal.addEventListener('abort', onAbort, { once: true })
     })
+    try {
+      // Custom fetch implementations may ignore abort. Do not let their late
+      // response update funding state or trigger a refreshed-challenge retry.
+      return await Promise.race([
+        parameters.fetch(managementInput(parameters.input), {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { [Constants.Headers.authorization]: authorization },
+        }),
+        aborted,
+      ])
+    } finally {
+      clearTimeout(timeout)
+      parameters.signal?.removeEventListener('abort', abort)
+      controller.signal.removeEventListener('abort', onAbort)
+    }
+  }
   const response = await post(parameters.challenge)
   if (response.status !== 402) return response
   const challenge = Challenge.fromResponseList(response).find(isTip1034SessionChallenge)

@@ -1484,6 +1484,30 @@ describe('Session', () => {
       }
     }
 
+    test('a stalled POST releases funding waiters with an unknown-outcome error', async () => {
+      vi.useFakeTimers()
+      const h = setup()
+      try {
+        const first = h.manager.topUp('5')
+        await vi.waitFor(() => expect(h.posted).toHaveLength(1))
+        const queued = h.manager.topUp('1')
+        const results = Promise.allSettled([first, queued])
+        await vi.advanceTimersByTimeAsync(30_000)
+        const settled = await results
+        expect(settled.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+        for (const result of settled)
+          if (result.status === 'rejected')
+            expect(result.reason.message).toContain('payment outcome unknown')
+        h.release()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(h.posted).toHaveLength(1)
+        expect(h.manager.state).toMatchObject({ deposit: '5000000' })
+      } finally {
+        h.release()
+        vi.useRealTimers()
+      }
+    })
+
     test('aborts a queued flow before the in-flight top-up completes', async () => {
       const h = setup()
       const first = h.manager.topUp('5')

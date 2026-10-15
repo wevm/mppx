@@ -256,7 +256,7 @@ describe('HttpManagement', () => {
     test('postTopUp forwards cancellation to the management request', async () => {
       const controller = new AbortController()
       const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-        expect(init?.signal).toBe(controller.signal)
+        expect(init?.signal?.aborted).toBe(false)
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
             once: true,
@@ -278,6 +278,41 @@ describe('HttpManagement', () => {
       controller.abort(new Error('cancelled'))
 
       await expect(pending).rejects.toThrow('cancelled')
+    })
+
+    test('times out a stalled management POST and ignores a late 402', async () => {
+      vi.useFakeTimers()
+      try {
+        let finish!: (response: Response) => void
+        let signal: AbortSignal | null | undefined
+        const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+          signal = init?.signal
+          return new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        })
+        const createSessionCredential = vi.fn(async () => 'top-up-credential')
+        const pending = postTopUp({
+          additionalDeposit: 3n,
+          challenge: challenge(),
+          channel: channel(),
+          channelId,
+          createSessionCredential,
+          fetch,
+          input: 'https://example.test/resource',
+        })
+        const rejected = expect(pending).rejects.toThrow('payment outcome unknown')
+        await vi.advanceTimersByTimeAsync(30_000)
+        await rejected
+        expect(signal?.aborted).toBe(true)
+        finish(new Response(null, { status: 402 }))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(fetch).toHaveBeenCalledOnce()
+        expect(createSessionCredential).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     test('retryHttpPaymentRequired signs the server-required cumulative voucher', async () => {
@@ -1026,7 +1061,7 @@ describe('SseDriver', () => {
     const controller = new AbortController()
     const createSessionCredential = vi.fn(async () => 'Payment credential')
     const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(init?.signal).toBe(controller.signal)
+      expect(init?.signal?.aborted).toBe(false)
       return new Response(null, { status: 204 })
     })
     const channel: ChannelEntry = {
