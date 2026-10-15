@@ -249,6 +249,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return undefined
   }
 
+  async function persistChannel(entry: ChannelEntry) {
+    const current = await backing.get(entryKey(entry))
+    if (current?.channelId === entry.channelId && current.uncertainTopUp)
+      entry.uncertainTopUp = true
+    await backing.set(entry)
+  }
+
   const store: ChannelStore = {
     async get(key) {
       const entry = await getReusable(key)
@@ -260,13 +267,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
     async set(entry) {
       const key = entryKey(entry)
-      const current = await backing.get(key)
-      if (current?.channelId === entry.channelId && current.uncertainTopUp)
-        entry = { ...entry, uncertainTopUp: true }
       if (entry.opened) ignoredChannelIds.delete(entry.channelId)
       if (channelUse?.trackCreates && !channelUse.seenExisting.has(key))
         channelUse.created.set(key, entry)
-      await backing.set(entry)
+      await persistChannel(entry)
     },
     delete: (key) => backing.delete(key),
   }
@@ -274,6 +278,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   /** Removes a failed channel from candidacy for the rest of this manager's life. */
   async function ignoreChannel(entry: ChannelEntry) {
     const key = entryKey(entry)
+    const current = await backing.get(key)
+    if (entry.uncertainTopUp || (current?.channelId === entry.channelId && current.uncertainTopUp))
+      throw new Error(
+        'Session funding outcome is unknown; reconcile the pending payment before replacing the channel.',
+      )
     ignoredChannelIds.add(entry.channelId)
     channelUse?.seenExisting.delete(key)
     if (channelUse?.resumed === entry) channelUse.resumed = undefined
@@ -284,6 +293,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const use = channelUse
     if (!use?.created.size) return
     for (const [key, entry] of use.created) {
+      const current = await backing.get(key)
+      if (
+        entry.uncertainTopUp ||
+        (current?.channelId === entry.channelId && current.uncertainTopUp)
+      )
+        throw new Error(
+          'Session funding outcome is unknown; reconcile the pending payment before discarding the channel.',
+        )
       ignoredChannelIds.add(entry.channelId)
       await Promise.resolve(backing.delete(key)).catch(() => undefined)
     }
@@ -769,7 +786,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         spent: restored.spent,
         units: restored.units,
       })
-      await backing.set(runtime.channel)
+      await persistChannel(runtime.channel)
     }
   }
 
@@ -778,7 +795,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     runtime.channel = restored.channel
     runtime.spent = restored.spent
     runtime.state = restored.state
-    if (runtime.channel?.opened) await backing.set(runtime.channel)
+    if (runtime.channel?.opened) await persistChannel(runtime.channel)
   }
 
   function toPaymentResponse(response: Response): PaymentResponse {
