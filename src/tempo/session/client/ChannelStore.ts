@@ -3,7 +3,10 @@ import type { Address } from 'viem'
 import type { MaybePromise } from '../../../internal/types.js'
 import type { ChannelEntry } from './ChannelOps.js'
 
-/** Store of reusable payer session channels keyed by payment scope. */
+/**
+ * Store of reusable payer session channels keyed by payment scope.
+ * Callers sharing a backend across processes must coordinate funding and writes externally.
+ */
 export type ChannelStore = {
   /** Returns the channel cached for `key`, when present. */
   get(key: string): MaybePromise<ChannelEntry | undefined>
@@ -108,4 +111,56 @@ export function createJsonChannelStore(kv: JsonChannelKv): ChannelStore {
       await kv.delete(channelPrefix + key)
     },
   } satisfies ChannelStore
+}
+
+const pendingOperations = new WeakMap<ChannelStore, Map<string, Promise<unknown>>>()
+const fundingStores = new WeakMap<ChannelStore, ChannelStore>()
+
+/** @internal Shares funding coordination between a manager's store view and its backing store. */
+export function registerFundingStore(view: ChannelStore, backing: ChannelStore): void {
+  fundingStores.set(view, fundingStores.get(backing) ?? backing)
+}
+
+async function exclusive<T>(
+  store: ChannelStore,
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let pending = pendingOperations.get(store)
+  if (!pending) {
+    pending = new Map()
+    pendingOperations.set(store, pending)
+  }
+  const previous = pending.get(key) ?? Promise.resolve()
+  const result = previous.catch(() => {}).then(operation)
+  pending.set(key, result)
+  try {
+    return await result
+  } finally {
+    if (pending.get(key) === result) pending.delete(key)
+  }
+}
+
+/** @internal Serializes funding decisions for callers sharing one backing store in this process. */
+export function withFundingLock<T>(
+  store: ChannelStore,
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return exclusive(fundingStores.get(store) ?? store, `funding:${key}`, operation)
+}
+
+/** @internal Serializes writes and preserves unresolved funding across stale channel copies. */
+export async function persistChannel(store: ChannelStore, entry: ChannelEntry): Promise<void> {
+  await exclusive(store, `write:${entryKey(entry)}`, async () => {
+    const current = await store.get(entryKey(entry))
+    if (current?.uncertainTopUp) {
+      if (current.channelId !== entry.channelId)
+        throw new Error(
+          'Session funding outcome is unknown; reconcile the pending payment before replacing the channel.',
+        )
+      entry.uncertainTopUp = true
+    }
+    await store.set(entry)
+  })
 }

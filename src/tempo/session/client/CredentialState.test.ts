@@ -16,6 +16,7 @@ import {
   deserializeEntry,
   entryKey,
   serializeEntry,
+  persistChannel,
   type ChannelSink,
 } from './ChannelStore.js'
 import {
@@ -178,6 +179,43 @@ describe('ChannelCache', () => {
       })
       return { backend, store }
     }
+
+    test('serializes stale writes before persisting uncertain funding', async () => {
+      const entry = channel()
+      let value = JSON.stringify(serializeEntry(entry))
+      let release!: () => void
+      let started!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const writing = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      let writes = 0
+      const store = createJsonChannelStore({
+        get: () => value,
+        async set(_key, next) {
+          writes++
+          if (writes === 1) {
+            started()
+            await gate
+          }
+          value = next
+        },
+        delete() {},
+      })
+      const stale = persistChannel(store, { ...entry, cumulativeAmount: 12n })
+      await writing
+      const uncertain = persistChannel(store, { ...entry, uncertainTopUp: true })
+      expect(writes).toBe(1)
+      release()
+      await Promise.all([stale, uncertain])
+      await persistChannel(store, { ...entry, cumulativeAmount: 13n })
+      expect(await store.get(entryKey(entry))).toMatchObject({
+        uncertainTopUp: true,
+        cumulativeAmount: 13n,
+      })
+    })
 
     test('persists, gets, and deletes via a string KV backend', async () => {
       const { backend, store } = jsonStore()

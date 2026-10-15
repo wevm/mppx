@@ -29,7 +29,7 @@ import {
   type ChannelEntry,
   type TempoChannelCall,
 } from './ChannelOps.js'
-import { channelKey, entryKey, type ChannelSink } from './ChannelStore.js'
+import { channelKey, entryKey, persistChannel, type ChannelSink } from './ChannelStore.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -59,7 +59,7 @@ export function readCredentialCumulativeAmount(
  * can react to the close.
  */
 async function storeChannelEntry(sink: ChannelSink, entry: ChannelEntry): Promise<void> {
-  if (entry.opened) await sink.store.set(entry)
+  if (entry.opened) await persistChannel(sink.store, entry)
   else await sink.store.delete(entryKey(entry))
   sink.notifyUpdate(entry)
 }

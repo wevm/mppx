@@ -718,6 +718,51 @@ describe('precompile client session', () => {
     expect(updatedDeposit).toBe(200n)
   })
 
+  test('rechecks persisted uncertainty after loading a stale low-level channel', async () => {
+    const backing = createChannelStore()
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const channel = {
+      chainId,
+      channelId,
+      cumulativeAmount: 100n,
+      deposit: 100n,
+      descriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    } as const
+    await backing.set(channel)
+    let firstRead = true
+    const channelStore = {
+      ...backing,
+      get(key: string) {
+        const entry = backing.get(key)
+        if (firstRead) {
+          firstRead = false
+          void backing.set({ ...channel, uncertainTopUp: true })
+        }
+        return entry
+      },
+    }
+    const method = session({
+      account,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+      topUpAmount: '100',
+    })
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }))
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: {},
+        fetch,
+        input: 'https://example.com/resource',
+      }),
+    ).rejects.toThrow('reconcile the pending payment')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await backing.get(defaultChannelKey)).toMatchObject({ uncertainTopUp: true })
+  })
+
   test('preserves newer channel state after an automatic top-up', async () => {
     const channelStore = createChannelStore()
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })

@@ -12,7 +12,14 @@ import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
-import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
+import {
+  createChannelStore,
+  entryKey,
+  persistChannel as persistStoredChannel,
+  registerFundingStore,
+  withFundingLock,
+  type ChannelStore,
+} from '../client/ChannelStore.js'
 import {
   hydrateSessionSnapshot,
   sessionContextSchema,
@@ -249,12 +256,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return undefined
   }
 
-  async function persistChannel(entry: ChannelEntry) {
-    const current = await backing.get(entryKey(entry))
-    if (current?.channelId === entry.channelId && current.uncertainTopUp)
-      entry.uncertainTopUp = true
-    await backing.set(entry)
-  }
+  const persistChannel = (entry: ChannelEntry) => persistStoredChannel(backing, entry)
 
   const store: ChannelStore = {
     async get(key) {
@@ -274,6 +276,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
     delete: (key) => backing.delete(key),
   }
+
+  registerFundingStore(store, backing)
 
   /** Removes a failed channel from candidacy for the rest of this manager's life. */
   async function ignoreChannel(entry: ChannelEntry) {
@@ -670,75 +674,78 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     knownDeposit?: bigint | undefined
     signal?: AbortSignal | undefined
   }) {
-    const { knownDeposit, ...topUp } = parameters
-    const stored = runtime.channel ? await store.get(entryKey(runtime.channel)) : undefined
-    if (stored?.channelId === parameters.channelId && stored.uncertainTopUp)
-      throw new Error(
-        'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
-      )
-    const receipt = await postTopUp({
-      ...topUp,
-      channel: runtime.channel,
-      createSessionCredential,
-      fetch: config.fetch,
-      onUncertainFunding: async (channel) => {
-        const current = await store.get(entryKey(channel))
-        const unresolved = {
-          ...(current?.channelId === channel.channelId ? current : channel),
-          uncertainTopUp: true,
-        }
-        if (runtime.channel?.channelId === channel.channelId) runtime.channel = unresolved
-        await store.set(unresolved)
-        commitDurableTopUp(unresolved)
-      },
-    })
-    updateSpentFromReceipt(receipt)
-    let baseline = runtime.channel
-    const applied = applyTopUpResult({
-      additionalDeposit: parameters.additionalDeposit,
-      channel: runtime.channel,
-      channelId: parameters.channelId,
-      challengeId: runtime.lastChallenge?.id,
-      currentState: runtime.state,
-      knownDeposit,
-      receipt,
-      spent: runtime.spent,
-    })
-    if (applied?.channel && runtime.lastChallenge) {
-      let entry = applied.channel
-      for (;;) {
-        await store.set(entry)
-        const current = runtime.channel
-        if (current === baseline) break
-        // A completed deposit must not restore a replaced session. For the same
-        // channel retain newer vouchers while recording the confirmed funding.
-        if (!current) return receipt
-        const funded = applied.channel
-        entry =
-          current.channelId !== funded.channelId
-            ? current
-            : {
-                ...current,
-                deposit: current.deposit > funded.deposit ? current.deposit : funded.deposit,
-                cumulativeAmount:
-                  current.cumulativeAmount > funded.cumulativeAmount
-                    ? current.cumulativeAmount
-                    : funded.cumulativeAmount,
-              }
-        baseline = current
-      }
-      if (entry.channelId !== applied.channel.channelId) return receipt
-      runtime.channel = entry
-      dispatch({
-        type: 'activated',
-        challengeId: runtime.lastChallenge.id,
-        entry,
-        spent: runtime.spent.toString(),
-        units: activeUnits(),
+    if (!runtime.channel) throw new Error('Cannot top up session: no active channel')
+    return withFundingLock(backing, entryKey(runtime.channel), async () => {
+      const { knownDeposit, ...topUp } = parameters
+      const stored = runtime.channel ? await store.get(entryKey(runtime.channel)) : undefined
+      if (stored?.channelId === parameters.channelId && stored.uncertainTopUp)
+        throw new Error(
+          'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
+        )
+      const receipt = await postTopUp({
+        ...topUp,
+        channel: runtime.channel,
+        createSessionCredential,
+        fetch: config.fetch,
+        onUncertainFunding: async (channel) => {
+          const current = await store.get(entryKey(channel))
+          const unresolved = {
+            ...(current?.channelId === channel.channelId ? current : channel),
+            uncertainTopUp: true,
+          }
+          if (runtime.channel?.channelId === channel.channelId) runtime.channel = unresolved
+          await store.set(unresolved)
+          commitDurableTopUp(unresolved)
+        },
       })
-      commitDurableTopUp(entry)
-    }
-    return receipt
+      updateSpentFromReceipt(receipt)
+      let baseline = runtime.channel
+      const applied = applyTopUpResult({
+        additionalDeposit: parameters.additionalDeposit,
+        channel: runtime.channel,
+        channelId: parameters.channelId,
+        challengeId: runtime.lastChallenge?.id,
+        currentState: runtime.state,
+        knownDeposit,
+        receipt,
+        spent: runtime.spent,
+      })
+      if (applied?.channel && runtime.lastChallenge) {
+        let entry = applied.channel
+        for (;;) {
+          await store.set(entry)
+          const current = runtime.channel
+          if (current === baseline) break
+          // A completed deposit must not restore a replaced session. For the same
+          // channel retain newer vouchers while recording the confirmed funding.
+          if (!current) return receipt
+          const funded = applied.channel
+          entry =
+            current.channelId !== funded.channelId
+              ? current
+              : {
+                  ...current,
+                  deposit: current.deposit > funded.deposit ? current.deposit : funded.deposit,
+                  cumulativeAmount:
+                    current.cumulativeAmount > funded.cumulativeAmount
+                      ? current.cumulativeAmount
+                      : funded.cumulativeAmount,
+                }
+          baseline = current
+        }
+        if (entry.channelId !== applied.channel.channelId) return receipt
+        runtime.channel = entry
+        dispatch({
+          type: 'activated',
+          challengeId: runtime.lastChallenge.id,
+          entry,
+          spent: runtime.spent.toString(),
+          units: activeUnits(),
+        })
+        commitDurableTopUp(entry)
+      }
+      return receipt
+    })
   }
 
   async function topUpIfNeeded(parameters: TopUpRequirement) {

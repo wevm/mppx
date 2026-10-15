@@ -23,7 +23,13 @@ import {
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { createChannelStore, entryKey, type ChannelStore } from './ChannelStore.js'
+import {
+  createChannelStore,
+  entryKey,
+  persistChannel,
+  withFundingLock,
+  type ChannelStore,
+} from './ChannelStore.js'
 import {
   canSignDescriptor,
   executeCredentialPlan,
@@ -254,7 +260,7 @@ export function session(parameters: session.Parameters = {}) {
                   !current?.opened ||
                   current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
                 ) {
-                  await store.set(opened)
+                  await persistChannel(store, opened)
                   sink.notifyUpdate(opened)
                 }
               }
@@ -289,49 +295,58 @@ export function session(parameters: session.Parameters = {}) {
     requiredCumulative: bigint
     signal?: AbortSignal | undefined
   }) => {
-    const knownDeposit = channel.deposit > deposit ? channel.deposit : deposit
-    const additionalDeposit = resolveAutomaticTopUp({
-      deposit: knownDeposit,
-      maxDeposit,
-      requiredCumulative,
-      suggestedDeposit:
-        challenge.request.suggestedDeposit === undefined
-          ? undefined
-          : BigInt(challenge.request.suggestedDeposit),
-      topUpAmount,
-    })
-    if (additionalDeposit > 0n)
-      await postTopUp({
-        additionalDeposit,
-        challenge,
-        channel,
-        channelId: channel.channelId,
-        createSessionCredential: (challenge, context) =>
-          method.createCredential({ challenge, context }),
-        onUncertainFunding: async (entry) => {
-          const current = await store.get(entryKey(entry))
-          const unresolved = {
-            ...(current?.channelId === entry.channelId ? current : entry),
-            uncertainTopUp: true,
-          }
-          await store.set(unresolved)
-          sink.notifyUpdate(unresolved)
-        },
-        fetch,
-        input,
-        signal,
+    return withFundingLock(store, entryKey(channel), async () => {
+      signal?.throwIfAborted()
+      const fundingChannel = await store.get(entryKey(channel))
+      if (fundingChannel?.channelId === channel.channelId) channel = fundingChannel
+      if (channel.uncertainTopUp)
+        throw new Error(
+          'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
+        )
+      const knownDeposit = channel.deposit > deposit ? channel.deposit : deposit
+      const additionalDeposit = resolveAutomaticTopUp({
+        deposit: knownDeposit,
+        maxDeposit,
+        requiredCumulative,
+        suggestedDeposit:
+          challenge.request.suggestedDeposit === undefined
+            ? undefined
+            : BigInt(challenge.request.suggestedDeposit),
+        topUpAmount,
       })
-    const nextDeposit = knownDeposit + additionalDeposit
-    if (nextDeposit === channel.deposit) return
-    const current = await store.get(entryKey(channel))
-    const latest =
-      current?.channelId.toLowerCase() === channel.channelId.toLowerCase() ? current : channel
-    const updated = {
-      ...latest,
-      deposit: latest.deposit > nextDeposit ? latest.deposit : nextDeposit,
-    }
-    await store.set(updated)
-    sink.notifyUpdate(updated)
+      if (additionalDeposit > 0n)
+        await postTopUp({
+          additionalDeposit,
+          challenge,
+          channel,
+          channelId: channel.channelId,
+          createSessionCredential: (challenge, context) =>
+            method.createCredential({ challenge, context }),
+          onUncertainFunding: async (entry) => {
+            const current = await store.get(entryKey(entry))
+            const unresolved = {
+              ...(current?.channelId === entry.channelId ? current : entry),
+              uncertainTopUp: true,
+            }
+            await persistChannel(store, unresolved)
+            sink.notifyUpdate(unresolved)
+          },
+          fetch,
+          input,
+          signal,
+        })
+      const nextDeposit = knownDeposit + additionalDeposit
+      if (nextDeposit === channel.deposit) return
+      const current = await store.get(entryKey(channel))
+      const latest =
+        current?.channelId.toLowerCase() === channel.channelId.toLowerCase() ? current : channel
+      const updated = {
+        ...latest,
+        deposit: latest.deposit > nextDeposit ? latest.deposit : nextDeposit,
+      }
+      await persistChannel(store, updated)
+      sink.notifyUpdate(updated)
+    })
   }
 
   MethodChallenge.register(method, async ({ challenge, context, fetch, input, signal }) => {
