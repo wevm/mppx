@@ -5260,11 +5260,13 @@ describe('onSessionSettlement', () => {
 
 test.each(
   ['withdrawn', 'closing', 'rpc failure'].flatMap((failure) =>
-    [0, Number.MAX_SAFE_INTEGER].map((ttl) => ({ failure, ttl })),
+    [0, Number.MAX_SAFE_INTEGER].flatMap((ttl) =>
+      [5_001, -5_001].map((clockDelta) => ({ failure, ttl, clockDelta })),
+    ),
   ),
 )(
-  'managed SSE stops delivering after escrow is $failure with TTL $ttl',
-  async ({ failure, ttl }) => {
+  'managed SSE stops delivering after escrow is $failure with TTL $ttl and clock change $clockDelta',
+  async ({ failure, ttl, clockDelta }) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const rawStore = Store.memory()
@@ -5278,7 +5280,7 @@ test.each(
         currency: token,
         decimals: 0,
         recipient: payee,
-        sse: true,
+        sse: { pollingInterval: 100, beforeCharge: async () => {} } as { pollingInterval: number },
         store: rawStore,
         channelStateTtl: ttl,
         getClient: () =>
@@ -5319,7 +5321,7 @@ test.each(
         response: (async function* () {
           yield 'first'
           unhealthy = true
-          vi.setSystemTime(Date.now() + 5_001)
+          vi.setSystemTime(Date.now() + clockDelta)
           if (failure === 'withdrawn') {
             await expect(
               method.verify({

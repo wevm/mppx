@@ -405,7 +405,8 @@ export function session<const parameters extends session.Parameters>(
       throw new Errors.ChannelClosedError({ reason: 'stream channel is closed' })
     const now = Date.now()
     const ttl = Math.min(Math.max(channelStateTtl, 0), 5_000)
-    if (now - (lastOnChainVerified.get(channelId) ?? 0) < ttl) return
+    const lastVerified = lastOnChainVerified.get(channelId)
+    if (lastVerified !== undefined && now >= lastVerified && now - lastVerified < ttl) return
     let state: Chain.ChannelState
     try {
       const client = await getClient({ chainId: channel.chainId })
@@ -438,10 +439,10 @@ export function session<const parameters extends session.Parameters>(
   type SessionTransport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
     ? Transport.sse({
+        ...(typeof parameters.sse === 'object' ? parameters.sse : {}),
         beforeCharge: beforeStreamCharge,
         settleCharged,
         store,
-        ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
       })
     : undefined
 
