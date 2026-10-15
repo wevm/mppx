@@ -2247,24 +2247,76 @@ describe('precompile server session unit guardrails', () => {
   })
 
   describe('default HTTP auto-billing', () => {
-    function createRoute(rawStore: Store.AtomicStore) {
+    function createRoute(rawStore: Store.AtomicStore, sse = false, amount = '1') {
       return Mppx_server.create({
         methods: [
           tempo_server.session({
-            amount: '1',
+            amount,
             chainId,
             currency: token,
             decimals: 0,
             recipient: payee,
             store: rawStore,
+            sse,
             unitType: 'request',
             getClient: () => createStateClient(payer),
           }),
         ],
         realm: 'api.example.com',
         secretKey: 'test-secret-key-test-secret-key-32',
-      }).session({ amount: '1', decimals: 0, unitType: 'request' })
+      }).session({ amount, decimals: 0, unitType: 'request' })
     }
+
+    test.each([undefined, 'text/event-stream'])(
+      'reserves coverage before concurrent handlers with Accept %s',
+      async (accept) => {
+        const rawStore = Store.memory()
+        const store = channelStore(rawStore)
+        const open = await createOpenPayload({ initialAmount: 101n })
+        await persistPrecompileChannel(store, open, {
+          highestVoucherAmount: 0n,
+          highestVoucher: null,
+        })
+        const route = createRoute(rawStore, true, '100')
+        const offered = await route(new Request('https://api.example.com/resource'))
+        if (offered.status !== 402) throw new Error('expected challenge')
+        const challenge = Challenge.fromResponse(offered.challenge)
+        const vouchers = await Promise.all(
+          [100n, 101n].map((amount) =>
+            ClientOps.createVoucherPayload(
+              createSigningClient(),
+              payer,
+              open.descriptor,
+              Types.uint96(amount),
+              chainId,
+            ),
+          ),
+        )
+        const results = await Promise.all(
+          vouchers.map((payload) =>
+            route(
+              new Request('https://api.example.com/resource', {
+                headers: {
+                  Authorization: Credential.serialize({ challenge, payload, source: sourceFor() }),
+                  ...(accept ? { accept } : {}),
+                },
+              }),
+            ),
+          ),
+        )
+        expect(results.filter((result) => result.status === 200)).toHaveLength(1)
+        const reserved = await store.getChannel(open.channelId)
+        expect(reserved?.spent).toBe(0n)
+        expect(ChannelStore.reservedStreamAmount(reserved!)).toBe(100n)
+        const accepted = results.find((result) => result.status === 200)!
+        if (accepted.status !== 200) throw new Error('expected acceptance')
+        const response = await accepted.withReceipt(new Response('paid content'))
+        expect(await response.text()).toBe('paid content')
+        const committed = await store.getChannel(open.channelId)
+        expect(committed?.spent).toBe(100n)
+        expect(ChannelStore.reservedStreamAmount(committed!)).toBe(0n)
+      },
+    )
 
     test('GET content flow charges once and rejects same-voucher replay', async () => {
       const rawStore = Store.memory()
@@ -2937,7 +2989,7 @@ describe('precompile server session unit guardrails', () => {
       },
     )
 
-    test('captures an explicit stream charge without an extra request tick', async () => {
+    test('captures an explicit stream charge including the reserved request tick', async () => {
       const harness = createManagedSseFetch({ explicitCharge: 4014n, maxDeposit: 4015n })
       const manager = precompileSessionManager({
         account: payer,
@@ -2956,11 +3008,11 @@ describe('precompile server session unit guardrails', () => {
       expect(harness.voucherPosts).toBeGreaterThan(0)
 
       const closeReceipt = await manager.close()
-      expect(closeReceipt?.acceptedCumulative).toBe('4014')
-      expect(closeReceipt?.spent).toBe('4014')
+      expect(closeReceipt?.acceptedCumulative).toBe('4015')
+      expect(closeReceipt?.spent).toBe('4015')
 
       const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
-      expect(persisted).toMatchObject({ finalized: true, spent: 4014n, units: 1 })
+      expect(persisted).toMatchObject({ finalized: true, spent: 4015n, units: 2 })
     })
 
     test.each([

@@ -63,6 +63,7 @@ import {
   type OnSessionSettlementFailure,
   type SettlementSchedule,
 } from './Settlement.js'
+import { reserveChargeOrWait } from './Transports.js'
 import * as Ws from './Ws.js'
 
 /** Server-side automatic settlement schedule. */
@@ -526,6 +527,24 @@ export function session<const parameters extends session.Parameters>(
       getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
       sseEnabled: Boolean(parameters.sse),
       markPrepaidReceipt: Transport.markPrepaidSessionTick,
+      markReservedReceipt: Transport.markReservedSessionTick,
+      reserve: async (channelId, amount) => {
+        const reservationId = globalThis.crypto.randomUUID()
+        await reserveChargeOrWait({
+          store,
+          channelId,
+          amount,
+          reservationId,
+          pollIntervalMs: 100,
+          formatNeedVoucher: () => '',
+          emit: () => {
+            throw new Errors.InsufficientBalanceError({
+              reason: 'insufficient unreserved voucher coverage',
+            })
+          },
+        })
+        return reservationId
+      },
       charge: (channelId, requestAmount) =>
         chargeSessionChannel({ store, channelId, amount: requestAmount }),
       settleCharged: (channel) =>

@@ -14,9 +14,20 @@ import { requireSessionCredentialContext } from '../../session/precompile/Protoc
 import * as ChannelStore from '../../session/server/ChannelStore.js'
 import type { SettleChargedSessionChannel } from '../../session/server/Settlement.js'
 import * as Sse_core from '../../session/server/Sse.js'
+import { commitReservedCharges, releaseReservedCharges } from '../../session/server/Transports.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+const reservedSessionTick = new WeakMap<SessionReceipt, string>()
+
+/** Transfers a reserved request tick to the response transport. */
+export function markReservedSessionTick(
+  receipt: SessionReceipt,
+  reservationId: string,
+): SessionReceipt {
+  reservedSessionTick.set(receipt, reservationId)
+  return receipt
+}
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -100,6 +111,7 @@ export function sse(
         'No SSE context available',
       )
       const channelId = payload.channelId
+      const reservedChargeId = reservedSessionTick.get(receipt as SessionReceipt)
       const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
       const unitType =
         typeof verifiedRequest.unitType === 'string' ? verifiedRequest.unitType : undefined
@@ -127,12 +139,30 @@ export function sse(
           generate,
           beforeCharge: () => options.beforeCharge?.(channelId),
           onChargeCommitted: options.settleCharged,
-          prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
+          reservedChargeId,
+          prepaidUnits:
+            reservedChargeId || hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
           signal: input.signal,
         })
         return Sse_core.toResponse(stream)
       }
 
+      if (reservedChargeId) {
+        const reservation = { store, channelId, reservationId: reservedChargeId }
+        try {
+          await options.beforeCharge?.(channelId)
+          const charged = await commitReservedCharges(reservation)
+          if (!charged) throw new Error('request reservation was lost')
+          receipt = markPrepaidSessionTick({
+            ...(receipt as SessionReceipt),
+            spent: charged.spent.toString(),
+            units: charged.units,
+          })
+          await options.settleCharged?.(charged)
+        } finally {
+          await releaseReservedCharges(reservation)
+        }
+      }
       const baseResponse = base.respondReceipt({
         credential: verifiedCredential,
         envelope,

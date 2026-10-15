@@ -242,6 +242,8 @@ describe('applyVerifiedHttpAccounting', () => {
       charge,
       getRequestAmount: () => 75n,
       markPrepaidReceipt,
+      reserve: async () => 'reservation-1',
+      markReservedReceipt: (receipt) => receipt,
       payloadAction: 'voucher',
       receipt: receipt(),
       settleCharged: async () => undefined,

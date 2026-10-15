@@ -87,6 +87,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     onChargeCommitted: options.onChargeCommitted,
     pollIntervalMs,
     prepaidUnits: options.prepaidUnits,
+    reservedChargeId: options.reservedChargeId,
     signal: abortController.signal,
     emitNeedVoucher: (event) => streamController?.enqueue(encoder.encode(event)),
     formatNeedVoucher: formatNeedVoucherEvent,
@@ -173,6 +174,8 @@ export declare namespace serve {
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     pollIntervalMs?: number | undefined
     prepaidUnits?: number | undefined
+    /** Existing first-tick reservation transferred from request verification. */
+    reservedChargeId?: string | undefined
     signal?: AbortSignal | undefined
   }
 }
