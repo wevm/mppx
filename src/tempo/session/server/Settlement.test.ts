@@ -235,7 +235,10 @@ describe('applyVerifiedHttpAccounting', () => {
     const markPrepaidReceipt = vi.fn((value) => value)
 
     await applyVerifiedHttpAccounting({
-      capturedRequest: capturedRequest({ method: 'GET' }),
+      capturedRequest: capturedRequest({
+        method: 'GET',
+        headers: new Headers({ accept: 'text/event-stream' }),
+      }),
       charge,
       getRequestAmount: () => 75n,
       markPrepaidReceipt,
@@ -247,6 +250,43 @@ describe('applyVerifiedHttpAccounting', () => {
 
     expect(charge).not.toHaveBeenCalled()
     expect(markPrepaidReceipt).not.toHaveBeenCalled()
+  })
+
+  test.each([undefined, 'text/event-stream'])(
+    'rejects exhausted content coverage with Accept %s',
+    async (accept) => {
+      const charge = vi.fn(async () => {
+        throw new Error('insufficient coverage')
+      })
+      await expect(
+        applyVerifiedHttpAccounting({
+          capturedRequest: capturedRequest({ headers: new Headers(accept ? { accept } : {}) }),
+          charge,
+          getRequestAmount: () => 75n,
+          payloadAction: 'voucher',
+          receipt: { ...receipt(), spent: '200' },
+          settleCharged: async () => undefined,
+          sseEnabled: true,
+        }),
+      ).rejects.toThrow(/available 0|insufficient coverage/)
+    },
+  )
+
+  test('precharges plain HTTP on an SSE-enabled route', async () => {
+    const charge = vi.fn(async () => chargedChannel())
+    const markPrepaidReceipt = vi.fn((value) => value)
+    await applyVerifiedHttpAccounting({
+      capturedRequest: capturedRequest({}),
+      charge,
+      markPrepaidReceipt,
+      getRequestAmount: () => 75n,
+      payloadAction: 'voucher',
+      receipt: receipt(),
+      settleCharged: async () => undefined,
+      sseEnabled: true,
+    })
+    expect(charge).toHaveBeenCalledWith(channelId, 75n)
+    expect(markPrepaidReceipt).toHaveBeenCalledOnce()
   })
 
   test('does not charge SSE voucher management POSTs', async () => {

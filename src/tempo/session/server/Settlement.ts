@@ -383,10 +383,21 @@ export function shouldApplyVerifiedHttpAccounting(
 export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
 ): Promise<SessionReceipt> {
-  const { receipt } = parameters
-  if (parameters.sseEnabled || !shouldApplyVerifiedHttpAccounting(parameters)) return receipt
+  const { receipt, sseEnabled } = parameters
+  if (!shouldApplyVerifiedHttpAccounting(parameters)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
+  if (
+    sseEnabled &&
+    parameters.capturedRequest?.headers.get('accept')?.includes('text/event-stream')
+  ) {
+    const available = BigInt(receipt.acceptedCumulative) - BigInt(receipt.spent)
+    if (available < requestAmount)
+      throw new InsufficientBalanceError({
+        reason: `requested ${requestAmount}, available ${available}`,
+      })
+    return receipt
+  }
   const charged = await parameters.charge(receipt.channelId, requestAmount)
   const settlementTxHash = await parameters.settleCharged(charged)
   const chargedReceipt = {
@@ -395,7 +406,9 @@ export async function applyVerifiedHttpAccounting(
     units: charged.units,
     ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
   }
-  return chargedReceipt
+  return sseEnabled
+    ? (parameters.markPrepaidReceipt?.(chargedReceipt) ?? chargedReceipt)
+    : chargedReceipt
 }
 
 /** Atomically deducts spend from a channel and maps store failures to typed session errors. */
