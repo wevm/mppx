@@ -34,3 +34,8 @@ export function has(method: Method.AnyClient): boolean {
 export function handle(method: Method.AnyClient, parameters: HandlerParameters): Promise<void> {
   return Promise.resolve(handlers.get(method)?.(parameters))
 }
+
+/** Returns the registered internal hook so a manager can coordinate its work. */
+export function get(method: Method.AnyClient): Handler | undefined {
+  return handlers.get(method)
+}

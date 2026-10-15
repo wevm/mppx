@@ -1425,6 +1425,159 @@ describe('Session', () => {
     )
   })
 
+  describe('funding coordination', () => {
+    function setup() {
+      const entry = channelEntry({ deposit: 5_000_000n })
+      const challenge = makeChallenge({ amount: '6000000', suggestedDeposit: '5000000' })
+      if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+      const posted: SessionCredentialPayload[] = []
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const storage = makeChannelStore([entry])
+      const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) return make402Response(challenge)
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        posted.push(payload)
+        if (payload.action === 'topUp') await gate
+        return makeOkResponse()
+      })
+      const manager = sessionManager({
+        account,
+        client,
+        fetch,
+        channelStore: storage.store,
+        maxDeposit: '10',
+      })
+      const internals = getSessionManagerInternals(manager)
+      const input = 'https://api.example.com/stream'
+      internals.rehydrate({ channel: entry, challenge, input, spent: 0n })
+      const consume = async (signal: AbortSignal) => {
+        const response = Object.assign(
+          makeSseResponse([
+            formatNeedVoucherEvent({
+              channelId: entry.channelId,
+              deposit: '5000000',
+              acceptedCumulative: '1000000',
+              requiredCumulative: '6000000',
+            }),
+          ]),
+          { challenge, channelId: entry.channelId, cumulative: 1_000_000n, receipt: null },
+        )
+        for await (const _chunk of internals.consumeSseResponse(input, response, { signal })) {
+          /* drain */
+        }
+      }
+      return {
+        manager,
+        internals,
+        entry,
+        challenge,
+        input,
+        storage,
+        posted,
+        release,
+        consume,
+        fetch,
+      }
+    }
+
+    test('aborts a queued flow before the in-flight top-up completes', async () => {
+      const h = setup()
+      const first = h.manager.topUp('5')
+      await vi.waitFor(() => expect(h.posted).toHaveLength(1))
+      const controller = new AbortController()
+      const listen = vi.spyOn(controller.signal, 'addEventListener')
+      const queued = h.consume(controller.signal)
+      const rejected = expect(queued).rejects.toThrow('stop waiting')
+      try {
+        await vi.waitFor(() => expect(listen).toHaveBeenCalled())
+        controller.abort(new Error('stop waiting'))
+        await rejected
+        expect(h.posted).toHaveLength(1)
+      } finally {
+        h.release()
+        await first
+      }
+    })
+
+    test.each(['channel', 'url'] as const)(
+      'rejects a queued manual top-up after its %s changes',
+      async (change) => {
+        const h = setup()
+        const first = h.manager.topUp('5')
+        await vi.waitFor(() => expect(h.posted).toHaveLength(1))
+        const queued = h.manager.topUp('1')
+        const rejected = expect(queued).rejects.toThrow('Session changed')
+        h.internals.rehydrate({
+          channel: change === 'channel' ? { ...h.entry, channelId } : h.entry,
+          challenge: h.challenge,
+          input: change === 'url' ? 'https://other.example.com/' : h.input,
+          spent: 0n,
+        })
+        h.release()
+        await first
+        await rejected
+        expect(h.posted).toHaveLength(1)
+      },
+    )
+
+    test.each([false, true])(
+      'preserves a newer runtime during persistence (replacement: %s)',
+      async (replacement) => {
+        const h = setup()
+        h.release()
+        let persist!: () => void
+        const gate = new Promise<void>((resolve) => {
+          persist = resolve
+        })
+        const originalSet = h.storage.store.set
+        h.storage.store.set = vi.fn(async (entry) => {
+          await gate
+          await originalSet(entry)
+        })
+        const topUp = h.manager.topUp('5')
+        await vi.waitFor(() => expect(h.storage.store.set).toHaveBeenCalled())
+        const newer = {
+          ...h.entry,
+          cumulativeAmount: 4_000_000n,
+          ...(replacement ? { channelId } : {}),
+        }
+        h.internals.rehydrate({ channel: newer, challenge: h.challenge, input: h.input, spent: 0n })
+        persist()
+        await topUp
+        expect(h.manager.channelId).toBe(newer.channelId)
+        expect(h.manager.cumulative).toBe(4_000_000n)
+        expect(await h.storage.store.get(entryKey(newer))).toMatchObject({
+          channelId: newer.channelId,
+          cumulativeAmount: 4_000_000n,
+        })
+        if (!replacement) {
+          expect(h.manager.state).toMatchObject({ deposit: '10000000' })
+          expect(await h.storage.store.get(entryKey(newer))).toMatchObject({
+            deposit: 10_000_000n,
+            cumulativeAmount: 4_000_000n,
+          })
+        }
+      },
+    )
+
+    test('shares the funding lock with preemptive HTTP challenges', async () => {
+      const h = setup()
+      const first = h.manager.topUp('5')
+      await vi.waitFor(() => expect(h.posted).toHaveLength(1))
+      const request = h.manager.fetch(h.input)
+      await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(2))
+      h.release()
+      await first
+      await request
+      expect(h.posted.filter((payload) => payload.action === 'topUp')).toHaveLength(1)
+      expect(h.manager.state).toMatchObject({ deposit: '10000000' })
+    })
+  })
+
   describe('.topUp()', () => {
     test('posts a precompile top-up credential for the active channel', async () => {
       const postedPayloads: SessionCredentialPayload[] = []
