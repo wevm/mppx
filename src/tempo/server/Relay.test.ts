@@ -1,4 +1,3 @@
-import { Hash, Hex, Json, Bytes } from 'ox'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
@@ -199,7 +198,6 @@ describe('relay boundary', () => {
           headers: expect.objectContaining({
             Accept: 'application/json',
             'content-type': 'application/json',
-            'idempotency-key': expect.stringMatching(/^mpp_0x/),
             'tempo-api-key': 'tempo_api_key',
           }),
           method: 'POST',
@@ -268,59 +266,27 @@ describe('relay boundary', () => {
     expect(calls).toEqual(['/v1/mpp/validate', '/v1/mpp/broadcast'])
   })
 
-  test('uses the transaction hash as the transaction broadcast idempotency key', async () => {
-    const calls: RequestInit[] = []
-    const fetch = mockRelay((_url, init) => {
-      calls.push(init)
-      return successReceipt()
-    })
-    const [method] = methods(fetch)
-
-    await method.broadcast!({ credential, request: credential.challenge.request } as never)
-    await method.broadcast!({ credential, request: credential.challenge.request } as never)
-    await method.broadcast!({
-      credential: { ...credential, payload: { signature: '0x5678', type: 'transaction' } },
-      request: credential.challenge.request,
-    } as never)
-
-    const keys = calls.map((init) => (init.headers as Record<string, string>)['idempotency-key'])
-    expect(keys).toEqual([
-      `mpp_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
-      `mpp_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
-      `mpp_${Hash.keccak256(Hex.toBytes('0x5678'), { as: 'Hex' })}`,
-    ])
-  })
-
-  test('uses a canonical credential hash for non-transaction broadcasts', async () => {
-    const calls: RequestInit[] = []
-    const fetch = mockRelay((_url, init) => {
-      calls.push(init)
-      return successReceipt()
-    })
-    const [method] = methods(fetch)
-    const proofCredential = {
-      ...credential,
-      payload: { proof: 'proof_123', type: 'proof' },
-    }
-
-    await method.broadcast!({
-      credential: proofCredential,
-      request: credential.challenge.request,
-    } as never)
-
-    const headers = calls[0]!.headers as Record<string, string>
-    const expected = Hash.sha256(
-      Bytes.fromString(
-        Json.canonicalize({
-          challenge: proofCredential.challenge,
-          payload: proofCredential.payload,
-          source: proofCredential.source,
-        }),
-      ),
-      { as: 'Hex' },
-    )
-    expect(headers['idempotency-key']).toBe(`mpp_${expected}`)
-  })
+  test.each(['transaction', 'hash', 'proof'])(
+    'consumes %s credentials once instead of returning cached success',
+    async (type) => {
+      let consumed = false
+      const fetch = mockRelay((url, init) => {
+        if (url.pathname.endsWith('/validate')) return Response.json({ success: true })
+        if (consumed && !new Headers(init.headers).has('idempotency-key'))
+          return Response.json({ success: false, error: { code: 'already_used', message: 'Used' } })
+        consumed = true
+        return successReceipt()
+      })
+      const [method] = methods(fetch)
+      const input = {
+        credential: { ...credential, payload: { ...credential.payload, type } },
+        request: credential.challenge.request,
+      } as never
+      const results = await Promise.allSettled([method.verify!(input), method.verify!(input)])
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    },
+  )
 
   test('preserves the legacy combined verify hook', async () => {
     const calls: string[] = []

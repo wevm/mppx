@@ -1,5 +1,3 @@
-import { Bytes, Hash, Hex, Json } from 'ox'
-
 import { PaymentExpiredError, VerificationFailedError } from '../../Errors.js'
 import type * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
@@ -94,9 +92,7 @@ export function configure<const intent extends Method.Method>(
 
   const broadcast: Method.BroadcastFn<intent> = async (parameters) => {
     const input = toRelayInput(parameters.credential)
-    const receipt = await request.broadcast(input, {
-      idempotencyKey: idempotencyKey(input),
-    })
+    const receipt = await request.broadcast(input)
     if (receipt.method !== method.name) throw failure()
     try {
       return Receipt.from({ ...receipt, status: 'success' })
@@ -170,7 +166,6 @@ function createRequest(options: configure.Options) {
   async function post(
     path: 'v1/mpp/broadcast' | 'v1/mpp/validate',
     input: RelayInput,
-    headers?: Record<string, string>,
   ): Promise<unknown> {
     let response: Response
     try {
@@ -180,7 +175,6 @@ function createRequest(options: configure.Options) {
           Accept: 'application/json',
           'content-type': 'application/json',
           'tempo-api-key': options.apiKey,
-          ...headers,
         },
         method: 'POST',
       })
@@ -197,10 +191,10 @@ function createRequest(options: configure.Options) {
     if (!isValidateSuccess(response)) throw failure(response)
   }
 
-  const broadcast = async (input: RelayInput, broadcastOptions: { idempotencyKey: string }) => {
-    const response = await post('v1/mpp/broadcast', input, {
-      'idempotency-key': broadcastOptions.idempotencyKey,
-    })
+  const broadcast = async (input: RelayInput) => {
+    // A cached settlement receipt must not authorize another protected operation.
+    // Omitting the idempotency key leaves credential consumption to the relay.
+    const response = await post('v1/mpp/broadcast', input)
     if (!isBroadcastSuccess(response)) throw failure(response)
     return response.receipt
   }
@@ -221,22 +215,6 @@ function toRelayInput(credential: {
     payload: credential.payload,
     ...(credential.source ? { source: credential.source } : {}),
   }
-}
-
-function idempotencyKey(input: RelayInput): string {
-  const payload = input.payload
-  if (
-    isRecord(payload) &&
-    payload.type === 'transaction' &&
-    typeof payload.signature === 'string' &&
-    Hex.validate(payload.signature)
-  ) {
-    const transactionHash = Hash.keccak256(Hex.toBytes(payload.signature), { as: 'Hex' })
-    return `mpp_${transactionHash}`
-  }
-
-  const hash = Hash.sha256(Bytes.fromString(Json.canonicalize(input)), { as: 'Hex' })
-  return `mpp_${hash}`
 }
 
 function failure(value?: unknown) {
