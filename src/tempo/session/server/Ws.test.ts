@@ -861,3 +861,41 @@ describe('isows', () => {
     expect(channel?.units).toBe(0)
   })
 })
+
+test('stops a websocket when the pre-delivery escrow check fails', async () => {
+  const store = memoryChannelStore()
+  await seedChannel(store, 100n)
+  const socket = new MockSocket()
+  let closedOnChain = false
+  await Ws.serve({
+    socket,
+    store,
+    url: 'https://example.test/ws',
+    route: acceptingRoute(100n),
+    beforeCharge() {
+      if (closedOnChain) throw new Error('escrow closed')
+    },
+    generate: async function* (stream) {
+      await stream.charge()
+      yield 'first'
+      closedOnChain = true
+      yield 'must not be delivered'
+    },
+  })
+  socket.receive(
+    Ws.formatAuthorizationMessage(
+      makeCredential({
+        action: 'open',
+        type: 'transaction',
+        channelId,
+        transaction: '0x',
+        cumulativeAmount: '100',
+        signature: '0x',
+      }),
+    ),
+  )
+  await vi.waitFor(() => expect(socket.closed).toBe(true))
+  expect(socket.sent.some((frame) => frame.includes('first'))).toBe(true)
+  expect(socket.sent.some((frame) => frame.includes('must not be delivered'))).toBe(false)
+  expect((await store.getChannel(channelId))!.spent).toBe(1n)
+})

@@ -162,6 +162,7 @@ export async function serve(options: serve.Options): Promise<void> {
         channelId: context.channelId,
         tickCost: context.tickCost,
         generate,
+        beforeCharge: () => options.beforeCharge?.(context.channelId),
         onChargeCommitted: options.onChargeCommitted ?? options.settleScheduled,
         pollIntervalMs,
         signal: abortController.signal,
@@ -362,7 +363,9 @@ export declare namespace serve {
     /** Payment route handler. Receives synthetic `POST` requests with only
      *  the `Authorization` header — no cookies, bodies, or upgrade headers. */
     route: SessionRoute
-    /** Optional low-level hook invoked after each committed stream charge. */
+    /** Verifies live escrow before charging and delivering stream items. */
+    beforeCharge?: ((channelId: StreamContext['channelId']) => void | Promise<void>) | undefined
+    /** Callback invoked after each nonzero stream charge is committed. */
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     /** @deprecated Use `onChargeCommitted`. */
     settleScheduled?: SettleChargedSessionChannel | undefined

@@ -51,6 +51,7 @@ function hasPrepaidSessionTick(receipt: SessionReceipt): boolean {
  */
 export function sse(
   options: sse.Options & {
+    beforeCharge?: ((channelId: `0x${string}`) => Promise<void>) | undefined
     settleCharged?: SettleChargedSessionChannel | undefined
     store: ChannelStore.ChannelStore
   },
@@ -124,6 +125,7 @@ export function sse(
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
+          beforeCharge: () => options.beforeCharge?.(channelId),
           onChargeCommitted: options.settleCharged,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
           signal: input.signal,

@@ -83,6 +83,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     channelId,
     tickCost,
     generate,
+    beforeCharge: options.beforeCharge,
     onChargeCommitted: options.onChargeCommitted,
     pollIntervalMs,
     prepaidUnits: options.prepaidUnits,
@@ -166,6 +167,8 @@ export declare namespace serve {
     challengeId: string
     tickCost: bigint
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Verifies live escrow before charging and delivering stream items. */
+    beforeCharge?: MeteredStreamOptions['beforeCharge']
     /** Callback invoked after each nonzero stream charge is committed. */
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     pollIntervalMs?: number | undefined

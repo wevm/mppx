@@ -5257,3 +5257,71 @@ describe('onSessionSettlement', () => {
     ).rejects.toThrow(/broadcast failed/)
   })
 })
+
+test.each(
+  ['withdrawn', 'closing', 'rpc failure'].flatMap((failure) =>
+    [0, Number.MAX_SAFE_INTEGER].map((ttl) => ({ failure, ttl })),
+  ),
+)(
+  'managed SSE stops delivering after escrow is $failure with TTL $ttl',
+  async ({ failure, ttl }) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const open = await createOpenPayload({ initialAmount: 100n })
+      await persistPrecompileChannel(store, open)
+      let unhealthy = false
+      const method = session({
+        amount: '1',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        sse: true,
+        store: rawStore,
+        channelStateTtl: ttl,
+        getClient: () =>
+          createServerClient([], payer, undefined, {
+            state: () => {
+              if (unhealthy && failure === 'rpc failure') throw new Error('RPC unavailable')
+              return {
+                settled: 0n,
+                deposit: unhealthy && failure === 'withdrawn' ? 0n : 1_000n,
+                closeRequestedAt: unhealthy && failure === 'closing' ? 1 : 0,
+              }
+            },
+          }),
+      })
+      const challenge = {
+        ...makeChallenge(open.channelId),
+        request: { ...makeRequest(open.channelId), amount: '1' },
+      }
+      const credential = { challenge, payload: open }
+      const response = await method.transport!.respondReceipt({
+        challengeId: challenge.id,
+        credential,
+        receipt: {
+          method: 'tempo',
+          status: 'success',
+          timestamp: new Date().toISOString(),
+          reference: open.channelId,
+        },
+        input: new Request('https://api.example.com/stream'),
+        response: (async function* () {
+          yield 'first'
+          unhealthy = true
+          vi.setSystemTime(Date.now() + 5_001)
+          yield 'must not be delivered'
+        })(),
+      })
+      const reader = response.body!.getReader()
+      const first = await reader.read()
+      expect(new TextDecoder().decode(first.value)).toContain('first')
+      await expect(reader.read()).rejects.toThrow()
+      expect((await store.getChannel(open.channelId))!.spent).toBe(1n)
+    } finally {
+      vi.useRealTimers()
+    }
+  },
+)

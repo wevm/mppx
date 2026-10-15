@@ -395,3 +395,15 @@ The module boundaries implement these contracts:
 | `server/Settlement.ts`                                          | Content accounting and server-owned settlement cadence.                       |
 | `server/RequestState.ts`                                        | Challenge context, bootstrap identity lookup, snapshots, and response gating. |
 | `client/Transports.ts` and `server/Transports.ts`               | SSE and WebSocket payment control messages.                                   |
+
+### Live escrow checks while streaming
+
+Managed SSE responses and `mppx.tempo.session.serveWebSocket` recheck on-chain
+escrow before charges and delivery, caching successful reads for at most five
+seconds (`channelStateTtl` can shorten this). Pending closes, withdrawn deposits,
+and failed RPC reads stop delivery. This bounds stale-state exposure; it does
+not settle earlier charges or replace a settlement schedule.
+
+Applications using low-level `Sse.serve` or `Ws.serve` must provide their own
+`beforeCharge` hook to check live escrow. The hook is also called before delivery,
+including prepaid items and manual generators that yield after a delay.

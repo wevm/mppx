@@ -27,6 +27,7 @@ import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
 import { fallbackStore } from '../../server/internal/fallback-store.js'
 import * as Transport from '../../server/internal/transport.js'
+import * as Chain from '../precompile/Chain.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
@@ -34,7 +35,7 @@ import {
 } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
 import { broadcastCredentialPayload, validateCredentialPayload } from './CredentialVerification.js'
-import { requireSessionCredentialPayload } from './CredentialVerification.js'
+import { requireSessionCredentialPayload, validateChannelState } from './CredentialVerification.js'
 import {
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
@@ -386,9 +387,24 @@ export function session<const parameters extends session.Parameters>(
   // stays served because the payer's voucher already covers the charge.
   const settleCharged: SettleChargedSessionChannel = (channel) =>
     settleScheduled(channel).catch(ignoreRetryableSettlementFailure)
+  // Stream checks have a bounded TTL even when callers disable validation caching.
+  // Cache only successful reads; RPC failures must stop delivery.
+  const beforeStreamCharge = async (channelId: Hex) => {
+    const channel = await store.getChannel(channelId)
+    if (!channel || channel.finalized || channel.closeRequestedAt !== 0n)
+      throw new Errors.ChannelClosedError({ reason: 'stream channel is closed' })
+    const now = Date.now()
+    const ttl = Math.min(Math.max(channelStateTtl, 0), 5_000)
+    if (now - (lastOnChainVerified.get(channelId) ?? 0) < ttl) return
+    const client = await getClient({ chainId: channel.chainId })
+    const state = await Chain.getChannelState(client, channelId, channel.escrowContract)
+    validateChannelState(state)
+    lastOnChainVerified.set(channelId, now)
+  }
   const serveWebSocket: session.Extensions['serveWebSocket'] = (options) =>
     Ws.serve({
       ...options,
+      beforeCharge: beforeStreamCharge,
       onChargeCommitted: settleCharged,
       store,
     })
@@ -406,6 +422,7 @@ export function session<const parameters extends session.Parameters>(
   type SessionTransport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
     ? Transport.sse({
+        beforeCharge: beforeStreamCharge,
         settleCharged,
         store,
         ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
@@ -629,7 +646,7 @@ export namespace session {
   /** WebSocket server options supplied after the session binds shared dependencies. */
   export type ServeWebSocketOptions = Omit<
     Ws.serve.Options,
-    'onChargeCommitted' | 'settleScheduled' | 'store'
+    'beforeCharge' | 'onChargeCommitted' | 'settleScheduled' | 'store'
   >
 
   /** Request defaults inferred from the Tempo session method schema. */
