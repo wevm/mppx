@@ -396,8 +396,14 @@ export function session<const parameters extends session.Parameters>(
     const now = Date.now()
     const ttl = Math.min(Math.max(channelStateTtl, 0), 5_000)
     if (now - (lastOnChainVerified.get(channelId) ?? 0) < ttl) return
-    const client = await getClient({ chainId: channel.chainId })
-    const state = await Chain.getChannelState(client, channelId, channel.escrowContract)
+    let state: Chain.ChannelState
+    try {
+      const client = await getClient({ chainId: channel.chainId })
+      state = await Chain.getChannelState(client, channelId, channel.escrowContract)
+    } catch {
+      // Transport errors can include private RPC URLs or authentication details.
+      throw new Error('Unable to verify stream escrow')
+    }
     validateChannelState(state)
     lastOnChainVerified.set(channelId, now)
   }

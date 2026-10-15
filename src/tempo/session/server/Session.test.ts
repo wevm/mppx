@@ -5284,7 +5284,8 @@ test.each(
         getClient: () =>
           createServerClient([], payer, undefined, {
             state: () => {
-              if (unhealthy && failure === 'rpc failure') throw new Error('RPC unavailable')
+              if (unhealthy && failure === 'rpc failure')
+                throw new Error('RPC unavailable at https://private-rpc.example/secret-api-key')
               return {
                 settled: 0n,
                 deposit: unhealthy && failure === 'withdrawn' ? 0n : 1_000n,
@@ -5318,7 +5319,9 @@ test.each(
       const reader = response.body!.getReader()
       const first = await reader.read()
       expect(new TextDecoder().decode(first.value)).toContain('first')
-      await expect(reader.read()).rejects.toThrow()
+      await expect(reader.read()).rejects.toThrow(
+        failure === 'rpc failure' ? 'Unable to verify stream escrow' : /channel/,
+      )
       expect((await store.getChannel(open.channelId))!.spent).toBe(1n)
     } finally {
       vi.useRealTimers()
