@@ -5294,6 +5294,13 @@ test.each(
             },
           }),
       })
+      const rejectedVoucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        open.descriptor,
+        Types.uint96(250n),
+        chainId,
+      )
       const challenge = {
         ...makeChallenge(open.channelId),
         request: { ...makeRequest(open.channelId), amount: '1' },
@@ -5313,6 +5320,14 @@ test.each(
           yield 'first'
           unhealthy = true
           vi.setSystemTime(Date.now() + 5_001)
+          if (failure === 'withdrawn') {
+            await expect(
+              method.verify({
+                credential: voucherCredential(rejectedVoucher, open.channelId),
+                request: verifyRequest(open.channelId),
+              }),
+            ).rejects.toThrow()
+          }
           yield 'must not be delivered'
         })(),
       })

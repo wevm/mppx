@@ -646,7 +646,8 @@ async function resolveVoucherChannelState(parameters: {
   const shouldRefresh =
     forceRefresh || Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
   const state = shouldRefresh ? await Chain.getChannelState(client, channelId, escrow) : undefined
-  if (state?.closeRequestedAt) lastOnChainVerified.delete(channelId)
+  if (state && (state.closeRequestedAt !== 0 || state.deposit === 0n))
+    lastOnChainVerified.delete(channelId)
   else if (state) lastOnChainVerified.set(channelId, Date.now())
   return {
     deposit: state?.deposit ?? uint96(channel.deposit),
