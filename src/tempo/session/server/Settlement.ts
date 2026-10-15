@@ -359,12 +359,6 @@ export type ApplyVerifiedHttpAccountingParameters = {
   receipt: SessionReceipt
   /** Marks an SSE receipt whose first content unit was charged during verification. */
   markPrepaidReceipt?: ((receipt: SessionReceipt) => SessionReceipt) | undefined
-  /** Reserves the first SSE content tick before application work begins. */
-  reserve?: ((channelId: Hex, amount: bigint) => Promise<string>) | undefined
-  /** Attaches the reservation to the receipt for transport ownership. */
-  markReservedReceipt?:
-    | ((receipt: SessionReceipt, reservationId: string) => SessionReceipt)
-    | undefined
   /** Whether SSE transport is enabled. SSE accounting is stream-driven, not HTTP-response-driven. */
   sseEnabled: boolean
   /** Runs optional server settlement policy after a successful content charge. */
@@ -393,10 +387,6 @@ export async function applyVerifiedHttpAccounting(
   if (!shouldApplyVerifiedHttpAccounting(parameters)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
-  if (sseEnabled && parameters.reserve && parameters.markReservedReceipt) {
-    const reservationId = await parameters.reserve(receipt.channelId, requestAmount)
-    return parameters.markReservedReceipt(receipt, reservationId)
-  }
   const charged = await parameters.charge(receipt.channelId, requestAmount)
   const settlementTxHash = await parameters.settleCharged(charged)
   const chargedReceipt = {

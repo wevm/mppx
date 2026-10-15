@@ -53,8 +53,6 @@ export type MeteredStreamOptions = {
   pollIntervalMs: number
   /** Pre-authorized implicit tick-cost units that may be emitted without a new reservation. */
   prepaidUnits?: number | undefined
-  /** Existing first-tick reservation transferred from request verification. */
-  reservedChargeId?: string | undefined
   /** Optional abort signal for stream cancellation. */
   signal?: AbortSignal | undefined
   /** Channel store used for state reads and atomic charge commits. */
@@ -71,9 +69,9 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
   const reservation = {
     store: options.store,
     channelId: options.channelId,
-    reservationId: options.reservedChargeId ?? globalThis.crypto.randomUUID(),
+    reservationId: globalThis.crypto.randomUUID(),
   }
-  let pending = Boolean(options.reservedChargeId)
+  let pending = false
   let cancelled = false
   const onAbort = () => {
     if (signal.aborted) return

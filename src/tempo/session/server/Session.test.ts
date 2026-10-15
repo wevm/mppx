@@ -2247,76 +2247,24 @@ describe('precompile server session unit guardrails', () => {
   })
 
   describe('default HTTP auto-billing', () => {
-    function createRoute(rawStore: Store.AtomicStore, sse = false, amount = '1') {
+    function createRoute(rawStore: Store.AtomicStore) {
       return Mppx_server.create({
         methods: [
           tempo_server.session({
-            amount,
+            amount: '1',
             chainId,
             currency: token,
             decimals: 0,
             recipient: payee,
             store: rawStore,
-            sse,
             unitType: 'request',
             getClient: () => createStateClient(payer),
           }),
         ],
         realm: 'api.example.com',
         secretKey: 'test-secret-key-test-secret-key-32',
-      }).session({ amount, decimals: 0, unitType: 'request' })
+      }).session({ amount: '1', decimals: 0, unitType: 'request' })
     }
-
-    test.each([undefined, 'text/event-stream'])(
-      'reserves coverage before concurrent handlers with Accept %s',
-      async (accept) => {
-        const rawStore = Store.memory()
-        const store = channelStore(rawStore)
-        const open = await createOpenPayload({ initialAmount: 101n })
-        await persistPrecompileChannel(store, open, {
-          highestVoucherAmount: 0n,
-          highestVoucher: null,
-        })
-        const route = createRoute(rawStore, true, '100')
-        const offered = await route(new Request('https://api.example.com/resource'))
-        if (offered.status !== 402) throw new Error('expected challenge')
-        const challenge = Challenge.fromResponse(offered.challenge)
-        const vouchers = await Promise.all(
-          [100n, 101n].map((amount) =>
-            ClientOps.createVoucherPayload(
-              createSigningClient(),
-              payer,
-              open.descriptor,
-              Types.uint96(amount),
-              chainId,
-            ),
-          ),
-        )
-        const results = await Promise.all(
-          vouchers.map((payload) =>
-            route(
-              new Request('https://api.example.com/resource', {
-                headers: {
-                  Authorization: Credential.serialize({ challenge, payload, source: sourceFor() }),
-                  ...(accept ? { accept } : {}),
-                },
-              }),
-            ),
-          ),
-        )
-        expect(results.filter((result) => result.status === 200)).toHaveLength(1)
-        const reserved = await store.getChannel(open.channelId)
-        expect(reserved?.spent).toBe(0n)
-        expect(ChannelStore.reservedStreamAmount(reserved!)).toBe(100n)
-        const accepted = results.find((result) => result.status === 200)!
-        if (accepted.status !== 200) throw new Error('expected acceptance')
-        const response = await accepted.withReceipt(new Response('paid content'))
-        expect(await response.text()).toBe('paid content')
-        const committed = await store.getChannel(open.channelId)
-        expect(committed?.spent).toBe(100n)
-        expect(ChannelStore.reservedStreamAmount(committed!)).toBe(0n)
-      },
-    )
 
     test('GET content flow charges once and rejects same-voucher replay', async () => {
       const rawStore = Store.memory()
@@ -2773,7 +2721,6 @@ describe('precompile server session unit guardrails', () => {
       options: {
         amount?: string
         chunkDelayMs?: number
-        failBeforeFirstChunk?: 'closing' | 'rpc failure'
         explicitCharge?: bigint
         maxDeposit?: bigint
         onSessionSettlement?: session.Parameters['onSessionSettlement']
@@ -2791,7 +2738,6 @@ describe('precompile server session unit guardrails', () => {
       const maxDeposit = options.maxDeposit ?? 3n
       let deposit = maxDeposit
       let settled = 0n
-      let failStream = false
       const unitType = options.unitType ?? 'token'
       const route = Mppx_server.create({
         methods: [
@@ -2839,11 +2785,7 @@ describe('precompile server session unit guardrails', () => {
                   settled = channel?.highestVoucherAmount ?? settled
                   return transactionReceipt([settledLog(activeChannelId, settled)])
                 },
-                state: () => {
-                  if (failStream && options.failBeforeFirstChunk === 'rpc failure')
-                    throw new Error('RPC unavailable')
-                  return { settled, deposit, closeRequestedAt: failStream ? 1 : 0 }
-                },
+                state: () => ({ settled, deposit, closeRequestedAt: 0 }),
               })
             },
           }),
@@ -2886,10 +2828,6 @@ describe('precompile server session unit guardrails', () => {
 
           currentPayload = undefined
           return result.withReceipt(async function* (stream) {
-            if (options.failBeforeFirstChunk) {
-              failStream = true
-              vi.setSystemTime(Date.now() + 5_001)
-            }
             if (options.explicitCharge !== undefined) {
               await stream.charge(options.explicitCharge)
               yield 'chunk-1'
@@ -2949,47 +2887,7 @@ describe('precompile server session unit guardrails', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
-    test.each(['closing', 'rpc failure'] as const)(
-      'does not charge undelivered SSE content after %s',
-      async (failure) => {
-        vi.useFakeTimers({ toFake: ['Date'] })
-        try {
-          const settlements = vi.fn()
-          const harness = createManagedSseFetch({
-            failBeforeFirstChunk: failure,
-            onSessionSettlement: settlements,
-            settlementSchedule: { units: 1 },
-          })
-          const manager = precompileSessionManager({
-            account: payer,
-            client: createSigningClient(),
-            decimals: 0,
-            fetch: harness.fetch,
-            maxDeposit: '3',
-          })
-          await expect(
-            (async () => {
-              for await (const _chunk of await manager.sse('https://api.example.com/stream')) {
-                throw new Error('unexpected delivered chunk')
-              }
-            })(),
-          ).rejects.toThrow(
-            failure === 'rpc failure' ? 'Unable to verify stream escrow' : /channel/,
-          )
-          expect(await channelStore(harness.rawStore).getChannel(manager.channelId!)).toMatchObject(
-            {
-              spent: 0n,
-              units: 0,
-            },
-          )
-          expect(settlements).not.toHaveBeenCalled()
-        } finally {
-          vi.useRealTimers()
-        }
-      },
-    )
-
-    test('captures an explicit stream charge including the reserved request tick', async () => {
+    test('captures an explicit stream charge after a prepaid request tick', async () => {
       const harness = createManagedSseFetch({ explicitCharge: 4014n, maxDeposit: 4015n })
       const manager = precompileSessionManager({
         account: payer,
