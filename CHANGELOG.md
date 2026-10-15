@@ -1,5 +1,26 @@
 # mppx
 
+## 0.13.5
+
+### Patch Changes
+
+- 19315c7: Bounded automatic MCP JSON and SSE payment-challenge inspection to 1 MiB while preserving the original response stream for callers.
+- 9da0e18: Removed retained native response bodies from manual payment event snapshots to prevent unbounded buffering while callers consume streams. Status and headers remained available; non-HTTP transport snapshots were unchanged.
+- 68381a4: Fixed Tempo charge `validBefore` to cover a fractional challenge expiry, so charge transactions stay valid for as long as their challenge.
+- ca6f04b: Exported `Attribution` from `mppx/tempo` so apps can encode, decode, and verify MPP attribution memos on TIP-20 transfers.
+- b085cae: Exposed the verified payer as `payer` on payment success contexts and per-method `onPaymentSuccess` hooks. Tempo charge and EVM charge validation now report the recovered payer address as `payer`.
+- 47beb31: Attached the original error as `cause` on `InternalPaymentError` so payment hooks can inspect unexpected failures, and added `CredentialReplayedError` (a `VerificationFailedError` subclass) for Tempo charge credentials whose payment already settled: replayed transaction hashes and proofs, claims held by a concurrent request, and settled transfers whose memo is bound to another challenge. The HTTP transport and session bootstrap answer it with a final 403 Problem Details response without a `WWW-Authenticate` challenge, so clients do not pay again; the problem type stays `verification-failed`.
+- 7271a85: Recovered confirmed Tempo charges when a synchronous broadcast returned an RPC error after inclusion.
+- 08fa745: Released Tempo charge transaction hash claims when settlement fails after a broadcast attempt, so retrying the same credential re-broadcasts and recovers the receipt instead of being rejected as a replay.
+- 1e692c3: Added `Errors.PaymentOutcomeUnknownError` and emitted it through `payment.failed` when a paid retry returns a 5xx response, carrying the challenge, credential, and the transaction hash for push and unsponsored Tempo charges. The response is still returned and never retried; when `payment.failed` is observed, its body is first buffered up to 64 KiB within 2 seconds so the connection is released, and a cut-off body is marked with `Mppx-Body-Truncated: true`. A thrown paid retry now passes the same error to `payment.failed` with the original error as `cause`, and the original error is still thrown.
+- 74533b0: Required at least 15 seconds of remaining validity before sponsoring and broadcasting transactions.
+- 94162a5: Fixed session settlements failing the charged request when a lagging RPC replica reverted the settle while preparing it (such as `ChannelNotFound` right after an open); `settle()` now retries reverted preparations.
+- 763a187: Shared default sponsor-budget storage across currency offers from tempo.charge and tempo.common, enforcing aggregate exposure limits without changing replay-store policy. Multi-process deployments still require a shared atomic store.
+- 68381a4: Shared one in-flight signing between concurrent Tempo charge requests for the same challenge and signer.
+- 61b4c10: Added `maxAmount` (display units, parsed with `decimals`) and `maxAtomicAmount` (base units) to the `tempo.charge()` client, matching the EVM charge client, plus a `currencies` allowlist that the caps require. Offers that exceed a cap or fail `currencies`, `expectedRecipients`, `expectedChainId`, or `allowedChainIds` are skipped during challenge selection and rejected before signing, and a `maxAmount` that would round is rejected.
+- 29855e8: Bounded synchronous Tempo charge broadcasts by a configurable `confirmationTimeoutMs` deadline (default 30 seconds). The broadcast may use at most two thirds of it, which leaves time for recovery. When the broadcast outcome is unknown, such as a timeout, a lost connection, or an "already known" response, the receipt is now polled until the deadline instead of failing while the transaction is still pending. Polling stops early once an expiring transaction is past its `validBefore`, followed by one final receipt lookup. Definitive RPC rejections still fail immediately.
+- 27213df: Added a one-time warning when Tempo `charge`, `session`, or `subscription` server methods fall back to an in-memory store, since replay protection backed by it only applies within a single instance.
+
 ## 0.13.4
 
 ### Patch Changes
