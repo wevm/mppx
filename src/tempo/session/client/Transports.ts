@@ -481,6 +481,8 @@ export type PostTopUpParameters = {
   input: RequestInfo | URL
   /** Cancels the top-up management request. */
   signal?: AbortSignal | undefined
+  /** Persists an unresolved funding outcome before another caller can reuse the channel. */
+  onUncertainFunding?: ((channel: ChannelEntry) => Promise<void>) | undefined
 }
 
 /** Inputs for retrying an HTTP 402 with a top-up/voucher management round trip. */
@@ -630,6 +632,10 @@ export async function postTopUp(
     throw new Error('Cannot top up session: no local channel descriptor available.')
   }
 
+  if (channel.uncertainTopUp)
+    throw new Error(
+      'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
+    )
   const response = await postManagementCredential({
     challenge: parameters.challenge,
     context: {
@@ -642,6 +648,12 @@ export async function postTopUp(
     fetch: parameters.fetch,
     input: parameters.input,
     signal: parameters.signal,
+  }).catch(async (error) => {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      channel.uncertainTopUp = true
+      await parameters.onUncertainFunding?.(channel)
+    }
+    throw error
   })
   if (!response.ok) throw new Error(`Top-up POST failed with status ${response.status}`)
 

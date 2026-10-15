@@ -327,7 +327,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (
       !use ||
       baseline?.channelId.toLowerCase() !== entry.channelId.toLowerCase() ||
-      entry.deposit <= baseline.deposit
+      (entry.deposit <= baseline.deposit && !entry.uncertainTopUp)
     )
       return
     use.resumed = undefined
@@ -651,6 +651,16 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       channel: runtime.channel,
       createSessionCredential,
       fetch: config.fetch,
+      onUncertainFunding: async (channel) => {
+        const current = await store.get(entryKey(channel))
+        const unresolved = {
+          ...(current?.channelId === channel.channelId ? current : channel),
+          uncertainTopUp: true,
+        }
+        if (runtime.channel?.channelId === channel.channelId) runtime.channel = unresolved
+        await store.set(unresolved)
+        commitDurableTopUp(unresolved)
+      },
     })
     updateSpentFromReceipt(receipt)
     let baseline = runtime.channel

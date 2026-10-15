@@ -308,6 +308,15 @@ export function session(parameters: session.Parameters = {}) {
         channelId: channel.channelId,
         createSessionCredential: (challenge, context) =>
           method.createCredential({ challenge, context }),
+        onUncertainFunding: async (entry) => {
+          const current = await store.get(entryKey(entry))
+          const unresolved = {
+            ...(current?.channelId === entry.channelId ? current : entry),
+            uncertainTopUp: true,
+          }
+          await store.set(unresolved)
+          sink.notifyUpdate(unresolved)
+        },
         fetch,
         input,
         signal,

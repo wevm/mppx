@@ -1507,6 +1507,23 @@ describe('Session', () => {
         await expect(h.manager.topUp('5')).rejects.toThrow('reconcile the pending payment')
         expect(h.posted).toHaveLength(1)
         expect(h.manager.state).toMatchObject({ deposit: '5000000' })
+        expect(await h.storage.store.get(entryKey(h.entry))).toMatchObject({ uncertainTopUp: true })
+        const restarted = sessionManager({
+          account,
+          client,
+          fetch: h.fetch,
+          channelStore: h.storage.store,
+          maxDeposit: '10',
+        })
+        getSessionManagerInternals(restarted).rehydrate({
+          channel: (await h.storage.store.get(entryKey(h.entry)))!,
+          challenge: h.challenge,
+          input: h.input,
+          spent: 0n,
+        })
+        await expect(restarted.topUp('5')).rejects.toThrow('reconcile the pending payment')
+        expect(h.posted).toHaveLength(1)
+        expect(await h.storage.store.get(entryKey(h.entry))).toMatchObject({ uncertainTopUp: true })
       } finally {
         h.release()
         vi.useRealTimers()

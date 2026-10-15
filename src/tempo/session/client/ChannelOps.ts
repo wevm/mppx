@@ -43,6 +43,8 @@ export type ChannelEntry = {
   channelId: Hex.Hex
   /** Highest cumulative amount this client has locally authorized. */
   cumulativeAmount: bigint
+  /** Blocks new deposits until an uncertain top-up has been reconciled against trusted chain state. */
+  uncertainTopUp?: boolean | undefined
   /** Latest channel deposit known by the client. */
   deposit: bigint
   /** TIP-1034 descriptor required for vouchers, top-ups, and close credentials. */
