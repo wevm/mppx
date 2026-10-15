@@ -12,14 +12,14 @@ export function evm() {
     method: 'evm',
     supports: (challenge) => challenge.method === 'evm' && !x402_ChallengeBrand.is(challenge),
 
-    async setup({ challenge }) {
+    async setup({ challenge, options }) {
       const request = challenge.request as Record<string, unknown>
       const methodDetails = request.methodDetails as Record<string, unknown> | undefined
       const chainId = methodDetails?.chainId as number | undefined
       const chain = chainId ? resolveChain(chainId) : undefined
       const currency = request.currency as string | undefined
 
-      const account = await resolveAccount()
+      const account = await resolveAccount(options.account)
       // Known assets provide EIP-712 domain metadata (token name/version) needed for EIP-3009 signing
       const knownCurrencies = [
         ...Object.values(evmAssets.base),
