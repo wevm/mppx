@@ -11,6 +11,7 @@ import * as Mppx from '../../server/Mppx.js'
 import * as Store from '../../Store.js'
 import { tokens } from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
+import * as Chain from '../session/precompile/Chain.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
 import * as Settlement from '../session/server/Settlement.js'
 import * as Ws from '../session/server/Ws.js'
@@ -140,6 +141,23 @@ test.each(
       const websocketStore = serve.mock.calls[0]![0].store
       if (!('updateChannel' in websocketStore)) throw new Error('Expected channel store')
       await websocketStore.updateChannel(channelId, () => ({ ...channel, channelId }))
+      const beforeCharge = serve.mock.calls[0]![0].beforeCharge!
+      expect(beforeCharge).toBeTypeOf('function')
+      const state = vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+        deposit: 0n,
+        settled: 0n,
+        closeRequestedAt: 0,
+      } as never)
+      try {
+        await websocketStore.updateChannel(channelId, (current) => ({
+          ...current!,
+          closeRequestedAt: 0n,
+        }))
+        await expect(beforeCharge(channelId)).rejects.toThrow(/channel/)
+        expect(state).toHaveBeenCalledWith(client, channelId, undefined)
+      } finally {
+        state.mockRestore()
+      }
       const settlementStore = settle.mock.calls[0]![0].store
       expect(await settlementStore.getChannel(channelId)).toMatchObject({ token: channel.token })
 

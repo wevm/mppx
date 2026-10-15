@@ -7,6 +7,7 @@ import {
   session as session_,
   settle as settle_,
   settleBatch as settleBatch_,
+  verifyStream as verifyStream_,
 } from '../session/server/Session.js'
 import * as Settlement from '../session/server/Settlement.js'
 import type { SessionController as SessionController_ } from '../session/server/Sse.js'
@@ -224,6 +225,7 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
   const [first, ...rest] = resolveCurrencies(parameters ?? {})
   const store = parameters?.store ?? fallbackStore('tempo.session')
   const settlements = new Map<string, session_.Extensions['settleScheduled']>()
+  const verifiers = new Map<string, (channelId: `0x${string}`) => Promise<void>>()
   const key = (chainId: number, currency: string) => `${chainId}:${currency.toLowerCase()}`
   const settleScheduled: session_.Extensions['settleScheduled'] = (channel) => {
     const settle = settlements.get(key(channel.chainId, channel.token))
@@ -236,6 +238,14 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       Ws_.serve({
         ...options,
         store: ChannelStore.fromStore(store),
+        beforeCharge: async (channelId) => {
+          const channel = await ChannelStore.fromStore(store).getChannel(channelId)
+          if (!channel) throw new Error('stream channel not found')
+          const verify = verifiers.get(key(channel.chainId, channel.token))
+          if (!verify)
+            throw new Error('Channel currency is not configured for this session handler.')
+          await verify(channelId)
+        },
         // Failed settlements are reported by the session handler; the charged request stays served.
         onChargeCommitted: (channel) =>
           settleScheduled(channel).catch(Settlement.ignoreRetryableSettlementFailure),
@@ -249,6 +259,9 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
     settlements.set(key(currency.chainId, currency.currency), method.extensions!.settleScheduled)
+    verifiers.set(key(currency.chainId, currency.currency), (channelId) =>
+      verifyStream_(method, channelId),
+    )
     return { ...method, extensions }
   }
   return [create(first), ...rest.map(create)] as const

@@ -66,6 +66,15 @@ import {
 import { reserveChargeOrWait } from './Transports.js'
 import * as Ws from './Ws.js'
 
+const streamVerifiers = new WeakMap<object, (channelId: Hex) => Promise<void>>()
+
+/** @internal Reuses a method's escrow verifier when composing shared currency helpers. */
+export function verifyStream(method: object, channelId: Hex): Promise<void> {
+  const verify = streamVerifiers.get(method)
+  if (!verify) throw new Error('Session stream verifier is not configured')
+  return verify(channelId)
+}
+
 /** Server-side automatic settlement schedule. */
 export type { SettlementSchedule } from './Settlement.js'
 /** Server-side settlement event hook types. */
@@ -653,6 +662,7 @@ export function session<const parameters extends session.Parameters>(
       })
     },
   })
+  streamVerifiers.set(method, beforeStreamCharge)
   return method
 }
 
