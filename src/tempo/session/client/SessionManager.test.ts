@@ -15,11 +15,13 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
+import { getSessionManagerInternals } from './internal/SessionManager.js'
 import {
   computeFallbackCloseAmount,
   mergeSessionCredentialContext,
   sessionManager,
 } from './SessionManager.js'
+import { isTempoSessionChallenge } from './Transports.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -1341,6 +1343,86 @@ describe('Session', () => {
       expect(s.channelId).toBeUndefined()
       expect(backend.size).toBe(0)
     })
+  })
+
+  describe('concurrent automatic top-ups', () => {
+    test.each([
+      { count: 2, fails: false, manual: false, abort: false },
+      { count: 8, fails: false, manual: false, abort: false },
+      { count: 2, fails: true, manual: false, abort: false },
+      { count: 8, fails: true, manual: false, abort: false },
+      { count: 2, fails: false, manual: true, abort: false },
+      { count: 2, fails: false, manual: true, abort: true },
+    ])(
+      'shares a top-up ($count requests, failure: $fails, manual: $manual, abort: $abort)',
+      async ({ count, fails, manual, abort }) => {
+        const entry = channelEntry({ deposit: 5_000_000n })
+        const challenge = makeChallenge({ suggestedDeposit: '5000000' })
+        if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+        const posted: SessionCredentialPayload[] = []
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        const mockFetch = vi.fn(async (_input, init?: RequestInit) => {
+          const authorization = new Headers(init?.headers).get('Authorization')!
+          const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          posted.push(payload)
+          if (payload.action === 'topUp') {
+            await gate
+            if (fails) throw new Error('top-up outcome unknown')
+          }
+          return makeOkResponse()
+        })
+        const s = sessionManager({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          channelStore: makeChannelStore([entry]).store,
+          maxDeposit: '10',
+        })
+        const internals = getSessionManagerInternals(s)
+        const input = 'https://api.example.com/stream'
+        internals.rehydrate({ channel: entry, challenge, input, spent: 0n })
+        const controller = new AbortController()
+        const consume = async () => {
+          const response = Object.assign(
+            makeSseResponse([
+              formatNeedVoucherEvent({
+                channelId: entry.channelId,
+                deposit: '5000000',
+                acceptedCumulative: '1000000',
+                requiredCumulative: '6000000',
+              }),
+            ]),
+            { challenge, channelId: entry.channelId, cumulative: 1_000_000n, receipt: null },
+          )
+          for await (const _chunk of internals.consumeSseResponse(input, response, {
+            signal: controller.signal,
+          })) {
+            /* drain */
+          }
+        }
+        const manualTopUp = manual ? s.topUp('5') : undefined
+        const pending = Promise.allSettled([
+          ...(manualTopUp ? [manualTopUp] : []),
+          ...Array.from({ length: count }, consume),
+        ])
+        try {
+          await vi.waitFor(() => expect(posted.some((p) => p.action === 'topUp')).toBe(true))
+          if (abort) controller.abort()
+        } finally {
+          release()
+        }
+        const results = await pending
+        expect(results.map((result) => result.status)).toEqual([
+          ...(manual ? ['fulfilled'] : []),
+          ...Array.from({ length: count }, () => (fails || abort ? 'rejected' : 'fulfilled')),
+        ])
+        expect(posted.filter((p) => p.action === 'topUp')).toHaveLength(1)
+        expect(s.state).toMatchObject({ deposit: fails ? '5000000' : '10000000' })
+      },
+    )
   })
 
   describe('.topUp()', () => {

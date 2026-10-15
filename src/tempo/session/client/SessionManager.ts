@@ -588,6 +588,25 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
+  let pendingTopUp: Promise<unknown> | undefined
+
+  // Keep funding decisions and their deposit updates atomic within this manager.
+  // Waiters share failures instead of immediately retrying an uncertain payment.
+  async function withTopUpLock<T>(operation: () => Promise<T>): Promise<T> {
+    for (;;) {
+      const pending = pendingTopUp
+      if (!pending) break
+      await pending
+    }
+    const pending = operation()
+    pendingTopUp = pending
+    try {
+      return await pending
+    } finally {
+      if (pendingTopUp === pending) pendingTopUp = undefined
+    }
+  }
+
   async function postTopUpAndApply(parameters: {
     additionalDeposit: bigint
     challenge: TempoSessionChallenge
@@ -616,6 +635,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
     if (applied?.channel && runtime.lastChallenge) {
       await store.set(applied.channel)
+      runtime.channel = applied.channel
       dispatch({
         type: 'activated',
         challengeId: runtime.lastChallenge.id,
@@ -629,27 +649,30 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function topUpIfNeeded(parameters: TopUpRequirement) {
-    const channelDeposit =
-      runtime.channel?.channelId === parameters.channelId ? runtime.channel.deposit : 0n
-    const deposit = channelDeposit > parameters.deposit ? channelDeposit : parameters.deposit
-    const additionalDeposit = resolveAutomaticTopUp({
-      deposit,
-      maxDeposit: config.maxVoucherCumulative,
-      requiredCumulative: parameters.requiredCumulative,
-      suggestedDeposit:
-        parameters.challenge.request.suggestedDeposit === undefined
-          ? undefined
-          : BigInt(parameters.challenge.request.suggestedDeposit),
-      topUpAmount: config.topUpAmount,
-    })
-    if (additionalDeposit === 0n) return
-    await postTopUpAndApply({
-      challenge: parameters.challenge,
-      input: parameters.input,
-      channelId: parameters.channelId,
-      additionalDeposit,
-      knownDeposit: deposit,
-      signal: parameters.signal,
+    return withTopUpLock(async () => {
+      parameters.signal?.throwIfAborted()
+      const channelDeposit =
+        runtime.channel?.channelId === parameters.channelId ? runtime.channel.deposit : 0n
+      const deposit = channelDeposit > parameters.deposit ? channelDeposit : parameters.deposit
+      const additionalDeposit = resolveAutomaticTopUp({
+        deposit,
+        maxDeposit: config.maxVoucherCumulative,
+        requiredCumulative: parameters.requiredCumulative,
+        suggestedDeposit:
+          parameters.challenge.request.suggestedDeposit === undefined
+            ? undefined
+            : BigInt(parameters.challenge.request.suggestedDeposit),
+        topUpAmount: config.topUpAmount,
+      })
+      if (additionalDeposit === 0n) return
+      await postTopUpAndApply({
+        challenge: parameters.challenge,
+        input: parameters.input,
+        channelId: parameters.channelId,
+        additionalDeposit,
+        knownDeposit: deposit,
+        signal: parameters.signal,
+      })
     })
   }
 
@@ -840,20 +863,22 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     fetch: doFetch,
 
     async topUp(amount) {
-      const target = resolveManualTopUp({
-        amount,
-        assertVoucherWithinLocalLimit,
-        channel: runtime.channel,
-        decimals: config.decimals,
-        lastChallenge: runtime.lastChallenge,
-        lastUrl: runtime.lastUrl,
-      })
+      return withTopUpLock(async () => {
+        const target = resolveManualTopUp({
+          amount,
+          assertVoucherWithinLocalLimit,
+          channel: runtime.channel,
+          decimals: config.decimals,
+          lastChallenge: runtime.lastChallenge,
+          lastUrl: runtime.lastUrl,
+        })
 
-      return postTopUpAndApply({
-        additionalDeposit: target.additionalDeposit,
-        challenge: target.challenge,
-        channelId: target.channelId,
-        input: target.input,
+        return postTopUpAndApply({
+          additionalDeposit: target.additionalDeposit,
+          challenge: target.challenge,
+          channelId: target.channelId,
+          input: target.input,
+        })
       })
     },
 
