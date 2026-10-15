@@ -14,6 +14,7 @@ import * as defaults from '../../internal/defaults.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import {
   createChannelStore,
+  deleteChannel,
   entryKey,
   persistChannel as persistStoredChannel,
   registerFundingStore,
@@ -274,7 +275,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         channelUse.created.set(key, entry)
       await persistChannel(entry)
     },
-    delete: (key) => backing.delete(key),
+    delete: (key) => deleteChannel(backing, key),
   }
 
   registerFundingStore(store, backing)
@@ -283,14 +284,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function ignoreChannel(entry: ChannelEntry) {
     const key = entryKey(entry)
     const current = await backing.get(key)
-    if (entry.uncertainTopUp || (current?.channelId === entry.channelId && current.uncertainTopUp))
+    if (entry.uncertainTopUp || current?.uncertainTopUp)
       throw new Error(
         'Session funding outcome is unknown; reconcile the pending payment before replacing the channel.',
       )
     ignoredChannelIds.add(entry.channelId)
     channelUse?.seenExisting.delete(key)
     if (channelUse?.resumed === entry) channelUse.resumed = undefined
-    await Promise.resolve(backing.delete(key)).catch(() => undefined)
+    await Promise.resolve(deleteChannel(backing, key)).catch(() => undefined)
   }
 
   async function rollbackCreatedChannels() {
@@ -306,7 +307,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           'Session funding outcome is unknown; reconcile the pending payment before discarding the channel.',
         )
       ignoredChannelIds.add(entry.channelId)
-      await Promise.resolve(backing.delete(key)).catch(() => undefined)
+      await Promise.resolve(deleteChannel(backing, key)).catch(() => undefined)
     }
     use.created.clear()
     await restoreRuntime(use.committed ?? use.previous)

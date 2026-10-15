@@ -164,3 +164,11 @@ export async function persistChannel(store: ChannelStore, entry: ChannelEntry): 
     await store.set(entry)
   })
 }
+
+/** @internal Retains unresolved funding records through close and stale-entry cleanup. */
+export async function deleteChannel(store: ChannelStore, key: string): Promise<void> {
+  await exclusive(store, `write:${key}`, async () => {
+    if ((await store.get(key))?.uncertainTopUp) return
+    await store.delete(key)
+  })
+}

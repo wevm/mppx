@@ -1524,6 +1524,12 @@ describe('Session', () => {
         await expect(restarted.topUp('5')).rejects.toThrow('reconcile the pending payment')
         expect(h.posted).toHaveLength(1)
         expect(await h.storage.store.get(entryKey(h.entry))).toMatchObject({ uncertainTopUp: true })
+        h.fetch.mockRejectedValueOnce(new Error('close unavailable'))
+        await expect(h.manager.close()).rejects.toThrow('close unavailable')
+        expect(await h.storage.store.get(entryKey(h.entry))).toMatchObject({
+          uncertainTopUp: true,
+          channelId: h.entry.channelId,
+        })
       } finally {
         h.release()
         vi.useRealTimers()
@@ -1565,6 +1571,44 @@ describe('Session', () => {
         })
       },
     )
+
+    test('does not discard unresolved funding when a new authority tries to replace the channel', async () => {
+      const foreignDescriptor = {
+        ...storedDescriptor,
+        payer: '0x0000000000000000000000000000000000000001' as Address,
+        authorizedSigner: '0x0000000000000000000000000000000000000001' as Address,
+      }
+      const entry = channelEntry({
+        uncertainTopUp: true,
+        descriptor: foreignDescriptor,
+        channelId: Channel.computeId({
+          ...foreignDescriptor,
+          chainId: 4217,
+          escrow: tip20ChannelEscrow,
+        }),
+      })
+      const storage = makeChannelStore([entry])
+      const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (new Headers(init?.headers).has('Authorization'))
+          throw new Error('unexpected payment dispatch')
+        return make402Response()
+      })
+      const manager = sessionManager({
+        account,
+        client,
+        fetch,
+        channelStore: storage.store,
+        maxDeposit: '10',
+      })
+      await expect(manager.fetch('https://api.example.com/data')).rejects.toThrow(
+        'reconcile the pending payment',
+      )
+      expect(storage.delete).not.toHaveBeenCalled()
+      expect(await storage.store.get(entryKey(entry))).toMatchObject({
+        uncertainTopUp: true,
+        channelId: entry.channelId,
+      })
+    })
 
     test('persists uncertainty when an in-flight automatic top-up is cancelled', async () => {
       const h = setup()
