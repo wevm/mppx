@@ -383,8 +383,8 @@ export function shouldApplyVerifiedHttpAccounting(
 export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
 ): Promise<SessionReceipt> {
-  const { receipt, sseEnabled } = parameters
-  if (!shouldApplyVerifiedHttpAccounting(parameters)) return receipt
+  const { receipt } = parameters
+  if (parameters.sseEnabled || !shouldApplyVerifiedHttpAccounting(parameters)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
   const charged = await parameters.charge(receipt.channelId, requestAmount)
@@ -395,9 +395,7 @@ export async function applyVerifiedHttpAccounting(
     units: charged.units,
     ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
   }
-  return sseEnabled
-    ? (parameters.markPrepaidReceipt?.(chargedReceipt) ?? chargedReceipt)
-    : chargedReceipt
+  return chargedReceipt
 }
 
 /** Atomically deducts spend from a channel and maps store failures to typed session errors. */

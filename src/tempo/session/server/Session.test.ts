@@ -2721,6 +2721,7 @@ describe('precompile server session unit guardrails', () => {
       options: {
         amount?: string
         chunkDelayMs?: number
+        failBeforeFirstChunk?: 'closing' | 'rpc failure'
         explicitCharge?: bigint
         maxDeposit?: bigint
         onSessionSettlement?: session.Parameters['onSessionSettlement']
@@ -2738,6 +2739,7 @@ describe('precompile server session unit guardrails', () => {
       const maxDeposit = options.maxDeposit ?? 3n
       let deposit = maxDeposit
       let settled = 0n
+      let failStream = false
       const unitType = options.unitType ?? 'token'
       const route = Mppx_server.create({
         methods: [
@@ -2785,7 +2787,11 @@ describe('precompile server session unit guardrails', () => {
                   settled = channel?.highestVoucherAmount ?? settled
                   return transactionReceipt([settledLog(activeChannelId, settled)])
                 },
-                state: () => ({ settled, deposit, closeRequestedAt: 0 }),
+                state: () => {
+                  if (failStream && options.failBeforeFirstChunk === 'rpc failure')
+                    throw new Error('RPC unavailable')
+                  return { settled, deposit, closeRequestedAt: failStream ? 1 : 0 }
+                },
               })
             },
           }),
@@ -2828,6 +2834,10 @@ describe('precompile server session unit guardrails', () => {
 
           currentPayload = undefined
           return result.withReceipt(async function* (stream) {
+            if (options.failBeforeFirstChunk) {
+              failStream = true
+              vi.setSystemTime(Date.now() + 5_001)
+            }
             if (options.explicitCharge !== undefined) {
               await stream.charge(options.explicitCharge)
               yield 'chunk-1'
@@ -2887,7 +2897,47 @@ describe('precompile server session unit guardrails', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
-    test('captures an explicit stream charge after a prepaid request tick', async () => {
+    test.each(['closing', 'rpc failure'] as const)(
+      'does not charge undelivered SSE content after %s',
+      async (failure) => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        try {
+          const settlements = vi.fn()
+          const harness = createManagedSseFetch({
+            failBeforeFirstChunk: failure,
+            onSessionSettlement: settlements,
+            settlementSchedule: { units: 1 },
+          })
+          const manager = precompileSessionManager({
+            account: payer,
+            client: createSigningClient(),
+            decimals: 0,
+            fetch: harness.fetch,
+            maxDeposit: '3',
+          })
+          await expect(
+            (async () => {
+              for await (const _chunk of await manager.sse('https://api.example.com/stream')) {
+                throw new Error('unexpected delivered chunk')
+              }
+            })(),
+          ).rejects.toThrow(
+            failure === 'rpc failure' ? 'Unable to verify stream escrow' : /channel/,
+          )
+          expect(await channelStore(harness.rawStore).getChannel(manager.channelId!)).toMatchObject(
+            {
+              spent: 0n,
+              units: 0,
+            },
+          )
+          expect(settlements).not.toHaveBeenCalled()
+        } finally {
+          vi.useRealTimers()
+        }
+      },
+    )
+
+    test('captures an explicit stream charge without an extra request tick', async () => {
       const harness = createManagedSseFetch({ explicitCharge: 4014n, maxDeposit: 4015n })
       const manager = precompileSessionManager({
         account: payer,
@@ -2906,11 +2956,11 @@ describe('precompile server session unit guardrails', () => {
       expect(harness.voucherPosts).toBeGreaterThan(0)
 
       const closeReceipt = await manager.close()
-      expect(closeReceipt?.acceptedCumulative).toBe('4015')
-      expect(closeReceipt?.spent).toBe('4015')
+      expect(closeReceipt?.acceptedCumulative).toBe('4014')
+      expect(closeReceipt?.spent).toBe('4014')
 
       const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
-      expect(persisted).toMatchObject({ finalized: true, spent: 4015n, units: 2 })
+      expect(persisted).toMatchObject({ finalized: true, spent: 4014n, units: 1 })
     })
 
     test.each([

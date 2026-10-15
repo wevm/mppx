@@ -230,7 +230,7 @@ describe('applyVerifiedHttpAccounting', () => {
     } as ChannelStore.State
   }
 
-  test('precharges SSE GET content and marks the receipt as prepaid', async () => {
+  test('defers SSE GET charges and settlement until stream delivery', async () => {
     const charge = vi.fn(async () => chargedChannel())
     const markPrepaidReceipt = vi.fn((value) => value)
 
@@ -245,8 +245,8 @@ describe('applyVerifiedHttpAccounting', () => {
       sseEnabled: true,
     })
 
-    expect(charge).toHaveBeenCalledWith(channelId, 75n)
-    expect(markPrepaidReceipt).toHaveBeenCalledOnce()
+    expect(charge).not.toHaveBeenCalled()
+    expect(markPrepaidReceipt).not.toHaveBeenCalled()
   })
 
   test('does not charge SSE voucher management POSTs', async () => {
