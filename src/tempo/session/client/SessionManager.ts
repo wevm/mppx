@@ -630,7 +630,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (error instanceof Error && error.name === 'TimeoutError')
         uncertainFunding = new Error(
           'Session funding outcome is unknown; reconcile the pending payment before creating a new session manager.',
-          { cause: error },
         )
       throw error
     } finally {
