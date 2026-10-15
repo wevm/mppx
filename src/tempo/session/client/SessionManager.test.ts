@@ -1530,6 +1530,23 @@ describe('Session', () => {
       }
     })
 
+    test('persists uncertainty when an in-flight automatic top-up is cancelled', async () => {
+      const h = setup()
+      const controller = new AbortController()
+      const pending = h.consume(controller.signal)
+      const rejected = expect(pending).rejects.toThrow('cancel funding')
+      try {
+        await vi.waitFor(() => expect(h.posted).toHaveLength(1))
+        controller.abort(new Error('cancel funding'))
+        await rejected
+        await expect(h.manager.topUp('5')).rejects.toThrow('reconcile the pending payment')
+        expect(await h.storage.store.get(entryKey(h.entry))).toMatchObject({ uncertainTopUp: true })
+        expect(h.posted).toHaveLength(1)
+      } finally {
+        h.release()
+      }
+    })
+
     test('aborts a queued flow before the in-flight top-up completes', async () => {
       const h = setup()
       const first = h.manager.topUp('5')

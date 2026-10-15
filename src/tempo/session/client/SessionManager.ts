@@ -58,7 +58,12 @@ import {
   WebSocketReadyState,
 } from './Transports.js'
 import { consumeSseSessionResponse, openSseSession, type SseDriverOptions } from './Transports.js'
-import { applyTopUpResult, resolveManualTopUp, type TopUpRequirement } from './Transports.js'
+import {
+  UncertainFundingError,
+  applyTopUpResult,
+  resolveManualTopUp,
+  type TopUpRequirement,
+} from './Transports.js'
 import {
   openWebSocketSession,
   prepareWebSocketSession,
@@ -255,6 +260,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
     async set(entry) {
       const key = entryKey(entry)
+      const current = await backing.get(key)
+      if (current?.channelId === entry.channelId && current.uncertainTopUp)
+        entry = { ...entry, uncertainTopUp: true }
       if (entry.opened) ignoredChannelIds.delete(entry.channelId)
       if (channelUse?.trackCreates && !channelUse.seenExisting.has(key))
         channelUse.created.set(key, entry)
@@ -627,7 +635,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     try {
       return await pending
     } catch (error) {
-      if (error instanceof Error && error.name === 'TimeoutError')
+      if (error instanceof UncertainFundingError)
         uncertainFunding = new Error(
           'Session funding outcome is unknown; reconcile the pending payment before creating a new session manager.',
         )
@@ -646,6 +654,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     signal?: AbortSignal | undefined
   }) {
     const { knownDeposit, ...topUp } = parameters
+    const stored = runtime.channel ? await store.get(entryKey(runtime.channel)) : undefined
+    if (stored?.channelId === parameters.channelId && stored.uncertainTopUp)
+      throw new Error(
+        'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
+      )
     const receipt = await postTopUp({
       ...topUp,
       channel: runtime.channel,

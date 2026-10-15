@@ -791,7 +791,11 @@ async function recover(
     resolved.chainId,
     resolved.escrow,
   )
+  const current = await sink.store.get(resolved.key)
   await storeChannelEntry(sink, {
+    ...(current?.channelId === reusable.channelId && current.uncertainTopUp
+      ? { uncertainTopUp: true }
+      : {}),
     channelId: reusable.channelId,
     cumulativeAmount,
     deposit: reusable.state.deposit,

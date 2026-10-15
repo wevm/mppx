@@ -152,7 +152,11 @@ describe('ChannelCache', () => {
     })
 
     test('round-trips a channel entry through JSON', () => {
-      const entry = channel({ cumulativeAmount: 2n ** 100n + 7n, deposit: 999n })
+      const entry = channel({
+        cumulativeAmount: 2n ** 100n + 7n,
+        deposit: 999n,
+        uncertainTopUp: true,
+      })
       const roundtrip = deserializeEntry(
         JSON.parse(JSON.stringify(serializeEntry(entry))) as ReturnType<typeof serializeEntry>,
       )
