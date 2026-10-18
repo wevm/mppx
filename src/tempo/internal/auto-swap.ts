@@ -12,6 +12,7 @@ const bps = 10_000n
 export const defaultCurrencies: readonly Address[] = [
   defaults.tokens.pathUsd as Address,
   defaults.tokens.usdc as Address,
+  defaults.tokens.ousd as Address,
 ]
 
 /**
