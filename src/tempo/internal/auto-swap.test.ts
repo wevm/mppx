@@ -127,16 +127,16 @@ describe('findCalls', () => {
       return { kind: 'buy' }
     }
 
-    vi.doMock('viem/actions', () => ({
-      readContract: vi.fn(async (_client, call: { kind: string }) =>
-        call.kind === 'targetBalance' ? 0n : 2_000_000n,
-      ),
-    }))
+    const readContract = vi.fn(async (_client, call: { kind: string }) =>
+      call.kind === 'targetBalance' ? 0n : 2_000_000n,
+    )
+    const getBuyQuote = vi.fn(async () => 1_000_000n)
+    vi.doMock('viem/actions', () => ({ readContract }))
     vi.doMock('viem/tempo', () => ({
       Actions: {
         dex: {
           buy: { call: buyCall },
-          getBuyQuote: vi.fn(async () => 1_000_000n),
+          getBuyQuote,
         },
         token: {
           approve: { call: approveCall },
@@ -158,6 +158,9 @@ describe('findCalls', () => {
       })
 
       expect(calls).toHaveLength(2)
+      // Reads go without the client's account, so an unpublished access key can find routes.
+      for (const [, call] of readContract.mock.calls) expect(call).toMatchObject({ account: null })
+      expect(getBuyQuote).toHaveBeenCalledWith(client, expect.objectContaining({ account: null }))
       expect(builderCalls.map((call) => call.client)).toEqual([client, client, client, undefined])
       expect(builderCalls.map((call) => call.name)).toEqual([
         'getBalance',

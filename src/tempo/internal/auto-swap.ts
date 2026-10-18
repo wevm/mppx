@@ -33,13 +33,18 @@ export async function findCalls(
 
   const candidates = tokenIn.filter((t) => !TempoAddress.isEqual(t, tokenOut))
 
+  // Reads never carry the client's account: a node refuses every call from an access key whose
+  // authorization is not yet published, which would hide every route from a new key.
   const balanceResults = await Promise.allSettled([
-    readContract(
-      client,
-      Actions.token.getBalance.call(client, { account, token: tokenOut }) as never,
-    ),
+    readContract(client, {
+      ...Actions.token.getBalance.call(client, { account, token: tokenOut }),
+      account: null,
+    } as never),
     ...candidates.map((t) =>
-      readContract(client, Actions.token.getBalance.call(client, { account, token: t }) as never),
+      readContract(client, {
+        ...Actions.token.getBalance.call(client, { account, token: t }),
+        account: null,
+      } as never),
     ),
   ])
 
@@ -64,11 +69,15 @@ export async function findCalls(
     const tokenIn = candidates[i]!
 
     try {
-      const quotedAmountIn = await Actions.dex.getBuyQuote(client as never, {
-        tokenIn,
-        tokenOut,
-        amountOut: deficit,
-      })
+      const quotedAmountIn = await Actions.dex.getBuyQuote(
+        client as never,
+        {
+          account: null,
+          tokenIn,
+          tokenOut,
+          amountOut: deficit,
+        } as never,
+      )
 
       if (quotedAmountIn <= 0n || quotedAmountIn > spendLimit) continue
       const quotedLimit = quotedAmountIn + (quotedAmountIn * slippageBps) / bps
