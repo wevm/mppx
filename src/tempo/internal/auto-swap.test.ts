@@ -102,6 +102,36 @@ describe('resolve', () => {
   })
 })
 
+describe('resolve with fallback: false', () => {
+  const custom = '0x1234567890abcdef1234567890abcdef12345678' as Address
+
+  test('swaps only from tokenIn', () => {
+    expect(resolve({ tokenIn: [custom], fallback: false }, defaultCurrencies)).toEqual({
+      slippage: 1,
+      tokenIn: [custom],
+    })
+  })
+
+  test('keeps a default currency listed in tokenIn', () => {
+    expect(
+      resolve({ tokenIn: [defaultCurrencies[1]!, custom], fallback: false }, defaultCurrencies),
+    ).toEqual({ slippage: 1, tokenIn: [defaultCurrencies[1], custom] })
+  })
+
+  test('fallback: true appends the defaults', () => {
+    expect(resolve({ tokenIn: [custom], fallback: true }, defaultCurrencies)).toEqual(
+      resolve({ tokenIn: [custom] }, defaultCurrencies),
+    )
+  })
+
+  test('is ignored without tokenIn', () => {
+    expect(resolve({ fallback: false }, defaultCurrencies)).toEqual({
+      slippage: 1,
+      tokenIn: defaultCurrencies,
+    })
+  })
+})
+
 describe('findCalls', () => {
   test('uses current viem Tempo call builder signatures', async () => {
     vi.resetModules()
