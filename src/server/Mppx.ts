@@ -2787,7 +2787,12 @@ function composeHandlers(
                     getStableBinding(credReq, internal._stableBinding),
                   )
                 : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
-              return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+              // A handler without a static scope issues challenges scoped to the request's route.
+              const effectiveMeta =
+                internal.scope === undefined
+                  ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
+                  : internal.meta
+              return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
             } catch {
               return false
             }
