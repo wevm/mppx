@@ -52,6 +52,8 @@ function hasPrepaidSessionTick(receipt: SessionReceipt): boolean {
 export function sse(
   options: sse.Options & {
     beforeCharge?: ((channelId: `0x${string}`) => Promise<void>) | undefined
+    /** Charges the verified route's price: reusable challenges are not bound to their quoted amount. */
+    reusableChallenges?: boolean | undefined
     settleCharged?: SettleChargedSessionChannel | undefined
     store: ChannelStore.ChannelStore
   },
@@ -100,8 +102,12 @@ export function sse(
         'No SSE context available',
       )
       const channelId = payload.channelId
-      // The route's own price: a reusable session challenge may have quoted a different amount.
-      const tickCost = BigInt(verifiedRequest.amount as string)
+      // A reusable challenge may have quoted another request's price, so charge the verified route's
+      // canonical price. Otherwise the challenge amount is canonical and bound to the route.
+      const tickCost = BigInt(
+        (options.reusableChallenges ? verifiedRequest : verifiedCredential.challenge.request)
+          .amount as string,
+      )
       const unitType =
         typeof verifiedRequest.unitType === 'string' ? verifiedRequest.unitType : undefined
 

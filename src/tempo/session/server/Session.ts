@@ -455,6 +455,7 @@ export function session<const parameters extends session.Parameters>(
     ? Transport.sse({
         ...(typeof parameters.sse === 'object' ? parameters.sse : {}),
         beforeCharge: beforeStreamCharge,
+        reusableChallenges: parameters.reusableChallenges,
         settleCharged,
         store,
       })
