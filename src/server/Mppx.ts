@@ -2359,6 +2359,29 @@ function getPinnedRequestBindingMismatch(
   )
 }
 
+/**
+ * Compares a credential with a composed handler's route request when dispatching. The route
+ * request lacks method details that the handler's `request()` hook adds (for example a session's
+ * `chainId` and `sessionProtocol`), so only the method fields it defines are compared. The
+ * selected handler still checks every pinned field against its full challenge.
+ */
+function getConfiguredRequestBindingMismatch(
+  configuredRequest: Record<string, unknown>,
+  actualRequest: Record<string, unknown>,
+): PinnedRequestBindingField | undefined {
+  const expected = getPinnedRequestBinding(configuredRequest)
+  const actual = getPinnedRequestBinding(actualRequest)
+
+  return (
+    getCoreBindingMismatch(expected.coreBinding, actual.coreBinding) ??
+    methodBindingFields.find(
+      (field) =>
+        expected.methodBinding[field] !== undefined &&
+        !isDeepStrictEqual(expected.methodBinding[field], actual.methodBinding[field]),
+    )
+  )
+}
+
 function getCoreBindingMismatch(
   expected: CoreBinding,
   actual: CoreBinding,
@@ -2747,7 +2770,7 @@ function composeHandlers(
                     getStableBinding(internal._canonicalRequest, internal._stableBinding),
                     getStableBinding(credReq, internal._stableBinding),
                   )
-                : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
+                : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
               return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
             } catch {
               return false
@@ -3007,7 +3030,7 @@ function composeMcpHandlers(
                   getStableBinding(internal._canonicalRequest, internal._stableBinding),
                   getStableBinding(credential.challenge.request, internal._stableBinding),
                 )
-              : getPinnedRequestBindingMismatch(
+              : getConfiguredRequestBindingMismatch(
                   internal._canonicalRequest,
                   credential.challenge.request,
                 )
