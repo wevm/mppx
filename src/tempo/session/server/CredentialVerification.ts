@@ -426,6 +426,7 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'payload'
   | 'store'
   | 'challenge'
+  | 'voucherStateMaxAge'
 > & {
   /** Allows terminal broadcast to recover accepted funds before rejecting a pending close. */
   allowPendingClose?: boolean | undefined
@@ -616,14 +617,22 @@ async function validateVoucherCredential(
   })
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const channelState = await resolveVoucherChannelState({
+  const channelState = canUseStoredChannelState({
     channel,
     channelId,
-    channelStateTtl,
-    client,
-    escrow,
     lastOnChainVerified,
+    voucher,
+    voucherStateMaxAge: parameters.voucherStateMaxAge ?? 0,
   })
+    ? storedChannelState(channel)
+    : await resolveVoucherChannelState({
+        channel,
+        channelId,
+        channelStateTtl,
+        client,
+        escrow,
+        lastOnChainVerified,
+      })
   if (parameters.allowPendingClose && channelState.closeRequestedAt !== 0) return
   await ChannelStore.validateVoucher({
     channel,
@@ -653,6 +662,31 @@ async function resolveVoucherChannelState(parameters: {
   else if (state) lastOnChainVerified.set(channelId, Date.now())
   if (state) return state
   return storedChannelState(await parameters.channel)
+}
+
+/**
+ * Whether a voucher may be checked against the stored channel instead of waiting for a chain read.
+ * A payer can withdraw only after the escrow's close grace period, so a voucher within the deposit
+ * of recently verified open state stays settleable while a fresh read finishes.
+ */
+function canUseStoredChannelState(parameters: {
+  channel: ChannelStore.State
+  channelId: Hex
+  lastOnChainVerified: Map<Hex, number>
+  voucher: { cumulativeAmount: bigint }
+  voucherStateMaxAge: number
+}): boolean {
+  const { channel, channelId, lastOnChainVerified, voucher, voucherStateMaxAge } = parameters
+  const verifiedAt = Math.max(
+    lastOnChainVerified.get(channelId) ?? 0,
+    channel.onChainVerifiedAt ?? 0,
+  )
+  return (
+    voucherStateMaxAge > 0 &&
+    channel.closeRequestedAt === 0n &&
+    Date.now() - verifiedAt <= voucherStateMaxAge &&
+    voucher.cumulativeAmount <= channel.deposit
+  )
 }
 
 function storedChannelState(channel: ChannelStore.State): Chain.ChannelState {
@@ -993,17 +1027,14 @@ async function handleVoucherCredential(
   const channel = await loadingChannel
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const verifiedAt = Math.max(
-    lastOnChainVerified.get(channelId) ?? 0,
-    channel.onChainVerifiedAt ?? 0,
-  )
-  // A payer can withdraw only after the escrow's close grace period, so a voucher within the
-  // deposit of recently verified open state stays settleable while the fresh read finishes.
   if (
-    voucherStateMaxAge > 0 &&
-    channel.closeRequestedAt === 0n &&
-    Date.now() - verifiedAt <= voucherStateMaxAge &&
-    voucher.cumulativeAmount <= channel.deposit
+    canUseStoredChannelState({
+      channel,
+      channelId,
+      lastOnChainVerified,
+      voucher,
+      voucherStateMaxAge,
+    })
   ) {
     if (reading) recordOnChainReadInBackground(parameters, channelId, reading)
     return ChannelStore.verifyAndAcceptVoucher({

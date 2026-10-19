@@ -477,6 +477,7 @@ export function session<const parameters extends session.Parameters>(
       minVoucherDelta: context.minVoucherDelta,
       payload,
       store,
+      voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
 
     return {
@@ -682,8 +683,8 @@ export namespace session {
     /** TTL in milliseconds for cached on-chain channel state during non-mutating validation, and before a voucher accepted under `voucherStateMaxAge` starts a fresh read. @default 5_000 */
     channelStateTtl?: number | undefined
     /**
-     * Maximum age in milliseconds of verified on-chain channel state that a voucher may be accepted
-     * against without waiting for a fresh read. The fresh read then finishes in the background and
+     * Maximum age in milliseconds of verified on-chain channel state that a voucher may be validated
+     * and accepted against without waiting for a fresh read. The fresh read then finishes in the background and
      * records a pending close, so later vouchers are rejected. `0` reads on-chain state before every
      * acceptance.
      *
