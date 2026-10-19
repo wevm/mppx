@@ -49,6 +49,7 @@ import {
   applyVerifiedHttpAccounting,
   chargeSessionChannel,
   shouldApplyVerifiedHttpAccounting,
+  shouldChargeVoucherOnAcceptance,
   type SettleChargedSessionChannel,
 } from './Settlement.js'
 import {
@@ -475,25 +476,32 @@ export function session<const parameters extends session.Parameters>(
       request,
     })
 
-    const details = await validateCredentialPayload({
-      account,
-      allowPendingClose: operation === 'broadcast',
-      challenge: credential.challenge,
-      channelStateTtl,
-      chainId: context.chainId,
-      client: context.client,
-      credentialSource: credential.source,
-      escrow: context.escrow,
-      expectedOperator: context.methodDetails.operator,
-      feePayer: context.feePayer,
-      feePayerPolicy: parameters.feePayerPolicy,
-      feeToken: context.methodDetails.feeToken,
-      lastOnChainVerified,
-      minVoucherDelta: context.minVoucherDelta,
-      payload,
-      store,
-      voucherStateMaxAge: parameters.voucherStateMaxAge,
-    })
+    // A broadcast voucher is checked against the stored channel by the update that accepts it.
+    const details =
+      operation === 'broadcast' && payload.action === 'voucher'
+        ? {
+            action: payload.action,
+            channelId: ChannelStore.normalizeChannelId(payload.channelId),
+          }
+        : await validateCredentialPayload({
+            account,
+            allowPendingClose: operation === 'broadcast',
+            challenge: credential.challenge,
+            channelStateTtl,
+            chainId: context.chainId,
+            client: context.client,
+            credentialSource: credential.source,
+            escrow: context.escrow,
+            expectedOperator: context.methodDetails.operator,
+            feePayer: context.feePayer,
+            feePayerPolicy: parameters.feePayerPolicy,
+            feeToken: context.methodDetails.feeToken,
+            lastOnChainVerified,
+            minVoucherDelta: context.minVoucherDelta,
+            payload,
+            store,
+            voucherStateMaxAge: parameters.voucherStateMaxAge,
+          })
 
     return {
       challenge: credential.challenge,
@@ -521,9 +529,36 @@ export function session<const parameters extends session.Parameters>(
       request,
     })
 
+    const chargeAmount =
+      parameters.chargeOnAcceptance &&
+      shouldChargeVoucherOnAcceptance({
+        capturedRequest: envelope?.capturedRequest,
+        payloadAction: payload.action,
+        unitType: context.request.unitType,
+      })
+        ? BigInt(context.request.amount ?? challenge.request.amount)
+        : undefined
+    const acceptance: { charged?: ChannelStore.State } = {}
+    const settleAcceptedCharge: SettleChargedSessionChannel = (channel) =>
+      maybeSettleScheduled({
+        account,
+        client: context.client,
+        ...(context.feePayer ? { feePayer: context.feePayer } : {}),
+        feePayerPolicy: parameters.feePayerPolicy,
+        feeToken: parameters.feeToken,
+        onSessionSettlement,
+        onSessionSettlementFailure,
+        schedule: settlementSchedule,
+        store,
+        channel,
+      }).catch(ignoreRetryableSettlementFailure)
     const sessionReceipt = await broadcastCredentialPayload({
       account,
       challenge,
+      chargeAmount,
+      onCharged: (channel) => {
+        acceptance.charged = channel
+      },
       channelStateTtl,
       chainId: context.chainId,
       client: context.client,
@@ -547,6 +582,14 @@ export function session<const parameters extends session.Parameters>(
       voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
 
+    if (acceptance.charged) {
+      const settlementTxHash = await settleAcceptedCharge(acceptance.charged)
+      const receipt = {
+        ...sessionReceipt,
+        ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
+      }
+      return parameters.sse ? Transport.markPrepaidSessionTick(receipt) : receipt
+    }
     return applyVerifiedHttpAccounting({
       capturedRequest: envelope?.capturedRequest,
       payloadAction: payload.action,
@@ -556,19 +599,7 @@ export function session<const parameters extends session.Parameters>(
       markPrepaidReceipt: Transport.markPrepaidSessionTick,
       charge: (channelId, requestAmount) =>
         chargeSessionChannel({ store, channelId, amount: requestAmount }),
-      settleCharged: (channel) =>
-        maybeSettleScheduled({
-          account,
-          client: context.client,
-          ...(context.feePayer ? { feePayer: context.feePayer } : {}),
-          feePayerPolicy: parameters.feePayerPolicy,
-          feeToken: parameters.feeToken,
-          onSessionSettlement,
-          onSessionSettlementFailure,
-          schedule: settlementSchedule,
-          store,
-          channel,
-        }).catch(ignoreRetryableSettlementFailure),
+      settleCharged: settleAcceptedCharge,
     })
   }
 
@@ -737,6 +768,12 @@ export namespace session {
      * A client can then send a voucher with a request instead of waiting for a `402`.
      */
     reusableChallenges?: boolean | undefined
+    /**
+     * Charges request-priced content (`unitType: 'request'`) in the same store update that accepts
+     * its voucher, before the response, instead of in a second update when the response is
+     * delivered. The server must then refund requests it cannot serve.
+     */
+    chargeOnAcceptance?: boolean | undefined
     /**
      * Atomic store backend for channel state.
      *

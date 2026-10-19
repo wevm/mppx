@@ -6,6 +6,7 @@ import {
   ChannelClosedError,
   ChannelNotFoundError,
   DeltaTooSmallError,
+  InsufficientBalanceError,
   InvalidSignatureError,
   VerificationFailedError,
 } from '../../../Errors.js'
@@ -244,6 +245,10 @@ export type VerifyAndAcceptVoucherParameters = {
   verifiedAt?: number | undefined
   /** Signed cumulative voucher to verify and accept. */
   voucher: SignedVoucher
+  /** Request price to charge in the same store update that accepts the voucher. */
+  chargeAmount?: bigint | undefined
+  /** Called with the stored channel after `chargeAmount` was charged. */
+  onCharged?: ((channel: State) => void) | undefined
 }
 
 /** Inputs for validating a cumulative voucher without recording it. */
@@ -612,16 +617,79 @@ export async function validateVoucher(
   return { alreadyAccepted: false }
 }
 
+/**
+ * Checks a cumulative voucher's amounts against channel state, without its signature, so the
+ * check can run inside the store update that accepts it.
+ */
+export function assertVoucherAmounts(parameters: {
+  channel: Pick<State, 'highestVoucherAmount'>
+  channelState: Chain.ChannelState
+  minVoucherDelta: bigint
+  voucher: Pick<SignedVoucher, 'cumulativeAmount'>
+}): VoucherValidation {
+  const { channel, channelState, minVoucherDelta, voucher } = parameters
+  validateChannelState(channelState)
+  if (voucher.cumulativeAmount > channelState.deposit)
+    throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
+  if (voucher.cumulativeAmount < channel.highestVoucherAmount)
+    throw new VerificationFailedError({
+      reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
+    })
+  if (voucher.cumulativeAmount <= channelState.settled)
+    throw new VerificationFailedError({
+      reason: 'voucher cumulativeAmount is below on-chain settled amount',
+    })
+  if (voucher.cumulativeAmount === channel.highestVoucherAmount) return { alreadyAccepted: true }
+  const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
+  if (delta < minVoucherDelta)
+    throw new DeltaTooSmallError({
+      reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
+    })
+  return { alreadyAccepted: false }
+}
+
+/**
+ * Charges `chargeAmount` to a channel state that just accepted a voucher, for the same store
+ * update. A charge the available balance cannot cover leaves the accepted state uncharged.
+ */
+export function planVoucherAcceptance(parameters: {
+  accepted: State
+  chargeAmount?: bigint | undefined
+}): { channel: State; charged: boolean } {
+  const { accepted, chargeAmount } = parameters
+  if (chargeAmount === undefined) return { channel: accepted, charged: false }
+  const deduction = planDeduction(accepted, chargeAmount)
+  if (deduction.op !== 'set') return { channel: accepted, charged: false }
+  return { channel: deduction.value, charged: true }
+}
+
+/** Reports a request charge that the channel's available balance could not cover. */
+export function insufficientBalanceForCharge(channel: State, chargeAmount: bigint) {
+  return new InsufficientBalanceError({
+    reason: `requested ${chargeAmount}, available ${
+      channel.highestVoucherAmount - channel.spent - reservedStreamAmount(channel)
+    }`,
+  })
+}
+
 /** Verifies a cumulative voucher and returns a session receipt after store reconciliation. */
 export async function verifyAndAcceptVoucher(
   parameters: VerifyAndAcceptVoucherParameters,
 ): Promise<SessionReceipt> {
-  const { store, challenge, channel, voucher, channelState, requireAdvance, verifiedAt } =
-    parameters
+  const {
+    store,
+    challenge,
+    channel,
+    voucher,
+    channelState,
+    requireAdvance,
+    verifiedAt,
+    chargeAmount,
+  } = parameters
   const validation = await validateVoucher(parameters)
-  if (validation.alreadyAccepted) {
-    if (requireAdvance)
-      throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
+  if (validation.alreadyAccepted && requireAdvance)
+    throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
+  if (validation.alreadyAccepted && chargeAmount === undefined)
     return createSessionReceipt({
       challengeId: challenge.id,
       channelId: voucher.channelId,
@@ -629,7 +697,7 @@ export async function verifyAndAcceptVoucher(
       spent: channel.spent,
       units: channel.units,
     })
-  }
+  let charged = false
   const updated = await store.updateChannel(voucher.channelId, (current) => {
     if (
       requireAdvance &&
@@ -637,9 +705,18 @@ export async function verifyAndAcceptVoucher(
       voucher.cumulativeAmount <= current.highestVoucherAmount
     )
       throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
-    return acceptVoucherStateUpdate({ channelState, current, verifiedAt, voucher })
+    const acceptance = planVoucherAcceptance({
+      accepted: acceptVoucherStateUpdate({ channelState, current, verifiedAt, voucher }),
+      chargeAmount,
+    })
+    charged = acceptance.charged
+    return acceptance.channel
   })
   if (!updated) throw new ChannelNotFoundError({ reason: 'channel not found' })
+  if (chargeAmount !== undefined) {
+    if (!charged) throw insufficientBalanceForCharge(updated, chargeAmount)
+    parameters.onCharged?.(updated)
+  }
   return createSessionReceipt({
     challengeId: challenge.id,
     channelId: voucher.channelId,

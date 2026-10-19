@@ -373,6 +373,10 @@ export type BroadcastCredentialPayloadParameters = {
   store: ChannelStore.ChannelStore
   /** Maximum age of verified on-chain state a voucher may be accepted against. See `session.Parameters`. @default 0 */
   voucherStateMaxAge?: number | undefined
+  /** Request price a voucher credential pays in the same store update that accepts it. */
+  chargeAmount?: bigint | undefined
+  /** Called with the stored channel after `chargeAmount` was charged. */
+  onCharged?: ((channel: ChannelStore.State) => void) | undefined
 }
 
 /** @deprecated Use {@link BroadcastCredentialPayloadParameters}. */
@@ -644,7 +648,7 @@ async function validateVoucherCredential(
 }
 
 async function resolveVoucherChannelState(parameters: {
-  channel: ChannelStore.State | Promise<ChannelStore.State>
+  channel: ChannelStore.State | (() => Promise<ChannelStore.State>)
   channelId: Hex
   channelStateTtl: number
   client: Chain.TransactionClient
@@ -661,7 +665,8 @@ async function resolveVoucherChannelState(parameters: {
     lastOnChainVerified.delete(channelId)
   else if (state) lastOnChainVerified.set(channelId, Date.now())
   if (state) return state
-  return storedChannelState(await parameters.channel)
+  const { channel } = parameters
+  return storedChannelState(typeof channel === 'function' ? await channel() : channel)
 }
 
 /**
@@ -992,14 +997,19 @@ async function handleVoucherCredential(
     expectedOperator,
   )
   const voucherStateMaxAge = parameters.voucherStateMaxAge ?? 0
-  const loadingChannel = ChannelStore.loadPrecompileChannel({
-    descriptor: payload.descriptor,
-    channelId,
-    chainId,
-    escrow,
-    store,
-    validateDescriptor: true,
-  })
+  const { chargeAmount, onCharged } = parameters
+  let loadingChannel: Promise<ChannelStore.StoredPrecompileChannel> | undefined
+  const loadChannel = () => {
+    loadingChannel ??= ChannelStore.loadPrecompileChannel({
+      descriptor: payload.descriptor,
+      channelId,
+      chainId,
+      escrow,
+      store,
+      validateDescriptor: true,
+    })
+    return loadingChannel
+  }
   // The on-chain read does not depend on the stored channel, so it overlaps the store read.
   // Store errors still take precedence because the stored channel is awaited first.
   let reading: OnChainRead | undefined
@@ -1007,7 +1017,7 @@ async function handleVoucherCredential(
     if (reading) return reading
     const startedAt = Date.now()
     const state = resolveVoucherChannelState({
-      channel: loadingChannel,
+      channel: loadChannel,
       channelId,
       channelStateTtl,
       client,
@@ -1024,7 +1034,14 @@ async function handleVoucherCredential(
     Date.now() - (lastOnChainVerified.get(channelId) ?? 0) <=
       Math.min(channelStateTtl, voucherStateMaxAge)
   if (!recentlyRead) readChannelState()
-  const channel = await loadingChannel
+  if (voucherStateMaxAge > 0 && store.updateChannelResult) {
+    const receipt = await acceptVoucherInOneUpdate(parameters, voucher, payload.descriptor)
+    if (receipt) {
+      if (reading) recordOnChainReadInBackground(parameters, channelId, reading)
+      return receipt
+    }
+  }
+  const channel = await loadChannel()
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
   if (
@@ -1046,6 +1063,8 @@ async function handleVoucherCredential(
       voucher,
       channelState: storedChannelState(channel),
       methodDetails: { chainId, escrowContract: escrow },
+      chargeAmount,
+      onCharged,
     })
   }
   const { startedAt, state } = readChannelState()
@@ -1074,6 +1093,91 @@ async function handleVoucherCredential(
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
     verifiedAt: startedAt,
+    chargeAmount,
+    onCharged,
+  })
+}
+
+/**
+ * Accepts a voucher, and charges its request, in one store update with no separate read: the
+ * update checks the stored channel itself. Returns `undefined` without writing when the stored
+ * on-chain state was not verified recently enough to accept against.
+ */
+async function acceptVoucherInOneUpdate(
+  parameters: VoucherCredentialActionParameters,
+  voucher: ReturnType<typeof Voucher.parseVoucherFromPayload>,
+  descriptor: Channel.ChannelDescriptor,
+): Promise<SessionReceipt | undefined> {
+  const {
+    challenge,
+    chainId,
+    chargeAmount,
+    credentialSource,
+    escrow,
+    lastOnChainVerified,
+    minVoucherDelta,
+    requireVoucherAdvance,
+    store,
+  } = parameters
+  const voucherStateMaxAge = parameters.voucherStateMaxAge ?? 0
+  const valid = await Voucher.verifyVoucher(escrow, chainId, voucher, authorizedSigner(descriptor))
+  if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  const outcome = await store.updateChannelResult!<
+    { channel: ChannelStore.State; charged: boolean } | undefined
+  >(voucher.channelId, (current) => {
+    if (!current) throw new ChannelNotFoundError({ reason: 'channel not found' })
+    if (!ChannelStore.isPrecompileState(current))
+      throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
+    assertSameDescriptor(descriptor, current.descriptor)
+    validateChannelDescriptor(
+      descriptor,
+      voucher.channelId,
+      chainId,
+      escrow,
+      current.payee,
+      current.token,
+    )
+    assertCredentialSourceCanSpend({ chainId, channel: current, source: credentialSource })
+    if (current.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+    if (
+      !canUseStoredChannelState({
+        channel: current,
+        channelId: voucher.channelId,
+        lastOnChainVerified,
+        voucher,
+        voucherStateMaxAge,
+      })
+    )
+      return { op: 'noop', result: undefined }
+    if (requireVoucherAdvance && voucher.cumulativeAmount <= current.highestVoucherAmount)
+      throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
+    const channelState = storedChannelState(current)
+    const { alreadyAccepted } = ChannelStore.assertVoucherAmounts({
+      channel: current,
+      channelState,
+      minVoucherDelta,
+      voucher,
+    })
+    if (alreadyAccepted && chargeAmount === undefined)
+      return { op: 'noop', result: { channel: current, charged: false } }
+    const acceptance = ChannelStore.planVoucherAcceptance({
+      accepted: ChannelStore.acceptVoucherStateUpdate({ channelState, current, voucher }),
+      chargeAmount,
+    })
+    return { op: 'set', value: acceptance.channel, result: acceptance }
+  })
+  if (!outcome) return undefined
+  if (chargeAmount !== undefined) {
+    if (!outcome.charged)
+      throw ChannelStore.insufficientBalanceForCharge(outcome.channel, chargeAmount)
+    parameters.onCharged?.(outcome.channel)
+  }
+  return createSessionReceipt({
+    challengeId: challenge.id,
+    channelId: voucher.channelId,
+    acceptedCumulative: outcome.channel.highestVoucherAmount,
+    spent: outcome.channel.spent,
+    units: outcome.channel.units,
   })
 }
 

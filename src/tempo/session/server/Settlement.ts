@@ -379,6 +379,22 @@ export function shouldApplyVerifiedHttpAccounting(
   return isSessionContentRequest(capturedRequest)
 }
 
+/**
+ * Returns whether a voucher pays for its request in the store update that accepts it. A
+ * request-priced content request is charged exactly once, so this is the charge the HTTP
+ * accounting or the streamed response would make, without a second store update; the receipt is
+ * then marked prepaid so an SSE response does not charge again.
+ */
+export function shouldChargeVoucherOnAcceptance(
+  parameters: Pick<ApplyVerifiedHttpAccountingParameters, 'capturedRequest' | 'payloadAction'> & {
+    unitType: unknown
+  },
+): boolean {
+  const { capturedRequest, payloadAction, unitType } = parameters
+  if (!capturedRequest || payloadAction !== 'voucher' || unitType !== 'request') return false
+  return isSessionContentRequest(capturedRequest)
+}
+
 /** Applies the default HTTP content charge after a session credential has been accepted. */
 export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
