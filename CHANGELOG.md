@@ -1,5 +1,32 @@
 # mppx
 
+## 0.13.6
+
+### Patch Changes
+
+- 82810df: Added `autoSwap.fallback` to Tempo charges. Setting `fallback: false` swaps only from `tokenIn`, as an allowlist, instead of also trying pathUSD and USDC afterwards.
+- 82810df: Added OUSD to the default Tempo auto-swap currencies, after pathUSD and USDC.
+- 0acc2bc: Fixed Tempo charge auto-swap finding no route for an access key whose authorization was not yet published. Balance and DEX quote reads no longer carry the client's account, which the node rejected with `KeyNotFound`.
+- 7827823: Bounded session management POSTs to 30 seconds so stalled endpoints cannot hold funding waiters indefinitely. Timed-out payments report an unknown outcome and ignore late responses.
+
+  Persisted uncertain top-up state in the channel store after dispatched management requests timed out, failed, or were cancelled and blocked new deposits, including from replacement managers. Callers must reconcile the pending transaction against trusted chain state before clearing that state.
+
+- 4de6876: Bounded payment authorization values to 64 KiB before scheme extraction and decoding.
+- 80f9a76: Rechecked sponsored subscription and session transaction deadlines before signing and submission. Aligned validity-window rounding and rejected maximum windows below the required 15 seconds.
+- 051510d: Fixed `compose()` dispatch for handlers without a static `scope`. Their challenges are scoped to the request's route, so dispatch now compares the credential's metadata with that scope merged in, instead of falling back to the first handler with the same method and intent.
+- 626afc6: Fixed `compose()` dispatching every `tempo/session` credential to the first session handler. Dispatch compared the credential with each handler's route request, which lacks the `chainId` and `sessionProtocol` the session request hook adds, so no handler matched; sessions offered in several currencies rejected all but the first with a currency mismatch.
+- f82decc: Sessions now read on-chain channel state concurrently with the stored channel when accepting a voucher, instead of after it. The forced on-chain refresh and error precedence are unchanged.
+- 7055666: Fixed manual streaming charges to commit before stream.charge() resolved, retaining charges when subsequent work was canceled or failed.
+- 3f95f89: Fixed the EVM CLI plugin to use the selected account when signing payments.
+- 3b18cd0: Paid session requests make fewer store round trips. Validating a voucher credential right before broadcasting it no longer reads the stored channel, since broadcasting checks it again. With `voucherStateMaxAge`, a voucher is checked against the stored channel inside the store update that accepts it, without a separate read. The new `chargeOnAcceptance` option charges request-priced content in that same update instead of a second update when the response is delivered.
+- 97eb961: Added `reusableChallenges` to `tempo.session()`. A session challenge then stays valid for later requests to the same route until it expires: it is bound to its route, currency, recipient and channel terms but not to the amount it quoted, and every request is charged its own price from the channel's accepted balance. Clients can send a voucher with a request instead of waiting for a `402`. Composed handlers with a stable binding are now also dispatched by the fields their route request defines, and with reusable challenges session SSE responses charge the verified route request's amount.
+- 22e5b42: Limited automatic swaps to the missing balance and bounded spending independently of DEX quotes. Added an explicit maxAmountIn budget for non-parity token pairs; defaults assumed 1:1 token units plus slippage. Sponsored charge validation accepted partial acquisition up to the payment amount.
+- 132a793: Stopped reusing cached relay receipts as new payment authorizations. Relay broadcasts now omit idempotency keys so reused credentials are rejected; applications should recover uncertain outcomes separately from executing protected operations.
+- 78d0a04: Serialized session-manager top-ups and refreshed the active deposit before subsequent funding decisions, preventing concurrent automatic requests from exceeding the configured deposit limit.
+- 9ad515a: Fixed Stripe-backed session offers to enforce the one-cent recording minimum before application offer policies.
+- d4dddfc: Checked on-chain escrow during managed SSE and WebSocket streams and stopped delivery when escrow closed or checks failed.
+- 13a9035: Added `voucherStateMaxAge` to `tempo.session()`. Vouchers within the deposit of on-chain state verified that recently are accepted without waiting for a fresh on-chain read, which finishes in the background and records a pending close for later vouchers. The verification time is persisted on the stored channel so every server instance can use it. The default `0` keeps reading on-chain state before every acceptance.
+
 ## 0.13.5
 
 ### Patch Changes
