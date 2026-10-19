@@ -133,6 +133,8 @@ export type AcceptVoucherStateUpdateParameters = {
   channelState: Chain.ChannelState
   /** Existing channel state being updated. */
   current: State | null
+  /** When `channelState` was read from chain; omitted when it came from the store. */
+  verifiedAt?: number | undefined
   /** Verified signed voucher. */
   voucher: SessionSignedVoucher
 }
@@ -238,6 +240,8 @@ export type VerifyAndAcceptVoucherParameters = {
   requireAdvance?: boolean | undefined
   /** Server channel store. */
   store: ChannelStore
+  /** When `channelState` was read from chain; omitted when it came from the store. */
+  verifiedAt?: number | undefined
   /** Signed cumulative voucher to verify and accept. */
   voucher: SignedVoucher
 }
@@ -311,6 +315,8 @@ export interface BaseState {
   token: Address
   /** Number of charge operations (API requests) fulfilled in the current session. */
   units: number
+  /** Unix milliseconds when the channel's on-chain deposit, settlement and close state were last read. */
+  onChainVerifiedAt?: number | undefined
   /** Uncommitted stream charges shared across workers. */
   streamReservations?:
     | Record<string, { amount: bigint; units: number; expiresAt: number }>
@@ -442,13 +448,18 @@ export function topUpChannelState(parameters: TopUpStateParameters): State | nul
 
 /** Merges an accepted voucher into persisted channel state after signature and on-chain checks pass. */
 export function acceptVoucherStateUpdate(parameters: AcceptVoucherStateUpdateParameters): State {
-  const { channelState, current, voucher } = parameters
+  const { channelState, current, verifiedAt, voucher } = parameters
   if (!current) throw new ChannelNotFoundError({ reason: 'channel not found' })
   if (current.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
   if (current.closeRequestedAt !== 0n)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
 
-  const onChain = mergeActiveOnChainState(current, channelState)
+  const onChain = {
+    ...mergeActiveOnChainState(current, channelState),
+    ...(verifiedAt === undefined
+      ? {}
+      : { onChainVerifiedAt: Math.max(verifiedAt, current.onChainVerifiedAt ?? 0) }),
+  }
 
   if (voucher.cumulativeAmount <= current.highestVoucherAmount) {
     return { ...current, ...onChain }
@@ -605,7 +616,8 @@ export async function validateVoucher(
 export async function verifyAndAcceptVoucher(
   parameters: VerifyAndAcceptVoucherParameters,
 ): Promise<SessionReceipt> {
-  const { store, challenge, channel, voucher, channelState, requireAdvance } = parameters
+  const { store, challenge, channel, voucher, channelState, requireAdvance, verifiedAt } =
+    parameters
   const validation = await validateVoucher(parameters)
   if (validation.alreadyAccepted) {
     if (requireAdvance)
@@ -625,7 +637,7 @@ export async function verifyAndAcceptVoucher(
       voucher.cumulativeAmount <= current.highestVoucherAmount
     )
       throw new DeltaTooSmallError({ reason: 'voucher does not add new funds for this request' })
-    return acceptVoucherStateUpdate({ channelState, current, voucher })
+    return acceptVoucherStateUpdate({ channelState, current, verifiedAt, voucher })
   })
   if (!updated) throw new ChannelNotFoundError({ reason: 'channel not found' })
   return createSessionReceipt({

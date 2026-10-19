@@ -528,6 +528,7 @@ export function session<const parameters extends session.Parameters>(
         sseEnabled: Boolean(parameters.sse),
       }),
       store,
+      voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
 
     return applyVerifiedHttpAccounting({
@@ -678,8 +679,20 @@ export namespace session {
 
   /** Parameters accepted by the TIP-1034 server session payment method. */
   export type Parameters = {
-    /** TTL in milliseconds for cached on-chain channel state during non-mutating validation. Voucher acceptance always refreshes on-chain state. @default 5_000 */
+    /** TTL in milliseconds for cached on-chain channel state during non-mutating validation, and before a voucher accepted under `voucherStateMaxAge` starts a fresh read. @default 5_000 */
     channelStateTtl?: number | undefined
+    /**
+     * Maximum age in milliseconds of verified on-chain channel state that a voucher may be accepted
+     * against without waiting for a fresh read. The fresh read then finishes in the background and
+     * records a pending close, so later vouchers are rejected. `0` reads on-chain state before every
+     * acceptance.
+     *
+     * A payer can withdraw only after the escrow's `CLOSE_GRACE_PERIOD` (900 s on Tempo) following a
+     * close request, so vouchers accepted this way stay settleable as long as the payee settles them
+     * within the grace period minus this age. Keep it well below that bound.
+     * @default 0
+     */
+    voucherStateMaxAge?: number | undefined
     /** Override the fee-sponsor policy used for sponsored open/topUp transactions and server-driven close transactions. */
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */

@@ -371,6 +371,8 @@ export type BroadcastCredentialPayloadParameters = {
   requireVoucherAdvance?: boolean | undefined
   /** Server-side channel store. */
   store: ChannelStore.ChannelStore
+  /** Maximum age of verified on-chain state a voucher may be accepted against. See `session.Parameters`. @default 0 */
+  voucherStateMaxAge?: number | undefined
 }
 
 /** @deprecated Use {@link BroadcastCredentialPayloadParameters}. */
@@ -650,7 +652,10 @@ async function resolveVoucherChannelState(parameters: {
     lastOnChainVerified.delete(channelId)
   else if (state) lastOnChainVerified.set(channelId, Date.now())
   if (state) return state
-  const channel = await parameters.channel
+  return storedChannelState(await parameters.channel)
+}
+
+function storedChannelState(channel: ChannelStore.State): Chain.ChannelState {
   return {
     deposit: uint96(channel.deposit),
     settled: uint96(channel.settledOnChain),
@@ -952,6 +957,7 @@ async function handleVoucherCredential(
     request.currency,
     expectedOperator,
   )
+  const voucherStateMaxAge = parameters.voucherStateMaxAge ?? 0
   const loadingChannel = ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
     channelId,
@@ -960,22 +966,59 @@ async function handleVoucherCredential(
     store,
     validateDescriptor: true,
   })
-  // The forced on-chain read does not depend on the stored channel, so it overlaps the store read.
+  // The on-chain read does not depend on the stored channel, so it overlaps the store read.
   // Store errors still take precedence because the stored channel is awaited first.
-  const readingChannelState = resolveVoucherChannelState({
-    channel: loadingChannel,
-    channelId,
-    channelStateTtl,
-    client,
-    escrow,
-    forceRefresh: true,
-    lastOnChainVerified,
-  })
-  readingChannelState.catch(() => {})
+  let reading: OnChainRead | undefined
+  const readChannelState = (): OnChainRead => {
+    if (reading) return reading
+    const startedAt = Date.now()
+    const state = resolveVoucherChannelState({
+      channel: loadingChannel,
+      channelId,
+      channelStateTtl,
+      client,
+      escrow,
+      forceRefresh: true,
+      lastOnChainVerified,
+    })
+    state.catch(() => {})
+    reading = { startedAt, state }
+    return reading
+  }
+  const recentlyRead =
+    voucherStateMaxAge > 0 &&
+    Date.now() - (lastOnChainVerified.get(channelId) ?? 0) <=
+      Math.min(channelStateTtl, voucherStateMaxAge)
+  if (!recentlyRead) readChannelState()
   const channel = await loadingChannel
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const channelState = await readingChannelState
+  const verifiedAt = Math.max(
+    lastOnChainVerified.get(channelId) ?? 0,
+    channel.onChainVerifiedAt ?? 0,
+  )
+  // A payer can withdraw only after the escrow's close grace period, so a voucher within the
+  // deposit of recently verified open state stays settleable while the fresh read finishes.
+  if (
+    voucherStateMaxAge > 0 &&
+    channel.closeRequestedAt === 0n &&
+    Date.now() - verifiedAt <= voucherStateMaxAge &&
+    voucher.cumulativeAmount <= channel.deposit
+  ) {
+    if (reading) recordOnChainReadInBackground(parameters, channelId, reading)
+    return ChannelStore.verifyAndAcceptVoucher({
+      store,
+      minVoucherDelta,
+      requireAdvance: parameters.requireVoucherAdvance,
+      challenge,
+      channel,
+      voucher,
+      channelState: storedChannelState(channel),
+      methodDetails: { chainId, escrowContract: escrow },
+    })
+  }
+  const { startedAt, state } = readChannelState()
+  const channelState = await state
   const reconciled =
     channel.closeRequestedAt === 0n
       ? channel
@@ -987,34 +1030,7 @@ async function handleVoucherCredential(
           }),
         )) ?? channel)
   if (channelState.closeRequestedAt !== 0) {
-    const closing = await store.updateChannel(channelId, (current) =>
-      current
-        ? {
-            ...current,
-            settledOnChain:
-              channelState.settled > current.settledOnChain
-                ? channelState.settled
-                : current.settledOnChain,
-            closeRequestedAt:
-              BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
-                ? BigInt(channelState.closeRequestedAt)
-                : current.closeRequestedAt,
-          }
-        : current,
-    )
-    if (closing && !closing.finalized && channelState.deposit > 0n)
-      await maybeSettleScheduled({
-        account: parameters.account,
-        channel: closing,
-        client,
-        feePayer: parameters.feePayer,
-        feePayerPolicy: parameters.feePayerPolicy,
-        feeToken: parameters.feeToken,
-        onSessionSettlement: parameters.onSessionSettlement,
-        onSessionSettlementFailure: parameters.onSessionSettlementFailure,
-        schedule: {},
-        store,
-      })
+    await recordPendingClose(parameters, channelId, channelState)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
   return ChannelStore.verifyAndAcceptVoucher({
@@ -1026,7 +1042,74 @@ async function handleVoucherCredential(
     voucher,
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
+    verifiedAt: startedAt,
   })
+}
+
+/** An on-chain channel read and when it was issued. */
+type OnChainRead = { startedAt: number; state: Promise<Chain.ChannelState> }
+
+/** Persists a pending close seen on chain and settles the channel while the payee still can. */
+async function recordPendingClose(
+  parameters: VoucherCredentialActionParameters,
+  channelId: Hex,
+  channelState: Chain.ChannelState,
+) {
+  const { client, store } = parameters
+  const closing = await store.updateChannel(channelId, (current) =>
+    current
+      ? {
+          ...current,
+          settledOnChain:
+            channelState.settled > current.settledOnChain
+              ? channelState.settled
+              : current.settledOnChain,
+          closeRequestedAt:
+            BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
+              ? BigInt(channelState.closeRequestedAt)
+              : current.closeRequestedAt,
+        }
+      : current,
+  )
+  if (closing && !closing.finalized && channelState.deposit > 0n)
+    await maybeSettleScheduled({
+      account: parameters.account,
+      channel: closing,
+      client,
+      feePayer: parameters.feePayer,
+      feePayerPolicy: parameters.feePayerPolicy,
+      feeToken: parameters.feeToken,
+      onSessionSettlement: parameters.onSessionSettlement,
+      onSessionSettlementFailure: parameters.onSessionSettlementFailure,
+      schedule: {},
+      store,
+    })
+}
+
+/**
+ * Records an on-chain read that a voucher did not wait for: a pending close is persisted so later
+ * vouchers are rejected, and open state extends the verified age of the stored channel.
+ */
+function recordOnChainReadInBackground(
+  parameters: VoucherCredentialActionParameters,
+  channelId: Hex,
+  read: OnChainRead,
+) {
+  read.state
+    .then(async (state) => {
+      if (state.closeRequestedAt !== 0) return recordPendingClose(parameters, channelId, state)
+      if (state.deposit === 0n) return
+      await parameters.store.updateChannel(channelId, (current) =>
+        current && !current.finalized && current.closeRequestedAt === 0n
+          ? {
+              ...current,
+              ...ChannelStore.mergeActiveOnChainState(current, state),
+              onChainVerifiedAt: Math.max(read.startedAt, current.onChainVerifiedAt ?? 0),
+            }
+          : current,
+      )
+    })
+    .catch(() => {})
 }
 
 const sendMethods = new Set([
