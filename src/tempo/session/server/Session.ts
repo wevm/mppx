@@ -336,6 +336,20 @@ async function handleBootstrapPreflight(
   return new Response(null, { status: 204, headers })
 }
 
+/** Binds a reusable session challenge to its route and channel terms but not to its quoted amount. */
+const reusableSessionBinding: Method.StableBindingFn<typeof Methods.session> = (request) => {
+  const { methodDetails } = request
+  return {
+    chainId: methodDetails.chainId,
+    currency: request.currency,
+    escrowContract: methodDetails.escrowContract,
+    operator: methodDetails.operator,
+    recipient: request.recipient,
+    sessionProtocol: methodDetails[Constants.MethodDetailKeys.sessionProtocol],
+    unitType: request.unitType,
+  }
+}
+
 /** Creates a server-side TIP20EscrowChannel precompile session payment method. */
 export function session<const parameters extends session.Parameters>(
   p?: NoExtraKeys<parameters, session.Parameters>,
@@ -578,6 +592,8 @@ export function session<const parameters extends session.Parameters>(
 
     extensions: { serveWebSocket, settleScheduled },
 
+    ...(parameters.reusableChallenges ? { stableBinding: reusableSessionBinding } : {}),
+
     transport: deriveTransport<parameters>(transport),
 
     preflight: parameters.bootstrap
@@ -713,6 +729,13 @@ export namespace session {
      * containing the signed highest voucher for client rehydration.
      */
     bootstrap?: boolean | undefined
+    /**
+     * Lets a session challenge pay for later requests to the same route until it expires. The
+     * challenge is bound to its route, currency, recipient and channel terms but not to the amount
+     * it quoted, and every request is charged its own price from the channel's accepted balance.
+     * A client can then send a voucher with a request instead of waiting for a `402`.
+     */
+    reusableChallenges?: boolean | undefined
     /**
      * Atomic store backend for channel state.
      *

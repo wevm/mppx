@@ -2423,6 +2423,22 @@ function getPinnedRequestBinding(request: Record<string, unknown>): PinnedReques
   }
 }
 
+/**
+ * Compares a credential with a composed handler's stable route binding when dispatching. The route
+ * request lacks fields its `request()` hook adds, so only the fields it defines are compared; the
+ * selected handler still checks the full binding against its challenge.
+ */
+function getConfiguredStableBindingMismatch(
+  expected: StableBinding,
+  actual: StableBinding,
+): string | undefined {
+  return Object.keys(expected).find(
+    (field) =>
+      expected[field] !== undefined &&
+      !isDeepStrictEqual(normalizeComparable(expected[field]), normalizeComparable(actual[field])),
+  )
+}
+
 function getRequestBindingMismatch(
   expected: StableBinding,
   actual: StableBinding,
@@ -2766,7 +2782,7 @@ function composeHandlers(
             try {
               if (internal.name !== credMethod || internal.intent !== credIntent) return false
               const mismatch = internal._stableBinding
-                ? getRequestBindingMismatch(
+                ? getConfiguredStableBindingMismatch(
                     getStableBinding(internal._canonicalRequest, internal._stableBinding),
                     getStableBinding(credReq, internal._stableBinding),
                   )
@@ -3026,7 +3042,7 @@ function composeMcpHandlers(
         getConfiguredOffers(handler as never).some((internal) => {
           try {
             const mismatch = internal._stableBinding
-              ? getRequestBindingMismatch(
+              ? getConfiguredStableBindingMismatch(
                   getStableBinding(internal._canonicalRequest, internal._stableBinding),
                   getStableBinding(credential.challenge.request, internal._stableBinding),
                 )
