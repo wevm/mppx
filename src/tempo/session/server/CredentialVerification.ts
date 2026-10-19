@@ -633,7 +633,7 @@ async function validateVoucherCredential(
 }
 
 async function resolveVoucherChannelState(parameters: {
-  channel: ChannelStore.State
+  channel: ChannelStore.State | Promise<ChannelStore.State>
   channelId: Hex
   channelStateTtl: number
   client: Chain.TransactionClient
@@ -641,7 +641,7 @@ async function resolveVoucherChannelState(parameters: {
   forceRefresh?: boolean | undefined
   lastOnChainVerified: Map<Hex, number>
 }): Promise<Chain.ChannelState> {
-  const { channel, channelId, channelStateTtl, client, escrow, forceRefresh, lastOnChainVerified } =
+  const { channelId, channelStateTtl, client, escrow, forceRefresh, lastOnChainVerified } =
     parameters
   const shouldRefresh =
     forceRefresh || Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
@@ -649,10 +649,12 @@ async function resolveVoucherChannelState(parameters: {
   if (state && (state.closeRequestedAt !== 0 || state.deposit === 0n))
     lastOnChainVerified.delete(channelId)
   else if (state) lastOnChainVerified.set(channelId, Date.now())
+  if (state) return state
+  const channel = await parameters.channel
   return {
-    deposit: state?.deposit ?? uint96(channel.deposit),
-    settled: state?.settled ?? uint96(channel.settledOnChain),
-    closeRequestedAt: state?.closeRequestedAt ?? Number(channel.closeRequestedAt),
+    deposit: uint96(channel.deposit),
+    settled: uint96(channel.settledOnChain),
+    closeRequestedAt: Number(channel.closeRequestedAt),
   }
 }
 
@@ -950,7 +952,7 @@ async function handleVoucherCredential(
     request.currency,
     expectedOperator,
   )
-  const channel = await ChannelStore.loadPrecompileChannel({
+  const loadingChannel = ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
     channelId,
     chainId,
@@ -958,10 +960,10 @@ async function handleVoucherCredential(
     store,
     validateDescriptor: true,
   })
-  assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
-  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const channelState = await resolveVoucherChannelState({
-    channel,
+  // The forced on-chain read does not depend on the stored channel, so it overlaps the store read.
+  // Store errors still take precedence because the stored channel is awaited first.
+  const readingChannelState = resolveVoucherChannelState({
+    channel: loadingChannel,
     channelId,
     channelStateTtl,
     client,
@@ -969,6 +971,11 @@ async function handleVoucherCredential(
     forceRefresh: true,
     lastOnChainVerified,
   })
+  readingChannelState.catch(() => {})
+  const channel = await loadingChannel
+  assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
+  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+  const channelState = await readingChannelState
   const reconciled =
     channel.closeRequestedAt === 0n
       ? channel
