@@ -100,7 +100,8 @@ export function sse(
         'No SSE context available',
       )
       const channelId = payload.channelId
-      const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
+      // The route's own price: a reusable session challenge may have quoted a different amount.
+      const tickCost = BigInt(verifiedRequest.amount as string)
       const unitType =
         typeof verifiedRequest.unitType === 'string' ? verifiedRequest.unitType : undefined
 
