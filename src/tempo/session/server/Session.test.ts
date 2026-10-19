@@ -2016,8 +2016,14 @@ describe('precompile server session unit guardrails', () => {
   })
 
   test('rejects precompile voucher exceeding deposit', async () => {
-    const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
     const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const { method, store } = createServer({
+      channelStateTtl: Number.MAX_SAFE_INTEGER,
+      getClient: () =>
+        createServerClient([], payer, openPayload.channelId, {
+          state: { settled: 0n, deposit: 300n, closeRequestedAt: 0 },
+        }),
+    })
     await persistPrecompileChannel(store, openPayload, { deposit: 300n })
     const voucher = await ClientOps.createVoucherPayload(
       createSigningClient(),
