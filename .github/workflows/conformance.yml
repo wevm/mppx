@@ -22,8 +22,11 @@ concurrency:
 jobs:
   conformance-policy:
     name: Conformance Policy
+    # The reusable jobs start with secure-runner, which needs an OIDC token.
+    # Without id-token here GitHub refuses to start the run (startup_failure).
     permissions:
       contents: read
+      id-token: write
       pull-requests: read
     uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml@main
     with:
@@ -37,6 +40,7 @@ jobs:
     needs: conformance-policy
     permissions:
       contents: read
+      id-token: write
     uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml@main
     with:
       adapter: typescript
