@@ -42,8 +42,10 @@ import type { SessionMethodDetails } from './RequestState.js'
  */
 export type State = BaseState & BackendState
 
-/** Result of an atomic channel deduction attempt. */
-export type DeductResult = { ok: true; channel: State } | { ok: false; channel: State }
+/** Result of an atomic channel deduction attempt. `replayed` marks a keyed charge recorded earlier. */
+export type DeductResult =
+  | { ok: true; channel: State; replayed?: boolean | undefined }
+  | { ok: false; channel: State }
 
 /** Persisted channel state after narrowing to the TIP-1034 precompile backend. */
 export type StoredPrecompileChannel = BaseState & PrecompileBackendState
@@ -334,12 +336,62 @@ export interface BaseState {
   lastSettlementSpent?: bigint | undefined
   /** Charge operation count when the last server-scheduled settlement ran. */
   lastSettlementUnits?: number | undefined
+  /**
+   * Accepted vouchers below `highestVoucher`, ascending, that a settlement may capture once
+   * `spent` covers them. See {@link resolveSettleableVoucher}.
+   */
+  retainedVouchers?: readonly RetainedVoucher[] | undefined
+  /** Settlement transaction that may still land; credits keep `spent` at or above its amount. */
+  pendingSettlement?: PendingSettlement | undefined
+  /** Outcomes of keyed charges and credits, by `charge:<key>` and `credit:<key>`, until they expire. */
+  idempotencyMarkers?: Record<string, IdempotencyMarker> | undefined
+  /** First block at which the close supervisor read this channel open on-chain. */
+  closeSupervisedFromBlock?: bigint | undefined
 }
 
 /** Expiring ownership claim for one server-scheduled settlement attempt. */
 export type ScheduledSettlementLease = {
   expiresAt: number
   owner: string
+}
+
+/** An accepted voucher kept below the highest one. */
+export type RetainedVoucher = {
+  /** Cumulative amount the voucher authorizes. */
+  cumulativeAmount: bigint
+  /** Voucher signature. */
+  signature: Hex
+}
+
+/** A settlement transaction that may land until `expiresAt`. */
+export type PendingSettlement = {
+  /** Cumulative amount the transaction captures. */
+  amount: bigint
+  /** Unix milliseconds after which the transaction can no longer be included. */
+  expiresAt: number
+}
+
+/** Why a credit was not applied. */
+export type CreditDeclineReason =
+  /** Crediting would take `spent` below what settled, or may still settle, on-chain. */
+  | 'belowSettled'
+  /** A close is pending, so its capture is already fixed. */
+  | 'closing'
+  /** The amount is larger than `spent`. */
+  | 'exceedsSpent'
+  /** The channel is closed. */
+  | 'finalized'
+
+/** Recorded outcome of one keyed charge or credit. */
+export type IdempotencyMarker = {
+  /** Amount the operation charged or credited. */
+  amount: bigint
+  /** Unix milliseconds until which a retry with the same key replays this outcome. */
+  expiresAt: number
+  /** `charged`, `credited`, or why the credit was declined. */
+  outcome: 'charged' | 'credited' | CreditDeclineReason
+  /** Charge operations a credit returned, when any. */
+  units?: number | undefined
 }
 
 /** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */
@@ -434,6 +486,15 @@ export function openChannelState(parameters: OpenChannelStateParameters): State 
     settledOnChain: onChain.settledOnChain,
     highestVoucherAmount: highestVoucher.highestVoucherAmount,
     highestVoucher: highestVoucher.highestVoucher,
+    ...(current && highestVoucher.highestVoucherAmount > current.highestVoucherAmount
+      ? {
+          retainedVouchers: retainVouchers(
+            current,
+            highestVoucher.highestVoucherAmount,
+            onChain.settledOnChain,
+          ),
+        }
+      : {}),
     spent: keepGreater(current?.spent ?? 0n, state.settled),
     units: current?.units ?? 0,
     finalized: current?.finalized ?? false,
@@ -448,6 +509,92 @@ export function topUpChannelState(parameters: TopUpStateParameters): State | nul
   return {
     ...current,
     ...mergeActiveOnChainState(current, state),
+  }
+}
+
+/**
+ * Number of accepted vouchers kept below the highest one. Clients sign every voucher above their
+ * last one, so once a credit lowers `spent` the highest voucher stays above it for good and only
+ * earlier vouchers can be settled; those fall at or below `spent` as later charges accumulate.
+ * Each costs about 200 bytes of the channel record. In a simulated 20,000-request channel crediting
+ * up to 80% of each request back, which left the highest voucher 80,000 units above `spent`,
+ * settling every 50 requests left on average 1,290 units unsettled with 16 retained vouchers and
+ * 784 with 32.
+ */
+export const maxRetainedVouchers = 16
+
+/**
+ * Returns the vouchers to keep once `highestVoucherAmount` replaces the highest voucher: the
+ * retained ones and the superseded highest voucher, above `settledOnChain`. Beyond
+ * {@link maxRetainedVouchers} it repeatedly drops the voucher whose neighbours are closest, so the
+ * kept ones stay spread over the unsettled range and some keep falling at or below `spent` however
+ * far credits have moved it below the highest voucher.
+ */
+export function retainVouchers(
+  current: Pick<State, 'highestVoucher' | 'retainedVouchers' | 'settledOnChain'>,
+  highestVoucherAmount: bigint,
+  settledOnChain: bigint = current.settledOnChain,
+): RetainedVoucher[] {
+  const candidates = [...(current.retainedVouchers ?? [])]
+  if (current.highestVoucher)
+    candidates.push({
+      cumulativeAmount: current.highestVoucher.cumulativeAmount,
+      signature: current.highestVoucher.signature,
+    })
+  const kept = candidates
+    .filter(
+      ({ cumulativeAmount }) =>
+        cumulativeAmount > settledOnChain && cumulativeAmount < highestVoucherAmount,
+    )
+    .sort((a, b) =>
+      a.cumulativeAmount < b.cumulativeAmount
+        ? -1
+        : a.cumulativeAmount > b.cumulativeAmount
+          ? 1
+          : 0,
+    )
+  while (kept.length > maxRetainedVouchers) {
+    let drop = 0
+    let narrowest: bigint | undefined
+    for (let index = 0; index < kept.length; index++) {
+      const below = index === 0 ? settledOnChain : kept[index - 1]!.cumulativeAmount
+      const above =
+        index === kept.length - 1 ? highestVoucherAmount : kept[index + 1]!.cumulativeAmount
+      if (narrowest === undefined || above - below < narrowest) {
+        narrowest = above - below
+        drop = index
+      }
+    }
+    kept.splice(drop, 1)
+  }
+  return kept
+}
+
+/**
+ * Returns the largest accepted voucher a settlement may capture. The escrow's `settle` captures a
+ * voucher's whole cumulative amount, and a credit may leave the highest voucher above `spent`, so
+ * the voucher must be at most `spent`; one at or below `settledOnChain` captures nothing.
+ */
+export function resolveSettleableVoucher(
+  state: Pick<
+    State,
+    'channelId' | 'highestVoucher' | 'retainedVouchers' | 'settledOnChain' | 'spent'
+  >,
+): SessionSignedVoucher | null {
+  let settleable: RetainedVoucher | undefined
+  for (const voucher of [
+    ...(state.retainedVouchers ?? []),
+    ...(state.highestVoucher ? [state.highestVoucher] : []),
+  ]) {
+    if (voucher.cumulativeAmount > state.spent || voucher.cumulativeAmount <= state.settledOnChain)
+      continue
+    if (!settleable || voucher.cumulativeAmount > settleable.cumulativeAmount) settleable = voucher
+  }
+  if (!settleable) return null
+  return {
+    channelId: state.channelId,
+    cumulativeAmount: settleable.cumulativeAmount,
+    signature: settleable.signature,
   }
 }
 
@@ -475,6 +622,7 @@ export function acceptVoucherStateUpdate(parameters: AcceptVoucherStateUpdatePar
     ...onChain,
     highestVoucherAmount: voucher.cumulativeAmount,
     highestVoucher: voucher,
+    retainedVouchers: retainVouchers(current, voucher.cumulativeAmount, onChain.settledOnChain),
   }
 }
 
@@ -508,7 +656,7 @@ export function resolveCloseCaptureAmount(parameters: ResolveCloseCaptureAmountP
 export const pendingCloseValiditySeconds = 25
 
 /** Extra seconds allowed for clock differences between the server and the chain. */
-const pendingCloseClockSkewSeconds = 30
+export const pendingCloseClockSkewSeconds = 30
 
 /** Clears a server pending-close marker whose close transaction expired without closing the channel. */
 export function reconcileExpiredPendingClose(parameters: {
@@ -963,17 +1111,134 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
 }
 
 /**
+ * Default time a keyed charge or credit outcome is kept: a day, longer than any retry within one
+ * request or durable job step. Callers whose retries span longer pass their own `retention`.
+ */
+export const defaultIdempotencyRetention = 24 * 60 * 60 * 1000
+
+/** Options for charging a channel at most once per key. */
+export type ChargeOptions = {
+  /**
+   * Key of the operation being charged. A retry with the same key and amount returns the recorded
+   * charge without charging again; the same key with a different amount throws
+   * {@link IdempotencyKeyConflictError}. A refused charge records nothing, so it may succeed later.
+   */
+  idempotencyKey?: string | undefined
+  /**
+   * Milliseconds the charge stays recorded, which must cover every retry. The channel record keeps
+   * one marker per keyed charge and credit of this window; expired markers are removed by the next
+   * keyed charge or credit of the channel. @default 86_400_000
+   */
+  retention?: number | undefined
+}
+
+/** Options for returning an amount to a channel at most once per key. */
+export type CreditOptions = {
+  /**
+   * Key of the credit. Its first outcome, credited or declined, is final: a retry with the same key
+   * and terms returns it without crediting again, and the same key with other terms throws
+   * {@link IdempotencyKeyConflictError}.
+   */
+  idempotencyKey: string
+  /** Milliseconds the outcome stays recorded; see {@link ChargeOptions.retention}. @default 86_400_000 */
+  retention?: number | undefined
+  /** Charge operations to take back from `units`, e.g. `1` when refunding a whole request. @default 0 */
+  units?: number | undefined
+}
+
+/**
+ * Outcome of a credit. `declined` leaves `spent` unchanged, so the caller refunds the amount
+ * another way; a finalized channel whose `settledOnChain` is below `spent` was withdrawn before
+ * its spend was captured. `unknown` means the store write failed and may have committed: retry
+ * with the same key to learn the outcome.
+ */
+export type CreditResult =
+  | { status: 'credited'; channel: State; replayed: boolean }
+  | { status: 'declined'; reason: CreditDeclineReason; channel: State; replayed: boolean }
+  | { status: 'unknown'; error: unknown }
+
+/** Raised when an idempotency key is reused with terms other than those it recorded. */
+export class IdempotencyKeyConflictError extends Error {
+  override readonly name = 'IdempotencyKeyConflictError'
+  /** The reused key. */
+  readonly idempotencyKey: string
+
+  constructor(options: { idempotencyKey: string; operation: 'charge' | 'credit' }) {
+    super(
+      `Session ${options.operation} "${options.idempotencyKey}" was recorded with different terms.`,
+    )
+    this.idempotencyKey = options.idempotencyKey
+  }
+}
+
+/** Atomic read-modify-write through `updateChannelResult`, or `updateChannel` when absent. */
+async function applyChange<result>(
+  store: ChannelStore,
+  channelId: Hex,
+  fn: (current: State | null) => Store.Change<State, result>,
+): Promise<result> {
+  if (store.updateChannelResult) return store.updateChannelResult(channelId, fn)
+  // The callback can rerun on a contended write; the result of its last run is the stored one.
+  let result!: result
+  await store.updateChannel(channelId, (current) => {
+    const change = fn(current)
+    result = change.result
+    if (change.op === 'set') return change.value
+    if (change.op === 'delete') return null
+    return current
+  })
+  return result
+}
+
+/** Validates the idempotency options of a keyed charge or credit. */
+export function assertIdempotencyOptions(options: {
+  idempotencyKey?: string | undefined
+  retention?: number | undefined
+}): void {
+  const { idempotencyKey, retention } = options
+  if (idempotencyKey !== undefined && (typeof idempotencyKey !== 'string' || !idempotencyKey))
+    throw new Error('`idempotencyKey` must be a non-empty string.')
+  if (retention !== undefined && (!Number.isFinite(retention) || retention <= 0))
+    throw new Error('`retention` must be a positive number.')
+}
+
+/** Markers of a channel that have not expired. */
+function liveMarkers(state: State, now: number): Record<string, IdempotencyMarker> {
+  const markers: Record<string, IdempotencyMarker> = {}
+  for (const [key, marker] of Object.entries(state.idempotencyMarkers ?? {}))
+    if (marker.expiresAt > now) markers[key] = marker
+  return markers
+}
+
+/**
  * Atomically deducts `amount` from a channel's available voucher balance.
  *
  * Returns `{ ok: true, channel }` with updated spend/unit counters when the
  * deduction succeeds. Returns `{ ok: false, channel }` without mutating state
- * when the channel exists but cannot currently be charged.
+ * when the channel exists but cannot currently be charged. With an
+ * `idempotencyKey`, a charge recorded under the key returns
+ * `{ ok: true, channel, replayed: true }` without charging again.
  */
 export async function deductFromChannel(
   store: ChannelStore,
   channelId: State['channelId'],
   amount: bigint,
+  options?: ChargeOptions,
 ): Promise<DeductResult> {
+  const idempotencyKey = options?.idempotencyKey
+  if (idempotencyKey !== undefined) {
+    assertIdempotencyOptions(options!)
+    const now = Date.now()
+    const expiresAt = now + (options?.retention ?? defaultIdempotencyRetention)
+    const result = await applyChange(store, channelId, (current) =>
+      planKeyedDeduction(current, amount, idempotencyKey, expiresAt, now),
+    )
+    if (!result) throw new Error('channel not found')
+    if (result === 'conflict')
+      throw new IdempotencyKeyConflictError({ idempotencyKey, operation: 'charge' })
+    return result
+  }
+
   if (store.updateChannelResult) {
     const result = await store.updateChannelResult<DeductResult | null>(
       channelId,
@@ -994,6 +1259,31 @@ export async function deductFromChannel(
   return result ?? { ok: false, channel }
 }
 
+function planKeyedDeduction(
+  current: State | null,
+  amount: bigint,
+  idempotencyKey: string,
+  expiresAt: number,
+  now: number,
+): Store.Change<State, DeductResult | 'conflict' | null> {
+  if (!current) return { op: 'noop', result: null }
+  const markers = liveMarkers(current, now)
+  const markerKey = `charge:${idempotencyKey}`
+  const recorded = markers[markerKey]
+  if (recorded) {
+    if (recorded.outcome !== 'charged' || recorded.amount !== amount)
+      return { op: 'noop', result: 'conflict' }
+    return { op: 'noop', result: { ok: true, channel: current, replayed: true } }
+  }
+  const deduction = planDeduction(current, amount)
+  if (deduction.op !== 'set') return deduction
+  const channel: State = {
+    ...deduction.value,
+    idempotencyMarkers: { ...markers, [markerKey]: { amount, expiresAt, outcome: 'charged' } },
+  }
+  return { op: 'set', value: channel, result: { ok: true, channel } }
+}
+
 function planDeduction(current: State | null, amount: bigint): DeductionChange {
   if (!current) return { op: 'noop', result: null }
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
@@ -1004,6 +1294,102 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
 
   const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
   return { op: 'set', value: next, result: { ok: true, channel: next } }
+}
+
+/**
+ * Returns `amount` to a channel's `spent` at most once per idempotency key. The credit is declined
+ * when the channel is closing or finalized, or when it would take `spent` below zero or below
+ * what settled, or may still settle, on-chain, because a close captures `max(spent, settled)`.
+ * The first outcome for a key is final, so a declined credit is never applied later.
+ */
+export async function creditChannel(
+  store: ChannelStore,
+  channelId: State['channelId'],
+  amount: bigint,
+  options: CreditOptions,
+): Promise<CreditResult> {
+  const { idempotencyKey, units = 0 } = options
+  assertIdempotencyOptions(options)
+  if (typeof idempotencyKey !== 'string') throw new Error('`idempotencyKey` is required.')
+  if (amount <= 0n) throw new Error('Credit amount must be positive.')
+  if (!Number.isSafeInteger(units) || units < 0)
+    throw new Error('`units` must be a non-negative integer.')
+  const now = Date.now()
+  const expiresAt = now + (options.retention ?? defaultIdempotencyRetention)
+  let result: CreditPlan
+  try {
+    result = await applyChange(store, channelId, (current) =>
+      planCredit(current, { amount, expiresAt, idempotencyKey, now, units }),
+    )
+  } catch (error) {
+    return { status: 'unknown', error }
+  }
+  if (!result) throw new ChannelNotFoundError({ reason: 'channel not found' })
+  if (result === 'conflict')
+    throw new IdempotencyKeyConflictError({ idempotencyKey, operation: 'credit' })
+  return result
+}
+
+/** Decided credit, a key reused with other terms, or a missing channel. */
+type CreditPlan = Exclude<CreditResult, { status: 'unknown' }> | 'conflict' | null
+
+function planCredit(
+  current: State | null,
+  terms: { amount: bigint; expiresAt: number; idempotencyKey: string; now: number; units: number },
+): Store.Change<State, CreditPlan> {
+  const { amount, expiresAt, idempotencyKey, now, units } = terms
+  if (!current) return { op: 'noop', result: null }
+  const markers = liveMarkers(current, now)
+  const markerKey = `credit:${idempotencyKey}`
+  const recorded = markers[markerKey]
+  if (recorded) {
+    if (
+      recorded.outcome === 'charged' ||
+      recorded.amount !== amount ||
+      (recorded.units ?? 0) !== units
+    )
+      return { op: 'noop', result: 'conflict' }
+    return {
+      op: 'noop',
+      result:
+        recorded.outcome === 'credited'
+          ? { status: 'credited', channel: current, replayed: true }
+          : { status: 'declined', reason: recorded.outcome, channel: current, replayed: true },
+    }
+  }
+  const reason = creditDeclineReason(current, amount, now)
+  const marker: IdempotencyMarker = {
+    amount,
+    expiresAt,
+    outcome: reason ?? 'credited',
+    ...(units > 0 ? { units } : {}),
+  }
+  const channel: State = {
+    ...current,
+    ...(reason ? {} : { spent: current.spent - amount, units: Math.max(0, current.units - units) }),
+    idempotencyMarkers: { ...markers, [markerKey]: marker },
+  }
+  return {
+    op: 'set',
+    value: channel,
+    result: reason
+      ? { status: 'declined', reason, channel, replayed: false }
+      : { status: 'credited', channel, replayed: false },
+  }
+}
+
+function creditDeclineReason(
+  current: State,
+  amount: bigint,
+  now: number,
+): CreditDeclineReason | undefined {
+  if (current.finalized) return 'finalized'
+  if (current.closeRequestedAt !== 0n) return 'closing'
+  if (amount > current.spent) return 'exceedsSpent'
+  const pending = current.pendingSettlement
+  const settling = pending && pending.expiresAt > now ? pending.amount : 0n
+  if (current.spent - amount < keepGreater(current.settledOnChain, settling)) return 'belowSettled'
+  return undefined
 }
 
 /** Returns unexpired stream reservations that ordinary deductions must respect. */

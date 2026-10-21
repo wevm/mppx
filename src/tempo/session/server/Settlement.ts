@@ -38,6 +38,7 @@ import {
   uint96,
   type SessionCredentialPayload,
   type SessionReceipt,
+  type SessionSignedVoucher,
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 
@@ -219,15 +220,15 @@ export function resolveSettlementSchedule(
  * Computes the schedule progress for an unsettled precompile-backed channel.
  *
  * Returns `undefined` for channels that cannot be scheduled: non-precompile
- * records, channels without an accepted voucher, or channels with no unsettled
- * voucher amount.
+ * records, or channels without an accepted voucher above the settled amount and
+ * within `spent` (see {@link ChannelStore.resolveSettleableVoucher}).
  */
 export function resolveSettlementProgress(
   channel: ChannelStore.State,
 ): SettlementProgress | undefined {
   if (!ChannelStore.isPrecompileState(channel)) return undefined
-  if (!channel.highestVoucher) return undefined
-  if (channel.highestVoucher.cumulativeAmount <= channel.settledOnChain) return undefined
+  // A settlement captures a voucher whole, so only a voucher within spend can be scheduled.
+  if (!ChannelStore.resolveSettleableVoucher(channel)) return undefined
 
   const amountBoundary = channel.lastSettlementSpent ?? channel.settledOnChain
   const timestampBoundary = Date.parse(channel.lastSettlementAt ?? channel.createdAt)
@@ -336,7 +337,7 @@ export type ChargeSessionChannel = (channelId: Hex, amount: bigint) => Promise<C
 export type SettleChargedSessionChannel = (channel: ChannelStore.State) => Promise<Hex | undefined>
 
 /** Inputs for charging a precompile-backed session channel. */
-export type ChargeParameters = {
+export type ChargeParameters = ChannelStore.ChargeOptions & {
   /** Server-side channel store. */
   store: ChannelStore.ChannelStore
   /** Channel ID to deduct from. */
@@ -420,11 +421,16 @@ export async function applyVerifiedHttpAccounting(
 export async function chargeSessionChannel(
   parameters: ChargeParameters,
 ): Promise<ChannelStore.State> {
-  const { store, channelId, amount } = parameters
+  const { store, channelId, amount, idempotencyKey, retention } = parameters
+  ChannelStore.assertIdempotencyOptions({ idempotencyKey, retention })
   let result: Awaited<ReturnType<typeof ChannelStore.deductFromChannel>>
   try {
-    result = await ChannelStore.deductFromChannel(store, channelId, amount)
-  } catch {
+    result = await ChannelStore.deductFromChannel(store, channelId, amount, {
+      idempotencyKey,
+      retention,
+    })
+  } catch (error) {
+    if (error instanceof ChannelStore.IdempotencyKeyConflictError) throw error
     throw new ChannelClosedError({ reason: 'channel not found' })
   }
   if (!result.ok) {
@@ -576,7 +582,12 @@ export async function maybeSettleScheduled(
   return txHash
 }
 
-/** Settles the highest accepted voucher for a precompile-backed session channel. */
+/**
+ * Settles the largest accepted voucher within the channel's `spent` for a precompile-backed session
+ * channel (see {@link ChannelStore.resolveSettleableVoucher}). The escrow captures the voucher's
+ * whole cumulative amount, so a voucher above `spent`, such as the highest one after a credit, is
+ * never settled. Until the transaction can no longer land, credits keep `spent` at or above it.
+ */
 export async function settle(
   store_: SessionStoreInput,
   client: Chain.TransactionClient,
@@ -599,31 +610,87 @@ export async function settle(
     payee: channel.payee,
     sender: account?.address,
   })
-  const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const { signature } = channel.highestVoucher
-  // A replica behind the open or top-up that admitted this voucher rejects the settle while
-  // preparing it (e.g. `ChannelNotFound`); nothing was broadcast, so retry until it catches up.
-  const txHash = await Chain.readbackWithRetry(
-    () =>
-      Chain.settleOnChain(
-        client,
-        channel.descriptor,
-        amount,
-        signature,
-        escrow,
-        account
-          ? {
-              account,
-              ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
-              ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-              ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
-              candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
-            }
-          : undefined,
-      ),
-    { shouldRetry: isExecutionRevert },
-  )
-  const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
+  // Pin the transaction's expiry so the credit floor below can expire once it can no longer land.
+  const validBefore = Math.floor(Date.now() / 1000) + ChannelStore.pendingCloseValiditySeconds
+  const pending: ChannelStore.PendingSettlement = {
+    amount: 0n,
+    expiresAt: (validBefore + ChannelStore.pendingCloseClockSkewSeconds) * 1000,
+  }
+  const claim: {
+    channel?: ChannelStore.State | undefined
+    voucher?: SessionSignedVoucher | undefined
+  } = {}
+  // Choosing the voucher and raising the credit floor in one update keeps a concurrent credit from
+  // lowering spent below what this transaction captures.
+  await store.updateChannel(channelId, (current) => {
+    claim.channel = current ?? undefined
+    claim.voucher = (current && ChannelStore.resolveSettleableVoucher(current)) ?? undefined
+    if (!current || !claim.voucher) return current
+    pending.amount = claim.voucher.cumulativeAmount
+    const live =
+      current.pendingSettlement && current.pendingSettlement.expiresAt > Date.now()
+        ? current.pendingSettlement
+        : undefined
+    return {
+      ...current,
+      pendingSettlement: {
+        amount: ChannelStore.keepGreater(live?.amount ?? 0n, pending.amount),
+        expiresAt: Math.max(live?.expiresAt ?? 0, pending.expiresAt),
+      },
+    }
+  })
+  const { voucher } = claim
+  if (!voucher || !claim.channel)
+    throw new VerificationFailedError({
+      reason: 'nothing to settle: no accepted voucher above the settled amount is within spent',
+    })
+  const claimed = claim.channel
+  const amount = uint96(voucher.cumulativeAmount)
+  const { signature } = voucher
+  // A revert proves the transaction will not land, so its credit floor can go at once.
+  const release = () =>
+    store
+      .updateChannel(channelId, (current) => {
+        if (
+          current?.pendingSettlement?.amount !== pending.amount ||
+          current.pendingSettlement.expiresAt !== pending.expiresAt
+        )
+          return current
+        const { pendingSettlement: _, ...rest } = current
+        return rest
+      })
+      .catch(() => undefined)
+  let txHash: Hex
+  let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
+  try {
+    // A replica behind the open or top-up that admitted this voucher rejects the settle while
+    // preparing it (e.g. `ChannelNotFound`); nothing was broadcast, so retry until it catches up.
+    txHash = await Chain.readbackWithRetry(
+      () =>
+        Chain.settleOnChain(
+          client,
+          channel.descriptor,
+          amount,
+          signature,
+          escrow,
+          account
+            ? {
+                account,
+                ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+                ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+                ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+                candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+                validBefore,
+              }
+            : { validBefore },
+        ),
+      { shouldRetry: isExecutionRevert },
+    )
+    receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
+  } catch (error) {
+    if (isExecutionRevert(error) || error instanceof VerificationFailedError) await release()
+    throw error
+  }
   const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
   const { deltaPaid, newSettled } = settled
   if (newSettled < amount)
@@ -638,22 +705,30 @@ export async function settle(
     })
   let checkpointError: { cause: unknown } | undefined
   await store
-    .updateChannel(channelId, (current) =>
-      current
-        ? {
-            ...current,
-            settledOnChain:
-              newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
-            lastSettlementAt: new Date().toISOString(),
-            // Charges accepted after the voucher was read are not covered by this transaction.
-            lastSettlementSpent: ChannelStore.keepGreater(
-              current.lastSettlementSpent ?? 0n,
-              channel.spent,
-            ),
-            lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, channel.units),
-          }
-        : current,
-    )
+    .updateChannel(channelId, (current) => {
+      if (!current) return current
+      const settledOnChain = ChannelStore.keepGreater(current.settledOnChain, newSettled)
+      const { pendingSettlement, ...rest } = current
+      return {
+        ...rest,
+        // The recorded settlement now keeps spent at or above what this transaction captured.
+        ...(pendingSettlement && pendingSettlement.amount > settledOnChain
+          ? { pendingSettlement }
+          : {}),
+        ...(current.retainedVouchers
+          ? {
+              retainedVouchers: current.retainedVouchers.filter(
+                (retained) => retained.cumulativeAmount > settledOnChain,
+              ),
+            }
+          : {}),
+        settledOnChain,
+        lastSettlementAt: new Date().toISOString(),
+        // Charges accepted after the voucher was chosen are not covered by this transaction.
+        lastSettlementSpent: ChannelStore.keepGreater(current.lastSettlementSpent ?? 0n, amount),
+        lastSettlementUnits: Math.max(current.lastSettlementUnits ?? 0, claimed.units),
+      }
+    })
     .catch((cause) => {
       checkpointError = { cause }
     })

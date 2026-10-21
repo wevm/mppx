@@ -126,12 +126,12 @@ wallets or other clients may choose not to expose the opt-in at all.
 
 The amounts below have intentionally different meanings.
 
-| Amount                                        | Meaning                                      | Rule                                                     |
-| --------------------------------------------- | -------------------------------------------- | -------------------------------------------------------- |
-| `acceptedCumulative` / `highestVoucherAmount` | Highest voucher the server accepted.         | Never decreases.                                         |
-| `spent`                                       | Value charged for content.                   | Never decreases; does not exceed accepted authorization. |
-| `settled` / `settledOnChain`                  | Value captured by escrow.                    | Never decreases; chain-authoritative.                    |
-| `requiredCumulative`                          | Authorization required for the next request. | It is a boundary, not a signed voucher.                  |
+| Amount                                        | Meaning                                      | Rule                                                              |
+| --------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------- |
+| `acceptedCumulative` / `highestVoucherAmount` | Highest voucher the server accepted.         | Never decreases.                                                  |
+| `spent`                                       | Value charged for content.                   | Decreases only by `credit`; never exceeds accepted authorization. |
+| `settled` / `settledOnChain`                  | Value captured by escrow.                    | Never decreases; chain-authoritative.                             |
+| `requiredCumulative`                          | Authorization required for the next request. | It is a boundary, not a signed voucher.                           |
 
 ## Request lifecycle
 
@@ -175,6 +175,96 @@ promise an atomic “charge only after a successful handler” transaction.
 Applications with irreversible work define their own idempotency and failure
 behavior. SDK changes must preserve this boundary or introduce an explicit
 prepare/commit contract rather than changing it implicitly.
+
+## Accounting outside the handler
+
+Servers that charge or refund outside the default HTTP accounting use the
+session server's helpers instead of editing channel records. Each takes the
+session's store, either the `Store.AtomicStore` passed to `tempo.session()` or a
+custom channel store.
+
+```ts
+import { Session } from 'mppx/tempo'
+
+// One durable job per voucher, retried under its operation ID.
+await Session.Server.charge(store, channelId, jobCost, { idempotencyKey: operationId })
+
+// Return what the job did not use, once.
+const credit = await Session.Server.credit(store, channelId, unused, {
+  idempotencyKey: `refund:${jobId}`,
+})
+if (credit.status === 'declined') await refundAnotherWay()
+```
+
+`charge` with an `idempotencyKey` charges at most once per key: a retry with the
+same key and amount returns the channel without charging again, and the same key
+with another amount throws `IdempotencyKeyConflictError`. A refused charge records
+nothing, so it can succeed once the channel can pay. The default HTTP accounting
+takes no key: every request it charges carries a voucher that must advance, or is
+charged in the update that accepts its voucher, so a retried request cannot be
+charged twice.
+
+`credit` returns an amount to `spent` at most once per key, and its first outcome
+for a key is final:
+
+| Outcome    | Meaning                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `credited` | `spent` (and `units`, with `units`) went down by the amount.                                                                                                                                                                                                                                                                                                                                   |
+| `declined` | The channel is closing or finalized (`reason` `closing`, `finalized`), or the credit would take `spent` below zero (`exceedsSpent`) or below what settled, or may still settle, on-chain (`belowSettled`). A close captures `max(spent, settled)`, so the caller refunds another way. A finalized channel whose `settledOnChain` is below `spent` was withdrawn before its spend was captured. |
+| `unknown`  | The store write failed and may have committed. Retry with the same key to learn the recorded outcome.                                                                                                                                                                                                                                                                                          |
+
+Charge and credit outcomes are recorded on the channel record, the only value a
+channel store updates atomically, so they work with every store. Each marker is
+kept for `retention` milliseconds (24 hours by default) after its operation and
+removed by the channel's next keyed charge or credit, so a record holds one
+marker per keyed operation of that window. Choose the shortest window that
+covers your retries; a retry after it is a new operation.
+
+### Settlement within spend
+
+The escrow's `settle` captures a voucher's whole cumulative amount. Clients sign
+every voucher above their last one, so after a credit the highest voucher stays
+above `spent`. Settlement therefore uses the largest accepted voucher at or below
+`spent` (`resolveSettleableVoucher`): the channel keeps up to 16 earlier vouchers,
+spread over the unsettled range, that become settleable as charges accumulate.
+`settle` raises a credit floor to the voucher it sends, pinned to the
+transaction's expiry, so a concurrent credit cannot lower `spent` below what lands.
+
+### Close supervision
+
+After a payer requests a close on-chain, the escrow lets it withdraw the whole
+deposit once the close grace period ends. `superviseCloses` answers those requests
+on channels no request is touching. Run it from a scheduled job, for example every
+minute, with the channel IDs the application keeps: a channel store cannot list
+its channels.
+
+```ts
+import { tempo } from 'mppx/server'
+
+const supervision = await tempo.superviseCloses({
+  account: settlementAccount,
+  channelIds: await db.supervisedChannelIds(),
+  client,
+  feeToken, // e.g. USDC.e when the channel token cannot pay fees
+  previousBlock: await db.lastSupervisionBlock(),
+  store,
+})
+if (supervision.complete) await db.setLastSupervisionBlock(supervision.block)
+```
+
+Each run reads every channel's escrow state at one pinned block. A close request
+is answered with a payee close capturing `max(spent, settled)`, bounded by the
+highest voucher and the deposit; a deposit that already left the escrow is
+finalized from its `ChannelClosed` event; and a cancelled request reopens the
+channel. Drop channels whose outcome is `closed`, `unrecovered`, `finalized` or
+`missing`.
+
+### Sponsored opens
+
+`sponsorshipLimit: { store }` limits fee-payer-sponsored opens, and separately
+top-ups, to five per payer per UTC day (`perDay`). The payer is the verified signer
+of the transaction, never the credential's `source`. Over the limit, the
+transaction is broadcast as signed, paying its own fees.
 
 ## Recovery lifecycle
 
@@ -393,6 +483,8 @@ The module boundaries implement these contracts:
 | `client/CredentialState.ts` and `client/ChannelOps.ts`          | Credential planning, recovery validation, and client cache updates.           |
 | `server/CredentialVerification.ts` and `server/ChannelStore.ts` | Credential verification and authoritative atomic channel state.               |
 | `server/Settlement.ts`                                          | Content accounting and server-owned settlement cadence.                       |
+| `server/CloseSupervisor.ts`                                     | Scheduled answers to payer close requests.                                    |
+| `server/SponsorshipLimit.ts`                                    | Daily limits on fee-payer-sponsored opens and top-ups.                        |
 | `server/RequestState.ts`                                        | Challenge context, bootstrap identity lookup, snapshots, and response gating. |
 | `client/Transports.ts` and `server/Transports.ts`               | SSE and WebSocket payment control messages.                                   |
 

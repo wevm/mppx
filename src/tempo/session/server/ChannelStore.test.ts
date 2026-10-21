@@ -1175,3 +1175,285 @@ describe('concurrency', () => {
     })
   })
 })
+
+// ---------- Session accounting ----------
+
+/** A channel store with only `getChannel` and `updateChannel`, like a custom adapter over a Store. */
+function plainChannelStore(store: Store.AtomicStore): ChannelStore.ChannelStore {
+  return {
+    async getChannel(id) {
+      return (await store.get(id)) as ChannelStore.State | null
+    },
+    updateChannel(id, fn) {
+      return store.update(id, (current) => {
+        const next = fn(current as ChannelStore.State | null)
+        if (next === null) return { op: 'delete', result: null }
+        return { op: 'set', value: next, result: next }
+      }) as Promise<ChannelStore.State | null>
+    },
+  }
+}
+
+const accountingStores = [
+  { label: 'atomic backend', create: () => ChannelStore.fromStore(Store.memory()) },
+  {
+    label: 'mutex fallback',
+    create: () => ChannelStore.fromStore(stripUpdateMethod(Store.memory())),
+  },
+  { label: 'custom channel store', create: () => plainChannelStore(Store.memory()) },
+]
+
+function voucherAt(cumulativeAmount: bigint): SessionSignedVoucher {
+  return {
+    channelId,
+    cumulativeAmount,
+    signature: `0x${cumulativeAmount.toString(16).padStart(130, '0')}`,
+  }
+}
+
+describe('ChannelStore idempotent charges', () => {
+  test.each(accountingStores)('charges a key once and replays it ($label)', async ({ create }) => {
+    const cs = create()
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
+
+    const first = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n, {
+      idempotencyKey: 'job-1',
+    })
+    const replay = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n, {
+      idempotencyKey: 'job-1',
+    })
+
+    expect(first).toMatchObject({ ok: true, channel: { spent: 1_000_000n, units: 1 } })
+    expect(first.ok && first.replayed).toBeFalsy()
+    expect(replay).toMatchObject({ ok: true, replayed: true, channel: { spent: 1_000_000n } })
+    expect(await cs.getChannel(channelId)).toMatchObject({ spent: 1_000_000n, units: 1 })
+  })
+
+  test('rejects a key reused with another amount', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
+    await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n, { idempotencyKey: 'job-1' })
+
+    await expect(
+      ChannelStore.deductFromChannel(cs, channelId, 2_000_000n, { idempotencyKey: 'job-1' }),
+    ).rejects.toBeInstanceOf(ChannelStore.IdempotencyKeyConflictError)
+    expect((await cs.getChannel(channelId))!.spent).toBe(1_000_000n)
+  })
+
+  test('records nothing for a refused charge, so a retry can succeed', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 1_000_000n, spent: 1_000_000n })
+
+    const refused = await ChannelStore.deductFromChannel(cs, channelId, 1n, {
+      idempotencyKey: 'job-1',
+    })
+    await cs.updateChannel(channelId, (current) =>
+      current ? { ...current, highestVoucherAmount: 2_000_000n } : current,
+    )
+    const charged = await ChannelStore.deductFromChannel(cs, channelId, 1n, {
+      idempotencyKey: 'job-1',
+    })
+
+    expect(refused.ok).toBe(false)
+    expect(charged).toMatchObject({ ok: true, channel: { spent: 1_000_001n } })
+    expect(charged.ok && charged.replayed).toBeFalsy()
+  })
+
+  test('forgets markers after their retention on the next keyed write', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
+    await ChannelStore.deductFromChannel(cs, channelId, 1n, { idempotencyKey: 'a', retention: 1 })
+    await sleep(5)
+    await ChannelStore.deductFromChannel(cs, channelId, 1n, { idempotencyKey: 'b' })
+
+    const channel = (await cs.getChannel(channelId))!
+    expect(Object.keys(channel.idempotencyMarkers ?? {})).toEqual(['charge:b'])
+    const again = await ChannelStore.deductFromChannel(cs, channelId, 1n, { idempotencyKey: 'a' })
+    expect(again.ok && again.replayed).toBeFalsy()
+    expect(again.channel.spent).toBe(3n)
+  })
+
+  test('rejects invalid idempotency options', () => {
+    expect(() => ChannelStore.assertIdempotencyOptions({ idempotencyKey: '' })).toThrow(
+      /idempotencyKey/,
+    )
+    expect(() => ChannelStore.assertIdempotencyOptions({ retention: 0 })).toThrow(/retention/)
+  })
+})
+
+describe('ChannelStore credits', () => {
+  test.each(accountingStores)(
+    'credits once per key and replays the outcome ($label)',
+    async ({ create }) => {
+      const cs = create()
+      await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 3_000_000n, units: 3 })
+
+      const first = await ChannelStore.creditChannel(cs, channelId, 1_000_000n, {
+        idempotencyKey: 'refund-1',
+        units: 1,
+      })
+      const replay = await ChannelStore.creditChannel(cs, channelId, 1_000_000n, {
+        idempotencyKey: 'refund-1',
+        units: 1,
+      })
+
+      expect(first).toMatchObject({
+        status: 'credited',
+        replayed: false,
+        channel: { spent: 2_000_000n, units: 2 },
+      })
+      expect(replay).toMatchObject({ status: 'credited', replayed: true })
+      expect(await cs.getChannel(channelId)).toMatchObject({ spent: 2_000_000n, units: 2 })
+    },
+  )
+
+  test.each([
+    ['closing', { closeRequestedAt: 1n }, 1n],
+    ['finalized', { finalized: true }, 1n],
+    ['exceedsSpent', {}, 3_000_001n],
+    ['belowSettled', { settledOnChain: 2_500_000n }, 600_000n],
+    [
+      'belowSettled',
+      { pendingSettlement: { amount: 2_500_000n, expiresAt: Date.now() + 60_000 } },
+      600_000n,
+    ],
+  ] as const)('declines a %s credit and keeps spent', async (reason, overrides, amount) => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 3_000_000n, ...overrides })
+
+    const result = await ChannelStore.creditChannel(cs, channelId, amount, {
+      idempotencyKey: 'refund-1',
+    })
+
+    expect(result).toMatchObject({ status: 'declined', reason, replayed: false })
+    expect((await cs.getChannel(channelId))!.spent).toBe(3_000_000n)
+  })
+
+  test('credits once a settlement that may land has expired', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, {
+      highestVoucherAmount: 5_000_000n,
+      pendingSettlement: { amount: 3_000_000n, expiresAt: Date.now() - 1 },
+      spent: 3_000_000n,
+    })
+
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 1_000_000n, { idempotencyKey: 'refund-1' }),
+    ).resolves.toMatchObject({ status: 'credited', channel: { spent: 2_000_000n } })
+  })
+
+  test('keeps the first decision for a key after the channel reopens', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, {
+      highestVoucherAmount: 5_000_000n,
+      spent: 3_000_000n,
+      closeRequestedAt: 1n,
+    })
+    await ChannelStore.creditChannel(cs, channelId, 1_000_000n, { idempotencyKey: 'refund-1' })
+    await cs.updateChannel(channelId, (current) =>
+      current ? { ...current, closeRequestedAt: 0n } : current,
+    )
+
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 1_000_000n, { idempotencyKey: 'refund-1' }),
+    ).resolves.toMatchObject({ status: 'declined', reason: 'closing', replayed: true })
+    expect((await cs.getChannel(channelId))!.spent).toBe(3_000_000n)
+  })
+
+  test('rejects a key reused with other terms', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 3_000_000n })
+    await ChannelStore.creditChannel(cs, channelId, 1_000_000n, { idempotencyKey: 'refund-1' })
+
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 2_000_000n, { idempotencyKey: 'refund-1' }),
+    ).rejects.toBeInstanceOf(ChannelStore.IdempotencyKeyConflictError)
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 1_000_000n, {
+        idempotencyKey: 'refund-1',
+        units: 1,
+      }),
+    ).rejects.toBeInstanceOf(ChannelStore.IdempotencyKeyConflictError)
+  })
+
+  test('reports an unknown outcome when the store write fails', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 3_000_000n })
+    const failing: ChannelStore.ChannelStore = {
+      getChannel: cs.getChannel,
+      updateChannel: () => Promise.reject(new Error('store unavailable')),
+    }
+
+    await expect(
+      ChannelStore.creditChannel(failing, channelId, 1n, { idempotencyKey: 'refund-1' }),
+    ).resolves.toMatchObject({ status: 'unknown', error: { message: 'store unavailable' } })
+  })
+
+  test('rejects missing channels and invalid amounts', async () => {
+    const cs = ChannelStore.fromStore(Store.memory())
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 1n, { idempotencyKey: 'refund-1' }),
+    ).rejects.toBeInstanceOf(ChannelNotFoundError)
+    await expect(
+      ChannelStore.creditChannel(cs, channelId, 0n, { idempotencyKey: 'refund-1' }),
+    ).rejects.toThrow(/positive/)
+  })
+})
+
+describe('ChannelStore settleable vouchers', () => {
+  test('keeps a superseded voucher that a settlement may capture once spent covers it', () => {
+    const current = makeChannel({
+      highestVoucher: voucherAt(100n),
+      highestVoucherAmount: 100n,
+      spent: 70n,
+    })
+    const next = ChannelStore.acceptVoucherStateUpdate({
+      current,
+      voucher: voucherAt(200n),
+      channelState: { deposit: 10_000_000n, settled: 0n, closeRequestedAt: 0 },
+    })
+
+    expect(next.retainedVouchers).toEqual([
+      { cumulativeAmount: 100n, signature: voucherAt(100n).signature },
+    ])
+    expect(ChannelStore.resolveSettleableVoucher(next)).toBeNull()
+    expect(ChannelStore.resolveSettleableVoucher({ ...next, spent: 150n })).toEqual(voucherAt(100n))
+    expect(ChannelStore.resolveSettleableVoucher({ ...next, spent: 200n })).toEqual(voucherAt(200n))
+    expect(
+      ChannelStore.resolveSettleableVoucher({ ...next, settledOnChain: 100n, spent: 150n }),
+    ).toBeNull()
+  })
+
+  test('keeps settling a long channel whose credits leave the highest voucher above spent', () => {
+    let channel = makeChannel({
+      highestVoucher: voucherAt(10n),
+      highestVoucherAmount: 10n,
+      spent: 10n,
+    })
+    let settlements = 0
+    for (let request = 1; request <= 1_000; request++) {
+      // Each request signs 10 above the last voucher, is charged 10 and credits 4 back.
+      channel = ChannelStore.acceptVoucherStateUpdate({
+        current: channel,
+        voucher: voucherAt(channel.highestVoucherAmount + 10n),
+        channelState: {
+          deposit: 10_000_000n,
+          settled: channel.settledOnChain,
+          closeRequestedAt: 0,
+        },
+      })
+      channel = { ...channel, spent: channel.spent + 10n - 4n }
+      if (request % 20 !== 0) continue
+      const settleable = ChannelStore.resolveSettleableVoucher(channel)
+      if (!settleable) continue
+      expect(settleable.cumulativeAmount).toBeLessThanOrEqual(channel.spent)
+      channel = { ...channel, settledOnChain: settleable.cumulativeAmount }
+      settlements++
+    }
+
+    expect(channel.retainedVouchers!.length).toBeLessThanOrEqual(ChannelStore.maxRetainedVouchers)
+    expect(channel.highestVoucherAmount - channel.spent).toBe(4_000n)
+    expect(settlements).toBeGreaterThan(25)
+    expect(channel.spent - channel.settledOnChain).toBeLessThan(250n)
+  })
+})

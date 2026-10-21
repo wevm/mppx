@@ -256,6 +256,8 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       request: sessionRequest(channelId) as never,
     })
     expect(receipt.reference).toBe(channelId)
+    // A settlement captures a voucher whole, so it settles only what was spent.
+    await store.updateChannel(channelId, (current) => current && { ...current, spent: 300n })
 
     const txHash = await settle(store, client, channelId)
     const settleReceipt = await waitForTransactionReceipt(client, { hash: txHash })
@@ -295,8 +297,8 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
         cumulativeAmount: 250n,
         signature: voucher.signature,
       },
-      spent: 0n,
-      units: 0,
+      spent: 250n,
+      units: 1,
       finalized: false,
       createdAt: new Date().toISOString(),
       descriptor,

@@ -48,6 +48,8 @@ import { respondToSessionCredential } from './RequestState.js'
 import {
   applyVerifiedHttpAccounting,
   chargeSessionChannel,
+  resolveChannelStore,
+  type SessionStoreInput,
   shouldApplyVerifiedHttpAccounting,
   shouldChargeVoucherOnAcceptance,
   type SettleChargedSessionChannel,
@@ -64,6 +66,7 @@ import {
   type OnSessionSettlementFailure,
   type SettlementSchedule,
 } from './Settlement.js'
+import * as SponsorshipLimit from './SponsorshipLimit.js'
 import * as Ws from './Ws.js'
 
 const streamVerifiers = new WeakMap<object, (channelId: Hex) => Promise<void>>()
@@ -367,6 +370,7 @@ export function session<const parameters extends session.Parameters>(
     unitType,
   } = parameters
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
+  SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
@@ -565,7 +569,12 @@ export function session<const parameters extends session.Parameters>(
       credentialSource: credential.source,
       escrow: context.escrow,
       expectedOperator: context.methodDetails.operator,
-      feePayer: context.feePayer,
+      feePayer: await SponsorshipLimit.limitFeePayer({
+        chainId: context.chainId,
+        feePayer: context.feePayer,
+        limit: parameters.sponsorshipLimit,
+        payload,
+      }),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: context.methodDetails.feeToken,
       lastOnChainVerified,
@@ -797,6 +806,14 @@ export namespace session {
 
     /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
+    /**
+     * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
+     * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never
+     * the credential's client-supplied `source`. A transaction over the limit, or one whose
+     * signatures prove no payer, is broadcast unsponsored, so it lands only if the payer pays its
+     * own fees.
+     */
+    sponsorshipLimit?: SponsorshipLimit.Parameters | undefined
   } & Account.resolve.Parameters &
     Client.getResolver.Parameters &
     Defaults &
@@ -821,11 +838,50 @@ export namespace session {
  *
  * Delegates to the shared `deductFromChannel` atomic helper and translates
  * failure modes into typed errors (`InsufficientBalanceError`, `ChannelClosedError`).
+ *
+ * With `options.idempotencyKey` the channel is charged at most once per key: a retry with the same
+ * key and amount returns the channel without charging again, and the same key with a different
+ * amount throws `IdempotencyKeyConflictError`.
+ *
+ * @example
+ * ```ts
+ * // One durable job per voucher, retried under its operation ID.
+ * const channel = await Session.Server.charge(store, channelId, jobCost, {
+ *   idempotencyKey: operationId,
+ * })
+ * ```
  */
 export async function charge(
-  store: ChannelStore.ChannelStore,
+  store: SessionStoreInput,
   channelId: Hex,
   amount: bigint,
+  options?: ChannelStore.ChargeOptions,
 ): Promise<ChannelStore.State> {
-  return chargeSessionChannel({ store, channelId, amount })
+  return chargeSessionChannel({ ...options, store: resolveChannelStore(store), channelId, amount })
+}
+
+/**
+ * Returns an unused amount to a channel's `spent` at most once per idempotency key.
+ *
+ * The first outcome for a key is final. A credit is `declined` when the channel is closing or
+ * finalized, or when it would take `spent` below zero or below what settled, or may still settle,
+ * on-chain, because a close captures `max(spent, settled)`; the caller then refunds another way.
+ * `unknown` reports a store write that failed and may have committed; retrying with the same key
+ * returns the outcome that was recorded.
+ *
+ * @example
+ * ```ts
+ * const result = await Session.Server.credit(store, channelId, unused, {
+ *   idempotencyKey: `refund:${flowId}`,
+ * })
+ * if (result.status === 'declined') await refundAnotherWay()
+ * ```
+ */
+export async function credit(
+  store: SessionStoreInput,
+  channelId: Hex,
+  amount: bigint,
+  options: ChannelStore.CreditOptions,
+): Promise<ChannelStore.CreditResult> {
+  return ChannelStore.creditChannel(resolveChannelStore(store), channelId, amount, options)
 }

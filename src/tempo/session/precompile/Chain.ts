@@ -331,18 +331,20 @@ export async function getChannelState(
 }
 
 /**
- * Read channel states from the TIP20EscrowChannel precompile.
+ * Read channel states from the TIP20EscrowChannel precompile, optionally at one block.
  */
 export async function getChannelStatesBatch(
   client: Client,
   channelIds: readonly Hex[],
   escrow: Address = tip20ChannelEscrow,
+  blockNumber?: bigint,
 ): Promise<ChannelState[]> {
   const states = await readContract(client, {
     address: escrow,
     abi: escrowAbi,
     functionName: 'getChannelStatesBatch',
     args: [channelIds],
+    ...(blockNumber !== undefined ? { blockNumber } : {}),
   })
   return states.map(stateFromTuple)
 }

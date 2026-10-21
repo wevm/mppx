@@ -312,10 +312,10 @@ describe('SettlementSchedule', () => {
       finalized: false,
       highestVoucher: {
         channelId,
-        cumulativeAmount: 600n,
+        cumulativeAmount: 350n,
         signature: '0x1234',
       },
-      highestVoucherAmount: 600n,
+      highestVoucherAmount: 350n,
       operator: '0x0000000000000000000000000000000000000000',
       payee: '0x0000000000000000000000000000000000000002',
       payer: '0x0000000000000000000000000000000000000001',

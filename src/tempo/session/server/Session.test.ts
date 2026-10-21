@@ -1253,7 +1253,7 @@ describe('precompile server session unit guardrails', () => {
     const openPayload = await createOpenPayload({
       operator: wrongPayer.address,
     })
-    await persistPrecompileChannel(store, openPayload)
+    await persistPrecompileChannel(store, openPayload, { spent: 100n })
 
     const { settle } = await import('./Session.js')
     const client = createClient({
@@ -1292,6 +1292,7 @@ describe('precompile server session unit guardrails', () => {
     const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
+      spent: 100n,
     })
     const client = createClient({
       account: payer,
@@ -1321,6 +1322,7 @@ describe('precompile server session unit guardrails', () => {
     const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: wrongPayer.address,
+      spent: 100n,
     })
     const client = createClient({
       account: payer,
@@ -1350,6 +1352,7 @@ describe('precompile server session unit guardrails', () => {
     const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
+      spent: 100n,
     })
 
     const { settle } = await import('./Session.js')
@@ -2047,7 +2050,8 @@ describe('precompile server session unit guardrails', () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)
       const openPayload = await createOpenPayload({ initialAmount: 100n })
-      await persistPrecompileChannel(store, openPayload)
+      // Settling captures the accepted voucher only because it is all spent.
+      await persistPrecompileChannel(store, openPayload, { spent: 100n })
       const voucher = await ClientOps.createVoucherPayload(
         createSigningClient(),
         payer,
@@ -4065,7 +4069,7 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload({ initialAmount: 100n })
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 100n })
     const client = createServerClient([], payer, openPayload.channelId, {
       receipt: transactionReceipt([settledLog(openPayload.channelId, 100n)]),
       state: { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 },
@@ -4549,6 +4553,127 @@ describe('onSessionSettlement', () => {
       amount: 100n,
       delta: 100n,
     })
+  })
+
+  test('settles the largest voucher within spent instead of the highest one', async () => {
+    const store = channelStore(Store.memory())
+    const openPayload = await createOpenPayload()
+    // A credit left the highest voucher above spent; only the earlier voucher is all spent.
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 350n,
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: '0x1234',
+      },
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0x5678' }],
+    })
+    const settleOnChain = vi.spyOn(Chain, 'settleOnChain')
+
+    const { settle } = await import('./Session.js')
+    try {
+      await expect(
+        settle(store, createSettleClient(openPayload.channelId, 300n), openPayload.channelId),
+      ).resolves.toBe(`0x${'cc'.repeat(32)}`)
+      expect(settleOnChain).toHaveBeenCalledWith(
+        expect.anything(),
+        openPayload.descriptor,
+        300n,
+        '0x5678',
+        tip20ChannelEscrow,
+        expect.objectContaining({ validBefore: expect.any(Number) }),
+      )
+    } finally {
+      settleOnChain.mockRestore()
+    }
+    const settled = await store.getChannel(openPayload.channelId)
+    expect(settled).toMatchObject({
+      lastSettlementSpent: 300n,
+      retainedVouchers: [],
+      settledOnChain: 300n,
+      spent: 350n,
+    })
+    expect(settled?.pendingSettlement).toBeUndefined()
+  })
+
+  test('sends nothing when no accepted voucher is within spent', async () => {
+    const store = channelStore(Store.memory())
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 99n })
+    const requests: string[] = []
+
+    const { settle } = await import('./Session.js')
+    await expect(
+      settle(
+        store,
+        createSettleClient(openPayload.channelId, 100n, { requests }),
+        openPayload.channelId,
+      ),
+    ).rejects.toThrow(/nothing to settle/)
+    expect(requests.some((method) => method.startsWith('eth_send'))).toBe(false)
+  })
+
+  test('declines credits below a settlement that may still land', async () => {
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 100n })
+    const inner = createSettleClient(openPayload.channelId, 100n)
+    const receiptRequested = Promise.withResolvers<void>()
+    const releaseReceipt = Promise.withResolvers<void>()
+    const client = createClient({
+      account: payer,
+      chain: testChain,
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_getTransactionReceipt') {
+              receiptRequested.resolve()
+              await releaseReceipt.promise
+            }
+            return inner.request(args as never)
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+
+    const { credit, settle } = await import('./Session.js')
+    const settlement = settle(store, client, openPayload.channelId)
+    await receiptRequested.promise
+    await expect(
+      credit(rawStore, openPayload.channelId, 40n, { idempotencyKey: 'refund-1' }),
+    ).resolves.toMatchObject({ status: 'declined', reason: 'belowSettled' })
+    releaseReceipt.resolve()
+    await settlement
+
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+      settledOnChain: 100n,
+      spent: 100n,
+    })
+  })
+
+  test('charges a durable job once per operation ID', async () => {
+    const rawStore = Store.memory()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(channelStore(rawStore), openPayload, {
+      highestVoucherAmount: 100n,
+      spent: 0n,
+    })
+
+    const first = await charge(rawStore, openPayload.channelId, 60n, { idempotencyKey: 'op-1' })
+    const retried = await charge(rawStore, openPayload.channelId, 60n, { idempotencyKey: 'op-1' })
+
+    expect(first).toMatchObject({ spent: 60n, units: 1 })
+    expect(retried).toMatchObject({ spent: 60n, units: 1 })
+    await expect(
+      charge(rawStore, openPayload.channelId, 30n, { idempotencyKey: 'op-1' }),
+    ).rejects.toBeInstanceOf(ChannelStore.IdempotencyKeyConflictError)
+    await expect(charge(rawStore, openPayload.channelId, 60n)).rejects.toThrow(
+      /requested 60, available 40/,
+    )
   })
 
   test('retries a settle whose preparation reverts on a replica behind the open', async () => {
@@ -5117,8 +5242,16 @@ describe('onSessionSettlement', () => {
     })
     const { settle, SettlementCheckpointError } = await import('./Settlement.js')
 
+    let updates = 0
     const error = await settle(
-      { ...store, updateChannel: () => Promise.reject(new Error('store unavailable')) },
+      // The settlement claim succeeds; the post-confirmation checkpoint write fails.
+      {
+        ...store,
+        updateChannel: (channelId, fn) =>
+          ++updates === 2
+            ? Promise.reject(new Error('store unavailable'))
+            : store.updateChannel(channelId, fn),
+      },
       createSettleClient(openPayload.channelId, 100n),
       openPayload.channelId,
       { onSessionSettlement: ({ txHash }) => void settlements.push(txHash) },
@@ -5183,11 +5316,11 @@ describe('onSessionSettlement', () => {
         client: createSettleClient(openPayload.channelId, 500n),
         onSessionSettlementFailure: ({ error }) => void failures.push((error as Error).message),
         schedule: { units: 5 },
-        // The lease claim succeeds; the post-confirmation checkpoint write fails.
+        // The lease and settlement claims succeed; the post-confirmation checkpoint write fails.
         store: {
           ...store,
           updateChannel: (channelId, fn) =>
-            ++updates === 2
+            ++updates === 3
               ? Promise.reject(new Error('store unavailable'))
               : store.updateChannel(channelId, fn),
         },

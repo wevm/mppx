@@ -2,8 +2,10 @@ import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
+import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
   charge as sessionCharge_,
+  credit as sessionCredit_,
   session as session_,
   settle as settle_,
   settleBatch as settleBatch_,
@@ -19,8 +21,10 @@ import { renew as renewSubscription_, subscription as subscription_ } from './Su
 
 const sessionServer = Object.assign(session_, {
   charge: sessionCharge_,
+  credit: sessionCredit_,
   settle: settle_,
   settleBatch: settleBatch_,
+  superviseCloses: superviseCloses_,
 })
 
 function createChargeMethod<const parameters extends SharedParameters>(
@@ -139,17 +143,21 @@ export namespace tempo {
   /** Creates ordered TIP-1034 session offers with shared storage and settlement helpers. */
   export const session = Object.assign(sessionOffers, {
     charge: sessionCharge_,
+    credit: sessionCredit_,
     settle: settle_,
     settleBatch: settleBatch_,
+    superviseCloses: superviseCloses_,
   })
   /** Creates ordered subscription offers. Existing subscriptions retain their authorized currency. */
   export const subscription = subscriptionOffers
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */
   export const renewSubscription = renewSubscription_
-  /** One-shot settle: reads highest voucher from storage and submits on-chain. */
+  /** One-shot settle: reads the largest voucher within spend from storage and submits it on-chain. */
   export const settle = settle_
   /** Batch-settle precompile-backed session channels. */
   export const settleBatch = settleBatch_
+  /** Answers payer close requests on supervised session channels; call it from a scheduled job. */
+  export const superviseCloses = superviseCloses_
   /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
   export const SettlementCheckpointError = Settlement.SettlementCheckpointError
   /** Raised by `settle` when its transaction confirmed but the channel store could not record it. */
