@@ -9,3 +9,5 @@ Standalone credential APIs now require a configured matching realm or trusted ro
 Preserved successful charge receipts when a challenge expired during settlement, preventing a fresh payment challenge after funds moved.
 
 Preserved Express JSON replacers, spacing, and escaping before payment response wrapping. Preserved HTTPS hostnames for certificate validation; local HTTPS names use the system resolver, while plain HTTP localhost subdomains retain the loopback shortcut.
+
+Selected the key bound to a new subscription challenge before a previously retained billing key, allowing an expired subscription to be activated again for the same payer.

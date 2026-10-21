@@ -918,8 +918,8 @@ async function submitSubscriptionPayment(parameters: {
     waitForConfirmation,
   } = parameters
   const stored =
-    (await store.getAccessKey(lookupKey)) ??
-    (await store.getAccessKeyByAddress(accessKey.accessKeyAddress, accessKey.keyToken))
+    (await store.getAccessKeyByAddress(accessKey.accessKeyAddress, accessKey.keyToken)) ??
+    (await store.getAccessKey(lookupKey))
   if (!stored) {
     throw new VerificationFailedError({ reason: 'subscription access key is missing' })
   }

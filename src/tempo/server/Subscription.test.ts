@@ -549,7 +549,7 @@ describe('tempo.subscription', () => {
     async (fails) => {
       const store = Store.memory()
       const subscriptions = SubscriptionStore.fromStore(store)
-      const { client, rpcMethods } = createBillingClient([hashActivate], {
+      const { client, rpcMethods } = createBillingClient([hashActivate, hashRenewed], {
         failSimulation: fails ? 1 : undefined,
       })
       const sourceKey = (source: { address: string; chainId: number }) =>
@@ -612,6 +612,30 @@ describe('tempo.subscription', () => {
       expect(record?.payer?.address.toLowerCase()).toBe(rootAccount.address.toLowerCase())
       expect(record?.accessKey).toEqual(challengeAccessKey)
       expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
+      if (!record) throw new Error('expected activated subscription')
+      await subscriptions.put({
+        ...record,
+        subscriptionExpires: new Date(Date.now() - 1_000).toISOString(),
+      })
+      const next = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+      if (next.status !== 402) throw new Error('expected re-subscription challenge')
+      const freshChallenge = Challenge.fromResponse(next.challenge)
+      const freshKey = (
+        freshChallenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+      ).methodDetails?.accessKey
+      if (!freshKey) throw new Error('expected fresh key')
+      expect(freshKey.accessKeyAddress).not.toBe(challengeAccessKey.accessKeyAddress)
+      const freshCredential = await createCredential(freshChallenge, rootAccount.address, freshKey)
+      const reactivated = await mppx.tempo.subscription({})(
+        new Request('https://example.com/resource', {
+          headers: { Authorization: Credential.serialize(freshCredential) },
+        }),
+      )
+      expect(reactivated.status).toBe(200)
+      expect((await subscriptions.getAccessKey(lookupKey))?.accessKeyAddress).toBe(
+        freshKey.accessKeyAddress,
+      )
+      expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
     },
   )
 
