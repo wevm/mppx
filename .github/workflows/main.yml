@@ -53,10 +53,12 @@ jobs:
           publish-script: pnpm run changeset:publish
           version-script: pnpm run changeset:version
 
+  # Runs alongside the changesets job instead of after it: both only need
+  # verify, and snapshot checks for pending changesets itself.
   snapshot:
     name: Snapshot
-    if: github.repository == 'wevm/mppx' && needs.changesets.outputs.hasChangesets == 'true'
-    needs: [verify, changesets]
+    if: github.repository == 'wevm/mppx'
+    needs: verify
     permissions:
       contents: read
       id-token: write
@@ -69,10 +71,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check for pending changesets
+        id: pending
+        run: |
+          if find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | grep -q .; then
+            echo "has-changesets=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install dependencies
+        if: steps.pending.outputs.has-changesets == 'true'
         uses: ./.github/actions/install-dependencies
 
       - name: Publish main snapshot
+        if: steps.pending.outputs.has-changesets == 'true'
         run: |
           pnpm changeset version --snapshot main
           pnpm build

@@ -87,14 +87,19 @@ jobs:
             args: --project node
             tempo: false
             keyring: false
-          - name: Tempo 1/2
+          - name: Tempo 1/3
             artifact: tempo-1
-            args: --project tempo --shard=1/2
+            args: --project tempo --shard=1/3
             tempo: true
             keyring: true
-          - name: Tempo 2/2
+          - name: Tempo 2/3
             artifact: tempo-2
-            args: --project tempo --shard=2/2
+            args: --project tempo --shard=2/3
+            tempo: true
+            keyring: true
+          - name: Tempo 3/3
+            artifact: tempo-3
+            args: --project tempo --shard=3/3
             tempo: true
             keyring: true
           - name: CLI
@@ -112,10 +117,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Setup Docker
-        if: matrix.tempo
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
 
       - name: Install secret-tool (libsecret)
         if: matrix.keyring
@@ -247,9 +248,17 @@ jobs:
           retention-days: 7
 
   test-x402-e2e:
-    name: Test x402 E2E
+    name: Test x402 E2E / ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Localnet
+            project: x402-localnet
+          - name: Coinbase client
+            project: x402-coinbase-client
     env:
       TESTCONTAINERS_RYUK_DISABLED: true
       VITE_TEMPO_NETWORK: none
@@ -260,9 +269,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Setup Docker
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
 
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
@@ -307,11 +313,10 @@ jobs:
             ghcr.io/foundry-rs/foundry@sha256:ede4c35d3e9310f6c77f09952cd666e17e4ee7cd5228290d8b4fc9d5cdd37eb1 \
             build
 
-      - name: Run x402 localnet tests
-        run: pnpm exec vp test --run --project x402-localnet --reporter=verbose --bail=1
-
-      - name: Run Coinbase x402 client interoperability tests
-        run: pnpm exec vp test --run --project x402-coinbase-client --reporter=verbose --bail=1
+      - name: Run tests
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: pnpm exec vp test --run --project "$PROJECT" --reporter=verbose --bail=1
 
   test-html:
     name: Test HTML
