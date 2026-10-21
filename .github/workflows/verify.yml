@@ -82,9 +82,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Node
-            artifact: node
-            args: --project node
+          - name: Node 1/2
+            artifact: node-1
+            args: --project node --shard=1/2
+            tempo: false
+            keyring: false
+          - name: Node 2/2
+            artifact: node-2
+            args: --project node --shard=2/2
             tempo: false
             keyring: false
           - name: Tempo 1/3
@@ -118,6 +123,37 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pull and start the localnet in the background so it boots while
+      # dependencies install; "Wait for Tempo localnet" blocks until it answers.
+      - name: Start Tempo localnet
+        if: matrix.tempo
+        run: |
+          {
+            docker rm -f mppx-tempo-localnet 2>/dev/null || true
+            docker run -d \
+              --name mppx-tempo-localnet \
+              -p 18545:54515 \
+              ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} \
+              node \
+              --authrpc.port 54545 \
+              --datadir /tmp/mppx-tempo-localnet \
+              --dev \
+              --dev.block-time 200ms \
+              --dev.mnemonic 'test test test test test test test test test test test junk' \
+              --engine.disable-precompile-cache \
+              --engine.legacy-state-root \
+              --faucet.address 0x20c0000000000000000000000000000000000000 0x20c0000000000000000000000000000000000001 0x20c0000000000000000000000000000000000002 0x20c0000000000000000000000000000000000003 \
+              --faucet.amount 1000000000000 \
+              --faucet.enabled \
+              --faucet.private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+              --http.addr 0.0.0.0 \
+              --http.api all \
+              --http.corsdomain '*' \
+              --http.port 54515 \
+              --port 54525 \
+              --ws.port 54535
+          } > "${RUNNER_TEMP}/tempo-localnet.log" 2>&1 &
+
       - name: Install secret-tool (libsecret)
         if: matrix.keyring
         uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
@@ -128,59 +164,13 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Resolve Tempo image digest
-        if: matrix.tempo
-        id: tempo-digest
-        run: |
-          digest=$(docker buildx imagetools inspect ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} --raw | sha256sum | cut -d' ' -f1)
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      - name: Bundle HTML files
+        run: pnpm build
 
-      - name: Cache Tempo Docker image
-        if: matrix.tempo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: docker-cache
-        with:
-          path: /tmp/tempo-image.tar
-          key: tempo-image-${{ steps.tempo-digest.outputs.digest }}
-
-      - name: Load cached Tempo image
-        if: matrix.tempo && steps.docker-cache.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/tempo-image.tar
-
-      - name: Pull and cache Tempo image
-        if: matrix.tempo && steps.docker-cache.outputs.cache-hit != 'true'
-        run: |
-          docker pull ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}
-          docker save ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} -o /tmp/tempo-image.tar
-
-      - name: Start Tempo localnet
+      - name: Wait for Tempo localnet
         if: matrix.tempo
         run: |
-          docker rm -f mppx-tempo-localnet 2>/dev/null || true
-          docker run -d \
-            --name mppx-tempo-localnet \
-            -p 18545:54515 \
-            ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} \
-            node \
-            --authrpc.port 54545 \
-            --datadir /tmp/mppx-tempo-localnet \
-            --dev \
-            --dev.block-time 200ms \
-            --dev.mnemonic 'test test test test test test test test test test test junk' \
-            --engine.disable-precompile-cache \
-            --engine.legacy-state-root \
-            --faucet.address 0x20c0000000000000000000000000000000000000 0x20c0000000000000000000000000000000000001 0x20c0000000000000000000000000000000000002 0x20c0000000000000000000000000000000000003 \
-            --faucet.amount 1000000000000 \
-            --faucet.enabled \
-            --faucet.private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
-            --http.addr 0.0.0.0 \
-            --http.api all \
-            --http.corsdomain '*' \
-            --http.port 54515 \
-            --port 54525 \
-            --ws.port 54535
-
-          for attempt in {1..30}; do
+          for attempt in {1..90}; do
             if curl -fsS \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
@@ -190,11 +180,9 @@ jobs:
             sleep 1
           done
 
+          cat "${RUNNER_TEMP}/tempo-localnet.log"
           docker logs mppx-tempo-localnet
           exit 1
-
-      - name: Bundle HTML files
-        run: pnpm build
 
       - name: Run tests
         run: |
