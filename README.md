@@ -71,8 +71,8 @@ Generate `MPP_SECRET_KEY` with at least 32 bytes, for example: `openssl rand -ba
 ### Client
 
 ```ts
-import { privateKeyToAccount } from 'viem/accounts'
 import { Mppx, tempo } from 'mppx/client'
+import { privateKeyToAccount } from 'viem/accounts'
 
 Mppx.create({
   methods: [tempo({ account: privateKeyToAccount('0x...') })],
