@@ -135,6 +135,40 @@ describe('expiry at authorization commit', () => {
 })
 
 describe('Express wrapped response', () => {
+  test('preserves Express JSON replacer, spacing, and HTML escaping', async () => {
+    const app = express()
+    app.set('json spaces', 2)
+    app.set('json escape', true)
+    app.set('json replacer', (key: string, value: unknown) =>
+      key === 'secret' ? undefined : typeof value === 'bigint' ? String(value) : value,
+    )
+    const body = { secret: 'private', amount: 1n, html: '<script>&' }
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt(response?: Response) {
+        if (!response) throw new Mppx.MissingReceiptResponseError()
+        return response
+      },
+    })
+    app.get('/plain', (_req, res) => res.json(body))
+    app.get('/paid', payment(intent, {}), (_req, res) => res.json(body))
+    const server = app.listen(0)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    try {
+      const port = (server.address() as { port: number }).port
+      const plain = await fetch(`http://localhost:${port}/plain`)
+      const paid = await fetch(`http://localhost:${port}/paid`)
+      expect(paid.status).toBe(200)
+      expect(paid.headers.get('content-type')).toBe(plain.headers.get('content-type'))
+      const expected = await plain.text()
+      expect(expected).not.toContain('private')
+      expect(expected).not.toContain('<script>')
+      expect(await paid.text()).toBe(expected)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   test.each([200, 201, 204, 402])('propagates transport status and body: %s', async (status) => {
     const app = express()
     const intent = () => async () => ({

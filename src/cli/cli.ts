@@ -296,7 +296,8 @@ function toSelectedChallengeResponse(challenge: Challenge.Challenge, response: R
 
 /** Resolves the actual fetch target and required Host header for a local subdomain. */
 function resolveFetchTarget(url: string): { host?: string | undefined; url: string } {
-  const { host, hostname } = new URL(url)
+  const { host, hostname, protocol } = new URL(url)
+  if (protocol === 'https:') return { url }
   if (!hostname.endsWith('.localhost') || hostname === 'localhost') return { url }
   return { host, url: url.replace(hostname, '127.0.0.1') }
 }
@@ -460,7 +461,7 @@ const cli = Cli.create('mppx', {
     insecure: z
       .boolean()
       .optional()
-      .describe('Skip TLS certificate verification (true for localhost/.local)'),
+      .describe('Skip TLS certificate verification (disables payment retries)'),
     jsonBody: z
       .string()
       .optional()
@@ -573,8 +574,8 @@ const cli = Cli.create('mppx', {
       : globalThis.fetch
 
     // Node.js doesn't resolve *.localhost subdomains to loopback (unlike
-    // browsers per RFC 6761). Rewrite the URL to 127.0.0.1 and set the
-    // Host header so reverse proxies can route correctly.
+    // browsers per RFC 6761). Rewrite plain HTTP to loopback. HTTPS keeps
+    // its hostname for certificate validation and uses the system resolver.
     const initialTarget = resolveFetchTarget(url)
     const fetchUrl = initialTarget.url
     if (initialTarget.host) headers.Host = initialTarget.host

@@ -615,6 +615,12 @@ test('seals anonymous keys without a capacity limit or per-challenge state', asy
   expect(await store.getAccessKeyByAddress(key.accessKeyAddress)).toBeNull()
   expect(await store.getAccessKeyByAddress(key.accessKeyAddress, key.keyToken)).toEqual(key)
   for (let i = 0; i < 1025; i++) await store.createChallengeAccessKey()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000)
+  try {
+    expect(await store.getAccessKeyByAddress(key.accessKeyAddress, key.keyToken)).toEqual(key)
+  } finally {
+    clock.mockRestore()
+  }
   const otherWorker = fromStore(raw)
   expect(await otherWorker.getAccessKeyByAddress(key.accessKeyAddress, key.keyToken)).toEqual(key)
   const other = await store.createChallengeAccessKey()

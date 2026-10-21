@@ -12,7 +12,7 @@ test.each(['https://example.local', 'https://localhost', 'https://app.localhost'
   async (url) => {
     vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '1')
     let verification: string | undefined
-    const fetch = vi.fn(async () => {
+    const fetch = vi.fn(async (_input: unknown, _init?: unknown) => {
       verification = process.env.NODE_TLS_REJECT_UNAUTHORIZED
       return new Response('ok')
     })
@@ -20,6 +20,7 @@ test.each(['https://example.local', 'https://localhost', 'https://app.localhost'
     await cli.serve([url, '--silent'], { stdout() {}, exit() {} })
     expect(fetch).toHaveBeenCalled()
     expect(verification).toBe('1')
+    expect(fetch.mock.calls[0]?.[0]).toBe(url)
   },
 )
 
