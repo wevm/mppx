@@ -221,6 +221,8 @@ export async function verify(
   } catch {
     return { status: 'unverified', reason: 'Replay protection is unavailable.' }
   }
+  if (input.expires <= Math.floor(Date.now() / 1000))
+    return { status: 'invalid', reason: 'The signature has expired.' }
   return { status: 'verified', input }
 }
 

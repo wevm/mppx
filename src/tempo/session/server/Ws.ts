@@ -1,3 +1,4 @@
+import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import {
@@ -45,7 +46,11 @@ export {
 /** Result returned by an HTTP route before upgrading or authorizing a WebSocket session. */
 export type SessionRouteResult =
   | { status: 402; challenge: Response }
-  | { status: 200; withReceipt(response?: Response): Response | Promise<Response> }
+  | {
+      status: 200
+      challenge?: Challenge.Challenge | undefined
+      withReceipt(response?: Response): Response | Promise<Response>
+    }
 
 /** HTTP route used to perform a WebSocket payment probe. */
 export type SessionRoute = (request: Request) => Promise<SessionRouteResult>
@@ -60,6 +65,7 @@ type StreamContext = {
 type AuthorizationResult =
   | {
       status: 'accepted'
+      amount?: bigint | undefined
       receipt: SessionReceipt
     }
   | {
@@ -233,6 +239,13 @@ export async function serve(options: serve.Options): Promise<void> {
     }
 
     const { receipt } = authorizationResult
+    const tickCost =
+      authorizationResult.amount ??
+      (expectedAmount !== undefined ? BigInt(expectedAmount) : undefined)
+    if (tickCost === undefined) {
+      await close(1008, 'WebSocket route must provide canonical pricing or an explicit amount')
+      return
+    }
     if (payload.action === 'voucher' && runtime.streamContext) {
       runtime.streamContext.challengeId = credential.challenge.id
     }
@@ -249,7 +262,7 @@ export async function serve(options: serve.Options): Promise<void> {
     runtime.streamContext = {
       challengeId: credential.challenge.id,
       channelId: payload.channelId,
-      tickCost: readSessionChallengeAmount(credential.challenge),
+      tickCost,
     }
     // Defer the first application frame until after the client receives the
     // auth receipt and has a chance to install its own message listeners.
@@ -346,14 +359,15 @@ export async function serve(options: serve.Options): Promise<void> {
 /** Type helpers for {@link serve}. */
 export declare namespace serve {
   type Options = {
-    /** Expected per-tick amount in raw units. When set, credentials whose
+    /** Expected per-tick amount in raw units. Required for custom routes that
+     *  do not return their canonical challenge. When set, credentials whose
      *  challenge `request.amount` does not match are rejected. Use this to
      *  pin the price when the route is backed by `Mppx.compose()` with
      *  multiple offers — otherwise a client can select the cheapest offer
      *  and still receive the same stream. */
     amount?: string | undefined
     /** Application stream. A manual stream can call `charge(amount)` with a
-     *  per-message raw-unit amount; omitting it uses the challenge tick cost. */
+     *  per-message raw-unit amount; omitting it uses the canonical route tick cost. */
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     /** Maximum accepted inbound WebSocket frame size in bytes. @default 65536 */
     maxIncomingMessageBytes?: number | undefined
@@ -447,5 +461,9 @@ async function authorizePaymentFrame(
   const response = await result.withReceipt(new Response(null, { status: 204 }))
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
   if (!receiptHeader) throw new Error('management response missing Payment-Receipt header')
-  return { status: 'accepted', receipt: deserializeSessionReceipt(receiptHeader) }
+  return {
+    status: 'accepted',
+    amount: result.challenge ? readSessionChallengeAmount(result.challenge) : undefined,
+    receipt: deserializeSessionReceipt(receiptHeader),
+  }
 }

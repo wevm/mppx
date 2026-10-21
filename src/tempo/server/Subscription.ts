@@ -460,9 +460,7 @@ async function resolveChallengeAccessKey(parameters: {
 async function createUnboundChallengeAccessKey(parameters: {
   store: SubscriptionStore.SubscriptionStore
 }) {
-  const accessKey = await parameters.store.getOrCreateAccessKey(
-    `challenge:${createSubscriptionId()}`,
-  )
+  const accessKey = await parameters.store.createChallengeAccessKey()
   return {
     accessKeyAddress: accessKey.accessKeyAddress,
     keyType: accessKey.keyType,
@@ -1033,9 +1031,11 @@ async function submitSubscriptionPayment(parameters: {
   if (!waitForConfirmation) {
     // Optimistic mode has no receipt to inspect, so it cannot detect a T6
     // (TIP-1028) held transfer. Use `waitForConfirmation: true` for T6-safe proof.
-    return sendRawTransaction(client, {
+    const hash = await sendRawTransaction(client, {
       serializedTransaction: serializedTransaction as Transaction.TransactionSerializedTempo,
     })
+    await store.retainAccessKey(lookupKey, stored)
+    return hash
   }
 
   const receipt = await sendRawTransactionSync(client, {
@@ -1052,6 +1052,7 @@ async function submitSubscriptionPayment(parameters: {
     memo,
     recipient: request.recipient as Address,
   })
+  await store.retainAccessKey(lookupKey, stored)
   return receipt.transactionHash
 }
 

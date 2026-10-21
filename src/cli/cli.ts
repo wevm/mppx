@@ -554,11 +554,7 @@ const cli = Cli.create('mppx', {
       return hasProtocol ? c.args.url : `${isLocal ? 'http' : 'https'}://${c.args.url}`
     })()
     const { hostname } = new URL(url)
-    const insecure =
-      c.options.insecure ||
-      hostname === 'localhost' ||
-      hostname.endsWith('.localhost') ||
-      hostname.endsWith('.local')
+    const insecure = c.options.insecure ?? false
 
     // Scoped fetch that temporarily disables TLS verification only for
     // the target connection when `insecure` is true, then restores
@@ -613,6 +609,13 @@ const cli = Cli.create('mppx', {
         c.options.location ?? false,
       )
       const challengeResponse = challengeRequest.response
+      if (insecure && challengeResponse.status === 402)
+        return c.error({
+          code: 'INSECURE_PAYMENT',
+          message:
+            'Payment requires verified TLS. Install a trusted certificate and omit --insecure.',
+          exitCode: 2,
+        })
       if (challengeResponse.status !== 402) {
         if (c.options.session !== 'auto')
           return c.error({

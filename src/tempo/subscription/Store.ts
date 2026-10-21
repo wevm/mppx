@@ -1,6 +1,7 @@
 import { Secp256k1 } from 'ox'
 import { Account as TempoAccount } from 'viem/tempo'
 
+import { VerificationFailedError } from '../../Errors.js'
 import * as Store from '../../Store.js'
 import type { SubscriptionAccessKeyRecord, SubscriptionRecord } from './Types.js'
 
@@ -8,6 +9,7 @@ const defaultRecordPrefix = 'tempo:subscription:record:'
 const defaultKeyPrefix = 'tempo:subscription:key:'
 const defaultActivationPrefix = 'tempo:subscription:activation:'
 const defaultAccessKeyPrefix = 'tempo:subscription:access-key:'
+const defaultPendingAccessKeyPrefix = 'tempo:subscription:pending-access-key:'
 const defaultCredentialPrefix = 'tempo:subscription:credential:'
 const defaultActivationTimeoutMs = 15 * 60 * 1_000
 const defaultRenewalTimeoutMs = 15 * 60 * 1_000
@@ -28,6 +30,10 @@ export type SubscriptionStore = {
   getAccessKeyByAddress(address: string): Promise<SubscriptionAccessKeyRecord | null>
   /** Looks up the active subscription for a resolved request key. */
   getByKey(key: string): Promise<SubscriptionRecord | null>
+  /** Creates a temporary key. At most 1,024 pending keys are retained for 15 minutes; expired entries are reclaimed on issuance. */
+  createChallengeAccessKey(): Promise<SubscriptionAccessKeyRecord>
+  /** Retains a key after verified payment submission for subsequent subscription billing. */
+  retainAccessKey(key: string, record: SubscriptionAccessKeyRecord): Promise<void>
   /** Gets or creates the server-owned access key for a resolved request key. */
   getOrCreateAccessKey(key: string): Promise<SubscriptionAccessKeyRecord>
   /** Upserts a subscription record and marks it as active for its lookup key. */
@@ -89,6 +95,7 @@ export function fromStore(
     credentialPrefix = defaultCredentialPrefix,
     keyPrefix = defaultKeyPrefix,
     recordPrefix = defaultRecordPrefix,
+    pendingAccessKeyPrefix = defaultPendingAccessKeyPrefix,
     renewalTimeoutMs = defaultRenewalTimeoutMs,
   } = options ?? {}
 
@@ -153,7 +160,48 @@ export function fromStore(
     return marker?.challengeId === challengeId
   }
 
+  const pendingKey = `${pendingAccessKeyPrefix}pool`
+  type PendingKey = SubscriptionAccessKeyRecord & { expiresAt: number }
+
   return {
+    async createChallengeAccessKey() {
+      const privateKey = Secp256k1.randomPrivateKey()
+      const account = TempoAccount.fromSecp256k1(privateKey)
+      const record = {
+        accessKeyAddress: account.address.toLowerCase() as `0x${string}`,
+        keyType: account.keyType,
+        privateKey,
+      } satisfies SubscriptionAccessKeyRecord
+      const created = await store.update(pendingKey, (current): Store.Change<unknown, boolean> => {
+        const now = Date.now()
+        const live = ((current ?? []) as PendingKey[]).filter((entry) => entry.expiresAt > now)
+        if (live.length >= 1024) return { op: 'set', value: live, result: false }
+        return {
+          op: 'set',
+          value: [...live, { ...record, expiresAt: now + 15 * 60_000 }],
+          result: true,
+        }
+      })
+      if (!created)
+        throw new VerificationFailedError({
+          reason: 'subscription challenge capacity exceeded; retry later',
+        })
+      return record
+    },
+
+    async retainAccessKey(key, record) {
+      await store.put(accessKeyKey(key), record)
+      await store.put(accessKeyAddressKey(record.accessKeyAddress), record)
+      await store.update(pendingKey, (current) => ({
+        op: 'set',
+        value: ((current ?? []) as PendingKey[]).filter(
+          (entry) =>
+            entry.accessKeyAddress !== record.accessKeyAddress && entry.expiresAt > Date.now(),
+        ),
+        result: undefined,
+      }))
+    },
+
     async activate({ challengeId, create, isReusable, lookupKey }) {
       const claimed = await store.update(credentialKey(challengeId), (current) => {
         if (current) return { op: 'noop', result: false }
@@ -256,7 +304,17 @@ export function fromStore(
     },
 
     async getAccessKeyByAddress(address) {
-      return (await store.get(accessKeyAddressKey(address))) as SubscriptionAccessKeyRecord | null
+      const stored = (await store.get(
+        accessKeyAddressKey(address),
+      )) as SubscriptionAccessKeyRecord | null
+      if (stored) return stored
+      const pending = ((await store.get(pendingKey)) ?? []) as PendingKey[]
+      const record = pending.find(
+        (entry) => entry.accessKeyAddress === address.toLowerCase() && entry.expiresAt > Date.now(),
+      )
+      if (!record) return null
+      const { expiresAt: _, ...key } = record
+      return key
     },
 
     async getByKey(key) {
@@ -409,6 +467,8 @@ export declare namespace fromStore {
   type Options = {
     /** Key prefix for server-owned subscription access keys. @default `'tempo:subscription:access-key:'` */
     accessKeyPrefix?: string | undefined
+    /** Prefix for the bounded pending access-key pool. */
+    pendingAccessKeyPrefix?: string | undefined
     /** Key prefix for resolved subscription activation locks. @default `'tempo:subscription:activation:'` */
     activationPrefix?: string | undefined
     /** Milliseconds before a stuck activation lock can be replaced. @default `900000` */

@@ -6805,7 +6805,7 @@ describe('verifyCredential', () => {
     )
   })
 
-  test('verifies route requirements using the echoed challenge realm when host was auto-detected', async () => {
+  test('requires trusted host context when the realm was auto-detected', async () => {
     const mppx = Mppx.create({
       methods: [alphaChargeServer],
       secretKey,
@@ -6826,7 +6826,17 @@ describe('verifyCredential', () => {
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
 
-    const receipt = await mppx.verifyCredential(credential, { request })
+    await expect(mppx.verifyCredential(credential, { request })).rejects.toThrow(
+      'matching configured realm',
+    )
+    const receipt = await mppx.verifyCredential(credential, {
+      request,
+      capturedRequest: {
+        url: new URL('https://api.example.com/premium'),
+        method: 'GET',
+        headers: new Headers(),
+      },
+    })
 
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('alpha')

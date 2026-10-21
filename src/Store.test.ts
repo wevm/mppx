@@ -235,7 +235,7 @@ describe('tryClaim', () => {
     expect(store.tryClaim).toBeUndefined()
     const expires = Date.now() + 60_000
 
-    expect(await Store.tryClaim(store, 'k', Date.now() - 1)).toBe(true)
+    await store.put('k', { expires: Date.now() - 1, type: 'mppx:replay' })
     expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
     expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
     expect(await store.get('k')).toEqual({ expires, type: 'mppx:replay' })

@@ -626,6 +626,7 @@ export function charge<const parameters extends charge.Parameters>(
               // Unrecognized calls do not invalidate an already verified payment.
             }
           }
+          Expires.assert(expires, challenge.id)
           return toReceipt(receipt.transactionHash, fundingCurrency)
         }
 
@@ -636,6 +637,7 @@ export function charge<const parameters extends charge.Parameters>(
             })
           }
 
+          Expires.assert(expires, challenge.id)
           return toReceipt(challenge.id)
         }
 
@@ -814,6 +816,7 @@ export function charge<const parameters extends charge.Parameters>(
                 transaction,
               })
 
+            Expires.assert(expires, challenge.id)
             broadcastAttempted = true
             if (waitForConfirmation) {
               const start = Date.now()
@@ -872,6 +875,7 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
+              Expires.assert(expires, challenge.id)
               return toReceipt(receipt.transactionHash, fundingCurrency)
             }
 
@@ -892,6 +896,7 @@ export function charge<const parameters extends charge.Parameters>(
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
+            Expires.assert(expires, challenge.id)
             return toReceipt(reference, fundingCurrency)
           } catch (error) {
             if (reservation) {

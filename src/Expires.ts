@@ -20,7 +20,7 @@ export function assert(
       ...(challengeId && { id: challengeId }),
       reason: 'malformed expires timestamp',
     })
-  if (new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
+  if (Date.parse(expires) <= Date.now()) throw new PaymentExpiredError({ expires })
 }
 
 /** Returns an ISO 8601 datetime string `n` days from now. */

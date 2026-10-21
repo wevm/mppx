@@ -49,7 +49,7 @@ export type Update<itemMap extends StoreItemMap = StoreItemMap> = <
   fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
 ) => Promise<result>
 
-/** Attempts to atomically record first use of a replay key through its expiry. */
+/** Attempts to atomically record first use of a replay key. Must reject expires <= Date.now() inside the atomic operation. */
 export type TryClaim<itemMap extends StoreItemMap = StoreItemMap> = <
   key extends keyof itemMap & string,
 >(
@@ -106,7 +106,7 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
  * Attempts to atomically record first use of a replay key through its expiry.
  *
  * Returns `true` when this call recorded the key and `false` when it was already
- * recorded and unexpired. `expires` is a Unix timestamp in milliseconds.
+ * recorded and unexpired, or the proposed expiry has passed. `expires` is a Unix timestamp in milliseconds.
  * Uses the adapter's optimized primitive when available and otherwise falls
  * back to {@link AtomicStore.update}.
  */
@@ -115,8 +115,15 @@ export function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap
   key: key,
   expires: number,
 ): MaybePromise<boolean> {
-  if (store.tryClaim) return store.tryClaim(key, expires)
+  if (!Number.isFinite(expires) || expires <= Date.now()) return false
+  if (store.tryClaim) {
+    const result = store.tryClaim(key, expires)
+    return typeof result === 'boolean'
+      ? result && expires > Date.now()
+      : result.then((claimed) => claimed && expires > Date.now())
+  }
   return store.update(key, (current) => {
+    if (!Number.isFinite(expires) || expires <= Date.now()) return { op: 'noop', result: false }
     if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
       return { op: 'noop', result: false }
     return {
@@ -288,6 +295,7 @@ export function memory(options?: memory.Options): AtomicStore {
         return change.result
       },
       tryClaim(key: string, expires: number) {
+        if (!Number.isFinite(expires) || expires <= Date.now()) return false
         const current = store.has(key) ? Json.parse(store.get(key)!) : null
         if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
           return false

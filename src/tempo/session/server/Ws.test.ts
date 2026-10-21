@@ -128,6 +128,7 @@ function seedChannel(
 function acceptingRoute(acceptedCumulative: bigint): Ws.serve.Options['route'] {
   return async () => ({
     status: 200,
+    challenge,
     withReceipt(response = new Response(null, { status: 204 })) {
       response.headers.set(
         'Payment-Receipt',
@@ -214,6 +215,7 @@ describe('isows', () => {
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -305,6 +307,7 @@ describe('isows', () => {
         await sleep(20)
         return {
           status: 200,
+          challenge,
           withReceipt(response = new Response(null, { status: 204 })) {
             response.headers.set(
               'Payment-Receipt',
@@ -421,6 +424,7 @@ describe('isows', () => {
       amount: '999',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -476,6 +480,7 @@ describe('isows', () => {
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -544,6 +549,7 @@ describe('isows', () => {
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -606,6 +612,7 @@ describe('isows', () => {
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -820,6 +827,7 @@ describe('isows', () => {
       url: 'ws://example.test/stream',
       route: async () => ({
         status: 200,
+        challenge,
         withReceipt(response = new Response(null, { status: 204 })) {
           response.headers.set(
             'Payment-Receipt',
@@ -900,4 +908,56 @@ test('stops a websocket when the pre-delivery escrow check fails', async () => {
   expect(socket.sent.some((frame) => frame.includes('first'))).toBe(true)
   expect(socket.sent.some((frame) => frame.includes('must not be delivered'))).toBe(false)
   expect((await store.getChannel(channelId))!.spent).toBe(1n)
+})
+
+test.each([false, true])('uses canonical route pricing (explicit charges: %s)', async (manual) => {
+  const socket = new MockSocket()
+  const store = memoryChannelStore()
+  await seedChannel(store, 25n)
+  await Ws.serve({
+    socket,
+    store,
+    url: 'ws://example.test/stream',
+    route: async () => ({
+      status: 200,
+      challenge: { ...challenge, request: { ...challenge.request, amount: '7' } },
+      withReceipt(response = new Response(null, { status: 204 })) {
+        response.headers.set(
+          'Payment-Receipt',
+          serializeSessionReceipt(
+            createSessionReceipt({
+              challengeId: challenge.id,
+              channelId,
+              acceptedCumulative: 25n,
+              spent: 0n,
+              units: 0,
+            }),
+          ),
+        )
+        return response
+      },
+    }),
+    generate: manual
+      ? async function* (stream) {
+          await stream.charge()
+          yield 'canonical-price'
+        }
+      : (async function* () {
+          yield 'canonical-price'
+        })(),
+  })
+  socket.receive(
+    Ws.formatAuthorizationMessage(
+      makeCredential({
+        action: 'open',
+        channelId,
+        cumulativeAmount: '25',
+        signature: `0x${'77'.repeat(65)}`,
+        transaction: '0x01',
+        type: 'transaction',
+      }),
+    ),
+  )
+  await vi.waitFor(async () => expect((await store.getChannel(channelId))!.spent).toBe(7n))
+  socket.close()
 })

@@ -98,12 +98,17 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
-    const originalJson = res.json.bind(res)
     res.json = (body: any) => {
-      void Promise.resolve(result.withReceipt(Response.json(body))).then((wrapped: Response) => {
-        ExpressAdapter.copyHeaders(res, wrapped.headers)
-        originalJson(body)
-      }, next)
+      void Promise.resolve()
+        .then(() =>
+          result.withReceipt(
+            [204, 205, 304].includes(res.statusCode)
+              ? new Response(null, { status: res.statusCode })
+              : Response.json(body, { status: res.statusCode }),
+          ),
+        )
+        .then((wrapped: Response) => ExpressAdapter.sendResponse(res, wrapped))
+        .catch(next)
       return res
     }
 

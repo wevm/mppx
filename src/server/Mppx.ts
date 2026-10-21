@@ -315,6 +315,7 @@ export type Mppx<
      * can be parsed; strings that cannot be deserialized have no challenge
      * context to report.
      *
+     * Requires a configured realm or trusted route context.
      * @deprecated Use `broadcastCredential()` instead. This legacy name maps
      * to the same mutating operation and does not provide validation-only
      * semantics.
@@ -332,6 +333,7 @@ export type Mppx<
     ): Promise<Receipt.Receipt>
     /**
      * Validate a credential without consuming or broadcasting it.
+     * Requires a configured/explicit realm or a trusted captured request URL.
      *
      * This is an advisory pre-check. Methods that support it must not write
      * replay state, sign fee-payer transactions, broadcast, or otherwise
@@ -343,6 +345,7 @@ export type Mppx<
     ): Promise<Method.Validation>
     /**
      * Re-validates and broadcasts a credential, returning a receipt.
+     * Requires a configured/explicit realm or a trusted captured request URL.
      *
      * `verifyCredential()` is retained as a backwards-compatible alias for
      * this mutating path.
@@ -796,10 +799,20 @@ export function create<
       options?.meta !== undefined ||
       options?.realm !== undefined ||
       options?.request !== undefined
-    const expectedRealm =
-      options?.realm ??
-      realm ??
-      (options?.capturedRequest === undefined ? credential.challenge.realm : undefined)
+    const expectedRealm = options?.realm ?? realm
+
+    if (
+      (expectedRealm === undefined && options?.capturedRequest === undefined) ||
+      (expectedRealm !== undefined && credential.challenge.realm !== expectedRealm)
+    )
+      await fail(
+        new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason:
+            'standalone verification requires a matching configured realm or trusted route context',
+        }),
+        { credential: parsedCredential },
+      )
 
     let parsedRequest = credential.challenge.request as Record<string, unknown>
     let request: z.input<typeof mi.schema.request>
@@ -1339,6 +1352,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
         const result = {
           status: 200,
+          challenge,
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
@@ -2571,6 +2585,8 @@ declare namespace MethodFn {
       }
     | {
         status: 200
+        /** Canonical challenge resolved from the selected route's terms, when available. */
+        challenge?: Challenge.Challenge | undefined
         withReceipt: Transport.WithReceipt<transport>
       }
 }

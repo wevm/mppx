@@ -113,7 +113,7 @@ test('HTTP entry points preserve method instances and invoke only the selected c
 
 test('standalone verification selects the matching configured currency', async () => {
   const methods = fixture()
-  const server = Mppx.create({ methods: [methods], secretKey })
+  const server = Mppx.create({ methods: [methods], secretKey, realm: 'example.com' })
   const route = server.charge({ amount: '1' })
   const offered = await route(new Request('https://example.com'))
   if (offered.status !== 402) throw new Error('Expected payment offers')
