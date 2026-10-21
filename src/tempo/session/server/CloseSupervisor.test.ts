@@ -86,6 +86,21 @@ function closedLog(id: Hex, settledToPayee: bigint, refundedToPayer: bigint) {
   }
 }
 
+function settledLog(id: Hex, newSettled: bigint, deltaPaid: bigint) {
+  return {
+    address: tip20ChannelEscrow,
+    data: encodeAbiParameters(
+      [{ type: 'uint96' }, { type: 'uint96' }, { type: 'uint96' }],
+      [newSettled, deltaPaid, newSettled],
+    ),
+    topics: encodeEventTopics({
+      abi: escrowAbi,
+      eventName: 'Settled',
+      args: { channelId: id, payer: descriptor.payer, payee: descriptor.payee },
+    }),
+  }
+}
+
 function rpcLog(log: ReturnType<typeof closedLog>, blockNumber: bigint) {
   return {
     ...log,
@@ -142,6 +157,65 @@ function mockStates(...states: Chain.ChannelState[]) {
 }
 
 describe('superviseCloses', () => {
+  test('settles an open channel within spend when its spend crossed the schedule', async () => {
+    // A credit left the highest voucher above spent; an earlier retained voucher is within it.
+    const store = await seed({
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const settleOnChain = vi.spyOn(Chain, 'settleOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      blockNumber: 1_001n,
+      logs: [settledLog(channelId, 300n, 200n)],
+    } as never)
+    vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+      closeRequestedAt: 0,
+      deposit: 1_000n,
+      settled: 300n,
+    })
+
+    const supervision = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      feeToken,
+      settlementSchedule: { units: 1 },
+      store,
+    })
+
+    expect(settleOnChain).toHaveBeenCalledWith(
+      expect.anything(),
+      descriptor,
+      300n,
+      '0xabcd',
+      tip20ChannelEscrow,
+      expect.objectContaining({ account, feeToken }),
+    )
+    expect(supervision).toMatchObject({
+      complete: true,
+      settled: 1,
+      channels: [{ channelId, outcome: 'settled', txHash }],
+    })
+    expect(await store.getChannel(channelId)).toMatchObject({
+      finalized: false,
+      settledOnChain: 300n,
+    })
+  })
+
+  test('only reads open channels without a settlement schedule', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const settleOnChain = vi.spyOn(Chain, 'settleOnChain')
+
+    const supervision = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+    })
+
+    expect(settleOnChain).not.toHaveBeenCalled()
+    expect(supervision.channels).toEqual([{ channelId, outcome: 'open' }])
+  })
+
   test('answers a close request with a payee close capturing spent', async () => {
     const store = await seed()
     mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 100n })

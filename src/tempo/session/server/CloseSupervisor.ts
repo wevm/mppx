@@ -8,8 +8,10 @@ import * as ChannelStore from './ChannelStore.js'
 import {
   assertSettlementSender,
   getClientAccount,
+  maybeSettleScheduled,
   type OnSessionSettlementFailure,
   reportSessionSettlementFailure,
+  type ResolvedSettlementSchedule,
   resolveChannelStore,
   type SessionStoreInput,
   type SettlementTransactionOptions,
@@ -35,6 +37,8 @@ export const defaultCloseSearchMarginBlocks = 2_000n
 export type CloseSupervisionOutcome =
   /** Open with no close request, or not yet open at the pinned block. */
   | 'open'
+  /** Open, and settled because its spend crossed `settlementSchedule`. */
+  | 'settled'
   /** Close requested, with nothing above the settled amount to capture; the payer's withdrawal finalizes it. */
   | 'closing'
   /** A close request recorded on the channel was cancelled on-chain, so the channel accepts charges again. */
@@ -66,6 +70,8 @@ export type CloseSupervision = {
   closed: number
   /** Channels that failed. */
   failed: number
+  /** Open channels settled on `settlementSchedule`. */
+  settled: number
   /** Channels whose deposit left the escrow before their spend was captured. */
   unrecovered: number
   /**
@@ -108,6 +114,14 @@ export type SuperviseClosesParameters = Pick<
   onSessionSettlementFailure?: OnSessionSettlementFailure | undefined
   /** `block` of the last `complete` supervision, which bounds close-event searches. */
   previousBlock?: bigint | undefined
+  /**
+   * Settles open channels whose spend since their last settlement crossed this schedule, in raw
+   * token units, with the account and fee options of closes. Servers that charge channels with
+   * `charge()` rather than through the session handler, whose own schedule runs on each
+   * charge, use it to collect spend without waiting for a close. Settlement captures only a voucher
+   * within spend. Without it, open channels are only read.
+   */
+  settlementSchedule?: ResolvedSettlementSchedule | undefined
   /** Server channel store. */
   store: SessionStoreInput
 }
@@ -142,6 +156,7 @@ export async function superviseCloses(
     closed: 0,
     complete: false,
     failed: 0,
+    settled: 0,
     supervised: 0,
     timestamp: pinned.timestamp,
     unrecovered: 0,
@@ -156,6 +171,7 @@ export async function superviseCloses(
       outcome === 'cancelled' ||
       outcome === 'closed' ||
       outcome === 'failed' ||
+      outcome === 'settled' ||
       outcome === 'unrecovered'
     )
       supervision[outcome] += 1
@@ -283,7 +299,7 @@ async function superviseChannel(
         : current,
     )
   if (state.closeRequestedAt === 0) {
-    if (channel.closeRequestedAt === 0n) return { outcome: 'open' }
+    if (channel.closeRequestedAt === 0n) return settleDue(parameters, store, channel)
     // A pinned read without a request means the payer cancelled it, unless the record holds a
     // server close that may still land: those expire before they are cleared.
     const cleared: { channel?: ChannelStore.State | null } = {}
@@ -311,6 +327,29 @@ async function superviseChannel(
   if (!closing || closing.finalized || !ChannelStore.isPrecompileState(closing))
     return { outcome: 'finalized' }
   return closeAtSpend(parameters, store, closing, state)
+}
+
+/** Settles an open channel when its spend crossed the settlement schedule. */
+async function settleDue(
+  parameters: SuperviseClosesParameters,
+  store: ChannelStore.ChannelStore,
+  channel: ChannelStore.StoredPrecompileChannel,
+): Promise<{ outcome: CloseSupervisionOutcome; txHash?: Hex | undefined }> {
+  const { client, settlementSchedule } = parameters
+  if (!settlementSchedule) return { outcome: 'open' }
+  const txHash = await maybeSettleScheduled({
+    account: parameters.account ?? getClientAccount(client),
+    channel,
+    client,
+    ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+    ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+    ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+    onSessionSettlement: parameters.onSessionSettlement,
+    onSessionSettlementFailure: parameters.onSessionSettlementFailure,
+    schedule: settlementSchedule,
+    store,
+  })
+  return txHash ? { outcome: 'settled', txHash } : { outcome: 'open' }
 }
 
 /** Sends a payee close capturing the channel's spend and finalizes the channel. */

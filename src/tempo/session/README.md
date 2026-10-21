@@ -260,6 +260,12 @@ finalized from its `ChannelClosed` event; and a cancelled request reopens the
 channel. Drop channels whose outcome is `closed`, `unrecovered`, `finalized` or
 `missing`.
 
+A server that charges with `charge()` instead of the session handler, whose
+`settlementSchedule` runs on each charge, passes `settlementSchedule` here too
+(in raw units; `resolveSettlementSchedule` converts a decimal one). Open
+channels whose spend crossed it are settled within spend and reported `settled`,
+so spend is collected without waiting for a close.
+
 ### Sponsored opens
 
 `sponsorshipLimit: { store }` limits fee-payer-sponsored opens, and separately

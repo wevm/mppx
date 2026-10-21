@@ -19,7 +19,9 @@ export type {
 export type { Parameters as SponsorshipLimitParameters } from './SponsorshipLimit.js'
 /** SSE helpers and types for Tempo session streams. */
 export * as Sse from './Sse.js'
-/** Server-side automatic settlement schedule. */
+/** Server-side automatic settlement schedule, and its raw-unit form `superviseCloses` takes. */
+export { resolveSettlementSchedule } from './Settlement.js'
+export type { ResolvedSettlementSchedule } from './Settlement.js'
 export type {
   OnSessionSettlement,
   OnSessionSettlementFailure,
