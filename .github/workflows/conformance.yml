@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml@main
+    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml@802a943d2a14adb61c06919d059ae9e75b3d5acb
     with:
       protocol-paths: |
         src/**
@@ -37,7 +37,7 @@ jobs:
     needs: conformance-policy
     permissions:
       contents: read
-    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml@main
+    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml@802a943d2a14adb61c06919d059ae9e75b3d5acb
     with:
       adapter: typescript
       conformance-ref: ${{ needs.conformance-policy.outputs.conformance_ref }}

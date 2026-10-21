@@ -27,8 +27,14 @@ jobs:
   checks:
     name: Checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@117919c943b804057be733b0c4034c5542e58959 # 2026-09-23T05-09-41Z-117919c9
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,6 +83,9 @@ jobs:
   test-runtime:
     name: Test Runtime / ${{ matrix.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 12
     strategy:
       fail-fast: false
@@ -108,6 +117,9 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: true
       VITE_TEMPO_TAG: latest
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@117919c943b804057be733b0c4034c5542e58959 # 2026-09-23T05-09-41Z-117919c9
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,7 +143,7 @@ jobs:
         if: matrix.tempo
         id: tempo-digest
         run: |
-          digest=$(docker buildx imagetools inspect ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} --raw | sha256sum | cut -d' ' -f1)
+          digest=$(docker buildx imagetools inspect "ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}" --raw | sha256sum | cut -d' ' -f1)
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Tempo Docker image
@@ -149,8 +161,8 @@ jobs:
       - name: Pull and cache Tempo image
         if: matrix.tempo && steps.docker-cache.outputs.cache-hit != 'true'
         run: |
-          docker pull ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}
-          docker save ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} -o /tmp/tempo-image.tar
+          docker pull "ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}"
+          docker save "ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}" -o /tmp/tempo-image.tar
 
       - name: Start Tempo localnet
         if: matrix.tempo
@@ -159,7 +171,7 @@ jobs:
           docker run -d \
             --name mppx-tempo-localnet \
             -p 18545:54515 \
-            ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} \
+            "ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}" \
             node \
             --authrpc.port 54545 \
             --datadir /tmp/mppx-tempo-localnet \
@@ -179,7 +191,7 @@ jobs:
             --port 54525 \
             --ws.port 54535
 
-          for attempt in {1..30}; do
+          for _attempt in {1..30}; do
             if curl -fsS \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
@@ -249,6 +261,9 @@ jobs:
   test-x402-e2e:
     name: Test x402 E2E
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 12
     env:
       TESTCONTAINERS_RYUK_DISABLED: true
@@ -256,6 +271,9 @@ jobs:
       X402_ANVIL_RPC_URL: http://127.0.0.1:18546
       X402_LOCALNET: true
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@117919c943b804057be733b0c4034c5542e58959 # 2026-09-23T05-09-41Z-117919c9
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -283,7 +301,7 @@ jobs:
             --chain-id 31337 \
             --mnemonic 'test test test test test test test test test test test junk'
 
-          for attempt in {1..30}; do
+          for _attempt in {1..30}; do
             if curl -fsS \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
@@ -316,8 +334,14 @@ jobs:
   test-html:
     name: Test HTML
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 15
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@117919c943b804057be733b0c4034c5542e58959 # 2026-09-23T05-09-41Z-117919c9
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
