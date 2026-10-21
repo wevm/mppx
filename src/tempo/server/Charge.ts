@@ -626,7 +626,6 @@ export function charge<const parameters extends charge.Parameters>(
               // Unrecognized calls do not invalidate an already verified payment.
             }
           }
-          Expires.assert(expires, challenge.id)
           return toReceipt(receipt.transactionHash, fundingCurrency)
         }
 
@@ -816,6 +815,8 @@ export function charge<const parameters extends charge.Parameters>(
                 transaction,
               })
 
+            // Authorize before the irreversible send; expiry must not turn a paid
+            // request into a fresh payment challenge while settlement completes.
             Expires.assert(expires, challenge.id)
             broadcastAttempted = true
             if (waitForConfirmation) {
@@ -875,7 +876,6 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
-              Expires.assert(expires, challenge.id)
               return toReceipt(receipt.transactionHash, fundingCurrency)
             }
 
@@ -896,7 +896,6 @@ export function charge<const parameters extends charge.Parameters>(
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
-            Expires.assert(expires, challenge.id)
             return toReceipt(reference, fundingCurrency)
           } catch (error) {
             if (reservation) {

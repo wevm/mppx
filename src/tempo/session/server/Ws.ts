@@ -240,8 +240,7 @@ export async function serve(options: serve.Options): Promise<void> {
 
     const { receipt } = authorizationResult
     const tickCost =
-      authorizationResult.amount ??
-      (expectedAmount !== undefined ? BigInt(expectedAmount) : undefined)
+      expectedAmount !== undefined ? BigInt(expectedAmount) : authorizationResult.amount
     if (tickCost === undefined) {
       await close(1008, 'WebSocket route must provide canonical pricing or an explicit amount')
       return

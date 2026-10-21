@@ -2188,9 +2188,14 @@ test('anonymous subscription probes do not create permanent key indexes', async 
     subscriptionExpires: activeSubscriptionExpires,
   })
   const mppx = Mppx.create({ methods: [method], realm, secretKey })
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 1030; i++) {
     const result = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
     expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error('expected challenge')
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request).toMatchObject({
+      methodDetails: { accessKey: { keyToken: expect.any(String) } },
+    })
   }
-  expect([...written]).toEqual(['tempo:subscription:pending-access-key:pool'])
+  expect([...written]).toEqual(['tempo:subscription:pending-access-key:sealing-key'])
 })

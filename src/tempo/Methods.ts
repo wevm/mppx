@@ -36,6 +36,12 @@ const normalizedAddress = z.pipe(
 const subscriptionAccessKey = z.object({
   accessKeyAddress: normalizedAddress,
   keyType: z.enum(['p256', 'secp256k1', 'webAuthn']),
+  keyToken: z.optional(
+    z.pipe(
+      z.string().check(z.regex(/^0x[0-9a-fA-F]{120}$/)),
+      z.transform((value) => value as `0x${string}`),
+    ),
+  ),
 })
 
 const subscriptionMethodDetails = z.object({

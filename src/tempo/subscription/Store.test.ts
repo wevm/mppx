@@ -608,27 +608,24 @@ describe('tempo subscription store', () => {
   })
 })
 
-test('bounds pending keys, expires abandoned keys, and retains activated keys', async () => {
-  vi.useFakeTimers()
-  try {
-    const raw = Store.memory()
-    const store = fromStore(raw)
-    const key = await store.createChallengeAccessKey()
-    expect(await store.getAccessKeyByAddress(key.accessKeyAddress)).toEqual(key)
-    await store.retainAccessKey('verified-payer', key)
-    for (let i = 0; i < 1024; i++) await store.createChallengeAccessKey()
-    await expect(store.createChallengeAccessKey()).rejects.toThrow('capacity exceeded')
-    const pool = (await raw.get('tempo:subscription:pending-access-key:pool')) as {
-      accessKeyAddress: string
-    }[]
-    expect(pool).toHaveLength(1024)
-    vi.advanceTimersByTime(15 * 60_000)
-    expect(await store.getAccessKeyByAddress(pool[0]!.accessKeyAddress)).toBeNull()
-    expect(await store.getAccessKeyByAddress(key.accessKeyAddress)).toEqual(key)
-    expect(await store.getAccessKey('verified-payer')).toEqual(key)
-    await store.createChallengeAccessKey()
-    expect(await raw.get('tempo:subscription:pending-access-key:pool')).toHaveLength(1)
-  } finally {
-    vi.useRealTimers()
-  }
+test('seals anonymous keys without a capacity limit or per-challenge state', async () => {
+  const raw = Store.memory()
+  const store = fromStore(raw)
+  const key = await store.createChallengeAccessKey()
+  expect(await store.getAccessKeyByAddress(key.accessKeyAddress)).toBeNull()
+  expect(await store.getAccessKeyByAddress(key.accessKeyAddress, key.keyToken)).toEqual(key)
+  for (let i = 0; i < 1025; i++) await store.createChallengeAccessKey()
+  const otherWorker = fromStore(raw)
+  expect(await otherWorker.getAccessKeyByAddress(key.accessKeyAddress, key.keyToken)).toEqual(key)
+  const other = await store.createChallengeAccessKey()
+  expect(await store.getAccessKeyByAddress(other.accessKeyAddress, key.keyToken)).toBeNull()
+  const corrupted =
+    `${key.keyToken!.slice(0, -2)}${key.keyToken!.endsWith('00') ? '01' : '00'}` as `0x${string}`
+  expect(await store.getAccessKeyByAddress(key.accessKeyAddress, corrupted)).toBeNull()
+  expect(
+    await fromStore(Store.memory()).getAccessKeyByAddress(key.accessKeyAddress, key.keyToken),
+  ).toBeNull()
+  await store.retainAccessKey('verified-payer', key)
+  expect(await store.getAccessKeyByAddress(key.accessKeyAddress)).toEqual(key)
+  expect(await raw.get('tempo:subscription:pending-access-key:pool')).toBeNull()
 })

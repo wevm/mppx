@@ -910,54 +910,67 @@ test('stops a websocket when the pre-delivery escrow check fails', async () => {
   expect((await store.getChannel(channelId))!.spent).toBe(1n)
 })
 
-test.each([false, true])('uses canonical route pricing (explicit charges: %s)', async (manual) => {
-  const socket = new MockSocket()
-  const store = memoryChannelStore()
-  await seedChannel(store, 25n)
-  await Ws.serve({
-    socket,
-    store,
-    url: 'ws://example.test/stream',
-    route: async () => ({
-      status: 200,
-      challenge: { ...challenge, request: { ...challenge.request, amount: '7' } },
-      withReceipt(response = new Response(null, { status: 204 })) {
-        response.headers.set(
-          'Payment-Receipt',
-          serializeSessionReceipt(
-            createSessionReceipt({
-              challengeId: challenge.id,
-              channelId,
-              acceptedCumulative: 25n,
-              spent: 0n,
-              units: 0,
-            }),
-          ),
-        )
-        return response
-      },
-    }),
-    generate: manual
-      ? async function* (stream) {
-          await stream.charge()
-          yield 'canonical-price'
-        }
-      : (async function* () {
-          yield 'canonical-price'
-        })(),
-  })
-  socket.receive(
-    Ws.formatAuthorizationMessage(
-      makeCredential({
-        action: 'open',
-        channelId,
-        cumulativeAmount: '25',
-        signature: `0x${'77'.repeat(65)}`,
-        transaction: '0x01',
-        type: 'transaction',
+test.each([
+  { manual: false, pinned: false },
+  { manual: true, pinned: false },
+  { manual: false, pinned: true },
+  { manual: true, pinned: true },
+])(
+  'uses endpoint pricing (explicit charges: $manual, pin: $pinned)',
+  async ({ manual, pinned }) => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await seedChannel(store, 25n)
+    await Ws.serve({
+      socket,
+      store,
+      amount: pinned ? String(challenge.request.amount) : undefined,
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        challenge: { ...challenge, request: { ...challenge.request, amount: '7' } },
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 25n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
       }),
-    ),
-  )
-  await vi.waitFor(async () => expect((await store.getChannel(channelId))!.spent).toBe(7n))
-  socket.close()
-})
+      generate: manual
+        ? async function* (stream) {
+            await stream.charge()
+            yield 'canonical-price'
+          }
+        : (async function* () {
+            yield 'canonical-price'
+          })(),
+    })
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '25',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+    await vi.waitFor(async () =>
+      expect((await store.getChannel(channelId))!.spent).toBe(
+        pinned ? BigInt(challenge.request.amount) : 7n,
+      ),
+    )
+    socket.close()
+  },
+)

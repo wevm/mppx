@@ -7,6 +7,8 @@ export type SubscriptionPeriodUnit = 'dev_second' | 'day' | 'week'
 export type SubscriptionAccessKey = {
   accessKeyAddress: Address
   keyType: 'p256' | 'secp256k1' | 'webAuthn'
+  /** Opaque server-sealed key for stateless anonymous setup. */
+  keyToken?: `0x${string}` | undefined
 }
 
 /** Server-owned subscription access key persisted for automatic billing. */

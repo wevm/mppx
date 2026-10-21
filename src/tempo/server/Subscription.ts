@@ -464,6 +464,7 @@ async function createUnboundChallengeAccessKey(parameters: {
   return {
     accessKeyAddress: accessKey.accessKeyAddress,
     keyType: accessKey.keyType,
+    keyToken: accessKey.keyToken,
   } satisfies SubscriptionAccessKey
 }
 
@@ -918,7 +919,7 @@ async function submitSubscriptionPayment(parameters: {
   } = parameters
   const stored =
     (await store.getAccessKey(lookupKey)) ??
-    (await store.getAccessKeyByAddress(accessKey.accessKeyAddress))
+    (await store.getAccessKeyByAddress(accessKey.accessKeyAddress, accessKey.keyToken))
   if (!stored) {
     throw new VerificationFailedError({ reason: 'subscription access key is missing' })
   }

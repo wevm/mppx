@@ -481,6 +481,63 @@ describe('tempo', () => {
     })
   })
 
+  test.each([
+    { mode: 'push', rpcMethod: 'eth_getTransactionByHash', waitForConfirmation: true },
+    { mode: 'pull', rpcMethod: 'eth_sendRawTransactionSync', waitForConfirmation: true },
+    { mode: 'pull', rpcMethod: 'eth_sendRawTransaction', waitForConfirmation: false },
+  ] as const)(
+    'returns the payment receipt when expiry crosses $rpcMethod',
+    async ({ mode, rpcMethod, waitForConfirmation }) => {
+      let expires = 0
+      let crossed = false
+      const now = vi.spyOn(Date, 'now')
+      const delayedClient = createClient({
+        account: accounts[0],
+        chain,
+        transport: custom({
+          async request(args) {
+            const result = await client.transport.request(args)
+            if (args.method === rpcMethod && expires) {
+              crossed = true
+              now.mockReturnValue(expires + 1)
+            }
+            return result
+          },
+        }),
+      })
+      const server = Mppx_server.create({
+        realm,
+        secretKey,
+        methods: [
+          tempo_server.charge({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => delayedClient,
+            waitForConfirmation,
+          }),
+        ],
+      })
+      const payer = Mppx_client.create({
+        polyfill: false,
+        methods: [tempo_client({ account: accounts[1], mode, getClient: () => client })],
+      })
+      try {
+        const route = server.charge({ amount: '1', decimals: 6 })
+        const initial = await route(new Request('https://api.example.com'))
+        if (initial.status !== 402) throw new Error('expected challenge')
+        const credential = await payer.createCredential(initial.challenge)
+        expires = Date.parse(Credential.deserialize(credential).challenge.expires!)
+        const result = await route(
+          new Request('https://api.example.com', { headers: { Authorization: credential } }),
+        )
+        expect(crossed).toBe(true)
+        expect(result.status).toBe(200)
+      } finally {
+        now.mockRestore()
+      }
+    },
+  )
+
   describe('payer', () => {
     test.each([
       { mode: 'push', type: 'hash' },
