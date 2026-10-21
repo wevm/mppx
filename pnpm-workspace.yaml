@@ -30,7 +30,7 @@ overrides:
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'
   nanoid@<3.3.18: '3.3.18'
-  '@modelcontextprotocol/sdk@>=1.10.0 <1.31.0': '1.31.0'
+  '@modelcontextprotocol/sdk@>=1.10.0 <1.32.0': '1.32.0'
   '@modelcontextprotocol/server': '2.0.0-alpha.2'
   qs@>=6.7.0 <6.16.0: '6.16.0'
   ip-address@<10.7.1: '10.7.1'
@@ -42,9 +42,9 @@ overrides:
   elysia@<1.4.26: '1.4.26'
   file-type: 'catalog:'
   flatted@<=3.4.1: '>=3.4.2'
-  follow-redirects@<=1.15.11: '1.16.0'
+  follow-redirects@<1.16.1: '1.16.1'
   fast-uri@<3.1.8: '3.1.8'
-  hono@<4.13.7: '4.13.7'
+  hono@<4.13.11: '4.13.11'
   '@hono/node-server@<2.0.10': '2.0.10'
   undici@>=7.0.0 <7.28.0: '7.28.0'
   undici@>=8.0.0 <8.10.2: '8.10.2'
@@ -56,12 +56,22 @@ overrides:
   protobufjs@<=7.6.4: '7.6.5'
   uuid@<14.0.0: '14.0.0'
   tmp@>=0.2.6 <0.2.7: '0.2.7'
-  vite@>=8.0.0 <=8.0.15: '8.0.16'
+  vite@>=8.0.0 <8.3.3: '8.3.3'
+  launch-editor@<2.14.2: '2.14.2'
   vite-plus@<0.3.0: '0.3.0'
   esbuild@>=0.17.0 <0.28.1: '0.28.1'
   read-yaml-file@^1.1.0: '2.1.0'
   js-yaml@>=4.0.0 <4.3.1: '4.3.1'
   body-parser@>=2.0.0 <2.3.0: '2.3.0'
+
+# vite-plus 0.3 bundles a launch-editor older than 2.14.2, which only its dev server runs to
+# open files in an editor; the fix is vite-plus 1.1, which moves the tests to vitest 5. The
+# launch-editor and vite packages themselves are overridden above.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-587h-7wmj-h5pm
+    - GHSA-698v-4r3x-3vcv
+    - GHSA-r825-w8mm-5pxw
 
 nodeOptions: '--disable-warning=ExperimentalWarning --disable-warning=DeprecationWarning'
 
