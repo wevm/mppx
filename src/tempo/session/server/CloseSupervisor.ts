@@ -54,6 +54,8 @@ export type CloseSupervisionOutcome =
 export type CloseSupervision = {
   /** Block every escrow read was pinned to. Pass it as `previousBlock` once `complete`. */
   block: bigint
+  /** Timestamp of `block` in Unix seconds, e.g. to alert when the last complete run grows old. */
+  timestamp: number
   /** Whether every channel was read and handled, so `block` bounds later close-event searches. */
   complete: boolean
   /** Channels supervised. */
@@ -141,6 +143,7 @@ export async function superviseCloses(
     complete: false,
     failed: 0,
     supervised: 0,
+    timestamp: pinned.timestamp,
     unrecovered: 0,
   }
   const report = (

@@ -246,10 +246,11 @@ const supervision = await tempo.superviseCloses({
   channelIds: await db.supervisedChannelIds(),
   client,
   feeToken, // e.g. USDC.e when the channel token cannot pay fees
-  previousBlock: await db.lastSupervisionBlock(),
+  previousBlock: (await db.lastSupervision())?.block,
   store,
 })
-if (supervision.complete) await db.setLastSupervisionBlock(supervision.block)
+// Alert when the last complete run's block timestamp grows old.
+if (supervision.complete) await db.setLastSupervision(supervision.block, supervision.timestamp)
 ```
 
 Each run reads every channel's escrow state at one pinned block. A close request

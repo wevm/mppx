@@ -171,6 +171,7 @@ describe('superviseCloses', () => {
     )
     expect(supervision).toMatchObject({
       block: 1_000n,
+      timestamp: 2_000_000,
       closed: 1,
       complete: true,
       failed: 0,
