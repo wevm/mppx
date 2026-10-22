@@ -68,6 +68,37 @@ export async function handler(request: Request) {
 
 Generate `MPP_SECRET_KEY` with at least 32 bytes, for example: `openssl rand -base64 32`.
 
+### Dynamic prices
+
+A challenge `id` is an HMAC over the issued parameters, including the serialized `request`. `Challenge.verify` recomputes that HMAC from the echoed challenge and compares it to the echoed `id`. `mppx.charge()` builds the challenge it will sign from the `amount` you pass in. When that HMAC check fails, it returns this new challenge (`src/server/Mppx.ts`). Deserialize the credential, then call `Challenge.verify` with the same `MPP_SECRET_KEY`. Use `challenge.request.amount` only when that check succeeds and the value sits between a floor and a ceiling of your current quote (for example, at least 90% and at most 110%). Otherwise pass the live quote, including when the `Payment` credential is absent or the HMAC fails, so the replacement challenge is signed at the current price.
+
+Tempo, Stripe, and EVM store the echoed amount in base units, after scaling the decimal `amount` passed to `charge()` by the method's `decimals`. `getChallengeBindingMismatch` then compares that signed amount with the echoed challenge, so an in-band verified amount has to be the one passed to `charge()`. Convert it back with `formatUnits` and those `decimals` (Tempo's default token uses `6`). Other pinned fields, such as `currency` and `recipient`, still have to match. `Credential.extractPaymentScheme` reads the `Payment` value from `Authorization`; with `requiresAuth: true`, read `Payment-Authorization`. In the snippet, `decimals` is the method's decimals, `mppx` is the handler above, and `currentQuoteBaseUnits()` returns the quote in base units.
+
+```ts
+import { Challenge, Credential } from 'mppx'
+import { formatUnits } from 'viem'
+
+const quote = await currentQuoteBaseUnits()
+let base = quote
+const payment = Credential.extractPaymentScheme(request.headers.get('Authorization') ?? '')
+if (payment) {
+  const credential = Credential.deserialize(payment)
+  const echoed = credential.challenge.request.amount
+  if (
+    typeof echoed === 'string' &&
+    /^\d+$/.test(echoed) &&
+    Challenge.verify(credential.challenge, { secretKey: process.env.MPP_SECRET_KEY! })
+  ) {
+    const echoedBase = BigInt(echoed)
+    if (echoedBase * 10n >= quote * 9n && echoedBase * 10n <= quote * 11n) base = echoedBase
+  }
+}
+
+const response = await mppx.charge({ amount: formatUnits(base, decimals) })(request)
+if (response.status === 402) return response.challenge
+return response.withReceipt(Response.json({ data: '...' }))
+```
+
 ### Client
 
 ```ts
