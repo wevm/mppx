@@ -4,14 +4,24 @@ description: 'Prepare repository and all dependencies'
 runs:
   using: 'composite'
   steps:
-    - name: Set up pnpm
-      uses: pnpm/action-setup@b307475762933b98ed359c036b0e51f26b63b74b # v5.0.0
-
     - name: Set up Node
       uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
       with:
-        node-version: '24.5'
-        cache: 'pnpm'
+        node-version: '24'
+        package-manager-cache: false
+
+    - name: Set up pnpm
+      id: pnpm
+      shell: bash
+      run: |
+        corepack enable
+        echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache pnpm store
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.pnpm.outputs.store }}
+        key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
     - name: Install dependencies
       shell: bash

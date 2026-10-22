@@ -2,6 +2,10 @@
 
 TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Protocol).
 
+## Workflow
+
+Work in the main checkout on `main` and push each completed change directly to `main`. Never create worktrees or feature branches. Commit only your own changes and leave other dirty or untracked files alone; if a push is rejected, rebase onto `origin/main`, resolve conflicts and push again.
+
 ## Code Simplicity
 
 All code should be as simple as possible. Prefer existing patterns and avoid unnecessary abstractions.
