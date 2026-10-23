@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Recorded runs of an AI agent whose only integration is a stablecoin wallet, paying per call over MPP on Tempo mainnet."
+    />
+    <title>mpp-agent · Try it</title>
+    <link rel="stylesheet" href="site.css" />
+    <script src="site.js" defer></script>
+  </head>
+  <body data-page="try">
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-head">
+      <div class="site-head-inner">
+        <a class="brand" href="index.html"
+          ><span class="brand-mark" aria-hidden="true"></span>mpp-agent</a
+        >
+        <nav class="site-nav" aria-label="Primary">
+          <a href="try.html" data-nav="try" hidden>Try it</a>
+          <a href="index.html" data-nav="index">Runs</a>
+          <a href="how.html" data-nav="how">How this works</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="site-main" tabindex="-1">
+      <section class="panel try" aria-labelledby="try-title">
+        <div class="try-top">
+          <h1 id="try-title">Try it</h1>
+          <p class="wallet-line" aria-live="polite">
+            <span id="wallet-label">Wallet</span> <span id="wallet-address" class="mono">…</span> ·
+            Balance <b id="wallet-balance" class="money">—</b
+            ><span id="wallet-allowance" hidden></span>
+          </p>
+        </div>
+        <label class="sr-only" for="task">Task for the agent</label>
+        <textarea
+          id="task"
+          rows="3"
+          placeholder="Ask the agent to do something. It finds and pays for its own tools."
+        ></textarea>
+        <div id="chips" class="chips" aria-label="Suggested tasks"></div>
+        <div class="try-controls">
+          <label class="toggle"
+            ><input id="hints-toggle" type="checkbox" checked /> 🧭 Tool map (faster, more
+            reliable)</label
+          >
+          <label class="toggle"
+            ><input id="subagents-toggle" type="checkbox" /> 🧩 Sub-agents (spawn tool)</label
+          >
+          <span id="run-state" class="run-state" role="status" aria-live="polite"></span>
+          <span class="try-buttons">
+            <button id="stop-btn" class="btn" type="button" disabled>Stop</button>
+            <button id="run-btn" class="btn btn-primary" type="button">Run</button>
+          </span>
+        </div>
+        <p id="try-error" class="error-banner" role="alert" hidden></p>
+      </section>
+      <div id="try-run" hidden></div>
+      <noscript><p>This page needs JavaScript.</p></noscript>
+    </main>
+    <footer class="site-foot">
+      Recorded runs of an agent whose only integration is a stablecoin wallet paying per call over
+      MPP on Tempo mainnet. Every payment links to its on-chain transaction.
+    </footer>
+  </body>
+</html>

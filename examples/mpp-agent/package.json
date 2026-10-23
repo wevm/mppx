@@ -1,0 +1,24 @@
+{
+  "name": "mpp-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -b",
+    "dev": "tsx src/server.ts",
+    "export": "tsx scripts/export-site.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "preview": "python3 scripts/preview-site.py",
+    "setup": "tsx scripts/setup.ts"
+  },
+  "dependencies": {
+    "@types/node": "^26.2.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "accounts": "^0.21.0",
+    "mppx": "latest",
+    "ox": "0.14.45",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2",
+    "undici": "^6.29.0",
+    "viem": "2.57.1"
+  }
+}
