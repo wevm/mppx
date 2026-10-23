@@ -269,7 +269,13 @@ export async function validatePaymentFlow(
           headers: fetchHeaders,
           body: fetchBody ?? null,
         })
-        await validatePaymentResponse(results, response, verbose, tempoModerato)
+        await validatePaymentResponse(
+          results,
+          response,
+          verbose,
+          tempoModerato,
+          isTempoSessionChallenge(tempoTestnetChallenge),
+        )
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
       }
@@ -546,7 +552,7 @@ async function attemptCryptoPayment(
         headers: fetchHeaders,
         body: fetchBody ?? null,
       })
-      await validatePaymentResponse(results, response, verbose, paymentChain)
+      await validatePaymentResponse(results, response, verbose, paymentChain, true)
     } catch (error) {
       results.push(fail(tag, (error as Error).message))
     }
@@ -767,6 +773,7 @@ async function validatePaymentResponse(
   paymentResponse: Response,
   verbose: boolean,
   explorerChain?: Chain | undefined,
+  session = false,
 ): Promise<CheckResult[]> {
   if (paymentResponse.status === 402) {
     const body = await paymentResponse.text().catch(() => '')
@@ -807,8 +814,11 @@ async function validatePaymentResponse(
   }
 
   // Validate receipt
+  const contentType = paymentResponse.headers.get('content-type') ?? ''
   const receiptHeader = paymentResponse.headers.get(Constants.Headers.paymentReceipt)
-  if (!receiptHeader) {
+  if (!receiptHeader && session && contentType.startsWith('text/event-stream')) {
+    results.push(skip('Receipt validation', 'SSE receipts are delivered in the stream'))
+  } else if (!receiptHeader) {
     results.push(
       fail(
         'Payment-Receipt header present',
@@ -859,7 +869,6 @@ async function validatePaymentResponse(
   }
 
   // Validate response body
-  const contentType = paymentResponse.headers.get('content-type') ?? ''
   const body = await paymentResponse.text().catch(() => '')
 
   if (body.length > 0) {

@@ -335,7 +335,9 @@ test('funds the operator and handles the testnet session response', async () => 
       },
     },
   )
-  const handleResponse = vi.fn(({ response }: { response: Response }) => response)
+  const handleResponse = vi.fn(
+    () => new Response('data: {}\n\n', { headers: { 'content-type': 'text/event-stream' } }),
+  )
   MethodResponse.register(method, handleResponse)
   const methods = vi.spyOn(Tempo, 'tempo').mockReturnValue([method] as never)
 
@@ -345,7 +347,7 @@ test('funds the operator and handles the testnet session response', async () => 
   const server = await mppServer(challenge)
 
   try {
-    const { output } = await serve(['validate', server.url])
+    const { output, exitCode } = await serve(['validate', server.url])
 
     expect(fund).toHaveBeenCalledTimes(2)
     expect(fund).toHaveBeenCalledWith(expect.objectContaining({ chain: tempoModerato }), {
@@ -353,6 +355,15 @@ test('funds the operator and handles the testnet session response', async () => 
     })
     expect(handleResponse).toHaveBeenCalledOnce()
     expect(output).toContain('Payment: successful')
+    expect(output).toContain('Receipt validation (SSE receipts are delivered in the stream)')
+    expect(exitCode ?? 0).toBe(0)
+
+    handleResponse.mockImplementation(
+      () => new Response('{}', { headers: { 'content-type': 'application/json' } }),
+    )
+    const plain = await serve(['validate', server.url])
+    expect(plain.output).toContain('Payment-Receipt header present')
+    expect(plain.exitCode).toBe(1)
   } finally {
     methods.mockRestore()
   }
