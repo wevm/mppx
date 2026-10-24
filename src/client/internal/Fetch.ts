@@ -326,10 +326,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         mi = selected.method
         if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
-        const paymentInput = resolvePaymentRetryInput(
+        const paymentInput = await resolvePaymentRetryInput(
           response,
           initialRequest.input,
           initialRequest.input,
+          fetchInit as RequestInit,
         )
         const previousCredential = preparedCredential
         const key = Challenge.serialize(selectedChallenge)
@@ -1167,11 +1168,13 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
 }
 
-function resolvePaymentRetryInput(
+/** Retains Request state while targeting the same-origin challenge response URL. */
+async function resolvePaymentRetryInput(
   response: Response,
   fallback: RequestInfo | URL,
   initialInput: RequestInfo | URL,
-): RequestInfo | URL {
+  init: RequestInit,
+): Promise<RequestInfo | URL> {
   if (!response.url) return fallback
 
   const responseUrl = new URL(response.url)
@@ -1180,6 +1183,42 @@ function resolvePaymentRetryInput(
     throw new Error(
       `Refusing to send payment credential across redirect from ${initialUrl.origin} to ${responseUrl.origin}`,
     )
+  }
+
+  const method = (
+    init.method ?? (fallback instanceof Request ? fallback.method : 'GET')
+  ).toUpperCase()
+  // Fetch does not expose the redirect chain, so a non-GET/HEAD request may
+  // have become a GET before reaching the challenge (301/302/303).
+  if (response.redirected && method !== 'GET' && method !== 'HEAD')
+    throw new Error(
+      `Cannot automatically pay a redirected ${method} request. Use prepareRequest() to preserve redirect semantics.`,
+    )
+
+  if (fallback instanceof Request) {
+    // A replacement body makes a consumed or locked original body irrelevant.
+    // Otherwise retain the original body for any later payment challenges.
+    const source = init.body != null ? fallback : fallback.clone()
+    const request = new Request(source, init)
+    if (request.url === response.url) return request
+    if (request.keepalive && request.body) {
+      // Fetch rejects streaming keepalive bodies. Retarget a buffered copy instead.
+      return new Request(response.url, {
+        body: await request.arrayBuffer(),
+        cache: request.cache,
+        credentials: request.credentials,
+        headers: request.headers,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+        method: request.method,
+        mode: request.mode,
+        redirect: request.redirect,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+        signal: request.signal,
+      })
+    }
+    return new Request(response.url, request)
   }
 
   return response.url

@@ -179,6 +179,9 @@ importers:
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
+      undici:
+        specifier: 8.10.2
+        version: 8.10.2
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.5)
