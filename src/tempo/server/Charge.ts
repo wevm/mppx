@@ -520,7 +520,7 @@ export function charge<const parameters extends charge.Parameters>(
       : undefined,
 
     // TODO: dedupe `{charge,session}.request`
-    async request({ credential, request }) {
+    async request({ credential, expires, request }) {
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.chainId !== undefined) return parameters.chainId
@@ -555,6 +555,18 @@ export function charge<const parameters extends charge.Parameters>(
         if (credential) return account ?? (remoteFeePayer ? true : undefined)
         return account || remoteFeePayer ? true : undefined
       })()
+
+      // Issued sponsored challenges must leave room for the fee payer's
+      // minimum remaining validity, or every credential for them is rejected.
+      if (
+        !credential &&
+        resolvedFeePayer &&
+        expires !== undefined &&
+        !(Date.parse(expires) - Date.now() >= defaults.minRemainingValiditySeconds * 1000)
+      )
+        throw new Error(
+          `Sponsored charge challenges must expire at least ${defaults.minRemainingValiditySeconds} seconds after issuance.`,
+        )
 
       return {
         ...request,

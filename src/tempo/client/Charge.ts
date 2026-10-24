@@ -27,6 +27,16 @@ import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
 
+/**
+ * Seconds from now the client sets as the expiring-nonce `validBefore`,
+ * capped at the challenge expiry.
+ *
+ * Fee payers require at least `defaults.minRemainingValiditySeconds` (15s) of
+ * remaining validity when they co-sign, so a 60s window leaves about 45s for
+ * clock skew between client and server, signing and round trips.
+ */
+export const validityWindowSeconds = 60
+
 /** Runtime context accepted by the Tempo charge client method. */
 export type ChargeContext = {
   account?: Account.getResolver.Parameters['account'] | undefined
@@ -134,6 +144,14 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
+      if (methodDetails?.feePayer === true && challenge.expires) {
+        const remainingMs = new Date(challenge.expires).getTime() - Date.now()
+        if (!(remainingMs >= defaults.minRemainingValiditySeconds * 1000))
+          throw new Error(
+            `Sponsored challenge expires in less than ${defaults.minRemainingValiditySeconds} seconds; the fee payer would reject the transaction. Request a new challenge.`,
+          )
+      }
+
       const currency = request.currency as Address
       const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency })
       const memo = Attribution.encode({
@@ -238,7 +256,7 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       const validBefore = (() => {
-        const defaultExpiry = Math.floor(Date.now() / 1000) + 25
+        const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds
         if (!challenge.expires) return defaultExpiry
         // `validBefore` is an exclusive whole-second bound, so cap at the second
         // after a (possibly fractional) expiry to stay valid as long as the challenge.
