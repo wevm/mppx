@@ -8,6 +8,7 @@ import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
+import * as ProofRealm from './internal/ProofRealm.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
@@ -213,6 +214,7 @@ export function create<
       ? 'same-origin'
       : 'always',
     transport = Transport.http() as transport,
+    trustedRealms,
   } = config
 
   const rawFetch = Fetch.unwrapFetch(config.fetch ?? globalThis.fetch)
@@ -239,6 +241,7 @@ export function create<
     ...(orderChallenges && { orderChallenges }),
     methods,
     transport,
+    ...(trustedRealms && { trustedRealms }),
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 
@@ -315,6 +318,9 @@ export function create<
       challenge = challengeSnapshots[selected.index]!
       mi = selected.method as FlattenMethods<methods>[number]
       if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
+      const httpResponse: unknown = response
+      if (typeof Response !== 'undefined' && httpResponse instanceof Response && httpResponse.url)
+        ProofRealm.assert(challenge, new URL(httpResponse.url), trustedRealms)
 
       const selectedChallenge = challenge
       const selectedMethod = mi
@@ -431,6 +437,8 @@ export function create<
       FlattenMethods<methods>,
       Transport.Transport<RequestInit, Response>
     >
+
+    ProofRealm.assert(payment.challenge, new URL(preparedHttp.replayRequest.url), trustedRealms)
 
     const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
     const createRequestCredential = memoizeCreateCredential(async (context) => {
@@ -581,6 +589,8 @@ export declare namespace create {
     polyfill?: boolean | undefined
     /** Transport to use (defaults to HTTP). */
     transport?: transport | undefined
+    /** Realms, besides the request hostname, allowed to receive automatic zero-amount Tempo proofs. */
+    trustedRealms?: Fetch.from.Config['trustedRealms'] | undefined
   }
 }
 

@@ -9,6 +9,7 @@ import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
+import * as ProofRealm from './ProofRealm.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -248,6 +249,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     onChallenge,
     orderChallenges,
     transport = Transport.http(),
+    trustedRealms,
   } = config
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
@@ -331,6 +333,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           initialRequest.input,
           initialRequest.input,
         )
+        ProofRealm.assert(selectedChallenge, resolveRequestUrl(paymentInput), trustedRealms)
         const previousCredential = preparedCredential
         const key = Challenge.serialize(selectedChallenge)
         const sameAttempt =
@@ -603,6 +606,8 @@ export declare namespace from {
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
     /** Transport to use for challenge extraction and credential attachment. */
     transport?: Transport.AnyTransport | undefined
+    /** Realms, besides the request hostname, allowed to receive automatic zero-amount Tempo proofs. */
+    trustedRealms?: readonly string[] | undefined
   }
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (
