@@ -320,8 +320,9 @@ export function create<
       if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
       const responseUrl = resolveResponseUrl(response)
       if (responseUrl) ProofRealm.assert(challenge, responseUrl, trustedTempoProofRealms)
-      // Non-HTTP transports, such as MCP, have no origin that could own the realm.
-      else if (transport.name !== 'http')
+      // The MCP transport has no origin that could own the realm. Custom transports, such as the
+      // CLI's, check the realm against their own target.
+      else if (transport.name === 'mcp')
         ProofRealm.assertWithoutOrigin(
           challenge,
           trustedTempoProofRealms && Object.values(trustedTempoProofRealms),
@@ -601,8 +602,8 @@ export declare namespace create {
     /**
      * Server origins allowed to request zero-amount Tempo proofs for a realm other than their
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
-     * Over a transport without an origin, such as `Transport.mcp()`, only realms listed here are
-     * trusted, whatever their origin.
+     * With `Transport.mcp()`, which has no origin, only realms listed here are trusted,
+     * whatever their origin.
      */
     trustedTempoProofRealms?: Fetch.from.Config['trustedTempoProofRealms'] | undefined
   }
