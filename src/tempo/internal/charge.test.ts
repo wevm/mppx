@@ -25,6 +25,16 @@ describe('getTransfers', () => {
     expect(transfers[1]!.recipient).toBe(splitRecipient)
   })
 
+  test('canonicalizes split amounts with leading zeros', () => {
+    const splitRecipient = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as Address
+    const transfers = getTransfers({
+      amount: '0100',
+      methodDetails: { splits: [{ amount: '030', recipient: splitRecipient }] },
+      recipient,
+    })
+    expect(transfers.map((transfer) => transfer.amount)).toEqual(['70', '30'])
+  })
+
   test('throws when amount is zero with no splits', () => {
     expect(() => getTransfers({ amount: '0', recipient })).toThrow(
       'split total must be less than total amount',

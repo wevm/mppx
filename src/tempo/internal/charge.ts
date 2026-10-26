@@ -34,8 +34,9 @@ export function getTransfers(request: {
       memo: request.methodDetails?.memo,
       recipient: request.recipient,
     },
+    // Canonical integer form, so a split such as "0300" matches a 300 transfer.
     ...splits.map((split) => ({
-      amount: split.amount,
+      amount: BigInt(split.amount).toString(),
       memo: split.memo,
       recipient: split.recipient,
     })),
