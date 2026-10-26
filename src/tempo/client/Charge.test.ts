@@ -1608,13 +1608,12 @@ describe('challenge selection policy', () => {
       ...createChallenge(offer),
       id: `offer-${index}`,
     }))
-    const response = new Response(null, {
-      headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
-      status: 402,
-    })
-    // Zero-amount proofs are only signed for the server that owns the realm.
-    Object.defineProperty(response, 'url', { value: 'https://api.example.com/resource' })
-    const prepared = mppx.preparePayment(response)
+    const prepared = mppx.preparePayment(
+      new Response(null, {
+        headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
+        status: 402,
+      }),
+    )
     if (selected === undefined)
       await expect(prepared).rejects.toThrow('No method found for challenges')
     else expect((await prepared).challenge.id).toBe(`offer-${selected}`)
