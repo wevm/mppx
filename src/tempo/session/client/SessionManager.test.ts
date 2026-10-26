@@ -657,6 +657,33 @@ describe('Session', () => {
       expect(proofs).toHaveLength(signs ? 1 : 0)
     })
 
+    test('does not sign a bootstrap proof after a cross-origin redirect', async () => {
+      const proofs: string[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
+          // The relaying origin redirected to the target, which answered with its own challenge.
+          const response = make402Response(makeChargeChallenge({}, 'target.example'))
+          Object.defineProperty(response, 'url', { value: 'https://target.example/data' })
+          return Promise.resolve(response)
+        }
+        if (init?.method === 'HEAD') {
+          proofs.push(headers.get(Constants.Headers.authorization)!)
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      expect((await s.fetch('https://attacker.example/data')).status).toBe(200)
+      expect(proofs).toEqual([])
+    })
+
     test('does not answer non-zero bootstrap charge challenges', async () => {
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)

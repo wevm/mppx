@@ -518,12 +518,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const challenge = Challenge.fromResponseList(challengeResponse).find(isTempoChargeChallenge)
       if (!challenge) return undefined
       if (!isZeroAmountChargeChallenge(challenge)) return undefined
-      // The proof authenticates the payer at the challenge realm: sign only for its own server.
-      ProofRealm.assert(
-        challenge,
-        new URL(challengeResponse.url || String(bootstrapInput)),
-        parameters.trustedTempoProofRealms,
-      )
+      // The proof authenticates the payer at the challenge realm: sign only for the server it is
+      // sent to, and never after a redirect to another origin.
+      const target = new URL(String(bootstrapInput))
+      if (challengeResponse.url && new URL(challengeResponse.url).origin !== target.origin)
+        return undefined
+      ProofRealm.assert(challenge, target, parameters.trustedTempoProofRealms)
       const credential = await chargeMethod.createCredential({
         challenge: challenge as never,
         context: {},
