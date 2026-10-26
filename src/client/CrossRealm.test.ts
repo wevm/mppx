@@ -4,9 +4,11 @@ import { tempoLocalnet } from 'viem/chains'
 import { describe, expect, test } from 'vp/test'
 
 import * as Challenge from '../Challenge.js'
+import * as core_Mcp from '../Mcp.js'
 import { charge } from '../tempo/client/Charge.js'
 import * as Methods from '../tempo/Methods.js'
 import * as Mppx from './Mppx.js'
+import * as Transport from './Transport.js'
 
 const account = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000001',
@@ -114,5 +116,42 @@ describe('zero-amount Tempo proofs', () => {
       'Refusing to sign Tempo proof for realm',
     )
     expect(credentials).toEqual([])
+  })
+})
+
+describe('zero-amount Tempo proofs without an origin', () => {
+  function setupMcp(trustedTempoProofRealms?: Record<string, string>) {
+    const { challenge } = setup()
+    const mppx = Mppx.create({
+      methods: [charge({ account, getClient: () => client })],
+      polyfill: false,
+      transport: Transport.mcp(),
+      ...(trustedTempoProofRealms && { trustedTempoProofRealms }),
+    })
+    const response = {
+      error: {
+        code: core_Mcp.paymentRequiredCode,
+        data: { challenges: [challenge], httpStatus: 402 },
+        message: 'Payment Required',
+      },
+      id: 1,
+      jsonrpc: '2.0',
+    } as never
+    return { mppx, response }
+  }
+
+  test('refuses an unlisted realm over MCP', async () => {
+    const { mppx, response } = setupMcp()
+
+    await expect(mppx.preparePayment(response)).rejects.toThrow(
+      'Refusing to sign Tempo proof for untrusted realm "target.example"',
+    )
+  })
+
+  test('accepts a listed realm over MCP', async () => {
+    const { mppx, response } = setupMcp({ 'https://target.example': targetRealm })
+
+    const payment = await mppx.preparePayment(response)
+    expect(payment.challenge.realm).toBe(targetRealm)
   })
 })

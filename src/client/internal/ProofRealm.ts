@@ -44,11 +44,21 @@ export function assertWithoutOrigin(
   )
 }
 
-/** Whether `challenge` is a zero-amount `tempo/charge` Challenge, paid with a signed proof. */
+/**
+ * Whether `challenge` is a zero-amount `tempo/charge` Challenge, paid with a signed proof. Uses the
+ * same `BigInt` conversion as the Tempo charge client, so every encoding it signs a proof for
+ * (such as `"0x0"` or `" 0 "`) is checked.
+ */
 function isProof(challenge: Challenge.Challenge): boolean {
   if (challenge.method !== 'tempo' || challenge.intent !== 'charge') return false
-  const amount = challenge.request.amount
-  return typeof amount === 'string' && /^\d+$/.test(amount) && BigInt(amount) === 0n
+  const amount: unknown = challenge.request.amount
+  if (typeof amount !== 'string' && typeof amount !== 'number' && typeof amount !== 'bigint')
+    return false
+  try {
+    return BigInt(amount) === 0n
+  } catch {
+    return false
+  }
 }
 
 function normalizeOrigin(origin: string): string {

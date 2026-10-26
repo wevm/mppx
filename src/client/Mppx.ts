@@ -318,9 +318,14 @@ export function create<
       challenge = challengeSnapshots[selected.index]!
       mi = selected.method as FlattenMethods<methods>[number]
       if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
-      const httpResponse: unknown = response
-      if (typeof Response !== 'undefined' && httpResponse instanceof Response && httpResponse.url)
-        ProofRealm.assert(challenge, new URL(httpResponse.url), trustedTempoProofRealms)
+      const responseUrl = resolveResponseUrl(response)
+      if (responseUrl) ProofRealm.assert(challenge, responseUrl, trustedTempoProofRealms)
+      // Without a response URL (such as `Transport.mcp()`) no origin can own the realm.
+      else
+        ProofRealm.assertWithoutOrigin(
+          challenge,
+          trustedTempoProofRealms && Object.values(trustedTempoProofRealms),
+        )
 
       const selectedChallenge = challenge
       const selectedMethod = mi
@@ -430,6 +435,8 @@ export function create<
       })
     }
 
+    // The replayed request names the origin even when a custom fetch returns a Response without a URL.
+    responseUrls.set(preparedHttp.response, new URL(preparedHttp.replayRequest.url))
     const payment = (await preparePayment(preparedHttp.response as never, {
       ...paymentOptions,
       request: requestInit as never,
@@ -437,12 +444,6 @@ export function create<
       FlattenMethods<methods>,
       Transport.Transport<RequestInit, Response>
     >
-
-    ProofRealm.assert(
-      payment.challenge,
-      new URL(preparedHttp.replayRequest.url),
-      trustedTempoProofRealms,
-    )
 
     const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
     const createRequestCredential = memoizeCreateCredential(async (context) => {
@@ -596,6 +597,8 @@ export declare namespace create {
     /**
      * Server origins allowed to request zero-amount Tempo proofs for a realm other than their
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
+     * Without a response origin, such as with `Transport.mcp()`, only realms listed here are
+     * trusted, whatever their origin.
      */
     trustedTempoProofRealms?: Fetch.from.Config['trustedTempoProofRealms'] | undefined
   }
@@ -933,4 +936,17 @@ async function createCredentialForMethod(
   return mi.createCredential(
     parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
   )
+}
+
+/** Request URLs of responses whose own `url` may be empty, recorded by `prepareRequest`. */
+const responseUrls = new WeakMap<object, URL>()
+
+/** Returns the URL of the HTTP server that sent `response`, or `undefined` when it has no origin. */
+function resolveResponseUrl(response: unknown): URL | undefined {
+  if (typeof response !== 'object' || response === null) return undefined
+  const recorded = responseUrls.get(response)
+  if (recorded) return recorded
+  if (typeof Response !== 'undefined' && response instanceof Response && response.url)
+    return new URL(response.url)
+  return undefined
 }
