@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import * as Challenge from '../../Challenge.js'
+import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import * as Credential from '../../Credential.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
@@ -117,6 +118,11 @@ export declare namespace wrap {
     paymentPreferences?: AcceptPayment.Config<FlattenMethods<methods>> | undefined
     /** Array of methods to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
+    /**
+     * Realms allowed to request zero-amount Tempo proofs. An MCP server has no origin that could
+     * own a realm, so these proofs are refused unless their realm is listed here.
+     */
+    trustedTempoProofRealms?: readonly string[] | undefined
   }
 
   type McpClient<
@@ -221,6 +227,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
 
     if (selected.challenge.expires)
       Expires.assert(selected.challenge.expires, selected.challenge.id)
+    ProofRealm.assertWithoutOrigin(selected.challenge, config.trustedTempoProofRealms)
 
     if (call.onPaymentRequired) {
       const approved = await call.onPaymentRequired(selected.challenge)

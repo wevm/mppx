@@ -133,3 +133,55 @@ describe('MCP client payment approval', () => {
     expect(createCredential).toHaveBeenCalledOnce()
   })
 })
+
+describe('MCP client zero-amount Tempo proofs', () => {
+  function setup(trustedTempoProofRealms?: readonly string[]) {
+    const challenge = Challenge.from({
+      id: 'proof-test',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: { amount: '0' },
+    })
+    let calls = 0
+    const client = {
+      async callTool() {
+        calls++
+        if (calls === 1)
+          throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+            challenges: [challenge],
+            httpStatus: 402,
+          })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    }
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'proof' },
+      }),
+    )
+    const mcp = McpClient.wrap(client as unknown as Pick<Client, 'callTool'>, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+      ...(trustedTempoProofRealms && { trustedTempoProofRealms }),
+    })
+    return { createCredential, mcp }
+  }
+
+  test('refuses a realm that is not trusted', async () => {
+    const { createCredential, mcp } = setup()
+
+    await expect(mcp.callTool({ name: 'auth_tool' })).rejects.toThrow(
+      'Refusing to sign Tempo proof for untrusted realm "api.example.com"',
+    )
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('signs for a trusted realm', async () => {
+    const { createCredential, mcp } = setup(['api.example.com'])
+
+    const result = await mcp.callTool({ name: 'auth_tool' })
+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }])
+    expect(createCredential).toHaveBeenCalledOnce()
+  })
+})

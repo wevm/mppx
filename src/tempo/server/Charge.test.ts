@@ -4055,6 +4055,17 @@ describe('tempo', () => {
 
   describe('intent: charge; type: proof (zero-dollar auth)', () => {
     test('default: end-to-end zero-dollar auth via SDK', async () => {
+      const proofServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => client,
+          }),
+        ],
+        realm: 'localhost',
+        secretKey,
+      })
       const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
@@ -4067,7 +4078,7 @@ describe('tempo', () => {
 
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '0', decimals: 6 }),
+          proofServer.charge({ amount: '0', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
