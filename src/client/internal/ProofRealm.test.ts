@@ -41,11 +41,14 @@ describe('assert', () => {
     )
   })
 
-  test.each(['0x0', ' 0 ', '-0', '00'])('rejects a foreign realm with amount %j', (amount) => {
-    expect(() => ProofRealm.assert(challenge({ request: { amount } }), url, undefined)).toThrow(
-      'Refusing to sign Tempo proof for realm',
-    )
-  })
+  test.each<unknown>(['0x0', ' 0 ', '-0', '00', false, [], ['0']])(
+    'rejects a foreign realm with amount %j',
+    (amount) => {
+      expect(() => ProofRealm.assert(challenge({ request: { amount } }), url, undefined)).toThrow(
+        'Refusing to sign Tempo proof for realm',
+      )
+    },
+  )
 
   test('accepts a realm pinned to the origin', () => {
     expect(() =>

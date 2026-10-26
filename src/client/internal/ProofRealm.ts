@@ -51,11 +51,8 @@ export function assertWithoutOrigin(
  */
 function isProof(challenge: Challenge.Challenge): boolean {
   if (challenge.method !== 'tempo' || challenge.intent !== 'charge') return false
-  const amount: unknown = challenge.request.amount
-  if (typeof amount !== 'string' && typeof amount !== 'number' && typeof amount !== 'bigint')
-    return false
   try {
-    return BigInt(amount) === 0n
+    return BigInt(challenge.request.amount as never) === 0n
   } catch {
     return false
   }
