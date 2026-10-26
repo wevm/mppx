@@ -11,6 +11,7 @@ import { tempo as tempoMainnet } from 'viem/tempo/chains'
 
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'
+import * as ProofRealm from '../client/internal/ProofRealm.js'
 import { mpp as mppProtocol } from '../client/internal/protocols/Mpp.js'
 import { x402 as x402Protocol } from '../client/internal/protocols/X402.js'
 import * as Mppx from '../client/Mppx.js'
@@ -693,6 +694,19 @@ const cli = Cli.create('mppx', {
       const mppCredentialTarget = isX402Challenge
         ? undefined
         : resolveMppCredentialTarget(url, initialTarget, challengeRequest.logicalUrl)
+      // A zero-amount Tempo proof authenticates the payer at the challenge realm, so sign one only
+      // for the server that owns that realm.
+      if (!isX402Challenge) {
+        try {
+          ProofRealm.assert(challenge, new URL(challengeRequest.logicalUrl || url), undefined)
+        } catch (error) {
+          return c.error({
+            code: 'UNTRUSTED_PROOF_REALM',
+            message: (error as Error).message,
+            exitCode: 1,
+          })
+        }
+      }
       const selectedChallengeResponse = toSelectedChallengeResponse(challenge, challengeResponse)
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''

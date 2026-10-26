@@ -160,10 +160,13 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
   })
 }
 
-function makeChargeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
+function makeChargeChallenge(
+  overrides: Record<string, unknown> = {},
+  challengeRealm = 'api.example.com',
+): Challenge.Challenge {
   return Challenge.from({
     id: 'charge-bootstrap',
-    realm,
+    realm: challengeRealm,
     method: 'tempo',
     intent: 'charge',
     request: {
@@ -621,6 +624,37 @@ describe('Session', () => {
 
       expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
       expect(set).not.toHaveBeenCalled()
+    })
+
+    test.each([
+      { name: 'a relayed realm', trusted: undefined, signs: false },
+      {
+        name: 'a realm pinned to the origin',
+        trusted: { 'https://api.example.com': 'target.example' },
+        signs: true,
+      },
+    ])('bootstrap proofs for $name', async ({ trusted, signs }) => {
+      const proofs: string[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization))
+          return Promise.resolve(make402Response(makeChargeChallenge({}, 'target.example')))
+        if (init?.method === 'HEAD') {
+          proofs.push(headers.get(Constants.Headers.authorization)!)
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        ...(trusted && { trustedTempoProofRealms: trusted }),
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(proofs).toHaveLength(signs ? 1 : 0)
     })
 
     test('does not answer non-zero bootstrap charge challenges', async () => {

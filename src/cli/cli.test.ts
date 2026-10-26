@@ -1547,6 +1547,44 @@ export default defineConfig({
   )
 
   test(
+    'zero-amount charge refuses a proof for a realm the server does not own',
+    { timeout: 120_000 },
+    async () => {
+      const server = Mppx_server.create({
+        methods: [tempo.charge({ chainId: client.chain.id, getClient: () => client })],
+        realm: 'target.example',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
+      })
+      let authorization: string | undefined
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        authorization = req.headers.authorization
+        const result = await toNodeListener(
+          server.charge({
+            amount: '0',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('zero-dollar-paid')
+      })
+
+      try {
+        const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+          env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        })
+        expect(exitCode).toBe(1)
+        expect(output).toContain('Refusing to sign Tempo proof for realm')
+        expect(authorization).toBeUndefined()
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
+
+  test(
     'zero-amount charge with testnet currency omission uses a proof credential',
     { timeout: 120_000 },
     async () => {
