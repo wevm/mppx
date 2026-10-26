@@ -335,7 +335,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         )
         ProofRealm.assert(
           selectedChallenge,
-          resolveRequestUrl(paymentInput),
+          () => resolveRequestUrl(paymentInput),
           trustedTempoProofRealms,
         )
         const previousCredential = preparedCredential

@@ -11,14 +11,16 @@ export type TrustedRealms = Readonly<Record<string, string>>
  * Refuses a zero-amount Tempo proof whose realm the HTTP server that sent the Challenge does not
  * own. A proof authenticates the payer at the Challenge realm, so a foreign origin could otherwise
  * relay another server's Challenge and replay the signed proof there. The server owns the realm
- * when it is the request hostname, or when `trustedRealms` pins it to the request origin.
+ * when it is the request hostname, or when `trustedRealms` pins it to the request origin. Pass
+ * `url` as a function to resolve it only for proof Challenges.
  */
 export function assert(
   challenge: Challenge.Challenge,
-  url: URL,
+  url: URL | (() => URL),
   trustedRealms: TrustedRealms | undefined,
 ): void {
   if (!isProof(challenge)) return
+  url = typeof url === 'function' ? url() : url
   const { realm } = challenge
   if (realm.toLowerCase() === url.hostname.toLowerCase()) return
   const origin = url.origin.toLowerCase()

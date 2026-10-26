@@ -1,4 +1,4 @@
-import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Mcp, Method, Receipt, z } from 'mppx'
 import { evm, tempo } from 'mppx/client'
 import {
   Mppx as Mppx_server,
@@ -1924,6 +1924,44 @@ describe('Fetch.from: 402 retry path', () => {
     await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)
     expect(createCredential).not.toHaveBeenCalled()
     expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
+  })
+
+  test('retries a relative request whose 402 has no URL', async () => {
+    const challenge = Challenge.from({
+      id: 'relative',
+      intent: 'charge',
+      method: 'test',
+      realm: 'api.example.com',
+      request: { amount: '1' },
+    })
+    let calls = 0
+    const fetch = Fetch.from({
+      fetch: async () =>
+        ++calls === 1
+          ? new Response(null, {
+              headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+              status: 402,
+            })
+          : new Response('ok'),
+      methods: [
+        Method.toClient(
+          Method.from({
+            intent: 'charge',
+            name: 'test',
+            schema: {
+              credential: { payload: z.object({}) },
+              request: z.object({ amount: z.string() }),
+            },
+          }),
+          {
+            createCredential: async ({ challenge }) =>
+              Credential.serialize({ challenge, payload: {} }),
+          },
+        ),
+      ],
+    })
+
+    expect(await (await fetch('/resource')).text()).toBe('ok')
   })
 
   test('preserves existing headers on retry', async () => {
