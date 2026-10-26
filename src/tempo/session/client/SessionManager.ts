@@ -520,7 +520,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (!isZeroAmountChargeChallenge(challenge)) return undefined
       // The proof authenticates the payer at the challenge realm: sign only for the server it is
       // sent to, and never after a redirect to another origin.
-      const target = new URL(String(bootstrapInput))
+      const target = new URL(
+        String(bootstrapInput),
+        typeof location !== 'undefined' ? location.href : undefined,
+      )
       if (challengeResponse.url && new URL(challengeResponse.url).origin !== target.origin)
         return undefined
       ProofRealm.assert(challenge, target, parameters.trustedTempoProofRealms)
