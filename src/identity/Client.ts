@@ -56,9 +56,12 @@ export function from(provers: readonly Types.Prover[]): Client {
     async send(fetch, request, context = {}) {
       const result = await sendOnce(fetch, request, context)
       const { response } = result
-      // A paid attempt (context carries the challenge) is never resent: its credential may
-      // already have settled, and replaying it could trigger another payment.
-      if (context.challenge || response.status < 400 || response.status === 402) return result
+      // A paid attempt (a challenge in context, or a Payment credential the caller attached) is
+      // never resent: its credential may already have settled, and replaying it could pay again.
+      const paid =
+        context.challenge !== undefined ||
+        [...request.headers.values()].some((value) => value.startsWith('Payment '))
+      if (paid || response.status < 400 || response.status === 402) return result
       // Each callback reads its own copy, so the returned response stays readable.
       const copies: Response[] = []
       let retry = false

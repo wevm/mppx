@@ -95,7 +95,12 @@ test('never resends a 402 or a paid attempt', async () => {
   await client.send(fetch as never, new Request('https://merchant.example'), {
     challenge: { id: 'paid' } as never,
   })
-  expect(fetch).toHaveBeenCalledTimes(2)
+  fetch.mockResolvedValueOnce(new Response(null, { status: 403 }))
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: 'Payment abc' } }),
+  )
+  expect(fetch).toHaveBeenCalledTimes(3)
   expect(retry).not.toHaveBeenCalled()
 })
 
