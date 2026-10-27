@@ -3053,8 +3053,10 @@ function composeHandlers(
       }
     }
 
+    // Identity WWW-Authenticate values already arrive in the merged offer value above.
     if (identityHeaders)
-      for (const [name, value] of identityHeaders) mergedHeaders.append(name, value)
+      for (const [name, value] of identityHeaders)
+        if (name !== paymentAuthChallengeHeader.toLowerCase()) mergedHeaders.append(name, value)
 
     // Collect html-enabled handlers and their challenges
     const htmlEntries = challengeEntries.filter((entry) => entry.handler._internal?.html)

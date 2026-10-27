@@ -445,6 +445,25 @@ test('a composed route ignores non-Payment challenges from identity rejections',
   expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['2'])
 })
 
+test('composed 402s carry an identity WWW-Authenticate challenge once', async () => {
+  const bearer: Identity.Verifier = {
+    stage: 'payment',
+    verify: () => ({ status: 'missing', headers: { 'WWW-Authenticate': 'Proof realm="kyb"' } }),
+  }
+  const inner = Mppx.create({
+    methods: [serverMethod],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+    selectOffers: (offers) => offers,
+  })
+  const result = await Mppx.compose(
+    inner.compose([serverMethod, { ...charge, identity: [bearer] }]),
+  )(new Request('https://x.test'))
+  if (result.status !== 402) throw new Error()
+  const value = (result.challenge as Response).headers.get('WWW-Authenticate')!
+  expect(value.match(/Proof realm/g)).toHaveLength(1)
+})
+
 test('a composed route accepts at most one payment-stage identity offer', () => {
   const mppx = createPayments()
   expect(() =>

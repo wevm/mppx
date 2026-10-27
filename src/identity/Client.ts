@@ -1,3 +1,4 @@
+import * as Credential from '../Credential.js'
 import * as SigningContext from './internal/SigningContext.js'
 import type * as Types from './Types.js'
 
@@ -60,7 +61,9 @@ export function from(provers: readonly Types.Prover[]): Client {
       // never resent: its credential may already have settled, and replaying it could pay again.
       const paid =
         context.challenge !== undefined ||
-        [...request.headers.values()].some((value) => value.startsWith('Payment '))
+        [...request.headers.values()].some(
+          (value) => Credential.extractPaymentScheme(value) !== null,
+        )
       if (paid || response.status < 400 || response.status === 402) return result
       // Each callback reads its own copy, so the returned response stays readable.
       const copies: Response[] = []
@@ -71,10 +74,16 @@ export function from(provers: readonly Types.Prover[]): Client {
         copies.push(copy)
         if (await prover.retry(copy, context)) retry = true
       }
-      if (!retry) return result
-      // Release every unread branch without waiting, so an unread copy cannot block the resend.
-      for (const unread of [response, ...copies])
-        if (!unread.bodyUsed) void unread.body?.cancel().catch(() => {})
+      // Release unread copies without waiting, so they neither buffer the body nor block a resend.
+      const release = (responses: readonly Response[]) => {
+        for (const unread of responses)
+          if (!unread.bodyUsed) void unread.body?.cancel().catch(() => {})
+      }
+      if (!retry) {
+        release(copies)
+        return result
+      }
+      release([response, ...copies])
       return sendOnce(fetch, request, context)
     },
     async challenge(response, context, url) {
