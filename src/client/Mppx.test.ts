@@ -550,7 +550,7 @@ describe('prepareRequest', () => {
     expect(paidBody.params._meta[Mcp.credentialMetaKey]).toBeDefined()
   })
 
-  test('behavior: returns the attested request that produced the challenge', async () => {
+  test('behavior: returns the proved request that produced the challenge', async () => {
     const requests: Request[] = []
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init)
@@ -559,16 +559,16 @@ describe('prepareRequest', () => {
     })
     const methods = setup(fetch as typeof globalThis.fetch).methods
     const mppx = Mppx.create({
-      attestation: {
-        test: {
-          protocol: 'test',
-          sign(request) {
+      identity: [
+        {
+          scope: '*',
+          prove(request) {
             const headers = new Headers(request.headers)
             headers.set('Signature', 'test-signature')
             return new Request(request, { headers })
           },
         },
-      },
+      ],
       fetch: fetch as typeof globalThis.fetch,
       methods,
       polyfill: false,

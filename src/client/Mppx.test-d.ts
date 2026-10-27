@@ -1,8 +1,8 @@
 import type { Account, Address } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
-import type * as Attestation from '../attestation/Types.js'
 import * as Challenge from '../Challenge.js'
+import type * as Identity from '../identity/Types.js'
 import type * as Mcp from '../Mcp.js'
 import * as Method from '../Method.js'
 import { charge } from '../tempo/client/Charge.js'
@@ -133,17 +133,17 @@ describe('create.Config', () => {
     expectTypeOf(mppx.fetch).toBeFunction()
   })
 
-  test('accepts request attestation for HTTP transport only', () => {
-    const signer = {} as Attestation.Signer
+  test('accepts identity provers for HTTP transport only', () => {
+    const prover = {} as Identity.Prover
     const mppx = Mppx.create({
-      attestation: { webBotAuth: signer },
+      identity: [prover],
       methods: [charge()],
     })
     expectTypeOf(mppx.fetch).toBeFunction()
 
     Mppx.create({
-      // @ts-expect-error request attestation applies to HTTP transport only.
-      attestation: { webBotAuth: signer },
+      // @ts-expect-error identity applies to HTTP transport only.
+      identity: [prover],
       methods: [charge()],
       transport: Transport.mcp(),
     })
