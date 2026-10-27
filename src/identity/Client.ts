@@ -60,14 +60,15 @@ export function from(provers: readonly Types.Prover[]): Client {
       // already have settled, and replaying it could trigger another payment.
       if (context.challenge || response.status < 400 || response.status === 402) return result
       let retry = false
+      // Each callback reads its own copy, so the returned response stays readable.
       for (const prover of inScope(request.url))
-        if (prover.retry && (await prover.retry(response, context))) retry = true
+        if (prover.retry && (await prover.retry(response.clone(), context))) retry = true
       if (!retry) return result
-      if (!response.bodyUsed) await response.body?.cancel().catch(() => {})
+      await response.body?.cancel()
       return sendOnce(fetch, request, context)
     },
     async challenge(response, context, url) {
-      for (const prover of inScope(url)) await prover.retry?.(response, context)
+      for (const prover of inScope(url)) await prover.retry?.(response.clone(), context)
     },
   }
 }

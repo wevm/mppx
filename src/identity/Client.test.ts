@@ -120,3 +120,22 @@ test('rejects an empty prover list', () => {
     'Mppx client identity must configure at least one prover.',
   )
 })
+
+test('retry callbacks read a copy, so a declined retry returns a readable response', async () => {
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: async (response) => (await response.json()).retry,
+    },
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: async (response) => (await response.json()).retry,
+    },
+  ])
+  const fetch = vi.fn(async () => Response.json({ retry: false }, { status: 403 }))
+  const { response } = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(await response.json()).toEqual({ retry: false })
+  expect(fetch).toHaveBeenCalledTimes(1)
+})

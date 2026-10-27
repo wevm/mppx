@@ -402,6 +402,31 @@ test('never reports a rejected identity as a successful payment', async () => {
   expect((unsigned.challenge as Response).status).toBe(403)
 })
 
+test('does not forward identity headers for an offer removed by Accept-Payment', async () => {
+  const other = Method.toServer(Method.from({ ...method, name: 'other' }), {
+    async verify() {
+      throw new Error('unreachable')
+    },
+  })
+  const mppx = Mppx.create({
+    methods: [serverMethod, other],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  const result = await mppx.compose(
+    [serverMethod, { ...charge, identity: [proofVerifier()] }],
+    [other, charge],
+  )(
+    new Request('https://x.test', {
+      headers: { [MppConstants.Headers.acceptPayment]: 'other/charge' },
+    }),
+  )
+  if (result.status !== 402) throw new Error()
+  const response = result.challenge as Response
+  expect(Challenge.fromResponseList(response).map((c) => c.method)).toEqual(['other'])
+  expect(response.headers.has(proofRequestHeader)).toBe(false)
+})
+
 test('a composed route accepts at most one payment-stage identity offer', () => {
   const mppx = createPayments()
   expect(() =>

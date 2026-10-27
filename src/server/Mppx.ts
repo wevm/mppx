@@ -423,9 +423,12 @@ type IntentHandlers<
  * Route identity option. HTTP routes accept identity verifiers, all of which must be valid;
  * use `Identity.anyOf` to accept one of several protocols. Other transports reject it.
  */
-type RouteIdentity<transport extends Transport.AnyTransport> = transport extends Transport.Http
-  ? { identity?: readonly Identity.Verifier[] | undefined }
-  : { identity?: never }
+type RouteIdentity<transport extends Transport.AnyTransport> =
+  Transport.InputOf<transport> extends Request
+    ? Transport.ChallengeOutputOf<transport> extends Response
+      ? { identity?: readonly Identity.Verifier[] | undefined }
+      : { identity?: never }
+    : { identity?: never }
 
 /** Handler for an intent with multiple methods - takes the intersection of all methods' options. */
 type MultiMethodFn<methods extends Method.AnyServer, transport extends Transport.AnyTransport> = (
@@ -1208,6 +1211,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           if (response.status === 402) return { challenge: response, status: 402 }
           return {
             status: 200,
+            identity: IdentityServer.results(identityValues),
             withReceipt() {
               return response
             },
@@ -3010,10 +3014,6 @@ function composeHandlers(
 
     const challengeResponses = offers.map((result) => result.challenge as Response)
 
-    // At most one offer carries an identity challenge (enforced when composing).
-    const identityHeaders = challengeResponses
-      .map((response) => identityChallenges.get(response))
-      .find((headers) => headers !== undefined)
     const unnegotiatedX402Responses =
       input.headers.has(Constants.Headers.acceptPayment) || challengeEntries.length === 0
         ? []
@@ -3029,6 +3029,11 @@ function composeHandlers(
             ...unnegotiatedX402Responses,
           ]
         : challengeResponses
+    // At most one offer carries an identity challenge (enforced when composing); forward it
+    // only if its payment challenge is still advertised after negotiation.
+    const identityHeaders = negotiatedChallengeResponses
+      .map((response) => identityChallenges.get(response))
+      .find((headers) => headers !== undefined)
 
     // Merge challenge headers from the negotiated 402 responses.
     const mergedHeaders = new Headers()
