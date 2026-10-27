@@ -16,6 +16,7 @@ import { Actions } from 'viem/tempo'
 import { tempoModerato, tempo as tempoMainnetChain } from 'viem/tempo/chains'
 
 import * as Challenge from '../../Challenge.js'
+import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import * as Mppx from '../../client/Mppx.js'
 import * as Constants from '../../Constants.js'
 import type { AnyClient } from '../../Method.js'
@@ -561,6 +562,7 @@ async function attemptCryptoPayment(
     results,
     loaded?.config.extensions,
     credentialContext,
+    url,
   )
   if (!credential) return
 
@@ -652,6 +654,7 @@ async function attemptStripePayment(
     results,
     loaded?.config.extensions,
     credentialContext,
+    url,
   )
   if (!credential) return
 
@@ -703,14 +706,17 @@ async function createAndSend(
     | undefined,
   tag: string,
   results: CheckResult[],
-  extensions?: readonly Extension.Extension[] | undefined,
-  initialCredentialContext?: unknown,
+  extensions: readonly Extension.Extension[] | undefined,
+  initialCredentialContext: unknown,
+  url: string,
 ): Promise<string | undefined> {
   const fakeResponse = new Response(null, {
     status: 402,
     headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
   })
   try {
+    // The credential goes to url, so only sign a zero-amount proof for a realm its server owns.
+    ProofRealm.assert(challenge, new URL(url), undefined)
     const credentialContext = await preparePayment(challenge, extensions, initialCredentialContext)
     let credential: string
     if (createCredentialFn) {

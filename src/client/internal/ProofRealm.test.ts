@@ -50,6 +50,18 @@ describe('assert', () => {
     },
   )
 
+  test('rejects a parent-domain realm', () => {
+    expect(() =>
+      ProofRealm.assert(
+        challenge({ realm: 'example.com' }),
+        new URL('https://tenant.example.com/resource'),
+        undefined,
+      ),
+    ).toThrow(
+      'Refusing to sign Tempo proof for realm "example.com" from https://tenant.example.com',
+    )
+  })
+
   test('accepts a realm pinned to the origin', () => {
     expect(() =>
       ProofRealm.assert(challenge(), url, { 'https://Attacker.example/': 'target.example' }),
