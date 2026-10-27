@@ -427,6 +427,24 @@ test('does not forward identity headers for an offer removed by Accept-Payment',
   expect(response.headers.has(proofRequestHeader)).toBe(false)
 })
 
+test('a composed route ignores non-Payment challenges from identity rejections', async () => {
+  const bearer: Identity.Verifier = {
+    verify: () => ({
+      status: 'missing',
+      code: 401,
+      headers: { 'WWW-Authenticate': 'Bearer realm="x"' },
+    }),
+  }
+  const result = await createPayments().compose(
+    [serverMethod, { ...charge, amount: '1', identity: [bearer] }],
+    [serverMethod, { ...charge, amount: '2' }],
+  )(new Request('https://x.test'))
+  if (result.status !== 402) throw new Error()
+  const response = result.challenge as Response
+  expect(response.status).toBe(402)
+  expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['2'])
+})
+
 test('a composed route accepts at most one payment-stage identity offer', () => {
   const mppx = createPayments()
   expect(() =>

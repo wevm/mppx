@@ -2983,6 +2983,8 @@ function composeHandlers(
       for (let i = 0; i < selectedHandlers.length; i++) {
         const result = results[i]
         if (result?.status !== 402) continue
+        // Identity rejections may carry non-Payment challenges (e.g. Bearer); they are not offers.
+        if (identityRejections.has(result.challenge as Response)) continue
 
         const response = result.challenge as Response
         const wwwAuth = response.headers.get(paymentAuthChallengeHeader)

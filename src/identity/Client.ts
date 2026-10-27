@@ -59,12 +59,19 @@ export function from(provers: readonly Types.Prover[]): Client {
       // A paid attempt (context carries the challenge) is never resent: its credential may
       // already have settled, and replaying it could trigger another payment.
       if (context.challenge || response.status < 400 || response.status === 402) return result
-      let retry = false
       // Each callback reads its own copy, so the returned response stays readable.
-      for (const prover of inScope(request.url))
-        if (prover.retry && (await prover.retry(response.clone(), context))) retry = true
+      const copies: Response[] = []
+      let retry = false
+      for (const prover of inScope(request.url)) {
+        if (!prover.retry) continue
+        const copy = response.clone()
+        copies.push(copy)
+        if (await prover.retry(copy, context)) retry = true
+      }
       if (!retry) return result
-      await response.body?.cancel()
+      // Release every unread branch without waiting, so an unread copy cannot block the resend.
+      for (const unread of [response, ...copies])
+        if (!unread.bodyUsed) void unread.body?.cancel().catch(() => {})
       return sendOnce(fetch, request, context)
     },
     async challenge(response, context, url) {

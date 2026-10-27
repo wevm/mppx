@@ -139,3 +139,19 @@ test('retry callbacks read a copy, so a declined retry returns a readable respon
   expect(await response.json()).toEqual({ retry: false })
   expect(fetch).toHaveBeenCalledTimes(1)
 })
+
+test('a header-only retry callback does not block the resend', async () => {
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: (response) => response.headers.has('X-Challenge'),
+    },
+  ])
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response('denied', { headers: { 'X-Challenge': '1' }, status: 401 }))
+    .mockResolvedValueOnce(new Response('ok'))
+  const { response } = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(await response.text()).toBe('ok')
+})
