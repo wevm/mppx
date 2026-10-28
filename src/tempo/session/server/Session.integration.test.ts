@@ -1,6 +1,13 @@
 import { Hex } from 'ox'
 import { createClient, custom, encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
+import {
+  Account as TempoAccount,
+  Actions,
+  KeyAuthorizationManager,
+  Secp256k1,
+  Transaction,
+} from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 import { tempoNetworkConfig } from '~test/config.js'
 import { accounts, asset, chain, client } from '~test/tempo/viem.js'
@@ -583,5 +590,87 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     const stored = await store.getChannel(channelId)
     expect(stored?.finalized).toBe(true)
     expect(stored?.settledOnChain).toBe(300n)
+  })
+})
+
+describe.runIf(isPrecompileTestnet)('sponsored session open with a fresh access key', () => {
+  // An access key used for the first time carries the root account's keyAuthorization, which
+  // installs the key in the same transaction as the channel open.
+  async function freshAccessKeyOpen() {
+    const root = TempoAccount.fromSecp256k1(Hex.random(32))
+    await Actions.token.transferSync(client, {
+      account: payer,
+      amount: 10_000n,
+      feeToken: asset,
+      to: root.address,
+      token: asset,
+    })
+    const keyAuthorizationManager = KeyAuthorizationManager.memory()
+    const accessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+      access: root,
+      keyAuthorizationManager,
+    })
+    const keyAuthorization = await root.signKeyAuthorization(
+      { accessKeyAddress: accessKey.accessKeyAddress, keyType: accessKey.keyType },
+      { chainId: BigInt(chain.id) },
+    )
+    await keyAuthorizationManager.set(
+      { accessKey: accessKey.accessKeyAddress, address: root.address, chainId: chain.id },
+      keyAuthorization,
+    )
+    const method = session({
+      account: payee,
+      amount: '100',
+      chainId: chain.id,
+      currency: asset,
+      decimals: 0,
+      feePayer,
+      feeToken: asset,
+      recipient: payee.address,
+      store: Store.memory(),
+      unitType: 'request',
+      getClient: () => client,
+    })
+    const payload = await createOpenPayload(client, accessKey, {
+      chainId: chain.id,
+      deposit: uint96(1_000n),
+      feePayer: true,
+      initialAmount: uint96(100n),
+      payee: payee.address,
+      token: asset,
+    })
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    const signed = Transaction.deserialize(
+      payload.transaction as Transaction.TransactionSerializedTempo,
+    )
+    expect(signed.keyAuthorization).toBeDefined()
+    const base = sessionRequest(payload.channelId)
+    const request = { ...base, methodDetails: { ...base.methodDetails, feePayer: true } }
+    const verify = () =>
+      method.verify({
+        credential: {
+          challenge: {
+            id: 'chain-sponsored-access-key-open',
+            realm: 'api.example.com',
+            method: 'tempo',
+            intent: 'session',
+            request,
+          } as never,
+          payload,
+        },
+        request: request as never,
+      })
+    return { channelId: payload.channelId, verify }
+  }
+
+  test('sponsors the open that installs the access key', async () => {
+    const { channelId, verify } = await freshAccessKeyOpen()
+    const receipt = await verify()
+    if (!('txHash' in receipt)) throw new Error('expected open txHash')
+    const txReceipt = await waitForTransactionReceipt(client, { hash: receipt.txHash as Hex.Hex })
+    expect(txReceipt.status).toBe('success')
+    expect(txReceipt.feePayer?.toLowerCase()).toBe(feePayer.address.toLowerCase())
+    const state = await getChannelState(client, channelId, tip20ChannelEscrow)
+    expect(state.deposit).toBe(1_000n)
   })
 })

@@ -390,7 +390,6 @@ export function subscription<const parameters extends subscription.Parameters>(
 
 // Access-key provisioning can cost around 4M gas.
 const defaultFeePayerPolicy = {
-  allowKeyAuthorization: true,
   maxGas: 5_000_000n,
   maxTotalFee: 200_000_000_000_000_000n,
 } satisfies Partial<FeePayer.Policy>
