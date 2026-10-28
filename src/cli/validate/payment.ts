@@ -973,15 +973,15 @@ const maxPendingEventBytes = 1024 * 1024
 
 /**
  * Wraps a fetch so in-stream session receipts are seen as the session client reads them: the
- * client consumes \`payment-receipt\` events before the caller sees the body. Event-stream
- * responses without a \`Payment-Receipt\` header pass through a scanner that keeps only the
+ * client consumes `payment-receipt` events before the caller sees the body. Event-stream
+ * responses without a `Payment-Receipt` header pass through a scanner that keeps only the
  * current partial event, so nothing is buffered or left unread.
  */
 /** @internal */
 export function captureEventStream(
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
-  // \`undefined\`: no stream scanned; \`null\`: scanned without a receipt.
+  // `undefined`: no stream scanned; `null`: scanned without a receipt.
   let receipt: SessionReceipt | null | undefined
   return {
     async fetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -1016,7 +1016,7 @@ export function captureEventStream(
         pending = rest + pending.slice(end)
         if (pending.length > maxPendingEventBytes) {
           // Keep a trailing line ending: it may be the first half of the event's boundary.
-          pending = /[\r\n]$/.test(pending) ? pending.slice(-1) : ''
+          pending = /[\r\n]*$/.exec(pending)?.[0] ?? ''
           skipping = true
         }
         for (const raw of events) {
