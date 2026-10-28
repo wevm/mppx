@@ -119,7 +119,9 @@ export function create(config: create.Config): Proxy {
             service.routes,
             upstreamPath,
             // skip free routes (e.g. `'GET /foo/bar': true`)
-            (endpoint) => endpoint !== true && matchesPaymentBinding(endpoint, fallbackBinding),
+            (endpoint) =>
+              Service.getHandler(endpoint as Service.Endpoint) !== undefined &&
+              matchesPaymentBinding(endpoint, fallbackBinding),
           )
         : null
     const matched = exactMatch ?? fallbackMatch
@@ -128,16 +130,16 @@ export function create(config: create.Config): Proxy {
     const endpoint = matched.value as Service.Endpoint
     const ctx: Service.Context = { request, service, upstreamPath }
 
-    if (endpoint === true)
+    const handler = Service.getHandler(endpoint)
+    if (!handler)
       return proxyUpstream({
         request,
         service,
-        ctx,
+        ctx: { ...ctx, ...Service.getOptions(endpoint) },
         proxy,
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
-    const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const scope =
       getConfiguredScope(handler) ??
       deriveRouteScope({
@@ -375,6 +377,10 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
         method: hasMethod ? tokens[0]! : 'GET',
         path: `/${service.id}${path}`,
         payment: endpoint ? Service.paymentOf(endpoint) : null,
+        ...(typeof endpoint === 'object' && endpoint?.requestBody
+          ? { requestBody: endpoint.requestBody }
+          : {}),
+        ...(typeof endpoint === 'object' && endpoint?.summary ? { summary: endpoint.summary } : {}),
       }
     }),
   )
@@ -442,9 +448,9 @@ function getPaymentBinding(request: Request): PaymentBinding | null {
 }
 
 function matchesPaymentBinding(endpoint: unknown, binding: PaymentBinding | null): boolean {
-  if (endpoint === true) return false
+  if (!Service.getHandler(endpoint as Service.Endpoint)) return false
   if (!binding) return true
-  const payment = Service.paymentOf(endpoint as Exclude<Service.Endpoint, true>)
+  const payment = Service.paymentOf(endpoint as Service.Endpoint)
   if (!payment) return true
   const offers = Array.isArray(payment.offers) ? payment.offers : [payment]
   return offers.some(

@@ -303,6 +303,66 @@ describe('create', () => {
     `)
   })
 
+  test('behavior: GET /openapi.json includes route summary and requestBody', async () => {
+    const requestBody = {
+      content: {
+        'application/json': {
+          schema: { properties: { prompt: { type: 'string' } }, type: 'object' },
+        },
+      },
+      required: true,
+    }
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://api.example.com',
+          routes: {
+            'GET /v1/models': { free: true, summary: 'List models' },
+            'POST /v1/generate': {
+              pay: mppx_server.charge({ amount: '1' }),
+              requestBody,
+              summary: 'Generate text',
+            },
+            'POST /v1/validate': { free: true, requestBody, summary: 'Validate a prompt' },
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/openapi.json`)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.paths['/api/v1/generate'].post).toMatchObject({
+      requestBody,
+      summary: 'Generate text',
+    })
+    expect(body.paths['/api/v1/generate'].post['x-payment-info']).toBeDefined()
+    expect(body.paths['/api/v1/validate'].post).toEqual({
+      requestBody,
+      responses: { '200': { description: 'Successful response' } },
+      summary: 'Validate a prompt',
+    })
+    expect(body.paths['/api/v1/models'].get.summary).toBe('List models')
+    expect(body.paths['/api/v1/models'].get.requestBody).toBeUndefined()
+  })
+
+  test('behavior: endpoint object with free: true is a free passthrough', async () => {
+    upstream = await createUpstream((req) => Response.json({ path: new URL(req.url).pathname }))
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: { 'GET /v1/models': { free: true, summary: 'List models' } },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/api/v1/models`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ path: '/v1/models' })
+  })
+
   test('behavior: GET /openapi.json respects basePath', async () => {
     const proxy = ApiProxy.create({
       basePath: '/proxy',

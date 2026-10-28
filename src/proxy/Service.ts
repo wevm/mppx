@@ -34,10 +34,51 @@ export type Docs = {
  * An endpoint definition.
  *
  * - `IntentHandler` — payment required, calls the handler to issue a 402 challenge or verify payment.
- * - `{ pay, options }` — payment required with per-endpoint config overrides.
+ * - `EndpointConfig` — `{ pay, options, summary, requestBody }` (paid) or `{ free: true, options, summary, requestBody }` (free).
  * - `true` — free passthrough, no payment required, rewriteRequest is applied.
  */
-export type Endpoint = IntentHandler | { pay: IntentHandler; options: EndpointOptions } | true
+export type Endpoint = IntentHandler | EndpointConfig | true
+
+/**
+ * An endpoint definition with per-endpoint config overrides and discovery metadata.
+ *
+ * @example
+ * ```ts
+ * routes: {
+ *   'POST /v1/search': {
+ *     pay: mppx.charge({ amount: '0.01' }),
+ *     summary: 'Search the web',
+ *     requestBody: {
+ *       content: { 'application/json': { schema: { type: 'object' } } },
+ *     },
+ *   },
+ *   'GET /v1/status': { free: true, summary: 'Service status' },
+ * }
+ * ```
+ */
+export type EndpointConfig = EndpointMetadata &
+  (
+    | {
+        /** Payment handler. */
+        pay: IntentHandler
+        free?: undefined
+      }
+    | {
+        /** Free passthrough route, declared explicitly so a missing handler never means free. */
+        free: true
+        pay?: undefined
+      }
+  )
+
+/** Per-endpoint config and discovery metadata shared by paid and free endpoint objects. */
+export type EndpointMetadata = {
+  /** Per-endpoint config overrides passed to request hooks via `ctx`. */
+  options?: EndpointOptions | undefined
+  /** OpenAPI request body object emitted in `/openapi.json`. */
+  requestBody?: Record<string, unknown> | undefined
+  /** Short summary emitted in `/openapi.json`. */
+  summary?: string | undefined
+}
 
 /** Map of `"METHOD /pattern"` keys to endpoint definitions. */
 export type EndpointMap<routes extends string = string> = Partial<Record<routes, Endpoint>> &
@@ -243,16 +284,29 @@ export function toLlmsTxt(
 
 /** Extracts per-endpoint options from an endpoint definition. */
 export function getOptions(endpoint: Endpoint): EndpointOptions | undefined {
-  if (typeof endpoint === 'object' && endpoint !== null && 'options' in endpoint)
-    return endpoint.options
+  if (typeof endpoint === 'object' && endpoint !== null) return endpoint.options
   return undefined
+}
+
+/**
+ * Returns the payment handler of an endpoint, or `undefined` for a route declared free (`true` or
+ * `{ free: true }`). Throws for anything else, such as `{ pay: undefined }`, so a missing handler
+ * fails closed instead of proxying for free with the service's credentials.
+ */
+export function getHandler(endpoint: Endpoint): IntentHandler | undefined {
+  if (typeof endpoint === 'function') return endpoint
+  if (endpoint === true) return undefined
+  if (typeof endpoint === 'object' && endpoint !== null) {
+    if (typeof endpoint.pay === 'function') return endpoint.pay
+    if (endpoint.free === true && endpoint.pay === undefined) return undefined
+  }
+  throw new Error('Invalid proxy endpoint: expected a payment handler, `true` or `{ free: true }`.')
 }
 
 /** Derives discovery payment metadata from an explicitly priced endpoint handler. */
 export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
-  if (endpoint === true) return null
-  const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
-  if (!('_internal' in handler)) return null
+  const handler = getHandler(endpoint)
+  if (!handler || !('_internal' in handler)) return null
   const metadata = handler._internal as Metadata.Metadata | undefined
   if (!metadata) return null
   if (Metadata.isComposed(metadata))

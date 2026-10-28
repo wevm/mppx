@@ -250,3 +250,29 @@ describe('getOptions', () => {
     expect(Service.getOptions(true)).toBeUndefined()
   })
 })
+
+describe('getHandler', () => {
+  const handler = (async () => ({
+    status: 402,
+    challenge: new Response(),
+  })) as Service.IntentHandler
+
+  test('returns the handler of a paid endpoint', () => {
+    expect(Service.getHandler(handler)).toBe(handler)
+    expect(Service.getHandler({ pay: handler, summary: 'Paid' })).toBe(handler)
+  })
+
+  test('returns undefined only for routes declared free', () => {
+    expect(Service.getHandler(true)).toBeUndefined()
+    expect(Service.getHandler({ free: true, summary: 'Free' })).toBeUndefined()
+  })
+
+  test.each([
+    ['{ pay: undefined }', { pay: undefined }],
+    ['a misspelled key', { charge: handler }],
+    ['undefined', undefined],
+    ['false', false],
+  ])('fails closed for %s', (_, endpoint) => {
+    expect(() => Service.getHandler(endpoint as never)).toThrowError('Invalid proxy endpoint')
+  })
+})
