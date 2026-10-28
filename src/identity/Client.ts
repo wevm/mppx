@@ -133,10 +133,20 @@ export function wrapFetch(
     const challenge = credentialChallenge(request.headers) ?? context?.challenge
     const { response } = await client.send(fetch, request, { ...context, challenge })
     if (response.status === 402 && challenge)
-      for (const next of Challenge.fromResponseList(response))
+      // A 402 without a parseable Payment challenge is returned as is: the caller decides.
+      for (const next of challengesOf(response))
         if (next.method === challenge.method && next.intent === challenge.intent)
           await client.challenge(response, { ...context, challenge: next }, request.url)
     return response
+  }
+}
+
+/** Returns the Payment challenges of a 402, or none when it carries none that parse. */
+function challengesOf(response: Response): readonly Challenge.Challenge[] {
+  try {
+    return Challenge.fromResponseList(response)
+  } catch {
+    return []
   }
 }
 

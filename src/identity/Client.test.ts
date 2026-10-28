@@ -254,3 +254,23 @@ test('never resends a request carrying an x402 credential', async () => {
   }
   expect(retry).not.toHaveBeenCalled()
 })
+
+test('wrapFetch returns a 402 without a Payment challenge instead of throwing', async () => {
+  const challenge = Challenge.from({
+    id: 'first',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+  const fetch = Identity.Client.wrapFetch(
+    vi.fn(
+      async () =>
+        new Response(null, { status: 402, headers: { 'WWW-Authenticate': 'Payment broken' } }),
+    ) as never,
+    Identity.Client.from([{ scope: '*', prove: (request) => request, retry: () => false }]),
+    { challenge },
+  )
+  const response = await fetch('https://merchant.example', { method: 'POST' })
+  expect(response.status).toBe(402)
+})
