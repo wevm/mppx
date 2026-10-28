@@ -24,7 +24,11 @@ import * as Receipt from '../../Receipt.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
 import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js'
-import { isEventStream, parseEvent } from '../../tempo/session/precompile/Protocol.js'
+import {
+  isEventStream,
+  parseEvent,
+  type SessionReceipt,
+} from '../../tempo/session/precompile/Protocol.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import type * as Extension from '../Extension.js'
@@ -278,7 +282,7 @@ export async function validatePaymentFlow(
           verbose,
           tempoModerato,
           isTempoSessionChallenge(tempoTestnetChallenge),
-          raw.last,
+          raw.receipt,
         )
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
@@ -557,7 +561,7 @@ async function attemptCryptoPayment(
         headers: fetchHeaders,
         body: fetchBody ?? null,
       })
-      await validatePaymentResponse(results, response, verbose, paymentChain, true, raw.last)
+      await validatePaymentResponse(results, response, verbose, paymentChain, true, raw.receipt)
     } catch (error) {
       results.push(fail(tag, (error as Error).message))
     }
@@ -786,7 +790,7 @@ async function validatePaymentResponse(
   verbose: boolean,
   explorerChain?: Chain | undefined,
   session = false,
-  rawStream?: () => Response | undefined,
+  streamReceipt?: () => SessionReceipt | null | undefined,
 ): Promise<CheckResult[]> {
   if (paymentResponse.status === 402) {
     const body = await paymentResponse.text().catch(() => '')
@@ -833,16 +837,11 @@ async function validatePaymentResponse(
   const body = await paymentResponse.text().catch(() => '')
   if (stream) {
     // SSE sessions deliver the receipt as a final payment-receipt event instead of a header.
-    // The session client consumes that event, so read it from the server's own stream.
-    const raw = rawStream?.()
-    const events = raw ? await raw.text().catch(() => '') : body
-    const receipt = events
-      .replace(/\r\n|\r/g, '\n')
-      .split('\n\n')
-      .map((event) => parseEvent(event))
-      .find((event) => event?.type === 'payment-receipt')
-    if (receipt?.type === 'payment-receipt')
-      results.push(check('Payment receipt in event stream', receipt.data.reference))
+    // The session client consumes that event, so it is captured from the server's stream as
+    // the client reads it; a stream read directly is parsed here.
+    const captured = streamReceipt?.()
+    const receipt = captured === undefined ? findReceipt(body) : (captured ?? undefined)
+    if (receipt) results.push(check('Payment receipt in event stream', receipt.reference))
     else
       results.push(
         fail(
@@ -960,23 +959,76 @@ async function validatePaymentResponse(
   return results
 }
 
+/** Returns the first session receipt in an event-stream body. */
+function findReceipt(body: string): SessionReceipt | undefined {
+  for (const raw of body.replace(/\r\n|\r/g, '\n').split('\n\n')) {
+    const event = parseEvent(raw)
+    if (event?.type === 'payment-receipt') return event.data
+  }
+  return undefined
+}
+
+/** Longest partial event kept while scanning; a receipt event is far smaller. */
+const maxPendingEventBytes = 1024 * 1024
+
 /**
- * Wraps a fetch so the last `text/event-stream` response it returned stays readable: the
- * session client consumes in-stream receipts before the caller sees the body.
+ * Wraps a fetch so in-stream session receipts are seen as the session client reads them: the
+ * client consumes \`payment-receipt\` events before the caller sees the body. Event-stream
+ * responses without a \`Payment-Receipt\` header pass through a scanner that keeps only the
+ * current partial event, so nothing is buffered or left unread.
  */
 function captureEventStream(
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
-  let last: Response | undefined
+  // \`undefined\`: no stream scanned; \`null\`: scanned without a receipt.
+  let receipt: SessionReceipt | null | undefined
   return {
     async fetch(input: RequestInfo | URL, init?: RequestInit) {
       const response = await fetch(input, init)
-      if (isEventStream(response)) {
-        void last?.body?.cancel().catch(() => {})
-        last = response.clone()
+      if (
+        !response.body ||
+        !isEventStream(response) ||
+        response.headers.has(Constants.Headers.paymentReceipt)
+      )
+        return response
+      receipt = null
+      const decoder = new TextDecoder()
+      let pending = ''
+      const scan = (text: string, done: boolean) => {
+        pending += text
+        // Keep a trailing CR: the next chunk may complete a CRLF.
+        const end = done || !pending.endsWith('\r') ? pending.length : pending.length - 1
+        const events = pending
+          .slice(0, end)
+          .replace(/\r\n|\r/g, '\n')
+          .split('\n\n')
+        const rest = done ? '' : (events.pop() ?? '')
+        pending = rest + pending.slice(end)
+        if (pending.length > maxPendingEventBytes) pending = ''
+        for (const raw of done ? [...events, rest] : events) {
+          const event = parseEvent(raw)
+          if (event?.type === 'payment-receipt' && !receipt) receipt = event.data
+        }
       }
-      return response
+      const body = response.body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            scan(decoder.decode(chunk, { stream: true }), false)
+            controller.enqueue(chunk)
+          },
+          flush() {
+            scan(decoder.decode(), true)
+          },
+        }),
+      )
+      const scanned = new Response(body, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      })
+      Object.defineProperty(scanned, 'url', { value: response.url })
+      return scanned
     },
-    last: () => last,
+    receipt: () => receipt,
   }
 }

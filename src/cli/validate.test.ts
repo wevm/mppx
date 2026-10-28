@@ -388,9 +388,12 @@ test('funds the operator and handles the testnet session response', async () => 
     expect(plain.output).toContain('Payment-Receipt header present')
     expect(plain.exitCode).toBe(1)
 
-    // The session client strips the receipt event; validate reads the server's own stream,
-    // including lone-CR line endings.
-    handleResponse.mockImplementation(() => sse('data: {}\n\n'))
+    // The session client consumes the stream and strips the receipt event; validate sees the
+    // receipt as the client reads it, including lone-CR line endings.
+    handleResponse.mockImplementation((async ({ response }: { response: Response }) => {
+      await response.text()
+      return sse('data: {}\n\n')
+    }) as never)
     const streamed = await mppServer(challenge, {
       sse: `data: {}\r\revent: payment-receipt\rdata: ${JSON.stringify(sessionReceipt)}\r\r`,
     })
