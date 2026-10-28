@@ -1015,7 +1015,8 @@ export function captureEventStream(
         }
         pending = rest + pending.slice(end)
         if (pending.length > maxPendingEventBytes) {
-          pending = ''
+          // Keep a trailing line ending: it may be the first half of the event's boundary.
+          pending = /[\r\n]$/.test(pending) ? pending.slice(-1) : ''
           skipping = true
         }
         for (const raw of events) {

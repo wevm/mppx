@@ -1413,6 +1413,10 @@ test('captureEventStream drops the tail of an oversized event', async () => {
   }
   const tail = `\nevent: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`
   expect(await read([`data: ${'x'.repeat(1_100_000)}`, tail])).toBeNull()
+  // A boundary split across chunks after the drop still ends the oversized event.
+  expect(await read([`data: ${'x'.repeat(1_100_000)}\n`, tail])).toMatchObject({
+    reference: receipt.reference,
+  })
   expect(
     await read([
       'data: {}\r',
