@@ -1,8 +1,8 @@
-import * as AttestationClient from '../attestation/Client.js'
-import type * as Attestation from '../attestation/Types.js'
 import type * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Expires from '../Expires.js'
+import * as IdentityClient from '../identity/Client.js'
+import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
@@ -205,7 +205,7 @@ export function create<
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    attestation,
+    identity,
     maxPaymentRetries,
     onChallenge,
     orderChallenges,
@@ -217,13 +217,13 @@ export function create<
     trustedTempoProofRealms,
   } = config
 
+  if ('attestation' in config)
+    throw new TypeError('Mppx client `attestation` was replaced by `identity: [prover]`.')
   const rawFetch = Fetch.unwrapFetch(config.fetch ?? globalThis.fetch)
-  const attestationSigner = attestation
-    ? createAttestationSigner(attestation as Attestation.SignerMap)
-    : undefined
-  const attestedFetch = attestationSigner
-    ? AttestationClient.wrapFetch(rawFetch, attestationSigner)
-    : rawFetch
+  // Rewrapping an mppx fetch keeps its identity provers unless new ones are configured.
+  const identityClient = identity
+    ? IdentityClient.from(identity as readonly Identity.Prover[])
+    : config.fetch && Fetch.identityOf(config.fetch)
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
   const events = Fetch.createEventDispatcher<FlattenMethods<methods>, EventResponseOf<transport>>()
@@ -234,7 +234,8 @@ export function create<
   const config_fetch = {
     acceptPayment,
     acceptPaymentPolicy,
-    ...((config.fetch || attestation) && { fetch: attestedFetch }),
+    ...(config.fetch && { fetch: rawFetch }),
+    ...(identityClient && { identity: identityClient }),
     eventDispatcher: events,
     ...(maxPaymentRetries !== undefined && { maxPaymentRetries }),
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
@@ -421,7 +422,7 @@ export function create<
       init,
       input,
       maxRedirects,
-      signer: attestationSigner,
+      identity: identityClient,
     })
     const requestInit = requestToInit(preparedHttp.replayRequest, preparedHttp.body)
     if (
@@ -452,11 +453,18 @@ export function create<
 
     const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
     const createRequestCredential = memoizeCreateCredential(async (context) => {
+      await identityClient?.challenge(
+        preparedHttp.response as Response,
+        { challenge: payment.challenge },
+        preparedHttp.replayRequest.url,
+      )
       if (MethodChallenge.has(paymentMethod))
         await MethodChallenge.handle(paymentMethod, {
           challenge: payment.challenge,
           context,
-          fetch: attestedFetch,
+          fetch: identityClient
+            ? IdentityClient.wrapFetch(rawFetch, identityClient, { challenge: payment.challenge })
+            : rawFetch,
           input: preparedHttp.replayRequest,
           signal: preparedHttp.replayRequest.signal,
         })
@@ -472,10 +480,15 @@ export function create<
           requestToInit(preparedHttp.replayRequest, preparedHttp.body),
           credential,
         )
-        return attestedFetch(preparedHttp.replayRequest.url, {
+        const paidRequest = new Request(preparedHttp.replayRequest.url, {
           ...paidInit,
           redirect: 'manual',
         })
+        if (!identityClient) return rawFetch(paidRequest)
+        const { response } = await identityClient.send(rawFetch, paidRequest, {
+          challenge: payment.challenge,
+        })
+        return response
       },
     })
     return Object.freeze({
@@ -570,9 +583,12 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Transport,
   > = {
-    /** Request-attestation signers applied to every outbound HTTP attempt. */
-    attestation?: transport extends Transport.Transport<RequestInit, Response>
-      ? Attestation.SignerMap | undefined
+    /**
+     * Identity provers applied to every in-scope HTTP attempt, in order.
+     * List request signers last so they cover headers added by earlier provers.
+     */
+    identity?: transport extends Transport.Transport<RequestInit, Response>
+      ? readonly Identity.Prover[] | undefined
       : never
     /** Controls when `Accept-Payment` is injected. */
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
@@ -609,15 +625,6 @@ export declare namespace create {
   }
 }
 
-function createAttestationSigner(signers: Attestation.SignerMap): Attestation.Signer {
-  const values = Object.values(signers)
-  if (values.length === 0)
-    throw new TypeError('Mppx client attestation must configure at least one signer.')
-  return AttestationClient.composeSigners(
-    ...(values as [Attestation.Signer, ...Attestation.Signer[]]),
-  )
-}
-
 const redirectStatuses = new Set([301, 302, 303, 307, 308])
 const bodyHeaders = [
   'content-encoding',
@@ -645,7 +652,7 @@ async function prepareHttpRequest(parameters: {
   init: RequestInit | undefined
   input: RequestInfo | URL
   maxRedirects: number
-  signer: Attestation.Signer | undefined
+  identity: IdentityClient.Client | undefined
 }): Promise<{
   body: BodyInit | undefined
   replayRequest: Request
@@ -653,7 +660,7 @@ async function prepareHttpRequest(parameters: {
   response: Response
   redirects: readonly PreparedRequest.Redirect[]
 }> {
-  const { acceptPayment, acceptPaymentPolicy, fetch, init, input, maxRedirects, signer } =
+  const { acceptPayment, acceptPaymentPolicy, fetch, identity, init, input, maxRedirects } =
     parameters
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0)
     throw new TypeError('maxRedirects must be a non-negative integer.')
@@ -665,8 +672,12 @@ async function prepareHttpRequest(parameters: {
 
   for (;;) {
     request = withAcceptPayment(request, acceptPayment, explicitAcceptPayment, acceptPaymentPolicy)
-    const sentRequest = signer ? await signer.sign(request.clone()) : request.clone()
-    const response = await fetch(sentRequest)
+    const { request: sentRequest, response } = await (async () => {
+      // `request` stays unread for replay; the reported request is the one actually sent.
+      if (identity) return identity.send(fetch, request.clone())
+      const sent = request.clone()
+      return { request: sent, response: await fetch(sent) }
+    })()
     if (response.type === 'opaqueredirect' || response.status === 0)
       throw new Error('prepareRequest requires a runtime that exposes manual redirect responses.')
     if (!redirectStatuses.has(response.status))

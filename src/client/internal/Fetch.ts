@@ -2,6 +2,8 @@ import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
 import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as IdentityClient from '../../identity/Client.js'
+import type * as Identity from '../../identity/Types.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
@@ -15,6 +17,8 @@ import * as ProofRealm from './ProofRealm.js'
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
 // an unrelated fetch installed by user code or another library.
 const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
+/** Identity runner of an mppx fetch wrapper, inherited when that wrapper is wrapped again. */
+const MPPX_FETCH_IDENTITY = Symbol.for('mppx.fetch.identity')
 const defaultMaxPaymentRetries = 3
 const maxErrorBodyBytes = 64 * 1024
 const errorBodyTimeoutMs = 2_000
@@ -23,6 +27,7 @@ const bodyTruncatedHeader = 'Mppx-Body-Truncated'
 
 type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
+  [MPPX_FETCH_IDENTITY]?: IdentityClient.Client | undefined
 }
 
 /** Credential state retained between payment retries until its method settles it. */
@@ -251,11 +256,22 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     transport = Transport.http(),
     trustedTempoProofRealms,
   } = config
+  // Rewrapping an mppx fetch keeps its identity provers unless new ones are configured.
+  // Only an explicitly passed mppx fetch hands down its provers; the global fetch never does.
+  const identity = config.identity ?? (config.fetch && identityOf(config.fetch))
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
   const baseFetch = unwrapFetch(fetch)
+  const send = async (
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+    context?: Identity.Context,
+  ): Promise<Response> =>
+    identity
+      ? (await identity.send(baseFetch, new Request(input, init), context)).response
+      : baseFetch(input, init)
 
   const request = async (
     input: RequestInfo | URL,
@@ -274,7 +290,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
-    let response = await baseFetch(cloneRequestInput(initialRequest.input), initialRequest.init)
+    let response = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
     if (!(await transport.isPaymentRequired(response, transportRequest as never))) return response
@@ -327,6 +343,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         challenge = selectedChallenge
         mi = selected.method
         if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
+        await identity?.challenge(
+          response,
+          { challenge: selectedChallenge },
+          resolveRequestUrl(initialRequest.input).href,
+        )
 
         const paymentInput = resolvePaymentRetryInput(
           response,
@@ -370,7 +391,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                 MethodChallenge.handle(selected.method, {
                   challenge: selectedChallenge,
                   context: credentialContext,
-                  fetch: baseFetch,
+                  // Management requests (e.g. session top-ups) carry the same identity proofs.
+                  fetch: identity
+                    ? IdentityClient.wrapFetch(baseFetch, identity, {
+                        challenge: selectedChallenge,
+                      })
+                    : baseFetch,
                   input: paymentInput,
                   signal: resolveRequestSignal(input, init),
                 }),
@@ -435,18 +461,22 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
           })
         try {
-          response = await baseFetch(paymentInput, {
-            ...transport.setCredential(
-              {
-                ...fetchInit,
-                headers: initialRequest.headers,
-              },
-              credential,
-              { challenge: selectedChallenge },
-            ),
-            // Runtimes do not strip custom payment headers on cross-origin redirects.
-            redirect: 'manual',
-          })
+          response = await send(
+            paymentInput,
+            {
+              ...transport.setCredential(
+                {
+                  ...fetchInit,
+                  headers: initialRequest.headers,
+                },
+                credential,
+                { challenge: selectedChallenge },
+              ),
+              // Runtimes do not strip custom payment headers on cross-origin redirects.
+              redirect: 'manual',
+            },
+            { challenge: selectedChallenge },
+          )
         } catch (cause) {
           outcomeUnknown = unknownOutcome(cause)
           throw cause
@@ -566,6 +596,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   // Record the wrapped target so future polyfill() / restore() calls can detect origin
   // and safely unwrap only mppx-installed wrappers.
   ;(wrappedFetch as WrappedFetch)[MPPX_FETCH_WRAPPER] = baseFetch
+  if (identity) (wrappedFetch as WrappedFetch)[MPPX_FETCH_IDENTITY] = identity
   return wrappedFetch as from.Fetch<methods>
 }
 
@@ -591,6 +622,8 @@ export declare namespace from {
       | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
+    /** Identity provers applied to every in-scope HTTP attempt. */
+    identity?: IdentityClient.Client | undefined
     /** Advanced shared event dispatcher. `challenge.received` handlers run before `onChallenge`; the first non-empty credential returned by a handler skips `onChallenge`. */
     eventDispatcher?: ClientEventDispatcher<methods, any> | undefined
     /** Maximum number of payment challenge retries after the initial response. @default 3 */
@@ -664,7 +697,8 @@ export function polyfill<const methods extends readonly Method.AnyClient[]>(
   globalThis.fetch = from({
     ...config,
     acceptPaymentPolicy: config.acceptPaymentPolicy ?? (isBrowser() ? 'same-origin' : 'always'),
-    fetch: globalThis.fetch,
+    // Unwrapped so a previous polyfill's identity provers are not inherited.
+    fetch: unwrapFetch(globalThis.fetch),
   }) as typeof globalThis.fetch
 }
 
@@ -1070,6 +1104,11 @@ function getCallerHeaders(input: RequestInfo | URL, headers: HeadersInit | undef
 }
 
 /** @internal */
+/** Returns the identity runner of an mppx fetch wrapper, if it has one. @internal */
+export function identityOf(fetch: typeof globalThis.fetch): IdentityClient.Client | undefined {
+  return (fetch as WrappedFetch)[MPPX_FETCH_IDENTITY]
+}
+
 /** @internal */
 export function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   let current = fetch as WrappedFetch

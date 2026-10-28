@@ -1,9 +1,9 @@
 import express from 'express'
 import { describe, expect, test, vi } from 'vp/test'
-import { keyPair } from '~test/Attestation.js'
+import { keyPair } from '~test/Identity.js'
 
-import * as HttpMessageSignature from './attestation/internal/HttpMessageSignature.js'
 import * as Credential from './Credential.js'
+import * as HttpMessageSignature from './extensions/identity/internal/HttpMessageSignature.js'
 import * as Method from './Method.js'
 import { payment } from './middlewares/express.js'
 import * as Mppx from './server/Mppx.js'

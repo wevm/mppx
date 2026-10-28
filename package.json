@@ -116,10 +116,10 @@
       "types": "./dist/client/node.d.ts",
       "default": "./dist/client/node.js"
     },
-    "./attestation": {
-      "src": "./src/attestation/index.ts",
-      "types": "./dist/attestation/index.d.ts",
-      "default": "./dist/attestation/index.js"
+    "./identity": {
+      "src": "./src/identity/index.ts",
+      "types": "./dist/identity/index.d.ts",
+      "default": "./dist/identity/index.js"
     },
     "./discovery": {
       "src": "./src/discovery/index.ts",
@@ -226,15 +226,20 @@
       "types": "./dist/tempo/index.d.ts",
       "default": "./dist/tempo/index.js"
     },
-    "./attestation/tap": {
-      "src": "./src/tap/index.ts",
-      "types": "./dist/tap/index.d.ts",
-      "default": "./dist/tap/index.js"
+    "./extensions/identity": {
+      "src": "./src/extensions/identity/index.ts",
+      "types": "./dist/extensions/identity/index.d.ts",
+      "default": "./dist/extensions/identity/index.js"
     },
-    "./attestation/web-bot-auth": {
-      "src": "./src/web-bot-auth/index.ts",
-      "types": "./dist/web-bot-auth/index.d.ts",
-      "default": "./dist/web-bot-auth/index.js"
+    "./extensions/identity/tap": {
+      "src": "./src/extensions/identity/tap/index.ts",
+      "types": "./dist/extensions/identity/tap/index.d.ts",
+      "default": "./dist/extensions/identity/tap/index.js"
+    },
+    "./extensions/identity/web-bot-auth": {
+      "src": "./src/extensions/identity/web-bot-auth/index.ts",
+      "types": "./dist/extensions/identity/web-bot-auth/index.d.ts",
+      "default": "./dist/extensions/identity/web-bot-auth/index.js"
     },
     "./html": {
       "src": "./src/Html.ts",

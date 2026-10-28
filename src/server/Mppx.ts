@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
-import * as AttestationServer from '../attestation/Server.js'
-import type * as Attestation from '../attestation/Types.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
+import * as IdentityServer from '../identity/Server.js'
+import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
 import type { DeepReadonly, MaybePromise } from '../internal/types.js'
@@ -419,9 +419,20 @@ type IntentHandlers<
     : MultiMethodFn<Extract<methods[number], { intent: intent }>, transport>
 }
 
+/**
+ * Route identity option. HTTP routes accept identity verifiers, all of which must be valid;
+ * use `Identity.anyOf` to accept one of several protocols. Other transports reject it.
+ */
+type RouteIdentity<transport extends Transport.AnyTransport> =
+  Transport.InputOf<transport> extends Request
+    ? Transport.ChallengeOutputOf<transport> extends Response
+      ? { identity?: readonly Identity.Verifier[] | undefined }
+      : { identity?: never }
+    : { identity?: never }
+
 /** Handler for an intent with multiple methods - takes the intersection of all methods' options. */
 type MultiMethodFn<methods extends Method.AnyServer, transport extends Transport.AnyTransport> = (
-  options: UnionToIntersection<MultiMethodFnDistribute<methods>>,
+  options: UnionToIntersection<MultiMethodFnDistribute<methods>> & RouteIdentity<transport>,
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 
 type MultiMethodFnDistribute<M> =
@@ -530,7 +541,6 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    attestation,
     requiresAuth,
     realm = Env.get('realm'),
     selectOffers,
@@ -538,6 +548,15 @@ export function create<
     transport = Transport.http({ requiresAuth }) as transport,
   } = config
   const credentialHeader = requiresAuth ? Constants.Headers.paymentAuthorization : undefined
+  if ('attestation' in config)
+    throw new TypeError(
+      'Mppx server `attestation` was replaced by per-route `identity`: pass `identity: [verifier]` to each route.',
+    )
+  // Identity is configured per route; a top-level option would otherwise be ignored (fail open).
+  if ('identity' in config)
+    throw new TypeError(
+      'Mppx server identity is configured per route: pass `identity: [verifier]` to each route.',
+    )
 
   if (!secretKey) {
     throw new Error(
@@ -548,9 +567,6 @@ export function create<
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
-  const verifyAttestation = attestation
-    ? createAttestationGuard(attestation as Attestation.VerifierMap)
-    : undefined
 
   const handlers: Record<string, unknown> = {}
   const methodHandlers = new Map<Method.AnyServer, AnyMethodFn>()
@@ -583,7 +599,6 @@ export function create<
 
   for (const mi of methods) {
     const fn = createMethodFn({
-      ...(verifyAttestation && { attest: verifyAttestation }),
       authorize: mi.authorize as never,
       credentialHeader,
       defaults: mi.defaults,
@@ -1063,8 +1078,6 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** Request-attestation verifiers required before handling an HTTP payment request. */
-    attestation?: transport extends Transport.Http ? Attestation.VerifierMap | undefined : never
     /** Array of configured methods. @example [tempo()] */
     methods: methods
     /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
@@ -1092,7 +1105,6 @@ function createMethodFn<
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
   const {
-    attest,
     authorize,
     credentialHeader,
     defaults,
@@ -1109,7 +1121,28 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     verify,
   } = parameters
 
-  return (options) => {
+  return (routeOptions) => {
+    const { identity = [], ...options } = routeOptions as typeof routeOptions & {
+      identity?: readonly Identity.Verifier[] | undefined
+    }
+    const requestVerifiers = identity.filter(
+      (verifier) => IdentityServer.stageOf(verifier) === 'request',
+    )
+    const paymentVerifiers = identity.filter(
+      (verifier) => IdentityServer.stageOf(verifier) === 'payment',
+    )
+    // Preflight hooks (e.g. session bootstrap) issue and settle their own challenges, which
+    // payment-stage verifiers cannot see; reject the combination instead of skipping identity.
+    if (paymentVerifiers.length > 0 && preflight)
+      throw new TypeError(
+        `Payment-stage identity is not supported on ${method.name}/${method.intent} routes with a preflight hook.`,
+      )
+    // The HTML checkout cannot answer identity challenges, and it pays before resubmitting, so
+    // a browser would pay and then be rejected.
+    if (paymentVerifiers.length > 0 && method.html)
+      throw new TypeError(
+        `Payment-stage identity is not supported on ${method.name}/${method.intent} routes with the HTML checkout.`,
+      )
     const { description, meta, scope, ...rest } = options
     const staticMeta = Scope.merge({ meta, scope })
     const internal = {
@@ -1127,21 +1160,26 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         ]),
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
+      _paymentIdentity: paymentVerifiers.length > 0,
       _stableBinding: stableBinding as never,
       _transport: transport,
     } as unknown as ConfiguredHandler['_internal']
     Object.defineProperty(internal, '_method', { value: method })
 
     const handler = async (input: Transport.InputOf): Promise<MethodFn.Response> => {
-      if (attest && input instanceof globalThis.Request) {
-        const response = await attest(input)
-        if (response)
-          return {
-            status: 200,
-            withReceipt() {
-              return response
-            },
-          } as MethodFn.Response
+      const identityValues = new Map<Identity.Verifier, unknown>()
+      if (identity.length > 0) {
+        if (!(input instanceof globalThis.Request))
+          throw new TypeError('Route identity requires the HTTP transport.')
+        const outcome = await IdentityServer.verify(input, requestVerifiers)
+        if (outcome.status !== 'valid') {
+          // Returned on the non-200 branch so callers never run paid work: like an early
+          // rejection, `challenge` holds the identity response (401/403) to send as is.
+          const rejection = IdentityServer.toResponse(outcome)
+          identityRejections.add(rejection)
+          return { challenge: rejection, status: 402 } as MethodFn.Response
+        }
+        for (const [verifier, value] of outcome.values) identityValues.set(verifier, value)
       }
 
       if (method.html && isServiceWorkerRequest(input))
@@ -1184,6 +1222,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           if (response.status === 402) return { challenge: response, status: 402 }
           return {
             status: 200,
+            identity: IdentityServer.results(identityValues),
             withReceipt() {
               return response
             },
@@ -1198,12 +1237,35 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         html?: Method.Method['html'] | undefined
         request: Record<string, unknown>
       }) => {
-        const response = await transport.respondChallenge({
+        let response = await transport.respondChallenge({
           challenge: parameters.challenge,
           input,
           ...(parameters.error && { error: parameters.error }),
           ...(parameters.html && { html: parameters.html }),
         })
+        // Payment-stage verifiers add their own challenge headers to the 402.
+        if (
+          paymentVerifiers.length > 0 &&
+          input instanceof globalThis.Request &&
+          response instanceof globalThis.Response
+        ) {
+          const outcome = await IdentityServer.verify(input, paymentVerifiers, {
+            challenge: parameters.challenge,
+          })
+          const identityHeaders = new Headers()
+          if (outcome.status !== 'valid')
+            for (const [name, value] of outcome.headers) identityHeaders.append(name, value)
+          if ([...identityHeaders].length > 0) {
+            const headers = new Headers(response.headers)
+            for (const [name, value] of identityHeaders) headers.append(name, value)
+            response = new globalThis.Response(response.body, {
+              headers,
+              status: response.status,
+              statusText: response.statusText,
+            }) as typeof response
+            identityChallenges.set(response as globalThis.Response, identityHeaders)
+          }
+        }
         if (isIssuedChallengeResponse(response))
           await events.emit(
             'challenge.created',
@@ -1353,6 +1415,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         const result = {
           status: 200,
           challenge,
+          identity: IdentityServer.results(identityValues),
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
@@ -1381,7 +1444,20 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
       // No credential provided—issue challenge
       if (!credential) {
-        if (authorize && input instanceof globalThis.Request) {
+        // Authorization without a payment credential still requires payment-stage identity;
+        // a verifier that needs the credential reports missing, so the route issues its 402.
+        const authorizeIdentity =
+          authorize && input instanceof globalThis.Request && paymentVerifiers.length > 0
+            ? await IdentityServer.verify(input, paymentVerifiers, { challenge })
+            : undefined
+        if (
+          authorize &&
+          input instanceof globalThis.Request &&
+          (!authorizeIdentity || authorizeIdentity.status === 'valid')
+        ) {
+          if (authorizeIdentity?.status === 'valid')
+            for (const [verifier, value] of authorizeIdentity.values)
+              identityValues.set(verifier, value)
           try {
             const authorized = await authorize({
               challenge,
@@ -1565,6 +1641,33 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         request: parsedRequest,
       })
 
+      // Payment-stage identity is checked against the answered challenge before settlement.
+      if (paymentVerifiers.length > 0) {
+        const outcome = await IdentityServer.verify(input as globalThis.Request, paymentVerifiers, {
+          challenge: credential.challenge,
+          credential: parsedCredential,
+        })
+        if (outcome.status !== 'valid') {
+          const error = new Errors.VerificationFailedError({ reason: outcome.reason })
+          await emitPaymentFailed({
+            challenge,
+            credential: parsedCredential,
+            error,
+            request: parsedRequest,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
+          // The client may already have pushed this payment, so a fresh 402 would invite
+          // it to pay again. Reject without a challenge, like a replayed credential.
+          // Returned on the non-200 branch so callers never run paid work: like an early
+          // rejection, `challenge` holds the identity response (401/403) to send as is.
+          const rejection = IdentityServer.toResponse(outcome)
+          identityRejections.add(rejection)
+          return { challenge: rejection, status: 402 } as MethodFn.Response
+        }
+        for (const [verifier, value] of outcome.values) identityValues.set(verifier, value)
+      }
+
       // User-provided verification (e.g., check signature, submit tx, verify payment).
       // If verification fails, re-issue the challenge so the client can retry.
       let receiptData: Receipt.Receipt
@@ -1665,9 +1768,16 @@ function createChallengeFn(parameters: {
   const { credentialHeader, defaults, method, realm, secretKey } = parameters
 
   return async (options) => {
-    const { description, meta, scope, ...rest } = options as {
+    const {
+      description,
+      identity: _,
+      meta,
+      scope,
+      ...rest
+    } = options as {
       description?: string
       expires?: z.DatetimeInput
+      identity?: unknown
       meta?: Record<string, string>
       scope?: string
       [key: string]: unknown
@@ -1699,7 +1809,6 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
-    attest?: (request: globalThis.Request) => Promise<globalThis.Response | undefined>
     authorize?: Method.AuthorizeFn<method>
     credentialHeader?: string | undefined
     defaults?: defaults
@@ -1722,39 +1831,6 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = MethodFn<method, transport, defaults>
-}
-
-function createAttestationGuard(verifiers: Attestation.VerifierMap) {
-  const entries = Object.entries(verifiers)
-  if (entries.length === 0)
-    throw new TypeError('Mppx server attestation must configure at least one verifier.')
-
-  const cache = new WeakMap<globalThis.Request, Promise<globalThis.Response | undefined>>()
-  return (request: globalThis.Request): Promise<globalThis.Response | undefined> => {
-    const cached = cache.get(request)
-    if (cached) return cached
-
-    const verification = AttestationServer.verify(request, verifiers).then((outcomes) => {
-      for (const [name, outcome] of Object.entries(outcomes))
-        if (outcome.status === 'invalid')
-          return new globalThis.Response(
-            `Request attestation "${name}" is invalid: ${outcome.reason}`,
-            { status: 401 },
-          )
-
-      for (const [name, outcome] of Object.entries(outcomes)) {
-        if (outcome.status === 'verified') continue
-        const reason =
-          outcome.status === 'unverified'
-            ? `Request attestation "${name}" could not be verified: ${outcome.reason}`
-            : `Request attestation "${name}" is required.`
-        return new globalThis.Response(reason, { status: 403 })
-      }
-      return undefined
-    })
-    cache.set(request, verification)
-    return verification
-  }
 }
 
 type ServerEventDispatcher<
@@ -2555,7 +2631,7 @@ export type MethodFn<
   transport extends Transport.AnyTransport,
   defaults extends Record<string, unknown>,
 > = (
-  options: MethodFn.Options<method, defaults>,
+  options: MethodFn.Options<method, defaults> & RouteIdentity<transport>,
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 /** @internal */
 export type AnyMethodFn = (options: any) => (input: any) => Promise<any>
@@ -2587,6 +2663,8 @@ declare namespace MethodFn {
         status: 200
         /** Canonical challenge resolved from the selected route's terms, when available. */
         challenge?: Challenge.Challenge | undefined
+        /** Verified identity values for the route's verifiers. */
+        identity?: Identity.Results | undefined
         withReceipt: Transport.WithReceipt<transport>
       }
 }
@@ -2606,6 +2684,8 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     scope?: string | undefined
     _canonicalRequest: Record<string, unknown>
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
+    /** Whether the offer requires payment-stage identity. */
+    _paymentIdentity?: boolean | undefined
     _transport: Transport.AnyTransport
   }
 }
@@ -2625,6 +2705,18 @@ type HandlerDiscoveryMetadata =
   | NonNullable<ComposedHandler['_internal']>
 
 const paymentAuthChallengeHeader = Constants.Headers.wwwAuthenticate
+
+/** Payment-stage identity headers added to issued 402 responses, keyed by response. @internal */
+const identityChallenges = new WeakMap<globalThis.Response, Headers>()
+
+/** Identity rejections (401/403) returned on a route's non-success branch. @internal */
+const identityRejections = new WeakSet<globalThis.Response>()
+
+/** Records a merged 402's identity challenge so an outer composer can forward it. @internal */
+function withIdentityChallenge(response: Response, headers: Headers | undefined): Response {
+  if (headers) identityChallenges.set(response, headers)
+  return response
+}
 
 const challengeHeaderMerges = [
   {
@@ -2652,19 +2744,22 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
   | {
       [i in keyof methods]: readonly [
         methods[i],
-        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>> &
+          RouteIdentity<Transport.Http>,
       ]
     }[number]
   | {
       [i in keyof methods]: readonly [
         `${methods[i]['name']}/${methods[i]['intent']}`,
-        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>> &
+          RouteIdentity<Transport.Http>,
       ]
     }[number]
   | {
       [i in keyof methods]: readonly [
         MethodFn<methods[i], any, any> & { _method: methods[i] },
-        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>> &
+          RouteIdentity<Transport.Http>,
       ]
     }[number]
 
@@ -2734,6 +2829,11 @@ function composeHandlers(
     return internal?.selectOffers === selectOffers ? (internal?.handlers ?? [handler]) : [handler]
   })
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
+  // A 402 carries one identity challenge, bound to one payment challenge.
+  if (handlers.flatMap(getConfiguredOffers).filter((offer) => offer._paymentIdentity).length > 1)
+    throw new TypeError(
+      'A composed route can include at most one offer with payment-stage identity.',
+    )
 
   const offerSelector = selectOffers
   const offerEntries = handlers.map((handler) => {
@@ -2869,13 +2969,20 @@ function composeHandlers(
 
     // No credential — evaluate handlers sequentially so authorize()/renewal hooks
     // can safely claim the request without racing each other.
+    // An identity rejection from one offer does not hide the others: it is returned only
+    // when no offer issued a payment challenge.
     const results: MethodFn.Response<Transport.Http>[] = []
     for (const handler of selectedHandlers) {
       const result = transportResults.get(handler) ?? (await handler(input))
       if (result.status === 200) return result
-      if (result.challenge.status !== 402) return result
+      const rejected = identityRejections.has(result.challenge as Response)
+      if (result.challenge.status !== 402 && !rejected) return result
       results.push(result)
     }
+    const offers = results.filter(
+      (result) => result.status === 402 && !identityRejections.has(result.challenge as Response),
+    )
+    if (offers.length === 0 && results[0]) return results[0]
 
     const challengeEntries = (() => {
       const entries: {
@@ -2887,6 +2994,8 @@ function composeHandlers(
       for (let i = 0; i < selectedHandlers.length; i++) {
         const result = results[i]
         if (result?.status !== 402) continue
+        // Identity rejections may carry non-Payment challenges (e.g. Bearer); they are not offers.
+        if (identityRejections.has(result.challenge as Response)) continue
 
         const response = result.challenge as Response
         const wwwAuth = response.headers.get(paymentAuthChallengeHeader)
@@ -2916,9 +3025,8 @@ function composeHandlers(
       }
     })()
 
-    const challengeResponses = results.flatMap((result) =>
-      result.status === 402 ? [result.challenge as Response] : [],
-    )
+    const challengeResponses = offers.map((result) => result.challenge as Response)
+
     const unnegotiatedX402Responses =
       input.headers.has(Constants.Headers.acceptPayment) || challengeEntries.length === 0
         ? []
@@ -2934,6 +3042,11 @@ function composeHandlers(
             ...unnegotiatedX402Responses,
           ]
         : challengeResponses
+    // At most one offer carries an identity challenge (enforced when composing); forward it
+    // only if its payment challenge is still advertised after negotiation.
+    const identityHeaders = negotiatedChallengeResponses
+      .map((response) => identityChallenges.get(response))
+      .find((headers) => headers !== undefined)
 
     // Merge challenge headers from the negotiated 402 responses.
     const mergedHeaders = new Headers()
@@ -2950,6 +3063,11 @@ function composeHandlers(
         mergedHeaders.append(header.name, value)
       }
     }
+
+    // Identity WWW-Authenticate values already arrive in the merged offer value above.
+    if (identityHeaders)
+      for (const [name, value] of identityHeaders)
+        if (name !== paymentAuthChallengeHeader.toLowerCase()) mergedHeaders.append(name, value)
 
     // Collect html-enabled handlers and their challenges
     const htmlEntries = challengeEntries.filter((entry) => entry.handler._internal?.html)
@@ -2995,7 +3113,10 @@ function composeHandlers(
 
       return {
         status: 402,
-        challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+        challenge: withIdentityChallenge(
+          new Response(body, { status: 402, headers: mergedHeaders }),
+          identityHeaders,
+        ),
       }
     }
 
@@ -3017,7 +3138,10 @@ function composeHandlers(
 
     return {
       status: 402,
-      challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+      challenge: withIdentityChallenge(
+        new Response(body, { status: 402, headers: mergedHeaders }),
+        identityHeaders,
+      ),
     }
   }
 

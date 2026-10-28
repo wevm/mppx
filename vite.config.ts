@@ -9,9 +9,13 @@ import { tempoSuites } from './test/runtime/tempo-suites.js'
 // Shared aliases used by both projects
 const alias = {
   'next/server': path.resolve(import.meta.dirname, 'node_modules/next/server.js'),
-  'mppx/attestation/tap': path.resolve(import.meta.dirname, 'src/tap'),
-  'mppx/attestation/web-bot-auth': path.resolve(import.meta.dirname, 'src/web-bot-auth'),
-  'mppx/attestation': path.resolve(import.meta.dirname, 'src/attestation'),
+  'mppx/extensions/identity/tap': path.resolve(import.meta.dirname, 'src/extensions/identity/tap'),
+  'mppx/extensions/identity/web-bot-auth': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/web-bot-auth',
+  ),
+  'mppx/extensions/identity': path.resolve(import.meta.dirname, 'src/extensions/identity'),
+  'mppx/identity': path.resolve(import.meta.dirname, 'src/identity'),
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
   'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
   'mppx/mcp/client': path.resolve(import.meta.dirname, 'src/mcp/client'),
