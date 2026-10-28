@@ -32,12 +32,12 @@ import type * as AccountResolution from './ResolveAccount.js'
  * capped at the challenge expiry.
  *
  * Fee payers require at least `defaults.minRemainingValiditySeconds` (15s) of
- * remaining validity when they co-sign, so a 30s window leaves about 15s for
- * clock skew between client and server, signing and round trips. It stays within
- * the server's default 30s confirmation timeout, so a transaction the server
- * stopped waiting for can't be mined after a new challenge is paid.
+ * remaining validity when they co-sign, so a 25s window leaves about 10s for
+ * clock skew between client and server, signing and round trips. It stays inside
+ * the server's default 30s confirmation timeout and within sponsor policies whose
+ * `maxValidityWindowSeconds` is 25 or more.
  */
-export const validityWindowSeconds = 30
+export const validityWindowSeconds = 25
 
 /** Runtime context accepted by the Tempo charge client method. */
 export type ChargeContext = {

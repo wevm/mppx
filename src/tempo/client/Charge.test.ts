@@ -971,14 +971,14 @@ describe('tempo.charge client', () => {
     const at = (seconds: number) => new Date(seconds * 1000).toISOString()
 
     test.each([
-      { label: 'no challenge expiry', now: base, expires: undefined, expected: base + 30 },
-      { label: 'expiry after the window', now: base, expires: at(base + 120), expected: base + 30 },
-      { label: 'expiry at the window', now: base, expires: at(base + 30), expected: base + 30 },
+      { label: 'no challenge expiry', now: base, expires: undefined, expected: base + 25 },
+      { label: 'expiry after the window', now: base, expires: at(base + 120), expected: base + 25 },
+      { label: 'expiry at the window', now: base, expires: at(base + 25), expected: base + 25 },
       {
         label: 'expiry just inside the window',
         now: base,
-        expires: at(base + 25),
-        expected: base + 26,
+        expires: at(base + 20),
+        expected: base + 21,
       },
       { label: 'expiry inside the window', now: base, expires: at(base + 10), expected: base + 11 },
       { label: 'fractional expiry', now: base, expires: at(base + 10.5), expected: base + 11 },
