@@ -437,13 +437,13 @@ type MultiMethodFn<methods extends Method.AnyServer, transport extends Transport
 
 /**
  * Intersected options of every method for an intent. When a method's options can't be inferred,
- * the intersection is `unknown`; fall back to any options so `RouteIdentity` doesn't turn it into
- * an object that rejects every option but `identity`.
+ * the intersection is `unknown`; fall back to any object (interfaces included) so `RouteIdentity`
+ * doesn't turn it into an object that rejects every option but `identity`.
  */
 type MultiMethodOptions<methods extends Method.AnyServer> =
   UnionToIntersection<MultiMethodFnDistribute<methods>> extends infer options
     ? unknown extends options
-      ? { [key: string]: unknown }
+      ? Record<string, any>
       : options
     : never
 

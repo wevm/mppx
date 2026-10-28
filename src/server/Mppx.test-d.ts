@@ -288,6 +288,15 @@ describe('Mppx type tests', () => {
     expectTypeOf(
       mppx.charge({ amount: '0.50', description: 'Premium API access', identity: [verifier] }),
     ).toBeFunction()
+
+    interface RouteOptions {
+      amount: string
+      description: string
+    }
+    const options: RouteOptions = { amount: '0.50', description: 'Premium API access' }
+    expectTypeOf(mppx.charge(options)).toBeFunction()
+    // @ts-expect-error identity is still typed.
+    mppx.charge({ amount: '0.50', identity: [1] })
   })
 
   test('nested handlers are accessible', () => {
