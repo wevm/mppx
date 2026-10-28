@@ -958,7 +958,21 @@ function snapshotMethod<method extends Method.AnyClient>(method: method): method
 }
 
 function snapshotResponse<response>(response: response): response {
-  if (response instanceof Response) return response.clone() as response
+  if (response instanceof Response) {
+    try {
+      return response.clone() as response
+    } catch {
+      // Consumed or locked bodies cannot be cloned; retain isolated status, headers and URL.
+      const snapshot = new Response(null, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      })
+      for (const key of ['redirected', 'type', 'url'] as const)
+        Object.defineProperty(snapshot, key, { value: response[key] })
+      return snapshot as response
+    }
+  }
   return snapshotValue(response)
 }
 
