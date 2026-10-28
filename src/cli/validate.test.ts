@@ -388,9 +388,12 @@ test('funds the operator and handles the testnet session response', async () => 
     expect(plain.output).toContain('Payment-Receipt header present')
     expect(plain.exitCode).toBe(1)
 
-    // The session client strips the receipt event; validate reads the server's own stream,
-    // including lone-CR line endings.
-    handleResponse.mockImplementation(() => sse('data: {}\n\n'))
+    // The session client consumes the stream and strips the receipt event; validate sees the
+    // receipt as the client reads it, including lone-CR line endings.
+    handleResponse.mockImplementation((async ({ response }: { response: Response }) => {
+      await response.text()
+      return sse('data: {}\n\n')
+    }) as never)
     const streamed = await mppServer(challenge, {
       sse: `data: {}\r\revent: payment-receipt\rdata: ${JSON.stringify(sessionReceipt)}\r\r`,
     })
@@ -1377,3 +1380,58 @@ test.each(['accepted', 'rejected', 'network failure'] as const)(
     }
   },
 )
+
+test('captureEventStream drops the tail of an oversized event', async () => {
+  const { captureEventStream } = await import('./validate/payment.js')
+  const receipt = {
+    acceptedCumulative: '1000',
+    challengeId: 'challenge',
+    channelId: `0x${'11'.repeat(32)}`,
+    intent: 'session',
+    method: 'tempo',
+    reference: `0x${'11'.repeat(32)}`,
+    spent: '1000',
+    status: 'success',
+    timestamp: new Date().toISOString(),
+  }
+  const read = async (chunks: readonly string[]) => {
+    const encoder = new TextEncoder()
+    const capture = captureEventStream(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+              controller.close()
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+    )
+    await (await capture.fetch('https://example.com')).text()
+    return capture.receipt()
+  }
+  const tail = `\nevent: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`
+  expect(await read([`data: ${'x'.repeat(1_100_000)}`, tail])).toBeNull()
+  // A CR boundary split around the overflow still ends the oversized event.
+  expect(
+    await read([
+      `data: ${'x'.repeat(1_048_570)}`,
+      '\r\n\r',
+      '\n',
+      `event: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`,
+    ]),
+  ).toMatchObject({ reference: receipt.reference })
+  // A boundary split across chunks after the drop still ends the oversized event.
+  expect(await read([`data: ${'x'.repeat(1_100_000)}\n`, tail])).toMatchObject({
+    reference: receipt.reference,
+  })
+  expect(
+    await read([
+      'data: {}\r',
+      `\n\r\nevent: payment-receipt\ndata: ${JSON.stringify(receipt)}\r\n\r\n`,
+    ]),
+  ).toMatchObject({
+    reference: receipt.reference,
+  })
+})
