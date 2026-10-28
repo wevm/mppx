@@ -1,5 +1,5 @@
 import { Method, z } from 'mppx'
-import { Mppx, tempo, Transport } from 'mppx/server'
+import { Mppx, stripe, tempo, Transport } from 'mppx/server'
 import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
 import type * as Identity from '../identity/Types.js'
@@ -274,6 +274,29 @@ describe('Mppx type tests', () => {
     })
     // @ts-expect-error identity applies to HTTP routes only.
     mcp.charge({ amount: '1', identity: [verifier] })
+  })
+
+  test('keeps method options on multi-method intents with uninferable options', () => {
+    const verifier = {} as Identity.Verifier<{ keyId: string }>
+    const payments = stripe.create({
+      client: {} as never,
+      livemode: false,
+      networkId: 'profile_123',
+      store: {} as never,
+    })
+    const mppx = Mppx.create({ methods: payments.defaultMethods(), realm, secretKey })
+    expectTypeOf(
+      mppx.charge({ amount: '0.50', description: 'Premium API access', identity: [verifier] }),
+    ).toBeFunction()
+
+    interface RouteOptions {
+      amount: string
+      description: string
+    }
+    const options: RouteOptions = { amount: '0.50', description: 'Premium API access' }
+    expectTypeOf(mppx.charge(options)).toBeFunction()
+    // @ts-expect-error identity is still typed.
+    mppx.charge({ amount: '0.50', identity: [1] })
   })
 
   test('nested handlers are accessible', () => {

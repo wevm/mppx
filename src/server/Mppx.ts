@@ -432,8 +432,20 @@ type RouteIdentity<transport extends Transport.AnyTransport> =
 
 /** Handler for an intent with multiple methods - takes the intersection of all methods' options. */
 type MultiMethodFn<methods extends Method.AnyServer, transport extends Transport.AnyTransport> = (
-  options: UnionToIntersection<MultiMethodFnDistribute<methods>> & RouteIdentity<transport>,
+  options: MultiMethodOptions<methods> & RouteIdentity<transport>,
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
+
+/**
+ * Intersected options of every method for an intent. When a method's options can't be inferred,
+ * the intersection is `unknown`; fall back to any object (interfaces included) so `RouteIdentity`
+ * doesn't turn it into an object that rejects every option but `identity`.
+ */
+type MultiMethodOptions<methods extends Method.AnyServer> =
+  UnionToIntersection<MultiMethodFnDistribute<methods>> extends infer options
+    ? unknown extends options
+      ? Record<string, any>
+      : options
+    : never
 
 type MultiMethodFnDistribute<M> =
   M extends Method.Server<infer method, infer defaults, any, any, any>
