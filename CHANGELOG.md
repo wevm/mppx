@@ -1,5 +1,33 @@
 # mppx
 
+## 0.16.0
+
+### Minor Changes
+
+- 793aa2b: Replaced request attestation with per-route identity. Breaking changes:
+
+  - `mppx/attestation` became `mppx/identity`. Server `Mppx.create({ attestation })` was removed (passing it now throws); routes take `identity: [verifier, ...]` (all required), for example `mppx.charge({ amount, identity: [tap] })`, and the result exposes `result.identity.get(verifier)`.
+  - Added `Identity.anyOf(...)` to accept one of several protocols. Every member runs, so each presented proof is consumed.
+  - Verifiers return `missing`, `invalid` or `valid` (`unverified` became `invalid` with code 403), may set their own status `code` and `headers`, and declare a `stage`: `request` (checked before any 402) or `payment` (adds headers to the 402 and is checked against the answered challenge and credential before settlement). Identity rejections are returned on the non-200 branch as a 401/403 response.
+  - A composed route can include at most one offer with payment-stage identity. Payment-stage identity is not supported on methods with a preflight hook.
+  - Client `attestation` signer maps became `identity: [prover, ...]`. Provers have a required origin `scope`, receive the payment challenge in `prove(request, context)`, and can prepare proofs or request one resend with `retry(response, context)`. Requests that carry proofs do not follow redirects.
+  - TAP and Web Bot Auth moved to `mppx/extensions/identity/tap` and `mppx/extensions/identity/web-bot-auth`; `Client.signer` became `Client.prover`.
+
+### Patch Changes
+
+- e555544: Fixed client payment events masking original errors when a response body had already been consumed or locked.
+- 81a95e1: Fixed multi-method intent handlers rejecting every route option but `identity` when the methods' options can't be inferred, such as `mppx.charge({ amount })` with `stripe.create(...).defaultMethods()`.
+- c31d932: Added optional `summary` and `requestBody` to proxy endpoint definitions, emitted in the proxy's generated `/openapi.json`. Free routes can carry them as `{ free: true, summary, requestBody }`. An endpoint that is neither a payment handler, `true` nor `{ free: true }` (such as `{ pay: undefined }`) now fails closed with an error instead of being proxied.
+- dd2c3e3: Refused to sign a zero-amount Tempo proof when the Challenge realm differs from the hostname of the server that sent it, so another origin can't relay a Challenge and replay the proof at its realm. To allow a server whose realm isn't its hostname, pin the realm to its origin with `trustedTempoProofRealms` on `Mppx.create` and `Fetch.from`, such as `{ 'https://api.example.com': 'MPP Payment' }`. Without an origin (`McpClient.wrap`, or `Mppx.create` with `Transport.mcp()`), these proofs are refused unless `trustedTempoProofRealms` lists the realm. The `mppx` CLI and `sessionManager` bootstrap apply the same check, and `sessionManager` takes `trustedTempoProofRealms` too. This matches mpp-rs, mpp-go and pympp.
+- d78de2c: Fixed missing subscription access-key address indexes when reusing existing keys.
+- 909f3db: Fixed Tempo session top-up, voucher retry, close and bootstrap requests to send the credential in the header the challenge selects (such as `Payment-Authorization` with `requiresAuth`) instead of always using `Authorization`. These requests keep the paid request's own `Authorization` header and no longer follow redirects, so the credential can't reach another origin.
+- 464df9a: Fixed Tempo charge verification rejecting split amounts written with leading zeros by comparing them as integers.
+- 9008513: Removed the `allowKeyAuthorization` fee-payer policy: sponsored transactions may now carry a `keyAuthorization`, so an access key can open a fee-sponsored session (or pay a sponsored charge) in the transaction that installs it. Sponsor exposure stays bounded by `maxGas` and `maxTotalFee`.
+- 4cfd556: Fixed `mppx validate` failing Tempo session responses that stream over SSE: when the receipt arrives in the event stream instead of the `Payment-Receipt` header, validation checks the `payment-receipt` event in the stream instead of requiring the header, and fails when the stream has none.
+- 510d1ed: Fixed `mppx validate` failing valid SSE sessions: the in-stream `payment-receipt` event is now read from the server's own stream, which the session client strips, and lone-CR line endings are accepted.
+- e6d8ffc: Fixed `mppx validate` buffering SSE session streams in memory and hanging when the session client cancelled one: in-stream receipts are now read as the client consumes the stream instead of from an unread copy.
+- 464df9a: Raised the zod dependency to ^4.6.7 to pick up the fix for GHSA-mrhx-c7xc-m3w5.
+
 ## 0.15.0
 
 ### Minor Changes
