@@ -996,27 +996,38 @@ export function captureEventStream(
       // later stream without a receipt must not discard one already seen.
       receipt ??= null
       const decoder = new TextDecoder()
+      // Normalized text of the current partial event; a CR that may start a CRLF is held apart.
       let pending = ''
+      let heldCr = false
       // Set after an oversized event is dropped, until its end, so its remaining lines are
       // never parsed as an event of their own.
       let skipping = false
       const scan = (text: string, done: boolean) => {
-        pending += text
-        // Keep a trailing CR: the next chunk may complete a CRLF.
-        const end = done || !pending.endsWith('\r') ? pending.length : pending.length - 1
-        const events = pending
-          .slice(0, end)
-          .replace(/\r\n|\r/g, '\n')
-          .split('\n\n')
-        const rest = done ? '' : (events.pop() ?? '')
-        if (skipping && (events.length > 0 || done)) {
+        let chunk = heldCr ? `\r${text}` : text
+        heldCr = !done && chunk.endsWith('\r')
+        if (heldCr) chunk = chunk.slice(0, -1)
+        // Only the new text is searched for boundaries, so a long event costs linear time.
+        const from = Math.max(0, pending.length - 1)
+        pending += chunk.replace(/\r\n|\r/g, '\n')
+        const events: string[] = []
+        let start = 0
+        for (let index = pending.indexOf('\n\n', from); index !== -1;) {
+          events.push(pending.slice(start, index))
+          start = index + 2
+          index = pending.indexOf('\n\n', start)
+        }
+        pending = pending.slice(start)
+        if (done) {
+          events.push(pending)
+          pending = ''
+        }
+        if (skipping && events.length > 0) {
           events.shift()
           skipping = false
         }
-        pending = rest + pending.slice(end)
         if (pending.length > maxPendingEventBytes) {
-          // Keep a trailing line ending: it may be the first half of the event's boundary.
-          pending = /[\r\n]*$/.exec(pending)?.[0] ?? ''
+          // Keep a trailing newline: it may be the first half of the event's boundary.
+          pending = pending.endsWith('\n') ? '\n' : ''
           skipping = true
         }
         for (const raw of events) {
