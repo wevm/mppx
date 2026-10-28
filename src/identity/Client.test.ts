@@ -222,3 +222,21 @@ test('wrapFetch binds proofs to the challenge of the credential being sent', asy
   await fetch('https://merchant.example', { method: 'POST' })
   expect(seen).toEqual(['second', 'first'])
 })
+
+test('challenge releases each unread copy after its retry callback', async () => {
+  let cancelled = 0
+  const response = new Response(
+    new ReadableStream({
+      cancel() {
+        cancelled++
+      },
+    }),
+    { status: 402 },
+  )
+  const client = Identity.Client.from([
+    { scope: '*', prove: (request) => request, retry: () => false },
+  ])
+  await client.challenge(response, {}, 'https://merchant.example')
+  await response.body!.cancel()
+  expect(cancelled).toBe(1)
+})

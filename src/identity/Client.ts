@@ -85,11 +85,6 @@ export function from(provers: readonly Types.Prover[]): Client {
         copies.push(copy)
         if (await prover.retry(copy, context)) retry = true
       }
-      // Release unread copies without waiting, so they neither buffer the body nor block a resend.
-      const release = (responses: readonly Response[]) => {
-        for (const unread of responses)
-          if (!unread.bodyUsed) void unread.body?.cancel().catch(() => {})
-      }
       if (!retry) {
         release(copies)
         return result
@@ -98,9 +93,22 @@ export function from(provers: readonly Types.Prover[]): Client {
       return sendOnce(fetch, request, context, false)
     },
     async challenge(response, context, url) {
-      for (const prover of inScope(url)) await prover.retry?.(response.clone(), context)
+      for (const prover of inScope(url)) {
+        if (!prover.retry) continue
+        const copy = response.clone()
+        try {
+          await prover.retry(copy, context)
+        } finally {
+          release([copy])
+        }
+      }
     },
   }
+}
+
+/** Releases unread response copies without waiting, so they neither buffer the body nor block a resend. */
+function release(responses: readonly Response[]) {
+  for (const unread of responses) if (!unread.bodyUsed) void unread.body?.cancel().catch(() => {})
 }
 
 /**
