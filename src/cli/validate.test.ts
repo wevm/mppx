@@ -335,8 +335,21 @@ test('funds the operator and handles the testnet session response', async () => 
       },
     },
   )
-  const handleResponse = vi.fn(
-    () => new Response('data: {}\n\n', { headers: { 'content-type': 'Text/Event-Stream' } }),
+  const sessionReceipt = {
+    acceptedCumulative: '1000',
+    challengeId: 'challenge',
+    channelId: `0x${'11'.repeat(32)}`,
+    intent: 'session',
+    method: 'tempo',
+    reference: `0x${'11'.repeat(32)}`,
+    spent: '1000',
+    status: 'success',
+    timestamp: new Date().toISOString(),
+  }
+  const sse = (body: string) =>
+    new Response(body, { headers: { 'content-type': 'Text/Event-Stream' } })
+  const handleResponse = vi.fn(() =>
+    sse(`data: {}\n\nevent: payment-receipt\ndata: ${JSON.stringify(sessionReceipt)}\n\n`),
   )
   MethodResponse.register(method, handleResponse)
   const methods = vi.spyOn(Tempo, 'tempo').mockReturnValue([method] as never)
@@ -355,8 +368,13 @@ test('funds the operator and handles the testnet session response', async () => 
     })
     expect(handleResponse).toHaveBeenCalledOnce()
     expect(output).toContain('Payment: successful')
-    expect(output).toContain('Receipt validation (SSE receipts are delivered in the stream)')
+    expect(output).toContain('Payment receipt in event stream')
     expect(exitCode ?? 0).toBe(0)
+
+    handleResponse.mockImplementation(() => sse('data: {}\n\n'))
+    const missing = await serve(['validate', server.url])
+    expect(missing.output).toContain('Payment receipt in event stream')
+    expect(missing.exitCode).toBe(1)
 
     handleResponse.mockImplementation(
       () => new Response('{}', { headers: { 'content-type': 'application/json' } }),

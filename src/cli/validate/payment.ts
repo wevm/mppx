@@ -24,7 +24,7 @@ import * as Receipt from '../../Receipt.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
 import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js'
-import { isEventStream } from '../../tempo/session/precompile/Protocol.js'
+import { isEventStream, parseEvent } from '../../tempo/session/precompile/Protocol.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import type * as Extension from '../Extension.js'
@@ -825,8 +825,24 @@ async function validatePaymentResponse(
   // Validate receipt
   const contentType = paymentResponse.headers.get('content-type') ?? ''
   const receiptHeader = paymentResponse.headers.get(Constants.Headers.paymentReceipt)
-  if (!receiptHeader && session && isEventStream(paymentResponse)) {
-    results.push(skip('Receipt validation', 'SSE receipts are delivered in the stream'))
+  const stream = !receiptHeader && session && isEventStream(paymentResponse)
+  const body = await paymentResponse.text().catch(() => '')
+  if (stream) {
+    // SSE sessions deliver the receipt as a final payment-receipt event instead of a header.
+    const receipt = body
+      .split(/\r?\n\r?\n/)
+      .map((event) => parseEvent(event.replace(/\r\n/g, '\n')))
+      .find((event) => event?.type === 'payment-receipt')
+    if (receipt?.type === 'payment-receipt')
+      results.push(check('Payment receipt in event stream', receipt.data.reference))
+    else
+      results.push(
+        fail(
+          'Payment receipt in event stream',
+          undefined,
+          'SSE session responses without a Payment-Receipt header must end with an "event: payment-receipt" carrying the session receipt.',
+        ),
+      )
   } else if (!receiptHeader) {
     results.push(
       fail(
@@ -878,8 +894,6 @@ async function validatePaymentResponse(
   }
 
   // Validate response body
-  const body = await paymentResponse.text().catch(() => '')
-
   if (body.length > 0) {
     results.push(
       check('Response body non-empty', `${contentType.split(';')[0]}, ${formatBytes(body.length)}`),
