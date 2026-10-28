@@ -33,8 +33,6 @@ export const callScopes = [
 ]
 
 export type Policy = {
-  /** Allows a sponsored transaction to install a new access key. @default false */
-  allowKeyAuthorization: boolean
   maxGas: bigint
   maxFeePerGas: bigint
   maxPriorityFeePerGas: bigint
@@ -338,7 +336,6 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
  * swap transactions at peak gas prices. Bumped from 0.01 ETH in #327.
  */
 const defaultPolicy: Policy = {
-  allowKeyAuthorization: false,
   maxGas: 2_000_000n,
   maxFeePerGas: 100_000_000_000n,
   maxPriorityFeePerGas: 10_000_000_000n,
@@ -360,7 +357,6 @@ function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Pol
   if (!overrides) return base
 
   return {
-    allowKeyAuthorization: overrides.allowKeyAuthorization ?? base.allowKeyAuthorization,
     maxGas: overrides.maxGas ?? base.maxGas,
     maxFeePerGas: overrides.maxFeePerGas ?? base.maxFeePerGas,
     maxPriorityFeePerGas: overrides.maxPriorityFeePerGas ?? base.maxPriorityFeePerGas,
@@ -646,9 +642,6 @@ export function assertTransactionPolicy(parameters: {
     })
 
   assertCanonicalSponsoredTransaction(transaction, fail)
-
-  if (transaction.keyAuthorization !== undefined && !policy.allowKeyAuthorization)
-    fail('fee-sponsored transaction keyAuthorization is not allowed')
 
   if (gas === undefined || gas <= 0n) fail('fee-sponsored transaction must declare gas')
   const gasLimit = gas

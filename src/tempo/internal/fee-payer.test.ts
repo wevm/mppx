@@ -1184,28 +1184,7 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
   })
 
-  test('rejects keyAuthorization by default', () => {
-    const keyAuthorization = {
-      address: bogus,
-      chainId: 42431,
-      nonce: 1n,
-      r: 1n,
-      s: 2n,
-      yParity: 0,
-    }
-
-    expect(() =>
-      prepareSponsoredTransaction({
-        account: sponsor,
-        chainId: 42431,
-        details,
-        allowedFeeTokens: [bogus],
-        transaction: { ...baseTransaction, keyAuthorization } as any,
-      }),
-    ).toThrow('keyAuthorization is not allowed')
-  })
-
-  test('preserves keyAuthorization when explicitly allowed', () => {
+  test('preserves keyAuthorization', () => {
     const keyAuthorization = {
       address: bogus,
       chainId: 42431,
@@ -1220,7 +1199,6 @@ describe('prepareSponsoredTransaction', () => {
       chainId: 42431,
       details,
       allowedFeeTokens: [bogus],
-      policy: { allowKeyAuthorization: true },
       transaction: { ...baseTransaction, keyAuthorization } as any,
     }) as { keyAuthorization?: unknown }
 
