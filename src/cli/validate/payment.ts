@@ -991,7 +991,9 @@ function captureEventStream(
         response.headers.has(Constants.Headers.paymentReceipt)
       )
         return response
-      receipt = null
+      // Session management requests (such as mid-stream voucher posts) share this fetch, so a
+      // later stream without a receipt must not discard one already seen.
+      receipt ??= null
       const decoder = new TextDecoder()
       let pending = ''
       const scan = (text: string, done: boolean) => {
