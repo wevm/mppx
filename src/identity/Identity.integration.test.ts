@@ -589,6 +589,38 @@ test('rewrapping an identity-enabled fetch keeps its provers', async () => {
   expect(seen).toEqual(['p'])
 })
 
+test('a client without identity does not inherit provers from a polyfilled global fetch', async () => {
+  const original = globalThis.fetch
+  const seen: (string | null)[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(new Request(input, init).headers.get('X-Proof'))
+    return new Response('ok')
+  }) as typeof globalThis.fetch
+  try {
+    ClientMppx.create({
+      identity: [
+        {
+          scope: '*',
+          prove(request) {
+            const headers = new Headers(request.headers)
+            headers.set('X-Proof', 'p')
+            return new Request(request, { headers })
+          },
+        },
+      ],
+      methods: [clientMethod],
+    })
+    const second = ClientMppx.create({ methods: [clientMethod], polyfill: false })
+    await second.fetch('https://merchant.example/resource')
+    ClientMppx.create({ methods: [clientMethod] })
+    await globalThis.fetch('https://merchant.example/resource')
+    expect(seen).toEqual([null, null])
+  } finally {
+    ClientMppx.restore()
+    globalThis.fetch = original
+  }
+})
+
 function now() {
   return Math.floor(Date.now() / 1_000)
 }

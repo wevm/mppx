@@ -257,7 +257,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     trustedTempoProofRealms,
   } = config
   // Rewrapping an mppx fetch keeps its identity provers unless new ones are configured.
-  const identity = config.identity ?? identityOf(fetch)
+  // Only an explicitly passed mppx fetch hands down its provers; the global fetch never does.
+  const identity = config.identity ?? (config.fetch && identityOf(config.fetch))
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
@@ -696,7 +697,8 @@ export function polyfill<const methods extends readonly Method.AnyClient[]>(
   globalThis.fetch = from({
     ...config,
     acceptPaymentPolicy: config.acceptPaymentPolicy ?? (isBrowser() ? 'same-origin' : 'always'),
-    fetch: globalThis.fetch,
+    // Unwrapped so a previous polyfill's identity provers are not inherited.
+    fetch: unwrapFetch(globalThis.fetch),
   }) as typeof globalThis.fetch
 }
 
