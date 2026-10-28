@@ -23,6 +23,9 @@ export type Client = {
   challenge: (response: Response, context: Types.Context, url: string) => Promise<void>
 }
 
+/** x402 credential headers (v2 and v1); a request carrying one is a paid attempt. */
+const x402CredentialHeaders = ['payment-signature', 'x-payment'] as const
+
 /**
  * Creates the client runner for a list of provers.
  *
@@ -65,10 +68,12 @@ export function from(provers: readonly Types.Prover[]): Client {
 
   return {
     async send(fetch, request, context = {}) {
-      // A paid attempt (a challenge in context, or a Payment credential the caller attached) is
-      // never resent: its credential may already have settled, and replaying it could pay again.
+      // A paid attempt (a challenge in context, or a Payment or x402 credential the caller
+      // attached) is never resent: its credential may already have settled, and replaying it
+      // could pay again.
       const paid =
         context.challenge !== undefined ||
+        x402CredentialHeaders.some((name) => request.headers.has(name)) ||
         [...request.headers.values()].some(
           (value) => Credential.extractPaymentScheme(value) !== null,
         )

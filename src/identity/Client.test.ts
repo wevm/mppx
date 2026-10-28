@@ -240,3 +240,17 @@ test('challenge releases each unread copy after its retry callback', async () =>
   await response.body!.cancel()
   expect(cancelled).toBe(1)
 })
+
+test('never resends a request carrying an x402 credential', async () => {
+  const retry = vi.fn(() => true)
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  for (const name of ['PAYMENT-SIGNATURE', 'X-PAYMENT']) {
+    const fetch = vi.fn(async () => new Response('denied', { status: 403 }))
+    await client.send(
+      fetch as never,
+      new Request('https://merchant.example', { headers: { [name]: 'signed' } }),
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+  }
+  expect(retry).not.toHaveBeenCalled()
+})
