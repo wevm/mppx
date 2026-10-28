@@ -74,7 +74,8 @@ function apply() {
     overridePath,
     updateWorkspace(fs.readFileSync(overridePath, 'utf8'), currentFixes),
   )
-  run(env('INSTALL_COMMAND', 'pnpm install'))
+  // The override change must update the lockfile; CI installs are frozen by default.
+  run(`${env('INSTALL_COMMAND', 'pnpm install')} --no-frozen-lockfile`)
 
   const remaining = audit()
   output('fixable', String(remaining.length === 0))
