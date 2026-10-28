@@ -728,6 +728,8 @@ export type SessionManagerRuntime = RuntimeState & {
   lastChallenge: TempoSessionChallenge | null
   /** Last HTTP resource URL usable for management POSTs. */
   lastUrl: RequestInfo | URL | null
+  /** Headers of the last HTTP request, whose application Authorization management POSTs keep. */
+  lastHeaders?: HeadersInit | undefined
   /** Active WebSocket payment session bookkeeping, when a socket is open. */
   socketSession: ActiveSocketSession | null
 }

@@ -434,7 +434,7 @@ export function session(parameters: session.Parameters = {}) {
 
       return wrapSseResponse({
         onNeedVoucher: (event, streamSignal) =>
-          handleSseNeedVoucher({ challenge, driver, input, signal: streamSignal }, event),
+          handleSseNeedVoucher({ challenge, driver, headers, input, signal: streamSignal }, event),
         onReceipt() {},
         response,
         signal,

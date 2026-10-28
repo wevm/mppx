@@ -7,6 +7,7 @@ import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as ProofRealm from '../../../client/internal/ProofRealm.js'
+import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -531,13 +532,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         challenge: challenge as never,
         context: {},
       })
-      const response = await config.fetch(bootstrapInput, {
-        ...headInit,
-        headers: {
-          ...Fetch.normalizeHeaders(headInit.headers),
-          [Constants.Headers.authorization]: credential,
-        },
-      })
+      const response = await config.fetch(
+        bootstrapInput,
+        // Runtimes do not strip custom payment headers on cross-origin redirects.
+        setCredentialHeader(
+          { ...headInit, redirect: 'manual' },
+          Challenge.credentialHeader(challenge),
+          credential,
+        ),
+      )
       if (response.ok) return await storeSnapshotHeader(response)
       return undefined
     } catch {
@@ -682,6 +685,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     challenge: TempoSessionChallenge
     channelId: Hex.Hex
     input: RequestInfo | URL
+    headers?: HeadersInit | undefined
     knownDeposit?: bigint | undefined
     signal?: AbortSignal | undefined
   }) {
@@ -837,6 +841,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
       )
     runtime.lastUrl = input
+    runtime.lastHeaders = init?.headers
 
     const previous = captureRuntimeStateSnapshot({
       channel: runtime.channel,
@@ -926,6 +931,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       createSessionCredential,
       fetch: config.fetch,
       getMinimumSpent: () => runtime.spent,
+      headers: runtime.lastHeaders,
       lastUrl: runtime.lastUrl,
       resolveSignedCloseAmount: (challenge) =>
         getValidatedFallbackCloseAmount(target, challenge, true),
@@ -1001,6 +1007,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           additionalDeposit: target.additionalDeposit,
           challenge: target.challenge,
           channelId: target.channelId,
+          headers: runtime.lastHeaders,
           input: target.input,
         })
       })

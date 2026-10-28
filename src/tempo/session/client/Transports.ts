@@ -2,6 +2,7 @@ import { Hex } from 'ox'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
+import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
 import * as PaymentCredential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -226,6 +227,8 @@ export type TopUpRequirement = {
   deposit: bigint
   /** Original paid resource URL; converted to a management URL by the caller. */
   input: RequestInfo | URL
+  /** Headers of the paid request; management posts keep its application `Authorization`. */
+  headers?: HeadersInit | undefined
   /** Minimum cumulative voucher amount the server needs. */
   requiredCumulative: bigint
   /** Cancels nested management requests for this top-up. */
@@ -312,6 +315,8 @@ export type ResolveNeedVoucherContextParameters = {
   getChannel(): ChannelEntry | null
   /** Original paid resource URL; converted to management URL by the caller. */
   input: RequestInfo | URL
+  /** Headers of the paid request; management posts keep its application `Authorization`. */
+  headers?: HeadersInit | undefined
   /** Cancels top-up work triggered by this event. */
   signal?: AbortSignal | undefined
   /** Performs the deposit top-up when server-required cumulative exceeds deposit. */
@@ -423,6 +428,7 @@ export async function resolveNeedVoucherContext(
   await parameters.topUpIfNeeded({
     challenge: parameters.challenge,
     input: parameters.input,
+    headers: parameters.headers,
     channelId: parameters.expectedChannelId,
     deposit: eventAmounts.deposit,
     requiredCumulative: eventAmounts.requiredCumulative,
@@ -479,6 +485,8 @@ export type PostTopUpParameters = {
   fetch: typeof globalThis.fetch
   /** Original paid resource URL; normalized to a management URL before posting. */
   input: RequestInfo | URL
+  /** Headers of the paid request; management posts keep its application `Authorization`. */
+  headers?: HeadersInit | undefined
   /** Cancels the top-up management request. */
   signal?: AbortSignal | undefined
   /** Persists an unresolved funding outcome before another caller can reuse the channel. */
@@ -525,6 +533,8 @@ export type CloseHttpSessionParameters = {
   fetch: typeof globalThis.fetch
   /** Last paid resource URL; used as the management endpoint base. */
   lastUrl: RequestInfo | URL | null
+  /** Headers of the last paid request; the close post keeps its application `Authorization`. */
+  headers?: HeadersInit | undefined
   /** Returns the latest cumulative spend already confirmed by the client. */
   getMinimumSpent?: (() => bigint) | undefined
   /** Resolves the close amount again when the server refreshes the challenge. */
@@ -567,21 +577,27 @@ export function getSessionSnapshot(challenge: TempoSessionChallenge): SessionSna
   )
 }
 
-/** Merges request headers and sets the payment authorization header for a retry. */
+/** Merges request headers and sets the challenge's credential header for a retry. */
 export function requestInitWithAuthorization(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
   credential: string,
+  challenge: TempoSessionChallenge,
 ): RequestInit {
   const requestHeaders = input instanceof Request ? input.headers : undefined
-  return {
-    ...init,
-    headers: {
-      ...Fetch.normalizeHeaders(requestHeaders),
-      ...Fetch.normalizeHeaders(init?.headers),
-      [Constants.Headers.authorization]: credential,
+  return setCredentialHeader(
+    {
+      ...init,
+      // Runtimes do not strip custom payment headers on cross-origin redirects.
+      redirect: 'manual',
+      headers: {
+        ...Fetch.normalizeHeaders(requestHeaders),
+        ...Fetch.normalizeHeaders(init?.headers),
+      },
     },
-  }
+    Challenge.credentialHeader(challenge),
+    credential,
+  )
 }
 
 /** Returns the exact resource URL used for out-of-band management POSTs, without its fragment. */
@@ -656,6 +672,7 @@ export async function postTopUp(
     },
     createSessionCredential: parameters.createSessionCredential,
     fetch: parameters.fetch,
+    headers: parameters.headers,
     input: parameters.input,
     signal: parameters.signal,
   }).catch(async (error) => {
@@ -677,6 +694,7 @@ async function postManagementCredential(parameters: {
   context: SessionContext
   createSessionCredential: CreateSessionCredential
   fetch: typeof globalThis.fetch
+  headers?: HeadersInit | undefined
   input: RequestInfo | URL
   signal?: AbortSignal | undefined
 }): Promise<Response> {
@@ -709,7 +727,13 @@ async function postManagementCredential(parameters: {
         parameters.fetch(managementInput(parameters.input), {
           method: 'POST',
           signal: controller.signal,
-          headers: { [Constants.Headers.authorization]: authorization },
+          redirect: 'manual',
+          headers: managementHeaders(
+            challenge,
+            authorization,
+            parameters.input,
+            parameters.headers,
+          ),
         }),
         aborted,
       ])
@@ -746,6 +770,7 @@ export async function retryHttpPaymentRequired(
   await parameters.topUpIfNeeded({
     challenge,
     input: parameters.input,
+    headers: parameters.init?.headers,
     channelId: snapshot.channelId,
     deposit: BigInt(snapshot.deposit),
     requiredCumulative,
@@ -773,7 +798,7 @@ export async function retryHttpPaymentRequired(
     })
     retry = await parameters.fetch(
       parameters.input,
-      requestInitWithAuthorization(parameters.input, parameters.init, credential),
+      requestInitWithAuthorization(parameters.input, parameters.init, credential, challenge),
     )
   } catch (error) {
     await restore()
@@ -827,7 +852,8 @@ export async function closeHttpSession(
     })
     return parameters.fetch(parameters.lastUrl!, {
       method: 'POST',
-      headers: { [Constants.Headers.authorization]: credential },
+      redirect: 'manual',
+      headers: managementHeaders(challenge, credential, parameters.lastUrl!, parameters.headers),
     })
   }
 
@@ -939,7 +965,7 @@ export async function openSseSession(
   if (!isEventStream(response) && driver.getChannel()?.opened)
     response = await driver.doFetch(input, sseInit)
 
-  return consumeSseSessionResponse(input, response, { onReceipt, signal }, driver)
+  return consumeSseSessionResponse(input, response, { onReceipt, signal }, driver, sseInit.headers)
 }
 
 /** @internal Consumes an already-paid SSE response with the session transport driver. */
@@ -948,6 +974,7 @@ export function consumeSseSessionResponse(
   response: Response,
   options: SseResponseOptions | undefined,
   driver: OpenSseSessionParameters,
+  headers?: HeadersInit | undefined,
 ): AsyncIterable<string> {
   if (!isEventStream(response)) throw new Error('SSE response is not an event stream.')
   if (!response.body) throw new Error('Response has no body.')
@@ -955,7 +982,7 @@ export function consumeSseSessionResponse(
 
   return iterateSseMessages({
     onNeedVoucher: (event) =>
-      handleSseNeedVoucher({ challenge, driver, input, signal: options?.signal }, event),
+      handleSseNeedVoucher({ challenge, driver, headers, input, signal: options?.signal }, event),
     onReceipt(receipt) {
       driver.acceptReceipt(receipt)
       options?.onReceipt?.(receipt)
@@ -1128,6 +1155,7 @@ export async function handleSseNeedVoucher(
   parameters: {
     challenge: TempoSessionChallenge | null
     driver: SsePaymentDriver
+    headers?: HeadersInit | undefined
     input: RequestInfo | URL
     signal?: AbortSignal | undefined
   },
@@ -1142,6 +1170,7 @@ export async function handleSseNeedVoucher(
     event,
     expectedChannelId: channel.channelId,
     getChannel: parameters.driver.getChannel,
+    headers: parameters.headers,
     input: parameters.input,
     signal: parameters.signal,
     topUpIfNeeded: parameters.driver.topUpIfNeeded,
@@ -1153,6 +1182,7 @@ export async function handleSseNeedVoucher(
     context: resolution.context,
     createSessionCredential: parameters.driver.createSessionCredential,
     fetch: parameters.driver.fetch,
+    headers: parameters.headers,
     input: parameters.input,
     signal: parameters.signal,
   })
@@ -1640,4 +1670,28 @@ function handleReceipt(parameters: HandleSocketMessageParameters, receipt: Sessi
   parameters.driver.acceptReceipt(receipt)
   parameters.driver.options?.onReceipt?.(receipt)
   parameters.driver.settleReceipt(receipt)
+}
+
+/**
+ * Builds the headers of a management or close post: the session credential in the header the
+ * challenge selects, plus the paid request's application `Authorization` when the credential
+ * goes elsewhere (`requiresAuth`), so the post passes the same application authentication.
+ */
+function managementHeaders(
+  challenge: TempoSessionChallenge,
+  credential: string,
+  input: RequestInfo | URL,
+  headers: HeadersInit | undefined,
+): Headers {
+  const header = Challenge.credentialHeader(challenge)
+  const result = new Headers()
+  if (header.toLowerCase() !== Constants.Headers.authorization.toLowerCase()) {
+    const authorization =
+      new Headers(headers).get(Constants.Headers.authorization) ??
+      (input instanceof Request ? input.headers.get(Constants.Headers.authorization) : null)
+    if (authorization && !authorization.startsWith(`${Constants.Schemes.payment} `))
+      result.set(Constants.Headers.authorization, authorization)
+  }
+  result.set(header, credential)
+  return result
 }
