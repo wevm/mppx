@@ -99,6 +99,8 @@ export type VerifiedChallengeEnvelope<
 export type RequestContext<method extends Method> = {
   capturedRequest?: CapturedRequest
   credential?: Credential.Credential | null
+  /** Expiry (ISO 8601) of the challenge being issued, or echoed by `credential`. */
+  expires?: string | undefined
   request: z.input<method['schema']['request']>
 }
 

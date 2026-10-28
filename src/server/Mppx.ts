@@ -2257,6 +2257,7 @@ async function resolveRouteChallenge(parameters: {
       ? ((await parameters.request({
           capturedRequest: parameters.capturedRequest,
           credential: parameters.credential,
+          expires: parameters.credential?.challenge.expires ?? parameters.expires,
           request: merged,
         } as never)) as Record<string, unknown>)
       : merged

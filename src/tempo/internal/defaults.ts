@@ -48,6 +48,16 @@ export const machineToken = Object.freeze({
  */
 export const decimals = 6
 
+/**
+ * Minimum remaining validity, in seconds, of a fee-sponsored transaction.
+ *
+ * Servers refuse to co-sign a sponsored transaction whose `validBefore` is
+ * closer than this, clients refuse to sign for a sponsored challenge that
+ * expires sooner, and servers refuse to issue a sponsored challenge that
+ * expires sooner after issuance.
+ */
+export const minRemainingValiditySeconds = 15
+
 /** Default payment-channel escrow contract addresses per chain. */
 export const escrowContract = {
   [chainId.mainnet]: '0x33b901018174DDabE4841042ab76ba85D4e24f25',
