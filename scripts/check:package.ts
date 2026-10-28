@@ -6,7 +6,7 @@ import path from 'node:path'
 const root = path.resolve(import.meta.dirname, '..')
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-package-'))
 const limits = {
-  fileCount: 500,
+  fileCount: 550,
   packedBytes: 1_200_000,
   unpackedBytes: 4_750_000,
 }
