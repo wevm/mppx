@@ -977,7 +977,8 @@ const maxPendingEventBytes = 1024 * 1024
  * responses without a \`Payment-Receipt\` header pass through a scanner that keeps only the
  * current partial event, so nothing is buffered or left unread.
  */
-function captureEventStream(
+/** @internal */
+export function captureEventStream(
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
   // \`undefined\`: no stream scanned; \`null\`: scanned without a receipt.
@@ -996,6 +997,9 @@ function captureEventStream(
       receipt ??= null
       const decoder = new TextDecoder()
       let pending = ''
+      // Set after an oversized event is dropped, until its end, so its remaining lines are
+      // never parsed as an event of their own.
+      let skipping = false
       const scan = (text: string, done: boolean) => {
         pending += text
         // Keep a trailing CR: the next chunk may complete a CRLF.
@@ -1005,9 +1009,16 @@ function captureEventStream(
           .replace(/\r\n|\r/g, '\n')
           .split('\n\n')
         const rest = done ? '' : (events.pop() ?? '')
+        if (skipping && (events.length > 0 || done)) {
+          events.shift()
+          skipping = false
+        }
         pending = rest + pending.slice(end)
-        if (pending.length > maxPendingEventBytes) pending = ''
-        for (const raw of done ? [...events, rest] : events) {
+        if (pending.length > maxPendingEventBytes) {
+          pending = ''
+          skipping = true
+        }
+        for (const raw of events) {
           const event = parseEvent(raw)
           if (event?.type === 'payment-receipt' && !receipt) receipt = event.data
         }
