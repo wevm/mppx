@@ -1,3 +1,4 @@
+import { Challenge, Credential } from 'mppx'
 import * as Identity from 'mppx/identity'
 import { expect, test, vi } from 'vp/test'
 
@@ -166,4 +167,58 @@ test('a header-only retry callback does not block the resend', async () => {
     .mockResolvedValueOnce(new Response('ok'))
   const { response } = await client.send(fetch as never, new Request('https://merchant.example'))
   expect(await response.text()).toBe('ok')
+})
+
+test('rejects a prover scope that is not "*" or an array of origins', () => {
+  expect(() =>
+    Identity.Client.from([
+      { scope: 'https://payments.example.com' as never, prove: (request) => request },
+    ]),
+  ).toThrow('Identity prover scope must be "*" or an array of origins.')
+})
+
+test('sends the request itself when it can never be resent', async () => {
+  const seen: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    seen.push(request)
+    return new Response('ok')
+  })
+  const out = new Request('https://elsewhere.example', { body: 'x', method: 'POST' })
+  const outcome = await Identity.Client.from([
+    { scope: ['https://merchant.example'], prove: header('X-Proof', 'p') },
+  ]).send(fetch as never, out)
+  expect(seen[0]).toBe(out)
+  expect(outcome.request).toBe(out)
+})
+
+test('wrapFetch binds proofs to the challenge of the credential being sent', async () => {
+  const challenge = (id: string) =>
+    Challenge.from({
+      id,
+      intent: 'charge',
+      method: 'test',
+      realm: 'merchant.example',
+      request: { amount: '1' },
+    })
+  const seen: (string | undefined)[] = []
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove(request, context) {
+        seen.push(context.challenge?.id)
+        return request
+      },
+    },
+  ])
+  const fetch = Identity.Client.wrapFetch(vi.fn(async () => new Response('ok')) as never, client, {
+    challenge: challenge('first'),
+  })
+  await fetch('https://merchant.example', {
+    headers: {
+      Authorization: Credential.serialize({ challenge: challenge('second'), payload: {} }),
+    },
+    method: 'POST',
+  })
+  await fetch('https://merchant.example', { method: 'POST' })
+  expect(seen).toEqual(['second', 'first'])
 })

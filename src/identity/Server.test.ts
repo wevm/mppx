@@ -125,3 +125,23 @@ test('rejects verifiers with an unknown stage instead of skipping them', () => {
     Identity.Server.stageOf({ stage: 'Payment' as never, verify: () => ({ status: 'missing' }) }),
   ).toThrow('Unknown identity verifier stage "Payment".')
 })
+
+test('does not reuse a decision across different credentials', async () => {
+  const verify = vi.fn((_request: Request, { credential }: Identity.Context) =>
+    (credential as { payload: { subject: string } }).payload.subject === 'alice'
+      ? ({ status: 'valid', value: true } as const)
+      : ({ status: 'invalid', reason: 'not alice' } as const),
+  )
+  const verifier: Identity.Verifier<boolean> = { stage: 'payment', verify }
+  const input = request()
+  const challenge = { id: 'a' } as never
+  const alice = { payload: { subject: 'alice' } } as never
+  const bob = { payload: { subject: 'bob' } } as never
+  expect(
+    (await Identity.Server.verify(input, [verifier], { challenge, credential: alice })).status,
+  ).toBe('valid')
+  expect(
+    (await Identity.Server.verify(input, [verifier], { challenge, credential: bob })).status,
+  ).toBe('invalid')
+  expect(verify).toHaveBeenCalledTimes(2)
+})

@@ -131,7 +131,10 @@ export function stageOf(verifier: Types.Verifier): Types.Stage {
   return stage
 }
 
-const cache = new WeakMap<Request, Map<Types.Verifier, Map<string, Promise<Types.Verification>>>>()
+const cache = new WeakMap<
+  Request,
+  Map<Types.Verifier, Map<string, Map<unknown, Promise<Types.Verification>>>>
+>()
 
 function run(
   verifier: Types.Verifier,
@@ -142,11 +145,14 @@ function run(
   if (!byVerifier) cache.set(request, (byVerifier = new Map()))
   let byContext = byVerifier.get(verifier)
   if (!byContext) byVerifier.set(verifier, (byContext = new Map()))
-  const key = `${context.challenge?.id ?? ''}|${context.credential ? 'credential' : ''}`
-  let outcome = byContext.get(key)
+  // Decisions can depend on the credential, so each credential object gets its own entry.
+  const key = context.challenge?.id ?? ''
+  let byCredential = byContext.get(key)
+  if (!byCredential) byContext.set(key, (byCredential = new Map()))
+  let outcome = byCredential.get(context.credential)
   if (!outcome) {
     outcome = Promise.resolve(verifier.verify(request, context))
-    byContext.set(key, outcome)
+    byCredential.set(context.credential, outcome)
   }
   return outcome
 }

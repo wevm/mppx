@@ -531,6 +531,64 @@ test('rejects an empty client identity list', () => {
   ).toThrow('Mppx client identity must configure at least one prover.')
 })
 
+test('rejects a top-level server identity option instead of ignoring it', () => {
+  expect(() =>
+    Mppx.create({
+      identity: [proofVerifier()],
+      methods: [serverMethod],
+      realm: 'localhost',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    } as never),
+  ).toThrow('Mppx server identity is configured per route')
+})
+
+test('rejects payment-stage identity on routes with the HTML checkout', () => {
+  const checkout = Method.toServer(method, {
+    html: {} as never,
+    async verify() {
+      throw new Error('unreachable')
+    },
+  })
+  const mppx = Mppx.create({
+    methods: [checkout],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  expect(() => mppx.charge({ ...charge, identity: [proofVerifier()] })).toThrow(
+    'Payment-stage identity is not supported on test/charge routes with the HTML checkout.',
+  )
+})
+
+test('rewrapping an identity-enabled fetch keeps its provers', async () => {
+  const seen: (string | null)[] = []
+  const base = async (input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(new Request(input, init).headers.get('X-Proof'))
+    return new Response('ok')
+  }
+  const client = ClientMppx.create({
+    fetch: base as never,
+    identity: [
+      {
+        scope: '*',
+        prove(request) {
+          const headers = new Headers(request.headers)
+          headers.set('X-Proof', 'p')
+          return new Request(request, { headers })
+        },
+      },
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const rewrapped = ClientMppx.create({
+    fetch: client.fetch,
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  await rewrapped.fetch('https://merchant.example/resource')
+  expect(seen).toEqual(['p'])
+})
+
 function now() {
   return Math.floor(Date.now() / 1_000)
 }

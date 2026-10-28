@@ -552,6 +552,11 @@ export function create<
     throw new TypeError(
       'Mppx server `attestation` was replaced by per-route `identity`: pass `identity: [verifier]` to each route.',
     )
+  // Identity is configured per route; a top-level option would otherwise be ignored (fail open).
+  if ('identity' in config)
+    throw new TypeError(
+      'Mppx server identity is configured per route: pass `identity: [verifier]` to each route.',
+    )
 
   if (!secretKey) {
     throw new Error(
@@ -1131,6 +1136,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     if (paymentVerifiers.length > 0 && preflight)
       throw new TypeError(
         `Payment-stage identity is not supported on ${method.name}/${method.intent} routes with a preflight hook.`,
+      )
+    // The HTML checkout cannot answer identity challenges, and it pays before resubmitting, so
+    // a browser would pay and then be rejected.
+    if (paymentVerifiers.length > 0 && method.html)
+      throw new TypeError(
+        `Payment-stage identity is not supported on ${method.name}/${method.intent} routes with the HTML checkout.`,
       )
     const { description, meta, scope, ...rest } = options
     const staticMeta = Scope.merge({ meta, scope })

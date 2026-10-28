@@ -220,9 +220,10 @@ export function create<
   if ('attestation' in config)
     throw new TypeError('Mppx client `attestation` was replaced by `identity: [prover]`.')
   const rawFetch = Fetch.unwrapFetch(config.fetch ?? globalThis.fetch)
+  // Rewrapping an mppx fetch keeps its identity provers unless new ones are configured.
   const identityClient = identity
     ? IdentityClient.from(identity as readonly Identity.Prover[])
-    : undefined
+    : config.fetch && Fetch.identityOf(config.fetch)
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
   const events = Fetch.createEventDispatcher<FlattenMethods<methods>, EventResponseOf<transport>>()
@@ -671,9 +672,12 @@ async function prepareHttpRequest(parameters: {
 
   for (;;) {
     request = withAcceptPayment(request, acceptPayment, explicitAcceptPayment, acceptPaymentPolicy)
-    const { request: sentRequest, response } = identity
-      ? await identity.send(fetch, request)
-      : { request: request.clone(), response: await fetch(request.clone()) }
+    const { request: sentRequest, response } = await (async () => {
+      // `request` stays unread for replay; the reported request is the one actually sent.
+      if (identity) return identity.send(fetch, request.clone())
+      const sent = request.clone()
+      return { request: sent, response: await fetch(sent) }
+    })()
     if (response.type === 'opaqueredirect' || response.status === 0)
       throw new Error('prepareRequest requires a runtime that exposes manual redirect responses.')
     if (!redirectStatuses.has(response.status))
