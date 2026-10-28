@@ -989,34 +989,57 @@ export function captureEventStream(
       if (
         !response.body ||
         !isEventStream(response) ||
-        response.headers.has(Constants.Headers.paymentReceipt)
+        response.headers.get(Constants.Headers.paymentReceipt)
       )
         return response
       // Session management requests (such as mid-stream voucher posts) share this fetch, so a
       // later stream without a receipt must not discard one already seen.
       receipt ??= null
       const decoder = new TextDecoder()
-      let pending = ''
+      // Normalized pieces of the current partial event, joined only when the event ends, so a
+      // long event costs linear time. A CR that may start a CRLF is held apart.
+      let parts: string[] = []
+      let size = 0
+      let heldCr = false
       // Set after an oversized event is dropped, until its end, so its remaining lines are
       // never parsed as an event of their own.
       let skipping = false
       const scan = (text: string, done: boolean) => {
-        pending += text
-        // Keep a trailing CR: the next chunk may complete a CRLF.
-        const end = done || !pending.endsWith('\r') ? pending.length : pending.length - 1
-        const events = pending
-          .slice(0, end)
-          .replace(/\r\n|\r/g, '\n')
-          .split('\n\n')
-        const rest = done ? '' : (events.pop() ?? '')
-        if (skipping && (events.length > 0 || done)) {
+        let chunk = heldCr ? `\r${text}` : text
+        heldCr = !done && chunk.endsWith('\r')
+        if (heldCr) chunk = chunk.slice(0, -1)
+        let rest = chunk.replace(/\r\n|\r/g, '\n')
+        const events: string[] = []
+        // A boundary split across chunks: the partial event ends in a newline and this text starts with one.
+        if (rest.startsWith('\n') && parts.at(-1)?.endsWith('\n')) {
+          events.push(parts.join('').slice(0, -1))
+          parts = []
+          size = 0
+          rest = rest.slice(1)
+        }
+        for (let index = rest.indexOf('\n\n'); index !== -1; index = rest.indexOf('\n\n')) {
+          events.push(parts.join('') + rest.slice(0, index))
+          parts = []
+          size = 0
+          rest = rest.slice(index + 2)
+        }
+        if (rest) {
+          parts.push(rest)
+          size += rest.length
+        }
+        if (done) {
+          events.push(parts.join(''))
+          parts = []
+          size = 0
+        }
+        if (skipping && events.length > 0) {
           events.shift()
           skipping = false
         }
-        pending = rest + pending.slice(end)
-        if (pending.length > maxPendingEventBytes) {
-          // Keep a trailing line ending: it may be the first half of the event's boundary.
-          pending = /[\r\n]*$/.exec(pending)?.[0] ?? ''
+        if (size > maxPendingEventBytes) {
+          // Keep a trailing newline: it may be the first half of the event's boundary.
+          parts = parts.at(-1)?.endsWith('\n') ? ['\n'] : []
+          size = parts.length
           skipping = true
         }
         for (const raw of events) {
