@@ -989,7 +989,7 @@ export function captureEventStream(
       if (
         !response.body ||
         !isEventStream(response) ||
-        response.headers.has(Constants.Headers.paymentReceipt)
+        response.headers.get(Constants.Headers.paymentReceipt)
       )
         return response
       // Session management requests (such as mid-stream voucher posts) share this fetch, so a
