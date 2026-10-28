@@ -254,6 +254,7 @@ export async function validatePaymentFlow(
     const provisioned = await provisionAndPayTestnet(tempoTestnetChallenge, verbose, options.silent)
     if (provisioned) {
       try {
+        const raw = captureEventStream((input, init) => fetchWithTimeout(input, init ?? {}, 30_000))
         const mppx = Mppx.create({
           methods: provisioned.methods,
           polyfill: false,
@@ -264,7 +265,7 @@ export async function validatePaymentFlow(
             results.push(check('Payment: submitted', 'ephemeral testnet wallet'))
             return credential
           },
-          fetch: (input, init) => fetchWithTimeout(input, init ?? {}, 30_000),
+          fetch: raw.fetch,
         })
         const response = await mppx.fetch(url, {
           method: endpoint.method,
@@ -277,6 +278,7 @@ export async function validatePaymentFlow(
           verbose,
           tempoModerato,
           isTempoSessionChallenge(tempoTestnetChallenge),
+          raw.last,
         )
       } catch (error) {
         results.push(fail('Payment: create credential', (error as Error).message))
@@ -525,6 +527,7 @@ async function attemptCryptoPayment(
 
   if (directMethod && isTempoSessionChallenge(challenge)) {
     let initial = true
+    const raw = captureEventStream((input, init) => fetchWithTimeout(input, init ?? {}, 30_000))
     const mppx = Mppx.create({
       methods: [directMethod],
       polyfill: false,
@@ -545,7 +548,7 @@ async function attemptCryptoPayment(
             },
           })
         }
-        return fetchWithTimeout(input, init ?? {}, 30_000)
+        return raw.fetch(input, init)
       },
     })
     try {
@@ -554,7 +557,7 @@ async function attemptCryptoPayment(
         headers: fetchHeaders,
         body: fetchBody ?? null,
       })
-      await validatePaymentResponse(results, response, verbose, paymentChain, true)
+      await validatePaymentResponse(results, response, verbose, paymentChain, true, raw.last)
     } catch (error) {
       results.push(fail(tag, (error as Error).message))
     }
@@ -783,6 +786,7 @@ async function validatePaymentResponse(
   verbose: boolean,
   explorerChain?: Chain | undefined,
   session = false,
+  rawStream?: () => Response | undefined,
 ): Promise<CheckResult[]> {
   if (paymentResponse.status === 402) {
     const body = await paymentResponse.text().catch(() => '')
@@ -829,9 +833,13 @@ async function validatePaymentResponse(
   const body = await paymentResponse.text().catch(() => '')
   if (stream) {
     // SSE sessions deliver the receipt as a final payment-receipt event instead of a header.
-    const receipt = body
-      .split(/\r?\n\r?\n/)
-      .map((event) => parseEvent(event.replace(/\r\n/g, '\n')))
+    // The session client consumes that event, so read it from the server's own stream.
+    const raw = rawStream?.()
+    const events = raw ? await raw.text().catch(() => '') : body
+    const receipt = events
+      .replace(/\r\n|\r/g, '\n')
+      .split('\n\n')
+      .map((event) => parseEvent(event))
       .find((event) => event?.type === 'payment-receipt')
     if (receipt?.type === 'payment-receipt')
       results.push(check('Payment receipt in event stream', receipt.data.reference))
@@ -950,4 +958,25 @@ async function validatePaymentResponse(
   }
 
   return results
+}
+
+/**
+ * Wraps a fetch so the last `text/event-stream` response it returned stays readable: the
+ * session client consumes in-stream receipts before the caller sees the body.
+ */
+function captureEventStream(
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  let last: Response | undefined
+  return {
+    async fetch(input: RequestInfo | URL, init?: RequestInit) {
+      const response = await fetch(input, init)
+      if (isEventStream(response)) {
+        void last?.body?.cancel().catch(() => {})
+        last = response.clone()
+      }
+      return response
+    },
+    last: () => last,
+  }
 }

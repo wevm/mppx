@@ -159,7 +159,7 @@ function makeDiscoveryDoc(
 
 async function mppServer(
   challenge: Challenge.Challenge,
-  opts?: { errorStatus?: number; postPaymentStatus?: number; llms?: boolean },
+  opts?: { errorStatus?: number; postPaymentStatus?: number; llms?: boolean; sse?: string },
 ) {
   return testServer((req, res) => {
     const url = new URL(req.url!, 'http://localhost')
@@ -176,6 +176,11 @@ async function mppServer(
     const hasAuth = req.headers[Challenge.credentialHeader(challenge).toLowerCase()]
     if (hasAuth && hasAuth !== `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`) {
       const status = opts?.postPaymentStatus ?? 200
+      if (opts?.sse !== undefined) {
+        res.writeHead(status, { 'content-type': 'text/event-stream' })
+        res.end(opts.sse)
+        return
+      }
       const receipt = Receipt.serialize({
         method: 'tempo',
         status: 'success',
@@ -382,6 +387,21 @@ test('funds the operator and handles the testnet session response', async () => 
     const plain = await serve(['validate', server.url])
     expect(plain.output).toContain('Payment-Receipt header present')
     expect(plain.exitCode).toBe(1)
+
+    // The session client strips the receipt event; validate reads the server's own stream,
+    // including lone-CR line endings.
+    handleResponse.mockImplementation(() => sse('data: {}\n\n'))
+    const streamed = await mppServer(challenge, {
+      sse: `data: {}\r\revent: payment-receipt\rdata: ${JSON.stringify(sessionReceipt)}\r\r`,
+    })
+    const stripped = await serve(['validate', streamed.url])
+    expect(stripped.output).toContain('Payment receipt in event stream')
+    expect(stripped.exitCode ?? 0).toBe(0)
+
+    const unpaid = await mppServer(challenge, { sse: 'data: {}\r\r' })
+    const absent = await serve(['validate', unpaid.url])
+    expect(absent.output).toContain('Payment receipt in event stream')
+    expect(absent.exitCode).toBe(1)
   } finally {
     methods.mockRestore()
   }
