@@ -126,6 +126,7 @@ try {
   )
 } finally {
   if (fs.existsSync(path.join(root, 'package.tmp.json')))
-    run('pnpm', ['exec', 'zile', 'publish:post'])
+    // Run zile directly: `pnpm exec` would see the publish manifest and try to repair dependencies.
+    run(path.join(root, 'node_modules', '.bin', 'zile'), ['publish:post'])
   fs.rmSync(temporaryDirectory, { force: true, recursive: true })
 }

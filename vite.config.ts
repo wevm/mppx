@@ -63,6 +63,7 @@ export default defineConfig({
         test: {
           name: 'node',
           alias,
+          globalSetup: ['./test/setup.html.ts'],
           include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
           exclude: [
             ...tempoTestFiles,
