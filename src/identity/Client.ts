@@ -88,7 +88,7 @@ export function from(provers: readonly Types.Prover[]): Client {
         if (!prover.retry) continue
         const copy = response.clone()
         copies.push(copy)
-        if (await prover.retry(copy, context)) retry = true
+        if (await prover.retry(copy)) retry = true
       }
       if (!retry) {
         release(copies)
@@ -99,10 +99,10 @@ export function from(provers: readonly Types.Prover[]): Client {
     },
     async challenge(response, context, url) {
       for (const prover of inScope(url)) {
-        if (!prover.retry) continue
+        if (!prover.prepare) continue
         const copy = response.clone()
         try {
-          await prover.retry(copy, context)
+          await prover.prepare(copy, context)
         } finally {
           release([copy])
         }

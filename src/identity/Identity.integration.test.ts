@@ -1,6 +1,14 @@
 import type { RequestListener } from 'node:http'
 
-import { Challenge, Constants as MppConstants, Credential, Method, Receipt, z } from 'mppx'
+import {
+  Challenge,
+  Constants as MppConstants,
+  Credential,
+  Method,
+  PaymentRequest,
+  Receipt,
+  z,
+} from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Signatures from 'mppx/extensions/identity'
 import * as Tap from 'mppx/extensions/identity/tap'
@@ -48,19 +56,26 @@ const charge = {
 } as const
 
 const proofRequestHeader = 'Proof-Request'
+
+/** The identity nonce a challenge carries in its HMAC-bound metadata. */
+function identityNonce(challenge: Challenge.Challenge): string | undefined {
+  return challenge.opaque
+    ? (PaymentRequest.deserialize(challenge.opaque)._mppx_identity as string)
+    : undefined
+}
 const proofResponseHeader = 'Proof-Response'
 
-/** A payment-stage verifier shaped like x401: it challenges inside the 402 and binds proofs to the challenge id. */
+/** A payment-stage verifier shaped like x401: it challenges inside the 402 and binds proofs to its identity nonce. */
 function proofVerifier(): Identity.Verifier<{ subject: string }> {
   return {
     stage: 'payment',
-    verify(request, { challenge, credential }) {
-      if (!credential)
-        return { status: 'missing', headers: { [proofRequestHeader]: challenge!.id } }
+    challenge: (_request, { nonce }) => ({ [proofRequestHeader]: nonce }),
+    verify(request, { credential, nonce: expected }) {
+      if (!credential) return { status: 'missing', reason: 'Proof is required.' }
       const proof = request.headers.get(proofResponseHeader)
       if (!proof) return { status: 'missing', reason: 'Proof is required.' }
       const [nonce, subject] = proof.split(':')
-      if (nonce !== credential.challenge.id)
+      if (!expected || nonce !== expected)
         return {
           status: 'invalid',
           headers: { 'Proof-Result': 'unbound' },
@@ -83,11 +98,9 @@ function proofProver(subject: string): Identity.Prover {
       headers.set(proofResponseHeader, proof)
       return new Request(request, { headers })
     },
-    retry(response, { challenge }) {
+    prepare(response, { challenge }) {
       const nonce = response.headers.get(proofRequestHeader)
-      if (!challenge || nonce !== challenge.id) return false
-      proofs.set(challenge.id, `${nonce}:${subject}`)
-      return false
+      if (challenge && nonce) proofs.set(challenge.id, `${nonce}:${subject}`)
     },
   }
 }
@@ -235,13 +248,13 @@ test('binds a payment-stage proof to the 402 challenge in one round trip', async
     expect(seen.requests).toEqual([false, true])
     expect(settlements).toBe(before + 1)
 
-    // The 402 carries the proof request bound to its own challenge.
+    // The 402 carries the proof request bound to its identity nonce.
     const challengeResponse = await fetch(
       await signer.tap.prove(new Request(seen.server.url), { created: now(), nonce: nonce() }),
     )
     expect(challengeResponse.status).toBe(402)
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challengeResponse.headers.get(proofRequestHeader)).toBe(challenge.id)
+    expect(challengeResponse.headers.get(proofRequestHeader)).toBe(identityNonce(challenge))
   } finally {
     seen.server.close()
   }
@@ -370,7 +383,9 @@ test('forwards payment-stage identity headers through nested composers', async (
   expect(result.status).toBe(402)
   if (result.status !== 402) throw new Error()
   const response = result.challenge as Response
-  expect(response.headers.get(proofRequestHeader)).toBe(Challenge.fromResponse(response).id)
+  expect(response.headers.get(proofRequestHeader)).toBe(
+    identityNonce(Challenge.fromResponse(response)),
+  )
 })
 
 test('never reports a rejected identity as a successful payment', async () => {
@@ -448,7 +463,8 @@ test('a composed route ignores non-Payment challenges from identity rejections',
 test('composed 402s carry an identity WWW-Authenticate challenge once', async () => {
   const bearer: Identity.Verifier = {
     stage: 'payment',
-    verify: () => ({ status: 'missing', headers: { 'WWW-Authenticate': 'Proof realm="kyb"' } }),
+    challenge: () => ({ 'WWW-Authenticate': 'Proof realm="kyb"' }),
+    verify: () => ({ status: 'missing' }),
   }
   const inner = Mppx.create({
     methods: [serverMethod],
@@ -464,14 +480,61 @@ test('composed 402s carry an identity WWW-Authenticate challenge once', async ()
   expect(value.match(/Proof realm/g)).toHaveLength(1)
 })
 
-test('a composed route accepts at most one payment-stage identity offer', () => {
+test('offers in one 402 share a payment-stage identity challenge', async () => {
+  const proof = proofVerifier()
+  const seen = await createServer(async (request, payments) => {
+    const result = await payments.compose(
+      [serverMethod, { ...charge, amount: '1', identity: [proof] }],
+      [serverMethod, { ...charge, amount: '2', identity: [proof] }],
+    )(request)
+    if (result.status === 402) return result.challenge
+    return result.withReceipt(new Response(result.identity?.get(proof)?.subject))
+  })
+
+  try {
+    const first = await fetch(seen.server.url)
+    expect(first.status).toBe(402)
+    const challenges = Challenge.fromResponseList(first)
+    expect(challenges.map((c) => c.request.amount)).toEqual(['1', '2'])
+    const nonce = first.headers.get(proofRequestHeader)
+    expect(nonce?.split(',')).toHaveLength(1)
+    expect(challenges.map(identityNonce)).toEqual([nonce, nonce])
+
+    // Paying the second offer with the shared proof settles.
+    const before = settlements
+    const paid = await fetch(seen.server.url, {
+      headers: {
+        [MppConstants.Headers.authorization]: Credential.serialize({
+          challenge: challenges[1]!,
+          payload: { token: 'paid' },
+        }),
+        [proofResponseHeader]: `${nonce}:dana`,
+      },
+    })
+    expect(paid.status).toBe(200)
+    expect(await paid.text()).toBe('dana')
+    expect(settlements).toBe(before + 1)
+
+    const client = ClientMppx.create({
+      identity: [proofProver('erin')],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    const response = await client.fetch(seen.server.url)
+    expect(await response.text()).toBe('erin')
+  } finally {
+    seen.server.close()
+  }
+})
+
+test('offers in a composed route must require the same payment-stage verifiers', () => {
   const mppx = createPayments()
   expect(() =>
     mppx.compose(
       [serverMethod, { ...charge, amount: '1', identity: [proofVerifier()] }],
       [serverMethod, { ...charge, amount: '2', identity: [proofVerifier()] }],
     ),
-  ).toThrow('at most one offer with payment-stage identity')
+  ).toThrow('must require the same payment-stage identity verifiers')
 })
 
 test('an identity rejection from one offer does not hide the other offers', async () => {
