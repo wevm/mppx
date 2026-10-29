@@ -3196,12 +3196,12 @@ function composeHandlers(
   return composed
 }
 
-/** Returns the flattened configured offers accepted by a handler. */
 /** Whether two verifier lists hold the same verifiers in the same order. */
 function sameVerifiers(a: readonly Identity.Verifier[], b: readonly Identity.Verifier[]): boolean {
   return a.length === b.length && a.every((verifier, i) => verifier === b[i])
 }
 
+/** Returns the flattened configured offers accepted by a handler. */
 function getConfiguredOffers(
   handler: ConfiguredHandler | ComposedHandler,
 ): readonly ConfiguredHandler['_internal'][] {
