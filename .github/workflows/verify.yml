@@ -156,7 +156,7 @@ jobs:
 
       - name: Install secret-tool (libsecret)
         if: matrix.keyring
-        uses: wevm/actions/vendor/awalsh128/cache-apt-pkgs-action/rev-553a35bb8ebd@73e899a58d51092d694fbaf94b7a1d8c09bfea28 # v1.6.3
+        uses: wevm/actions/vendor/awalsh128/cache-apt-pkgs-action/rev-553a35bb8ebd@73e899a58d51092d694fbaf94b7a1d8c09bfea28
         with:
           packages: libsecret-tools gnome-keyring dbus-x11
           version: 1.0
