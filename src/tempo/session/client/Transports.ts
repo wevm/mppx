@@ -601,16 +601,28 @@ export function requestInitWithAuthorization(
 }
 
 /** Returns the exact resource URL used for out-of-band management POSTs, without its fragment. */
+/** Returns whether a value is a `Request`, including one from another realm such as an iframe. */
+function isRequest(value: unknown): value is Request {
+  return (
+    value instanceof Request ||
+    (typeof value === 'object' &&
+      value !== null &&
+      !(value instanceof URL) &&
+      typeof (value as Request).url === 'string' &&
+      typeof (value as Request).method === 'string' &&
+      typeof (value as Request).clone === 'function')
+  )
+}
+
 export function managementInput(input: RequestInfo | URL): RequestInfo | URL {
   try {
     const base =
       typeof location === 'undefined' ? undefined : (location.href as `${string}:${string}`)
-    const url =
-      input instanceof Request
-        ? new URL(input.url)
-        : input instanceof URL
-          ? new URL(input)
-          : new URL(String(input), base)
+    const url = isRequest(input)
+      ? new URL(input.url)
+      : input instanceof URL
+        ? new URL(input)
+        : new URL(String(input), base)
     url.hash = ''
     return url
   } catch {
@@ -839,7 +851,7 @@ export async function closeHttpSession(
 
   let closeChallenge = parameters.target.challenge
   let signedCloseAmount = parameters.signedCloseAmount
-  const request = parameters.lastUrl instanceof Request ? parameters.lastUrl : undefined
+  const request = isRequest(parameters.lastUrl) ? parameters.lastUrl : undefined
   // Retain transport policy without inheriting the resource body or cancellation. Redirects stay
   // manual so the credential never follows one.
   const requestOptions: RequestInit | undefined = request
@@ -848,7 +860,8 @@ export async function closeHttpSession(
         credentials: request.credentials,
         integrity: request.integrity,
         keepalive: request.keepalive,
-        mode: request.mode,
+        // Fetch rejects `navigate` in a request init; a navigation becomes `same-origin`, as Fetch does.
+        mode: request.mode === 'navigate' ? 'same-origin' : request.mode,
         referrer: request.referrer,
         referrerPolicy: request.referrerPolicy,
       }
