@@ -349,10 +349,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           resolveRequestUrl(initialRequest.input).href,
         )
 
-        const paymentInput = resolvePaymentRetryInput(
+        const paymentInput = await resolvePaymentRetryInput(
           response,
           initialRequest.input,
           initialRequest.input,
+          fetchInit as RequestInit,
         )
         ProofRealm.assert(
           selectedChallenge,
@@ -383,6 +384,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               preparedCredential = undefined
             }
 
+            // A new payment must not start for a request the caller already aborted.
+            resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
             if (!MethodChallenge.has(selected.method))
               return resolveCredential(selectedChallenge, selected.method, credentialContext)
@@ -1232,11 +1235,29 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
 }
 
-function resolvePaymentRetryInput(
+/** Rejects Request modes whose paid retry cannot carry a credential to the server. */
+function assertPayableRequest(input: RequestInfo | URL, init: RequestInit) {
+  const request = input instanceof Request ? input : undefined
+  const mode = init.mode ?? request?.mode
+  // Fetch strips the Authorization header from no-cors requests.
+  if (mode === 'no-cors')
+    throw new Error('Cannot automatically pay a no-cors request: it cannot carry a credential.')
+  const cache = init.cache ?? request?.cache
+  // A cache-only retry never reaches the server.
+  if (cache === 'only-if-cached')
+    throw new Error(
+      'Cannot automatically pay an only-if-cached request: its retry cannot reach the server.',
+    )
+}
+
+/** Retains Request state while targeting the same-origin challenge response URL. */
+async function resolvePaymentRetryInput(
   response: Response,
   fallback: RequestInfo | URL,
   initialInput: RequestInfo | URL,
-): RequestInfo | URL {
+  init: RequestInit,
+): Promise<RequestInfo | URL> {
+  assertPayableRequest(fallback, init)
   if (!response.url) return fallback
 
   const responseUrl = new URL(response.url)
@@ -1245,6 +1266,50 @@ function resolvePaymentRetryInput(
     throw new Error(
       `Refusing to send payment credential across redirect from ${initialUrl.origin} to ${responseUrl.origin}`,
     )
+  }
+
+  const method = (
+    init.method ?? (fallback instanceof Request ? fallback.method : 'GET')
+  ).toUpperCase()
+  // Fetch does not expose the redirect chain, so a non-GET/HEAD request may
+  // have become a GET before reaching the challenge (301/302/303).
+  if (response.redirected && method !== 'GET' && method !== 'HEAD')
+    throw new Error(
+      `Cannot automatically pay a redirected ${method} request. Use prepareRequest() to preserve redirect semantics.`,
+    )
+
+  if (fallback instanceof Request) {
+    // A replacement body makes a consumed or locked original body irrelevant.
+    // Otherwise retain the original body for any later payment challenges.
+    const source = init.body != null ? fallback : fallback.clone()
+    // User-created requests cannot use navigate mode; retry a navigation as same-origin.
+    const request = new Request(
+      source,
+      fallback.mode === 'navigate' && init.mode === undefined
+        ? { ...init, mode: 'same-origin' }
+        : init,
+    )
+    // Fetch never sends a URL fragment, and the response URL has none.
+    if (request.url.split('#')[0] === response.url) return request
+    if (request.body) {
+      // Retargeting would turn the body into a stream without a length (and keepalive rejects
+      // streams). Retarget a buffered copy so the paid retry keeps its Content-Length.
+      return new Request(response.url, {
+        body: await request.arrayBuffer(),
+        cache: request.cache,
+        credentials: request.credentials,
+        headers: request.headers,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+        method: request.method,
+        mode: request.mode,
+        redirect: request.redirect,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+        signal: request.signal,
+      })
+    }
+    return new Request(response.url, request)
   }
 
   return response.url
