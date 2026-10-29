@@ -203,6 +203,30 @@ describe('HttpManagement', () => {
       expect(inits[0]?.mode).toBe('same-origin')
     })
 
+    test('closeHttpSession leaves relative string URLs for the configured fetch to resolve', async () => {
+      // A document base or custom fetch may resolve this differently from location.href.
+      vi.stubGlobal('location', { href: 'https://example.test/app/page' })
+      const inputs: unknown[] = []
+      try {
+        await closeHttpSession({
+          createSessionCredential: vi.fn(async () => 'close-credential'),
+          fetch: async (input) => {
+            inputs.push(input)
+            return new Response(null, {
+              status: 200,
+              headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+            })
+          },
+          lastUrl: 'resource?cursor=abc',
+          signedCloseAmount: '5',
+          target: { challenge: challenge(), channel: channel(), channelId },
+        })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+      expect(inputs).toEqual(['resource?cursor=abc'])
+    })
+
     test('resolves retry context from a session challenge snapshot and matching channel', () => {
       const entry = channel()
       expect(

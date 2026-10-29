@@ -878,7 +878,9 @@ export async function closeHttpSession(
       cumulativeAmountRaw: signedCloseAmount,
     })
     // Close is a separate management POST, independent of the resource Request.
-    return parameters.fetch(managementInput(parameters.lastUrl!), {
+    // A Request's URL is absolute. Pass other inputs unchanged so the configured fetch resolves
+    // relative URLs exactly as it did for the paid resource.
+    return parameters.fetch(request ? managementInput(request) : parameters.lastUrl!, {
       ...requestOptions,
       method: 'POST',
       redirect: 'manual',
