@@ -384,6 +384,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               preparedCredential = undefined
             }
 
+            // A new payment must not start for a request the caller already aborted.
+            resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
             if (!MethodChallenge.has(selected.method))
               return resolveCredential(selectedChallenge, selected.method, credentialContext)
@@ -1233,6 +1235,21 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
 }
 
+/** Rejects Request modes whose paid retry cannot carry a credential to the server. */
+function assertPayableRequest(input: RequestInfo | URL, init: RequestInit) {
+  const request = input instanceof Request ? input : undefined
+  const mode = init.mode ?? request?.mode
+  // Fetch strips the Authorization header from no-cors requests.
+  if (mode === 'no-cors')
+    throw new Error('Cannot automatically pay a no-cors request: it cannot carry a credential.')
+  const cache = init.cache ?? request?.cache
+  // A cache-only retry never reaches the server.
+  if (cache === 'only-if-cached')
+    throw new Error(
+      'Cannot automatically pay an only-if-cached request: its retry cannot reach the server.',
+    )
+}
+
 /** Retains Request state while targeting the same-origin challenge response URL. */
 async function resolvePaymentRetryInput(
   response: Response,
@@ -1240,6 +1257,7 @@ async function resolvePaymentRetryInput(
   initialInput: RequestInfo | URL,
   init: RequestInit,
 ): Promise<RequestInfo | URL> {
+  assertPayableRequest(fallback, init)
   if (!response.url) return fallback
 
   const responseUrl = new URL(response.url)
@@ -1264,7 +1282,13 @@ async function resolvePaymentRetryInput(
     // A replacement body makes a consumed or locked original body irrelevant.
     // Otherwise retain the original body for any later payment challenges.
     const source = init.body != null ? fallback : fallback.clone()
-    const request = new Request(source, init)
+    // User-created requests cannot use navigate mode; retry a navigation as same-origin.
+    const request = new Request(
+      source,
+      fallback.mode === 'navigate' && init.mode === undefined
+        ? { ...init, mode: 'same-origin' }
+        : init,
+    )
     if (request.url === response.url) return request
     if (request.keepalive && request.body) {
       // Fetch rejects streaming keepalive bodies. Retarget a buffered copy instead.

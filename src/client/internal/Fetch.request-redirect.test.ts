@@ -240,4 +240,73 @@ describe('Fetch.from: native redirect handling without connections', () => {
       agent.assertNoPendingInterceptors()
     },
   )
+
+  test.each([
+    { error: 'Cannot automatically pay a no-cors request', init: { mode: 'no-cors' } },
+    {
+      error: 'Cannot automatically pay an only-if-cached request',
+      init: { cache: 'only-if-cached', mode: 'same-origin' },
+    },
+  ] as const)(
+    'rejects a Request whose retry cannot carry a credential: $error',
+    async ({ error, init }) => {
+      agent
+        .get(origin)
+        .intercept({ path: '/start', method: 'GET' })
+        .reply(402, '', { headers: { 'WWW-Authenticate': challenge } })
+      const { createCredential, rawFetch } = setup()
+      const request = new Request(`${origin}/start`, init)
+      // Node has no HTTP cache or CORS: fetch the 402 without these modes.
+      const fetch = Fetch.from({
+        methods: [{ name: 'test', intent: 'charge', createCredential }],
+        fetch: (input, init) => rawFetch(input instanceof Request ? input.url : input, init),
+      })
+
+      await expect(fetch(request)).rejects.toThrow(error)
+      expect(createCredential).not.toHaveBeenCalled()
+    },
+  )
+
+  test('does not create a credential for a Request aborted during challenge handling', async () => {
+    agent
+      .get(origin)
+      .intercept({ path: '/start', method: 'GET' })
+      .reply(402, '', { headers: { 'WWW-Authenticate': challenge } })
+    const { createCredential, rawFetch } = setup()
+    const controller = new AbortController()
+    const fetch = Fetch.from({
+      methods: [{ name: 'test', intent: 'charge', createCredential }],
+      fetch: rawFetch,
+      onChallenge: async (_challenge, { createCredential }) => {
+        controller.abort(new Error('aborted by caller'))
+        return createCredential()
+      },
+    })
+
+    await expect(
+      fetch(new Request(`${origin}/start`, { signal: controller.signal })),
+    ).rejects.toThrow('aborted by caller')
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('pays a navigation Request as a same-origin retry', async () => {
+    const pool = agent.get(origin)
+    pool
+      .intercept({ path: '/start', method: 'GET' })
+      .reply(303, '', { headers: { Location: '/final' } })
+    pool
+      .intercept({ path: '/final', method: 'GET' })
+      .reply(402, '', { headers: { 'WWW-Authenticate': challenge } })
+    pool
+      .intercept({ path: '/final', method: 'GET', headers: { authorization: 'credential' } })
+      .reply(200, 'OK')
+    const { createCredential, fetch } = setup()
+    const request = new Request(`${origin}/start`)
+    // Only browsers create navigation requests.
+    Object.defineProperty(request, 'mode', { value: 'navigate' })
+
+    expect((await fetch(request)).status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
+    agent.assertNoPendingInterceptors()
+  })
 })
