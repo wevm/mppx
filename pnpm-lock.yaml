@@ -35,7 +35,7 @@ overrides:
   follow-redirects@<1.16.1: 1.16.1
   fast-uri@<3.1.9: 3.1.9
   hono@<4.13.11: 4.13.11
-  '@hono/node-server@<2.0.10': 2.0.10
+  '@hono/node-server@<2.1.5': 2.1.5
   undici@>=7.0.0 <7.28.0: 7.28.0
   undici@>=8.0.0 <8.12.2: 8.12.2
   socket.io-parser@>=4.0.0 <4.2.7: 4.2.7
@@ -78,8 +78,8 @@ importers:
         specifier: ^3.0.0
         version: 3.0.0
       '@hono/node-server':
-        specifier: 2.1.1
-        version: 2.1.1(hono@4.13.11)
+        specifier: 2.1.5
+        version: 2.1.5(hono@4.13.11)
       '@modelcontextprotocol/sdk':
         specifier: 1.32.0
         version: 1.32.0(@cfworker/json-schema@4.1.1)(zod@4.6.7)
@@ -225,8 +225,8 @@ importers:
   examples/charge-relay:
     dependencies:
       '@hono/node-server':
-        specifier: 2.1.1
-        version: 2.1.1(hono@4.13.11)
+        specifier: 2.1.5
+        version: 2.1.5(hono@4.13.11)
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -881,14 +881,8 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@hono/node-server@2.0.10':
-    resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      hono: 4.13.11
-
-  '@hono/node-server@2.1.1':
-    resolution: {integrity: sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==}
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: 4.13.11
@@ -5288,11 +5282,7 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.3
 
-  '@hono/node-server@2.0.10(hono@4.13.11)':
-    dependencies:
-      hono: 4.13.11
-
-  '@hono/node-server@2.1.1(hono@4.13.11)':
+  '@hono/node-server@2.1.5(hono@4.13.11)':
     dependencies:
       hono: 4.13.11
 
@@ -5604,7 +5594,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.11)
+      '@hono/node-server': 2.1.5(hono@4.13.11)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -5628,7 +5618,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.0(@cfworker/json-schema@4.1.1)(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.11)
+      '@hono/node-server': 2.1.5(hono@4.13.11)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -9020,7 +9010,7 @@ snapshots:
 
   wata@0.4.1(react@19.3.0)(typescript@7.0.2):
     dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.11)
+      '@hono/node-server': 2.1.5(hono@4.13.11)
       '@noble/ciphers': 2.4.0
       '@noble/hashes': 2.4.0
       hono: 4.13.11
