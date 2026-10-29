@@ -50,7 +50,7 @@ jobs:
 
       - name: Open or update version PR
         if: steps.pending.outputs.has-changesets == 'true'
-        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        uses: wevm/actions/vendor/changesets/action/abitype@73e899a58d51092d694fbaf94b7a1d8c09bfea28
         with:
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'
@@ -92,7 +92,7 @@ jobs:
 
       - name: Publish
         if: steps.pending.outputs.has-changesets != 'true'
-        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        uses: wevm/actions/vendor/changesets/action/abitype@73e899a58d51092d694fbaf94b7a1d8c09bfea28
         with:
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'
