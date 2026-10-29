@@ -117,9 +117,8 @@ test('passes a 402 challenge only to provers in scope for its URL', async () => 
   const prover = (name: string, scope: Identity.Prover['scope']): Identity.Prover => ({
     scope,
     prove: (request) => request,
-    retry() {
+    prepare() {
       ran.push(name)
-      return false
     },
   })
   const client = Identity.Client.from([prover('any', '*'), prover('scoped', ['https://a.example'])])
@@ -223,7 +222,7 @@ test('wrapFetch binds proofs to the challenge of the credential being sent', asy
   expect(seen).toEqual(['second', 'first'])
 })
 
-test('challenge releases each unread copy after its retry callback', async () => {
+test('challenge releases each unread copy after its prepare callback', async () => {
   let cancelled = 0
   const response = new Response(
     new ReadableStream({
@@ -234,7 +233,7 @@ test('challenge releases each unread copy after its retry callback', async () =>
     { status: 402 },
   )
   const client = Identity.Client.from([
-    { scope: '*', prove: (request) => request, retry: () => false },
+    { scope: '*', prove: (request) => request, prepare: () => {} },
   ])
   await client.challenge(response, {}, 'https://merchant.example')
   await response.body!.cancel()
@@ -273,4 +272,17 @@ test('wrapFetch returns a 402 without a Payment challenge instead of throwing', 
   )
   const response = await fetch('https://merchant.example', { method: 'POST' })
   expect(response.status).toBe(402)
+})
+
+test('prepare runs only on 402s and retry only on other rejections', async () => {
+  const prepare = vi.fn()
+  const retry = vi.fn(() => false)
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, prepare, retry }])
+  await client.send(
+    async () => new Response(null, { status: 403 }),
+    new Request('https://a.example'),
+  )
+  await client.challenge(new Response(null, { status: 402 }), {}, 'https://a.example')
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(retry).toHaveBeenCalledTimes(1)
 })

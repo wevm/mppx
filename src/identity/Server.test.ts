@@ -145,3 +145,31 @@ test('does not reuse a decision across different credentials', async () => {
   ).toBe('invalid')
   expect(verify).toHaveBeenCalledTimes(2)
 })
+
+test('runs each challenge hook once per request and nonce, through anyOf', async () => {
+  const hook = vi.fn(({ url }: Request, { nonce }: { nonce: string }) => ({
+    'Proof-Request': `${new URL(url).pathname}:${nonce}`,
+  }))
+  const proof: Identity.Verifier = {
+    stage: 'payment',
+    challenge: hook,
+    verify: () => ({ status: 'missing' }),
+  }
+  const plain: Identity.Verifier = { stage: 'payment', verify: () => ({ status: 'missing' }) }
+  const input = request()
+  const first = await Identity.Server.challenge(input, [Identity.anyOf(plain, proof)], 'n1')
+  const again = await Identity.Server.challenge(input, [proof], 'n1')
+  expect(first.get('Proof-Request')).toBe(again.get('Proof-Request'))
+  expect(hook).toHaveBeenCalledTimes(1)
+  await Identity.Server.challenge(input, [proof], 'n2')
+  expect(hook).toHaveBeenCalledTimes(2)
+})
+
+test('shares one identity nonce per request', () => {
+  const input = request()
+  let created = 0
+  const create = () => String(++created)
+  expect(Identity.Server.nonceFor(input, create)).toBe('1')
+  expect(Identity.Server.nonceFor(input, create)).toBe('1')
+  expect(Identity.Server.nonceFor(request(), create)).toBe('2')
+})

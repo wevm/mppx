@@ -106,6 +106,48 @@ export async function verify(
   }
 }
 
+/**
+ * Collects the challenge headers of payment-stage verifiers for one 402.
+ *
+ * Each verifier's hook runs at most once per request and nonce, so every offer
+ * in a composed 402 carries the same challenge. @internal
+ */
+export async function challenge(
+  request: Request,
+  verifiers: readonly Types.Verifier[],
+  nonce: string,
+): Promise<Headers> {
+  const headers = new Headers()
+  for (const verifier of verifiers) {
+    for (const member of leaves(verifier)) {
+      if (!member.challenge) continue
+      let byVerifier = challenges.get(request)
+      if (!byVerifier) challenges.set(request, (byVerifier = new Map()))
+      let byNonce = byVerifier.get(member)
+      if (!byNonce) byVerifier.set(member, (byNonce = new Map()))
+      let result = byNonce.get(nonce)
+      if (!result) {
+        result = Promise.resolve(member.challenge(request, { nonce }))
+        byNonce.set(nonce, result)
+      }
+      const init = await result
+      if (init) for (const [name, value] of new Headers(init)) headers.append(name, value)
+    }
+  }
+  return headers
+}
+
+/**
+ * Returns the identity nonce for every 402 issued on one request.
+ *
+ * Composed routes call each offer with the same request, so all offers share it. @internal
+ */
+export function nonceFor(request: Request, create: () => string): string {
+  let nonce = nonces.get(request)
+  if (!nonce) nonces.set(request, (nonce = create()))
+  return nonce
+}
+
 /** Builds the rejection response for a failed request-stage outcome. @internal */
 export function toResponse(outcome: Exclude<Outcome, { status: 'valid' }>): Response {
   const headers = new Headers(outcome.headers)
@@ -131,6 +173,19 @@ export function stageOf(verifier: Types.Verifier): Types.Stage {
   return stage
 }
 
+/** Returns a verifier and, through `anyOf`, every member it wraps. */
+function leaves(verifier: Types.Verifier): readonly Types.Verifier[] {
+  const nested = (verifier as Partial<AnyOfVerifier>)[members]
+  return nested ? nested.flatMap(leaves) : [verifier]
+}
+
+const nonces = new WeakMap<Request, string>()
+
+const challenges = new WeakMap<
+  Request,
+  Map<Types.Verifier, Map<string, Promise<HeadersInit | undefined>>>
+>()
+
 const cache = new WeakMap<
   Request,
   Map<Types.Verifier, Map<string, Map<unknown, Promise<Types.Verification>>>>
@@ -146,7 +201,7 @@ function run(
   let byContext = byVerifier.get(verifier)
   if (!byContext) byVerifier.set(verifier, (byContext = new Map()))
   // Decisions can depend on the credential, so each credential object gets its own entry.
-  const key = context.challenge?.id ?? ''
+  const key = `${context.challenge?.id ?? ''}|${context.nonce ?? ''}`
   let byCredential = byContext.get(key)
   if (!byCredential) byContext.set(key, (byCredential = new Map()))
   let outcome = byCredential.get(context.credential)

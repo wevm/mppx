@@ -6,9 +6,9 @@ import type { MaybePromise } from '../internal/types.js'
  * When a verifier runs on the server.
  *
  * `request` verifiers run before any payment challenge is issued and reject
- * the request with their own status code. `payment` verifiers run when a
- * challenge is issued (to add their own challenge headers to the 402) and
- * again on the paid retry, before the credential is settled.
+ * the request with their own status code. `payment` verifiers add their own
+ * challenge headers to the 402 (through `challenge`) and run on the paid
+ * retry, before the credential is settled.
  */
 export type Stage = 'request' | 'payment'
 
@@ -16,14 +16,26 @@ export type Stage = 'request' | 'payment'
  * Payment state passed to verifiers and provers.
  *
  * Request-stage verifiers receive an empty context. Payment-stage verifiers
- * receive the challenge being issued, or the challenge and credential being
- * answered on the paid retry.
+ * receive the answered challenge, its credential and the 402's identity nonce.
  */
 export type Context = {
-  /** The MPP challenge being issued or answered. */
+  /** The MPP challenge being answered (or, for provers, selected). */
   challenge?: Challenge.Challenge | undefined
   /** The payment credential submitted with the request. */
   credential?: Credential.Credential | undefined
+  /**
+   * The identity nonce of the 402 being answered.
+   *
+   * Every payment offer in one 402 carries the same HMAC-bound nonce, so a proof
+   * bound to it is bound to that 402 whichever offer the client pays.
+   */
+  nonce?: string | undefined
+}
+
+/** Context passed to a payment-stage verifier's `challenge` hook. */
+export type ChallengeContext = {
+  /** The identity nonce shared by every payment offer in the 402. Bind the proof request to it. */
+  nonce: string
 }
 
 /**
@@ -58,6 +70,14 @@ export type Verification<value = unknown> =
 export type Verifier<value = unknown> = {
   /** When the verifier runs. @default 'request' */
   stage?: Stage | undefined
+  /**
+   * Returns the protocol's challenge headers to add to a 402, such as a proof request.
+   *
+   * Payment stage only. Runs once per 402, however many payment offers it carries.
+   */
+  challenge?:
+    | ((request: Request, context: ChallengeContext) => MaybePromise<HeadersInit | undefined>)
+    | undefined
   /** Returns the protocol's verification outcome for the request. */
   verify: (request: Request, context: Context) => MaybePromise<Verification<value>>
 }
@@ -87,10 +107,15 @@ export type Prover = {
   /** Returns a new request carrying the protocol's identity material. */
   prove: (request: Request, context: ProveContext) => MaybePromise<Request>
   /**
-   * Inspects a rejected or 402 response and prepares a proof for the next attempt.
+   * Prepares a proof from a 402 before the payment retry, such as answering its proof request.
    *
-   * Return `true` to resend a rejected (non-402) request once. On a 402 the
-   * context carries the selected challenge and the payment retry always follows.
+   * The context carries the selected challenge; `prove` receives the same challenge
+   * on the paid retry.
    */
-  retry?: ((response: Response, context: Context) => MaybePromise<boolean | undefined>) | undefined
+  prepare?: ((response: Response, context: Context) => MaybePromise<void>) | undefined
+  /**
+   * Inspects a rejected (non-402) response. Return `true` to prove and resend the
+   * request once. Paid attempts are never resent.
+   */
+  retry?: ((response: Response) => MaybePromise<boolean | undefined>) | undefined
 }
