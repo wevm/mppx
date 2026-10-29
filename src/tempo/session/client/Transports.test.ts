@@ -158,6 +158,75 @@ describe('HttpManagement', () => {
       )
     })
 
+    test('reads management URLs from Request objects of another realm', () => {
+      const foreign = {
+        clone() {
+          return this
+        },
+        method: 'POST',
+        url: 'https://example.test/resource?cursor=abc#result',
+      } as unknown as Request
+      expect(managementInput(foreign).toString()).toBe('https://example.test/resource?cursor=abc')
+    })
+
+    test('closeHttpSession turns a navigation Request into a same-origin close', async () => {
+      const navigation = {
+        cache: 'default',
+        clone() {
+          return this
+        },
+        credentials: 'include',
+        integrity: '',
+        keepalive: false,
+        method: 'GET',
+        mode: 'navigate',
+        referrer: 'about:client',
+        referrerPolicy: '',
+        url: 'https://example.test/resource',
+      } as unknown as Request
+      const inits: RequestInit[] = []
+      await closeHttpSession({
+        createSessionCredential: vi.fn(async () => 'close-credential'),
+        fetch: async (input, init) => {
+          inits.push(init ?? {})
+          // Native Fetch rejects init.mode 'navigate'; constructing the request proves it is valid.
+          new Request(input, init)
+          return new Response(null, {
+            status: 200,
+            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+          })
+        },
+        lastUrl: navigation,
+        signedCloseAmount: '5',
+        target: { challenge: challenge(), channel: channel(), channelId },
+      })
+      expect(inits[0]?.mode).toBe('same-origin')
+    })
+
+    test('closeHttpSession leaves relative string URLs for the configured fetch to resolve', async () => {
+      // A document base or custom fetch may resolve this differently from location.href.
+      vi.stubGlobal('location', { href: 'https://example.test/app/page' })
+      const inputs: unknown[] = []
+      try {
+        await closeHttpSession({
+          createSessionCredential: vi.fn(async () => 'close-credential'),
+          fetch: async (input) => {
+            inputs.push(input)
+            return new Response(null, {
+              status: 200,
+              headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+            })
+          },
+          lastUrl: 'resource?cursor=abc',
+          signedCloseAmount: '5',
+          target: { challenge: challenge(), channel: channel(), channelId },
+        })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+      expect(inputs).toEqual(['resource?cursor=abc'])
+    })
+
     test('resolves retry context from a session challenge snapshot and matching channel', () => {
       const entry = channel()
       expect(
