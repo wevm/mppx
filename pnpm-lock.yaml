@@ -179,6 +179,9 @@ importers:
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
+      undici:
+        specifier: 7.30.1
+        version: 7.30.1
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
@@ -4617,6 +4620,10 @@ packages:
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
+  undici@7.30.1:
+    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
+    engines: {node: '>=20.18.1'}
+
   undici@8.12.2:
     resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
     engines: {node: '>=22.19.0'}
@@ -8771,6 +8778,8 @@ snapshots:
   undici-types@8.3.0: {}
 
   undici-types@8.9.0: {}
+
+  undici@7.30.1: {}
 
   undici@8.12.2: {}
 
