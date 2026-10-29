@@ -197,6 +197,8 @@ pnpm test                  # Run tests with vitest
 pnpm test:html             # Run HTML tests with playwright
 ```
 
+Run focused tests by project and path, for example `pnpm exec vp test --project node src/server/Mppx.test.ts`. The `node` project needs no Tempo localnet; files that need one run in the `tempo` project. A bare `pnpm test <path>` runs the `tempo` project's global setup and fails without a localnet on port 18545.
+
 ## Skills Reference
 
 Load these skills for specialized guidance:
