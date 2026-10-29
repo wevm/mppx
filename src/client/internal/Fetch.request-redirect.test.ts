@@ -309,4 +309,27 @@ describe('Fetch.from: native redirect handling without connections', () => {
     expect(createCredential).toHaveBeenCalledOnce()
     agent.assertNoPendingInterceptors()
   })
+
+  test('sends the paid retry body of a fragment URL with its Content-Length', async () => {
+    const pool = agent.get(origin)
+    pool
+      .intercept({ path: '/pay', method: 'PUT' })
+      .reply(402, '', { headers: { 'WWW-Authenticate': challenge } })
+    const paid = vi.fn()
+    pool
+      .intercept({ path: '/pay', method: 'PUT', headers: { authorization: 'credential' } })
+      .reply((options) => {
+        const headers = options.headers as Record<string, string>
+        paid(headers['content-length'], headers['transfer-encoding'])
+        return { statusCode: 200, data: 'OK' }
+      })
+    const { fetch } = setup()
+
+    const response = await fetch(
+      new Request(`${origin}/pay#result`, { body: 'original', method: 'PUT' }),
+    )
+    expect(response.status).toBe(200)
+    expect(paid).toHaveBeenCalledExactlyOnceWith('8', undefined)
+    agent.assertNoPendingInterceptors()
+  })
 })

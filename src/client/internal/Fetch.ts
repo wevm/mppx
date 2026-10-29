@@ -1289,9 +1289,11 @@ async function resolvePaymentRetryInput(
         ? { ...init, mode: 'same-origin' }
         : init,
     )
-    if (request.url === response.url) return request
-    if (request.keepalive && request.body) {
-      // Fetch rejects streaming keepalive bodies. Retarget a buffered copy instead.
+    // Fetch never sends a URL fragment, and the response URL has none.
+    if (request.url.split('#')[0] === response.url) return request
+    if (request.body) {
+      // Retargeting would turn the body into a stream without a length (and keepalive rejects
+      // streams). Retarget a buffered copy so the paid retry keeps its Content-Length.
       return new Request(response.url, {
         body: await request.arrayBuffer(),
         cache: request.cache,
