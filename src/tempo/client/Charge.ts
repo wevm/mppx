@@ -27,6 +27,18 @@ import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
 
+/**
+ * Seconds from now the client sets as the expiring-nonce `validBefore`,
+ * capped at the challenge expiry.
+ *
+ * Fee payers require at least `defaults.minRemainingValiditySeconds` (15s) of
+ * remaining validity when they co-sign, so a 25s window leaves about 10s for
+ * clock skew between client and server, signing and round trips. It stays inside
+ * the server's default 30s confirmation timeout and within sponsor policies whose
+ * `maxValidityWindowSeconds` is 25 or more.
+ */
+export const validityWindowSeconds = 25
+
 /** Runtime context accepted by the Tempo charge client method. */
 export type ChargeContext = {
   account?: Account.getResolver.Parameters['account'] | undefined
@@ -238,7 +250,7 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       const validBefore = (() => {
-        const defaultExpiry = Math.floor(Date.now() / 1000) + 25
+        const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds
         if (!challenge.expires) return defaultExpiry
         // `validBefore` is an exclusive whole-second bound, so cap at the second
         // after a (possibly fractional) expiry to stay valid as long as the challenge.
@@ -276,6 +288,17 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
+      // The fee payer rejects a sponsored transaction with under the minimum remaining validity,
+      // so refuse before signing rather than produce a credential the server must reject.
+      const assertSponsorable = () => {
+        if (methodDetails?.feePayer !== true || !challenge.expires) return
+        const remainingMs = new Date(challenge.expires).getTime() - Date.now()
+        if (!(remainingMs >= defaults.minRemainingValiditySeconds * 1000))
+          throw new Error(
+            `Sponsored challenge expires in less than ${defaults.minRemainingValiditySeconds} seconds; the fee payer would reject the transaction. Request a new challenge.`,
+          )
+      }
+      assertSponsorable()
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls,
@@ -292,6 +315,8 @@ export function charge(parameters: charge.Parameters = {}) {
         delete sponsored.feeToken
         sponsored.feePayer = true
       }
+      // Preparation is asynchronous: check again immediately before signing.
+      assertSponsorable()
       const signature = await signTransaction(client, prepared as never)
 
       return Credential.serialize({

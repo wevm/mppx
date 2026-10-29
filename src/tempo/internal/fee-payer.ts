@@ -596,8 +596,10 @@ export function assertRemainingValidity(parameters: {
     return fail('fee-sponsored transaction must declare validBefore for the expiring nonce')
   if (validBefore <= Math.floor(now.getTime() / 1_000))
     fail('fee-sponsored transaction has already expired')
-  if (validBefore < Math.ceil(now.getTime() / 1_000) + 15)
-    fail('fee-sponsored transaction needs at least 15 seconds of remaining validity')
+  if (validBefore < Math.ceil(now.getTime() / 1_000) + defaults.minRemainingValiditySeconds)
+    fail(
+      `fee-sponsored transaction needs at least ${defaults.minRemainingValiditySeconds} seconds of remaining validity`,
+    )
 }
 
 /** Validates sponsor fee policy limits for a fee-payer transaction. */
