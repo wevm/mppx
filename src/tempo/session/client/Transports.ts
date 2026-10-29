@@ -839,6 +839,20 @@ export async function closeHttpSession(
 
   let closeChallenge = parameters.target.challenge
   let signedCloseAmount = parameters.signedCloseAmount
+  const request = parameters.lastUrl instanceof Request ? parameters.lastUrl : undefined
+  // Retain transport policy without inheriting the resource body or cancellation. Redirects stay
+  // manual so the credential never follows one.
+  const requestOptions: RequestInit | undefined = request
+    ? {
+        cache: request.cache,
+        credentials: request.credentials,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+        mode: request.mode,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+      }
+    : undefined
   const postClose = async (challenge: TempoSessionChallenge, refreshed = false) => {
     closeChallenge = challenge
     signedCloseAmount =
@@ -850,7 +864,9 @@ export async function closeHttpSession(
       descriptor: parameters.target.channel.descriptor,
       cumulativeAmountRaw: signedCloseAmount,
     })
-    return parameters.fetch(parameters.lastUrl!, {
+    // Close is a separate management POST, independent of the resource Request.
+    return parameters.fetch(managementInput(parameters.lastUrl!), {
+      ...requestOptions,
       method: 'POST',
       redirect: 'manual',
       headers: managementHeaders(challenge, credential, parameters.lastUrl!, parameters.headers),

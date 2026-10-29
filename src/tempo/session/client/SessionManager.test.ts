@@ -2252,6 +2252,112 @@ describe('Session', () => {
   })
 
   describe('.close()', () => {
+    test.each(['aborted', 'consumed', 'locked', 'retry', 'options', 'string', 'URL'] as const)(
+      'closes independently of the resource request (%s)',
+      async (kind) => {
+        const resourceUrl = 'https://api.example.com/jobs/task?model=test&stream=1'
+        const controller = new AbortController()
+        const transportOptions: RequestInit = {
+          cache: 'no-store',
+          credentials: 'include',
+          integrity: 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=',
+          keepalive: true,
+          mode: 'same-origin',
+          redirect: 'error',
+          referrer: 'https://api.example.com/agent',
+          referrerPolicy: 'origin',
+        }
+        const hasBody =
+          kind === 'consumed' || kind === 'locked' || kind === 'retry' || kind === 'options'
+        const input =
+          kind === 'string'
+            ? resourceUrl
+            : kind === 'URL'
+              ? new URL(resourceUrl)
+              : new Request(resourceUrl, {
+                  ...(kind === 'options' ? transportOptions : {}),
+                  ...(hasBody ? { body: 'original prompt', method: 'POST' } : {}),
+                  signal: controller.signal,
+                })
+        const challenge = makeChallenge({ amount: '1', suggestedDeposit: '2' })
+        const refreshed = Challenge.from({ ...challenge, id: 'refreshed-close' })
+        const refresh =
+          kind === 'retry' || kind === 'options' || kind === 'string' || kind === 'URL'
+        const closedRequests: Request[] = []
+        const closeBodies: string[] = []
+        const closeChallengeIds: string[] = []
+        const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          // Construct and consume the effective request just as Fetch would.
+          const request = new Request(input, init)
+          request.signal.throwIfAborted()
+          const body = await request.text()
+          const authorization = request.headers.get(Constants.Headers.authorization)
+          if (!authorization) return make402Response(challenge)
+          const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
+          const payload = credential.payload
+          if (payload.action === 'close') {
+            closedRequests.push(request)
+            closeBodies.push(body)
+            closeChallengeIds.push(credential.challenge.id)
+            if (refresh && closedRequests.length === 1) return make402Response(refreshed)
+          } else if (payload.action !== 'open') {
+            throw new Error(`unexpected ${payload.action} request`)
+          }
+          return new Response(null, {
+            headers: {
+              [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+                createSessionReceipt({
+                  acceptedCumulative: BigInt(payload.cumulativeAmount),
+                  challengeId: credential.challenge.id,
+                  channelId: payload.channelId,
+                  spent: 1n,
+                  ...(payload.action === 'close' ? { txHash: `0x${'aa'.repeat(32)}` as Hex } : {}),
+                }),
+              ),
+            },
+          })
+        })
+        const storage = makeChannelStore()
+        const manager = sessionManager({
+          account,
+          client,
+          decimals: 0,
+          fetch,
+          maxDeposit: '2',
+          channelStore: storage.store,
+        })
+        // A body override leaves the original body available to lock, or to
+        // expose accidental inheritance during the refreshed-close retry.
+        const init =
+          kind === 'locked' || kind === 'retry'
+            ? { body: 'resource override', method: 'POST' }
+            : undefined
+        expect((await manager.fetch(input, init)).status).toBe(200)
+        if (kind === 'aborted') controller.abort(new Error('cancelled inference'))
+        if (kind === 'consumed') expect((input as Request).bodyUsed).toBe(true)
+        const reader = kind === 'locked' ? (input as Request).body!.getReader() : undefined
+
+        try {
+          const receipt = await manager.close()
+          expect(receipt?.spent).toBe('1')
+          expect(manager.state).toMatchObject({ status: 'closed', channelId: receipt?.channelId })
+          expect(storage.delete).toHaveBeenCalledOnce()
+          expect(closeChallengeIds).toEqual(refresh ? [challenge.id, refreshed.id] : [challenge.id])
+          expect(closeBodies).toEqual(refresh ? ['', ''] : [''])
+          for (const request of closedRequests) {
+            expect(request.method).toBe('POST')
+            expect(request.url).toBe('https://api.example.com/jobs/task?model=test&stream=1')
+            expect(request.signal.aborted).toBe(false)
+            if (kind === 'options')
+              for (const [key, value] of Object.entries(transportOptions))
+                expect(Reflect.get(request, key), key).toBe(key === 'redirect' ? 'manual' : value)
+          }
+        } finally {
+          reader?.releaseLock()
+        }
+      },
+    )
+
     test('is no-op when not opened', async () => {
       const mockFetch = vi.fn()
 
