@@ -45,7 +45,7 @@ overrides:
   follow-redirects@<1.16.1: '1.16.1'
   fast-uri@<3.1.9: '3.1.9'
   hono@<4.13.11: '4.13.11'
-  '@hono/node-server@<2.0.10': '2.0.10'
+  '@hono/node-server@<2.1.5': '2.1.5'
   undici@>=7.0.0 <7.28.0: '7.28.0'
   undici@>=8.0.0 <8.12.2: '8.12.2'
   socket.io-parser@>=4.0.0 <4.2.7: '4.2.7'
