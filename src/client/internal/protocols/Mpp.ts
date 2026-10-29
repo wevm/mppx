@@ -7,9 +7,12 @@ import { paymentRequiredStatus, setCredentialHeader } from './Shared.js'
 export function mpp(): Protocol {
   return {
     getChallenges(response) {
+      const header = response.headers.get(Constants.Headers.wwwAuthenticate)
+      // A 402 without a Payment challenge (such as `WWW-Authenticate: X402`) is left to other protocols.
       if (
         response.status !== paymentRequiredStatus ||
-        !response.headers.has(Constants.Headers.wwwAuthenticate)
+        !header ||
+        !Challenge.hasPaymentScheme(header)
       )
         return []
       return Challenge.fromResponseList(response)

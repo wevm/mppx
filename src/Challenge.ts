@@ -497,6 +497,21 @@ function startsWithSchemeToken(value: string, index: number, token: string): boo
   return Boolean(next && /\s/.test(next))
 }
 
+/**
+ * Returns whether a `WWW-Authenticate` value contains a Payment challenge.
+ *
+ * @internal
+ */
+export function hasPaymentScheme(value: string): boolean {
+  // A bare `Payment` scheme with no parameters is still a (malformed) Payment challenge.
+  return (
+    findSchemeStarts(value, Constants.Schemes.payment).length > 0 ||
+    value
+      .split(',')
+      .some((part) => part.trim().toLowerCase() === Constants.Schemes.payment.toLowerCase())
+  )
+}
+
 /** @internal Finds auth scheme boundaries while ignoring quoted-string contents. */
 function findSchemeStarts(value: string, token: string): number[] {
   const starts: number[] = []

@@ -100,6 +100,15 @@ describe('http', () => {
         name: 'x402 challenges',
       },
       {
+        expectedIds: [`${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: [x402_Types.paymentMethod],
+        headers: () => ({
+          'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+          'WWW-Authenticate': 'X402',
+        }),
+        name: 'x402 challenges behind a non-Payment WWW-Authenticate',
+      },
+      {
         expectedIds: [
           `${x402_Types.syntheticChallengeIdPrefix}0`,
           `${x402_Types.syntheticChallengeIdPrefix}1`,
@@ -701,4 +710,9 @@ describe('mcp', () => {
       },
     })
   })
+})
+
+test('http getChallenges still rejects a bare Payment challenge', () => {
+  const response = new Response(null, { headers: { 'WWW-Authenticate': 'Payment' }, status: 402 })
+  expect(() => Transport.http().getChallenges(response)).toThrow()
 })
