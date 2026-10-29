@@ -711,3 +711,8 @@ describe('mcp', () => {
     })
   })
 })
+
+test('http getChallenges still rejects a bare Payment challenge', () => {
+  const response = new Response(null, { headers: { 'WWW-Authenticate': 'Payment' }, status: 402 })
+  expect(() => Transport.http().getChallenges(response)).toThrow()
+})

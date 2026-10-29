@@ -503,7 +503,13 @@ function startsWithSchemeToken(value: string, index: number, token: string): boo
  * @internal
  */
 export function hasPaymentScheme(value: string): boolean {
-  return findSchemeStarts(value, Constants.Schemes.payment).length > 0
+  // A bare `Payment` scheme with no parameters is still a (malformed) Payment challenge.
+  return (
+    findSchemeStarts(value, Constants.Schemes.payment).length > 0 ||
+    value
+      .split(',')
+      .some((part) => part.trim().toLowerCase() === Constants.Schemes.payment.toLowerCase())
+  )
 }
 
 /** @internal Finds auth scheme boundaries while ignoring quoted-string contents. */
