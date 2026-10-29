@@ -1122,7 +1122,7 @@ describe('tempo.charge client', () => {
         feePayer: true,
         prepareSeconds: 11,
       })
-      expect(result?.message).toContain('Sponsored challenge expires in less than 15 seconds')
+      expect(result?.message).toContain('Sponsored transaction preparation took too long')
       expect(signTransaction).not.toHaveBeenCalled()
     })
 

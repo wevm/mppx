@@ -296,10 +296,14 @@ export function charge(parameters: charge.Parameters = {}) {
         if (methodDetails?.feePayer !== true) return
         const minimumMs = defaults.minRemainingValiditySeconds * 1000
         const expiresMs = challenge.expires ? new Date(challenge.expires).getTime() : Infinity
-        const remainingMs = Math.min(expiresMs, validBefore * 1000) - Date.now()
-        if (!(remainingMs >= minimumMs))
+        const now = Date.now()
+        if (!(expiresMs - now >= minimumMs))
           throw new Error(
             `Sponsored challenge expires in less than ${defaults.minRemainingValiditySeconds} seconds; the fee payer would reject the transaction. Request a new challenge.`,
+          )
+        if (!(validBefore * 1000 - now >= minimumMs))
+          throw new Error(
+            `Sponsored transaction preparation took too long: less than ${defaults.minRemainingValiditySeconds} seconds of its validity window remain, so the fee payer would reject it.`,
           )
       }
       assertSponsorable()
