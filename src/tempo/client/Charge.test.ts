@@ -1040,12 +1040,16 @@ describe('tempo.charge client', () => {
     async function sign(parameters: {
       expires: string
       feePayer?: boolean | undefined
+      prepareSeconds?: number | undefined
       supportedModes?: readonly ('pull' | 'push')[] | undefined
     }) {
       vi.resetModules()
       vi.useFakeTimers({ now: base * 1000, toFake: ['Date'] })
       const prepareTransactionRequest = vi.fn(
-        async (_client: unknown, _parameters: Record<string, unknown>) => ({}),
+        async (_client: unknown, _parameters: Record<string, unknown>) => {
+          if (parameters.prepareSeconds) vi.setSystemTime((base + parameters.prepareSeconds) * 1000)
+          return {}
+        },
       )
       const sendTransactionSync = vi.fn(async () => ({ transactionHash: `0x${'ab'.repeat(32)}` }))
       const signTransaction = vi.fn(async () => '0xdeadbeef')
@@ -1110,6 +1114,16 @@ describe('tempo.charge client', () => {
         validBefore: base + 16,
       })
       expect(signTransaction).toHaveBeenCalledOnce()
+    })
+
+    test('refuses to sign when preparation leaves validBefore under 15 seconds', async () => {
+      const { result, signTransaction } = await sign({
+        expires: at(base + 300),
+        feePayer: true,
+        prepareSeconds: 11,
+      })
+      expect(result?.message).toContain('Sponsored challenge expires in less than 15 seconds')
+      expect(signTransaction).not.toHaveBeenCalled()
     })
 
     test('signs a sponsored challenge expiring in under 15 seconds in push mode', async () => {

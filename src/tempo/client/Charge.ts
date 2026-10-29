@@ -290,10 +290,14 @@ export function charge(parameters: charge.Parameters = {}) {
 
       // The fee payer rejects a sponsored transaction with under the minimum remaining validity,
       // so refuse before signing rather than produce a credential the server must reject.
+      // The fee payer checks the signed `validBefore`, which is fixed before preparation, so the
+      // re-check measures both it and the challenge expiry against the current time.
       const assertSponsorable = () => {
-        if (methodDetails?.feePayer !== true || !challenge.expires) return
-        const remainingMs = new Date(challenge.expires).getTime() - Date.now()
-        if (!(remainingMs >= defaults.minRemainingValiditySeconds * 1000))
+        if (methodDetails?.feePayer !== true) return
+        const minimumMs = defaults.minRemainingValiditySeconds * 1000
+        const expiresMs = challenge.expires ? new Date(challenge.expires).getTime() : Infinity
+        const remainingMs = Math.min(expiresMs, validBefore * 1000) - Date.now()
+        if (!(remainingMs >= minimumMs))
           throw new Error(
             `Sponsored challenge expires in less than ${defaults.minRemainingValiditySeconds} seconds; the fee payer would reject the transaction. Request a new challenge.`,
           )
