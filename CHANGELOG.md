@@ -1,5 +1,24 @@
 # mppx
 
+## 0.17.0
+
+### Minor Changes
+
+- 25c8468: Simplified payment-stage identity. Breaking changes to `mppx/identity`:
+
+  - Every payment offer in one 402 now carries the same HMAC-bound identity nonce, passed to verifiers as `context.nonce`. Bind payment-stage proofs to it instead of the challenge id. Routes may combine several offers with payment-stage identity (for example `tempo()`'s default currencies, or Tempo and Stripe), as long as they require the same verifiers; previously a route allowed only one such offer.
+  - Verifiers issue their 402 challenge headers through a new optional `challenge(request, { nonce })` hook, which runs once per 402, instead of returning them from `verify` as `missing`. `verify` only checks proofs.
+  - `Prover.retry` is split: `prepare(response, { challenge })` runs on a 402 before the payment retry, and `retry(response)` runs on other rejections and returns whether to resend.
+
+### Patch Changes
+
+- b149237: Raised the @hono/node-server override to 2.1.5 to resolve a dependency audit advisory.
+- faa4735: Fixed the client throwing `No Payment schemes found.` on a `402` whose `WWW-Authenticate` has no Payment challenge, so other protocols such as x402 now handle it.
+- 73b464f: Fixed the Tempo charge client signing a sponsored transaction whose `validBefore` had fewer than 15 seconds left after slow preparation: the pre-sign check now measures `validBefore` as well as the challenge expiry.
+- a0d54fd: Enforced the fee payer's 15-second remaining-validity minimum for Tempo charges: clients refused to sign a sponsored pull transaction for a challenge expiring in under 15 seconds, checking again right before signing, and servers refused to issue a sponsored challenge with a paid amount and pull mode that expires that soon. Push and zero-amount challenges were exempt. Request hooks received the expiry echoed by the credential when verifying it.
+- 7a68c55: Fixed focused tests failing in a clean checkout by generating the HTML modules on demand, and the package check's cleanup reinstalling dependencies with the publish manifest.
+- 443ad6d: Improved `mppx validate` SSE receipt scanning to search only newly received text for event boundaries, so long events no longer cost quadratic time.
+
 ## 0.16.0
 
 ### Minor Changes
