@@ -972,7 +972,14 @@ describe('tempo.charge client', () => {
 
     test.each([
       { label: 'no challenge expiry', now: base, expires: undefined, expected: base + 25 },
-      { label: 'expiry after the window', now: base, expires: at(base + 60), expected: base + 25 },
+      { label: 'expiry after the window', now: base, expires: at(base + 120), expected: base + 25 },
+      { label: 'expiry at the window', now: base, expires: at(base + 25), expected: base + 25 },
+      {
+        label: 'expiry just inside the window',
+        now: base,
+        expires: at(base + 20),
+        expected: base + 21,
+      },
       { label: 'expiry inside the window', now: base, expires: at(base + 10), expected: base + 11 },
       { label: 'fractional expiry', now: base, expires: at(base + 10.5), expected: base + 11 },
       { label: 'sub-second expiry', now: base + 0.2, expires: at(base + 0.5), expected: base + 1 },
@@ -1023,6 +1030,103 @@ describe('tempo.charge client', () => {
         vi.doUnmock('viem/actions')
         vi.resetModules()
       }
+    })
+  })
+
+  describe('sponsored challenge expiry', () => {
+    const base = 1_800_000_000
+    const at = (seconds: number) => new Date(seconds * 1000).toISOString()
+
+    async function sign(parameters: {
+      expires: string
+      feePayer?: boolean | undefined
+      supportedModes?: readonly ('pull' | 'push')[] | undefined
+    }) {
+      vi.resetModules()
+      vi.useFakeTimers({ now: base * 1000, toFake: ['Date'] })
+      const prepareTransactionRequest = vi.fn(
+        async (_client: unknown, _parameters: Record<string, unknown>) => ({}),
+      )
+      const sendTransactionSync = vi.fn(async () => ({ transactionHash: `0x${'ab'.repeat(32)}` }))
+      const signTransaction = vi.fn(async () => '0xdeadbeef')
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest,
+        sendCallsSync: vi.fn(),
+        sendTransactionSync,
+        signTransaction,
+        signTypedData: vi.fn(),
+      }))
+
+      try {
+        const { charge: chargeWithMockedActions } = await import('./Charge.js')
+        const client = createClient({
+          account,
+          chain: { ...tempoLocalnet, id: 42431 },
+          transport: http('http://127.0.0.1'),
+        })
+        const method = chargeWithMockedActions({ account, getClient: () => client })
+        const result = await method
+          .createCredential({
+            challenge: {
+              ...createChallenge({
+                amount: '1',
+                chainId: 42431,
+                feePayer: parameters.feePayer,
+                supportedModes: parameters.supportedModes ?? ['pull'],
+              }),
+              expires: parameters.expires,
+            },
+            context: {},
+          })
+          .then(
+            () => undefined,
+            (error: Error) => error,
+          )
+        return { prepareTransactionRequest, result, sendTransactionSync, signTransaction }
+      } finally {
+        vi.useRealTimers()
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    }
+
+    test('refuses a sponsored challenge expiring in under 15 seconds', async () => {
+      const { prepareTransactionRequest, result, sendTransactionSync, signTransaction } =
+        await sign({ expires: at(base + 14.999), feePayer: true })
+      expect(result?.message).toContain('Sponsored challenge expires in less than 15 seconds')
+      expect(prepareTransactionRequest).not.toHaveBeenCalled()
+      expect(signTransaction).not.toHaveBeenCalled()
+      expect(sendTransactionSync).not.toHaveBeenCalled()
+    })
+
+    test('signs a sponsored challenge expiring in exactly 15 seconds', async () => {
+      const { prepareTransactionRequest, result, signTransaction } = await sign({
+        expires: at(base + 15),
+        feePayer: true,
+      })
+      expect(result).toBeUndefined()
+      expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
+        nonceKey: 'expiring',
+        validBefore: base + 16,
+      })
+      expect(signTransaction).toHaveBeenCalledOnce()
+    })
+
+    test('signs a sponsored challenge expiring in under 15 seconds in push mode', async () => {
+      const { prepareTransactionRequest, result, sendTransactionSync } = await sign({
+        expires: at(base + 5),
+        feePayer: true,
+        supportedModes: ['push'],
+      })
+      expect(result).toBeUndefined()
+      expect(prepareTransactionRequest).not.toHaveBeenCalled()
+      expect(sendTransactionSync).toHaveBeenCalledOnce()
+    })
+
+    test('signs an unsponsored challenge expiring in under 15 seconds', async () => {
+      const { prepareTransactionRequest, result } = await sign({ expires: at(base + 5) })
+      expect(result).toBeUndefined()
+      expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({ validBefore: base + 6 })
     })
   })
 
