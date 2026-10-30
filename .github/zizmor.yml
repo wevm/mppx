@@ -1,0 +1,5 @@
+rules:
+  # actionlint does not support the $/ self-repository syntax yet, so local
+  # actions and reusable workflows keep their ./ references.
+  self-repository:
+    disable: true

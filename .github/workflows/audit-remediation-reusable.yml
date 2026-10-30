@@ -67,8 +67,12 @@ jobs:
       actions: read
       contents: write
       pull-requests: write
+      id-token: write
     runs-on: ubuntu-latest
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,7 +90,7 @@ jobs:
           node-version: ${{ inputs['node-version'] }}
 
       - name: Install dependencies
-        run: ${{ inputs['install-command'] }}
+        run: ${{ inputs['install-command'] }} # zizmor: ignore[template-injection] This reusable workflow explicitly accepts shell commands from trusted callers, not event data.
 
       - name: Detect failed audit step
         id: detect

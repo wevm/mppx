@@ -17,7 +17,13 @@ jobs:
     if: always()
     needs: [checks, test, test-html, test-x402-e2e]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
             echo "One or more required jobs failed or were cancelled"
@@ -26,9 +32,15 @@ jobs:
 
   checks:
     name: Checks
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
 
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,7 +79,13 @@ jobs:
     if: always()
     needs: [test-runtime]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
             echo "One or more runtime test shards failed or were cancelled"
@@ -76,6 +94,9 @@ jobs:
 
   test-runtime:
     name: Test Runtime / ${{ matrix.name }}
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 12
     strategy:
@@ -118,6 +139,9 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: true
       VITE_TEMPO_TAG: latest
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -133,7 +157,7 @@ jobs:
             docker run -d \
               --name mppx-tempo-localnet \
               -p 18545:54515 \
-              ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} \
+              "ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG}" \
               node \
               --authrpc.port 54545 \
               --datadir /tmp/mppx-tempo-localnet \
@@ -170,7 +194,7 @@ jobs:
       - name: Wait for Tempo localnet
         if: matrix.tempo
         run: |
-          for attempt in {1..90}; do
+          for _attempt in {1..90}; do
             if curl -fsS \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
@@ -237,6 +261,9 @@ jobs:
 
   test-x402-e2e:
     name: Test x402 E2E / ${{ matrix.name }}
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 12
     strategy:
@@ -253,6 +280,9 @@ jobs:
       X402_ANVIL_RPC_URL: http://127.0.0.1:18546
       X402_LOCALNET: true
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -277,7 +307,7 @@ jobs:
             --chain-id 31337 \
             --mnemonic 'test test test test test test test test test test test junk'
 
-          for attempt in {1..30}; do
+          for _attempt in {1..30}; do
             if curl -fsS \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
@@ -308,9 +338,15 @@ jobs:
 
   test-html:
     name: Test HTML
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

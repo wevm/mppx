@@ -24,8 +24,12 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      id-token: write
 
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,7 +37,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Report and reconcile frictions
-        uses: wevm/frog/action@242e306ebb19fbe77b6b3bcffcd9430743f5117a # v1
+        uses: wevm/frog/action@702c4eadefe175a208290a99c36e7f4ac1390e53 # v1
         with:
           issue-author: github-actions[bot]
           version: 1.0.15

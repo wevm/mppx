@@ -28,7 +28,7 @@ jobs:
       contents: read
       id-token: write
       pull-requests: read
-    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml@main
+    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance-policy.yml@280f74c141024ca1e1578758a43bba9e96eb86ad # zizmor: ignore[ref-version-mismatch] mpp-tools publishes no tags for these pins.
     with:
       protocol-paths: |
         src/**
@@ -41,7 +41,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml@main
+    uses: tempoxyz/mpp-tools/.github/workflows/sdk-conformance.yml@280f74c141024ca1e1578758a43bba9e96eb86ad # zizmor: ignore[ref-version-mismatch] mpp-tools publishes no tags for these pins.
     with:
       adapter: typescript
       conformance-ref: ${{ needs.conformance-policy.outputs.conformance_ref }}
