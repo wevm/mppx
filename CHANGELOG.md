@@ -1,5 +1,12 @@
 # mppx
 
+## 0.17.1
+
+### Patch Changes
+
+- cd6a2a7: Fixed payment retries losing Request-carried HTTP methods and bodies, including valid body overrides. Rejected automatic payment after redirects with ambiguous method rewriting before creating credentials.
+- 807376f: Fixed cooperative HTTP session close inheriting the resource Request's body and abort signal while preserving its transport settings and the same resource URL.
+
 ## 0.17.0
 
 ### Minor Changes
