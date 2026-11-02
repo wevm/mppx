@@ -160,7 +160,7 @@ export function create(config: create.Config): Proxy {
         body,
         credential,
         method: request.method,
-        target: url.pathname + url.search,
+        target: url.origin + url.pathname + url.search,
       })
       const found = await Replay.lookup(replay, replayKey)
       if (found.type === 'respond') return found.response

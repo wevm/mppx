@@ -353,3 +353,27 @@ describe('replay review fixes', () => {
     }
   })
 })
+
+describe('replay key scope', () => {
+  test('does not replay a delivery on a proxy at another origin sharing the store', async () => {
+    const store = Store.memory()
+    const onPaymentA = vi.fn()
+    const onPaymentB = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxyA = createProxy({ fetch, onPayment: onPaymentA, replay: { store } })
+    const proxyB = createProxy({ fetch, onPayment: onPaymentB, replay: { store } })
+    const request = (origin: string) =>
+      new Request(origin + '/api/generate', {
+        body: '{}',
+        headers: { Authorization: 'Payment credential-1' },
+        method: 'POST',
+      })
+
+    await (await proxyA.fetch(request('https://a.example'))).text()
+    await new Promise((r) => setTimeout(r, 0))
+    await (await proxyB.fetch(request('https://b.example'))).text()
+
+    expect(onPaymentB).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})

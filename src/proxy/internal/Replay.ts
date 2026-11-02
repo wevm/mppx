@@ -84,7 +84,7 @@ export async function readBody(request: Request, maxRequestBodySize: number) {
   return keep(request.body, maxRequestBodySize)
 }
 
-/** Derives the replay key from the credential and the exact request it paid for. */
+/** Derives the replay key from the credential and the exact request (origin, path, query, method, body) it paid for. */
 export function key(parameters: {
   body: Uint8Array
   credential: string
