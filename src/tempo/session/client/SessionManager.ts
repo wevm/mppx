@@ -214,6 +214,7 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  * channel state management and credential creation, and to `Fetch.from`
  * for the 402 challenge/retry flow.
  *
+ * Each manager is pinned to its first request origin. Use a separate manager per origin.
  * `channelStore` can persist reusable channels between manager instances.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
@@ -222,6 +223,30 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     Client.assertAllowedChainId(parameters.allowedChainIds, clientChainId)
   const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const config = resolveSessionManagerConfig(parameters)
+  let sessionOrigin: string | undefined
+
+  function bindOrigin(input: RequestInfo | URL): string {
+    const origin = new URL(
+      input instanceof Request ? input.url : String(input),
+      typeof location === 'undefined' ? undefined : location.href,
+    ).origin
+    if (sessionOrigin !== undefined && sessionOrigin !== origin)
+      throw new Error('SessionManager: session payment origin mismatch')
+    sessionOrigin = origin
+    return origin
+  }
+
+  const rawFetch = config.fetch
+  config.fetch = async (input, init) => {
+    const origin = bindOrigin(input)
+    const response = await rawFetch(input, {
+      ...init,
+      redirect: init?.redirect === 'manual' ? 'manual' : 'error',
+    })
+    if (response.url && new URL(response.url).origin !== origin)
+      throw new Error('SessionManager: session response origin mismatch')
+    return response
+  }
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
@@ -255,11 +280,20 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   /** Returns the backing entry for `key` only when it is open and not ignored. */
   async function getReusable(key: string): Promise<ChannelEntry | undefined> {
     const entry = await backing.get(key)
-    if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) return entry
+    if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) {
+      if (entry.origin !== undefined && entry.origin !== sessionOrigin)
+        throw new Error('SessionManager: stored channel origin mismatch')
+      return entry
+    }
     return undefined
   }
 
-  const persistChannel = (entry: ChannelEntry) => persistStoredChannel(backing, entry)
+  const persistChannel = (entry: ChannelEntry) => {
+    if (entry.origin !== undefined && entry.origin !== sessionOrigin)
+      throw new Error('SessionManager: stored channel origin mismatch')
+    entry.origin = sessionOrigin
+    return persistStoredChannel(backing, entry)
+  }
 
   const store: ChannelStore = {
     async get(key) {
@@ -840,6 +874,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error(
         'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
       )
+    bindOrigin(input)
     runtime.lastUrl = input
     runtime.lastHeaders = init?.headers
 
@@ -1024,6 +1059,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         )
       }
       const probeUrl = webSocketProbeUrl(input)
+      bindOrigin(probeUrl)
       const signalInit = init?.signal ? { signal: init.signal } : undefined
       await bootstrapSession(probeUrl, signalInit)
       // Cold starts resume from `channelStore` after the probe's 402.
@@ -1121,9 +1157,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   registerSessionManagerInternals(self, {
     consumeSseResponse(input, response, options) {
+      const origin = bindOrigin(input)
+      if (response.url && new URL(response.url).origin !== origin)
+        throw new Error('SessionManager: session response origin mismatch')
       return consumeSseSessionResponse(input, response, options, sseDriver)
     },
     rehydrate({ channel, challenge, input, spent }) {
+      const origin = bindOrigin(input)
+      if (channel.origin !== undefined && channel.origin !== origin)
+        throw new Error('SessionManager: stored channel origin mismatch')
       if (!channel.opened) throw new Error('Cannot restore a closed session channel.')
       if (!isTempoSessionChallenge(challenge)) {
         throw new Error('Cannot restore session: challenge is not tempo/session.')

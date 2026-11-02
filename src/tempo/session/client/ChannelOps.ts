@@ -39,6 +39,8 @@ type AccountWithAccessKey = Account & {
 
 /** Client-side cached channel metadata used for automatic voucher management. */
 export type ChannelEntry = {
+  /** HTTP origin bound by a session manager; absent on legacy or standalone method entries. */
+  origin?: string | undefined
   /** TIP-1034 channel ID derived from descriptor, escrow, and chain ID. */
   channelId: Hex.Hex
   /** Highest cumulative amount this client has locally authorized. */
