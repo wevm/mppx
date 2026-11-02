@@ -360,7 +360,9 @@ export type ApplyVerifiedHttpAccountingParameters = {
   receipt: SessionReceipt
   /** Marks an SSE receipt whose first content unit was charged during verification. */
   markPrepaidReceipt?: ((receipt: SessionReceipt) => SessionReceipt) | undefined
-  /** Whether SSE transport is enabled. SSE accounting is stream-driven, not HTTP-response-driven. */
+  /** Pricing unit; request-priced content is charged before handing control to the application. */
+  unitType?: unknown
+  /** Whether SSE transport is enabled. Non-request units are charged as the stream advances. */
   sseEnabled: boolean
   /** Runs optional server settlement policy after a successful content charge. */
   settleCharged: SettleChargedSessionChannel
@@ -370,13 +372,13 @@ export type ApplyVerifiedHttpAccountingParameters = {
 export function shouldApplyVerifiedHttpAccounting(
   parameters: Pick<
     ApplyVerifiedHttpAccountingParameters,
-    'capturedRequest' | 'payloadAction' | 'sseEnabled'
+    'capturedRequest' | 'payloadAction' | 'sseEnabled' | 'unitType'
   >,
 ): boolean {
-  const { capturedRequest, payloadAction, sseEnabled } = parameters
+  const { capturedRequest, payloadAction, sseEnabled, unitType } = parameters
   if (!capturedRequest) return false
   if (payloadAction !== 'open' && payloadAction !== 'voucher') return false
-  if (sseEnabled && capturedRequest.method === 'POST') return false
+  if (sseEnabled && capturedRequest.method === 'POST' && unitType !== 'request') return false
   return isSessionContentRequest(capturedRequest)
 }
 

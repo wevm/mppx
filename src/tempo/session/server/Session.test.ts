@@ -2276,6 +2276,81 @@ describe('precompile server session unit guardrails', () => {
       }).session({ amount: '1', decimals: 0, unitType: 'request' })
     }
 
+    test.each([undefined, false, true])(
+      'SSE request-priced POST charges before the handler (chargeOnAcceptance=%s)',
+      async (chargeOnAcceptance) => {
+        const rawStore = Store.memory()
+        const store = channelStore(rawStore)
+        const openPayload = await createOpenPayload({ initialAmount: 1n })
+        const voucher = await ClientOps.createVoucherPayload(
+          createSigningClient(),
+          payer,
+          openPayload.descriptor,
+          Types.uint96(1n),
+          chainId,
+        )
+        await persistPrecompileChannel(store, openPayload, {
+          highestVoucherAmount: 1n,
+          highestVoucher: {
+            channelId: openPayload.channelId,
+            cumulativeAmount: 1n,
+            signature: voucher.signature,
+          },
+          spent: 0n,
+          units: 0,
+        })
+        const route = Mppx_server.create({
+          methods: [
+            tempo_server.session({
+              amount: '1',
+              chainId,
+              currency: token,
+              decimals: 0,
+              recipient: payee,
+              store: rawStore,
+              unitType: 'request',
+              sse: true,
+              chargeOnAcceptance,
+              getClient: () =>
+                createStateClient(payer, { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 }),
+            }),
+          ],
+          realm: 'api.example.com',
+          secretKey: 'test-secret-key-test-secret-key-32',
+        }).session({ amount: '1', decimals: 0, unitType: 'request' })
+        const input = (authorization?: string) =>
+          new Request('https://api.example.com/resource', {
+            method: 'POST',
+            body: 'paid work',
+            headers: authorization ? { Authorization: authorization } : {},
+          })
+        const first = await route(input())
+        if (first.status !== 402) throw new Error('expected challenge')
+        const authorization = Credential.serialize({
+          challenge: Challenge.fromResponse(first.challenge),
+          payload: voucher,
+          source: sourceFor(),
+        })
+        let calls = 0
+        const serve = async () => {
+          const result = await route(input(authorization))
+          if (result.status === 402) return result.challenge
+          calls++
+          expect((await store.getChannel(openPayload.channelId))?.spent).toBe(1n)
+          return result.withReceipt(new Response('paid work'))
+        }
+        const paid = await serve()
+        expect(await paid.text()).toBe('paid work')
+        const before = await store.getChannel(openPayload.channelId)
+        expect((await serve()).status).toBe(402)
+        expect(calls).toBe(1)
+        expect(await store.getChannel(openPayload.channelId)).toEqual({
+          ...before,
+          onChainVerifiedAt: expect.any(Number),
+        })
+      },
+    )
+
     test('GET content flow charges once and rejects same-voucher replay', async () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)

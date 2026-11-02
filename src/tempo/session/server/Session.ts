@@ -534,7 +534,7 @@ export function session<const parameters extends session.Parameters>(
     })
 
     const chargeAmount =
-      parameters.chargeOnAcceptance &&
+      (parameters.chargeOnAcceptance || parameters.sse) &&
       shouldChargeVoucherOnAcceptance({
         capturedRequest: envelope?.capturedRequest,
         payloadAction: payload.action,
@@ -606,6 +606,7 @@ export function session<const parameters extends session.Parameters>(
       getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
       sseEnabled: Boolean(parameters.sse),
       markPrepaidReceipt: Transport.markPrepaidSessionTick,
+      unitType: context.request.unitType,
       charge: (channelId, requestAmount) =>
         chargeSessionChannel({ store, channelId, amount: requestAmount }),
       settleCharged: settleAcceptedCharge,
@@ -780,7 +781,8 @@ export namespace session {
     /**
      * Charges request-priced content (`unitType: 'request'`) in the same store update that accepts
      * its voucher, before the response, instead of in a second update when the response is
-     * delivered. The server must then refund requests it cannot serve.
+     * delivered. Always enabled for SSE request-priced content, including POST requests that
+     * return plain responses. The server must refund requests it cannot serve.
      */
     chargeOnAcceptance?: boolean | undefined
     /**
