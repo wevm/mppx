@@ -115,6 +115,67 @@ function acknowledgesOpen(
   )
 }
 
+type SpendingPolicy = {
+  currencies: readonly string[] | undefined
+  maxAmount: bigint | undefined
+  maxAtomicAmount: bigint | undefined
+}
+
+/** Validates and parses the client's session spending options once, at construction. */
+function resolveSpendingPolicy(parameters: session.Parameters): SpendingPolicy {
+  const { currencies, decimals, maxAmount, maxAtomicAmount } = parameters
+  // Caps are denominated in the challenge currency, so they require a currency pin.
+  if ((maxAmount !== undefined || maxAtomicAmount !== undefined) && currencies === undefined)
+    throw new Error('Tempo session maxAmount and maxAtomicAmount require currencies.')
+  return {
+    currencies: currencies?.map((currency) => currency.toLowerCase()),
+    maxAmount: parseMaxAmount(maxAmount, decimals),
+    maxAtomicAmount: maxAtomicAmount === undefined ? undefined : BigInt(maxAtomicAmount),
+  }
+}
+
+/** Parses a display-unit cap, rejecting values that `parseUnits` would round. */
+function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefined) {
+  if (maxAmount === undefined) return undefined
+  if (decimals === undefined) throw new Error('Tempo session maxAmount requires currency decimals.')
+  const fraction = maxAmount.split('.')[1]?.replace(/0+$/, '') ?? ''
+  if (fraction.length > decimals)
+    throw new Error(
+      `Tempo session maxAmount ${maxAmount} has more fractional digits than ${decimals} decimals allow.`,
+    )
+  return parseUnits(maxAmount, decimals)
+}
+
+/**
+ * Rejects a session challenge whose currency or per-unit amount violates the client policy.
+ * Runs during challenge selection, in the automatic top-up hook, and before any signing work.
+ */
+function assertSpendingPolicy(
+  policy: SpendingPolicy,
+  request: { amount: string; currency: string },
+) {
+  if (policy.currencies && !policy.currencies.includes(request.currency.toLowerCase()))
+    throw new Error(`Tempo session currency is not allowed: ${request.currency}.`)
+  const amount = BigInt(request.amount)
+  if (policy.maxAtomicAmount !== undefined && amount > policy.maxAtomicAmount)
+    throw new Error('Tempo session amount exceeds maxAtomicAmount.')
+  if (policy.maxAmount !== undefined && amount > policy.maxAmount)
+    throw new Error('Tempo session amount exceeds maxAmount.')
+}
+
+/** Returns whether a session challenge satisfies the client policy. */
+function satisfiesSpendingPolicy(
+  policy: SpendingPolicy,
+  request: { amount: string; currency: string },
+) {
+  try {
+    assertSpendingPolicy(policy, request)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
  *
@@ -137,6 +198,7 @@ export function session(parameters: session.Parameters = {}) {
     onChannelUpdate,
     resolveAccount,
   } = parameters
+  const policy = resolveSpendingPolicy(parameters)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
@@ -187,10 +249,14 @@ export function session(parameters: session.Parameters = {}) {
     })
 
   const method = Method.toClient(Methods.session, {
-    canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
+    // Skip offers that violate client policy so an acceptable offer can be chosen.
+    canHandleChallenge: ({ challenge }) =>
+      isTip1034SessionChallenge(challenge) && satisfiesSpendingPolicy(policy, challenge.request),
     context: sessionContextSchema,
     async createCredential(parameters) {
       const { challenge, context } = parameters
+      // Closing settles what the channel already spent, so it stays available for any offer.
+      if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
       const resolved = await resolveChallengeContext({
         allowCustomEscrow,
         challenge,
@@ -351,6 +417,7 @@ export function session(parameters: session.Parameters = {}) {
 
   MethodChallenge.register(method, async ({ challenge, context, fetch, input, signal }) => {
     if (!isTip1034SessionChallenge(challenge)) return
+    assertSpendingPolicy(policy, challenge.request)
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
     const resolved = await resolveChallengeContext({
@@ -456,7 +523,14 @@ export declare namespace session {
       autoSwap?: AutoSwap.resolve.Value | undefined
       /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
       channelStore?: ChannelStore | undefined
-      /** Token decimals for parsing human-readable amounts (default: 6). */
+      /**
+       * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
+       * case-insensitively. Offers in other currencies are skipped during selection and
+       * rejected before signing; an empty list rejects all. Required with `maxAmount` or
+       * `maxAtomicAmount`, which are denominated in the challenge currency.
+       */
+      currencies?: readonly Address[] | undefined
+      /** Token decimals for parsing human-readable amounts (default: 6). `maxAmount` requires it explicitly. */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
@@ -466,6 +540,18 @@ export declare namespace session {
        * challenge or resolved client must select an allowed chain.
        */
       allowedChainIds?: readonly number[] | undefined
+      /**
+       * Maximum display-unit amount (e.g. `'1.5'`) the client is willing to pay per session
+       * unit (the challenge `amount`), parsed with an explicit `decimals`. Values with more
+       * fractional digits than `decimals` are rejected rather than rounded. Larger offers are
+       * skipped during selection and rejected before signing. Requires `currencies`.
+       */
+      maxAmount?: string | undefined
+      /**
+       * Maximum amount the client is willing to pay per session unit, in raw base units of the
+       * challenge currency. Checked like `maxAmount`. Requires `currencies`.
+       */
+      maxAtomicAmount?: string | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined
       /**
