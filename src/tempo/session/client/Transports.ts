@@ -602,7 +602,7 @@ export function requestInitWithAuthorization(
 
 /** Returns the exact resource URL used for out-of-band management POSTs, without its fragment. */
 /** Returns whether a value is a `Request`, including one from another realm such as an iframe. */
-function isRequest(value: unknown): value is Request {
+export function isRequest(value: unknown): value is Request {
   return (
     value instanceof Request ||
     (typeof value === 'object' &&

@@ -154,6 +154,11 @@ export function withFundingLock<T>(
 export async function persistChannel(store: ChannelStore, entry: ChannelEntry): Promise<void> {
   await exclusive(store, `write:${entryKey(entry)}`, async () => {
     const current = await store.get(entryKey(entry))
+    if (current?.origin !== undefined) {
+      if (entry.origin !== undefined && entry.origin !== current.origin)
+        throw new Error('SessionManager: stored channel origin mismatch')
+      entry.origin = current.origin
+    }
     if (current?.uncertainTopUp) {
       if (current.channelId !== entry.channelId)
         throw new Error(

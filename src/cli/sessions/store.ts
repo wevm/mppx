@@ -147,6 +147,7 @@ export class SessionBusyError extends Error {
 }
 
 const storedChannelSchema = z.object({
+  origin: z.optional(z.string()),
   channelId: z.hash(),
   cumulativeAmount: z.string(),
   deposit: z.string(),
@@ -323,6 +324,11 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
     const previous =
       previousValue === undefined ? undefined : parseStoredSession(previousValue, file)
     if (previous) assertSameSession(previous, input, file)
+    const origin = previous?.channel.origin ?? channel.origin
+    if (previous?.channel.origin && channel.origin && previous.channel.origin !== channel.origin)
+      throw stateError(file, 'Session payment origin mismatch.')
+    if (origin !== undefined && new URL(origin).origin !== origin)
+      throw stateError(file, 'Session payment origin must be a normalized origin.')
 
     const challenge = parseSessionChallenge(input.challenge, file)
     assertChallengeMatchesChannel(challenge, channel, file)
@@ -343,7 +349,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
       throw stateError(file, 'Session spend exceeds the locally authorized cumulative amount.')
 
     const storedChannel = sanitizeStoredChannel(
-      serializeEntry({ ...channel, cumulativeAmount }),
+      serializeEntry({ ...channel, cumulativeAmount, ...(origin !== undefined && { origin }) }),
       file,
     )
     const timestamp = monotonicTimestamp(previous?.updatedAt, now(), file)

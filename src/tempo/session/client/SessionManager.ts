@@ -9,6 +9,7 @@ import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as ProofRealm from '../../../client/internal/ProofRealm.js'
 import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
+import * as IdentityClient from '../../../identity/Client.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
@@ -57,6 +58,7 @@ import {
   closeHttpSession,
   getSessionSnapshot,
   isTempoSessionChallenge,
+  isRequest,
   postTopUp,
   retryHttpPaymentRequired,
   type TempoSessionChallenge,
@@ -160,7 +162,7 @@ function requestInitWithSessionHint(
   channelId: Hex.Hex | undefined,
 ): RequestInit | undefined {
   if (!channelId) return init
-  const requestHeaders = input instanceof Request ? input.headers : undefined
+  const requestHeaders = isRequest(input) ? input.headers : undefined
   const headers = {
     ...Fetch.normalizeHeaders(requestHeaders),
     ...Fetch.normalizeHeaders(init?.headers),
@@ -214,6 +216,7 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  * channel state management and credential creation, and to `Fetch.from`
  * for the 402 challenge/retry flow.
  *
+ * Each manager is pinned to its first request origin. Use a separate manager per origin.
  * `channelStore` can persist reusable channels between manager instances.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
@@ -222,6 +225,39 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     Client.assertAllowedChainId(parameters.allowedChainIds, clientChainId)
   const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const config = resolveSessionManagerConfig(parameters)
+  let sessionOrigin: string | undefined
+
+  function bindOrigin(input: RequestInfo | URL): string {
+    const url = new URL(
+      isRequest(input) ? input.url : String(input),
+      typeof location === 'undefined' ? undefined : location.href,
+    )
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      throw new Error('SessionManager: session payments require an HTTP origin')
+    const origin = url.origin
+    if (sessionOrigin !== undefined && sessionOrigin !== origin)
+      throw new Error('SessionManager: session payment origin mismatch')
+    sessionOrigin = origin
+    return origin
+  }
+
+  const inheritedIdentity = Fetch.identityOf(config.fetch)
+  const rawFetch = Fetch.unwrapFetch(config.fetch)
+  config.fetch = async (input, init) => {
+    const origin = bindOrigin(input)
+    const response = await rawFetch(input, {
+      ...init,
+      redirect:
+        (init?.redirect ?? (isRequest(input) ? input.redirect : undefined)) === 'manual'
+          ? 'manual'
+          : 'error',
+    })
+    if (response.url && new URL(response.url).origin !== origin)
+      throw new Error('SessionManager: session response origin mismatch')
+    return response
+  }
+  const guardedFetch = config.fetch
+  if (inheritedIdentity) config.fetch = IdentityClient.wrapFetch(guardedFetch, inheritedIdentity)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
@@ -255,11 +291,20 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   /** Returns the backing entry for `key` only when it is open and not ignored. */
   async function getReusable(key: string): Promise<ChannelEntry | undefined> {
     const entry = await backing.get(key)
-    if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) return entry
+    if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) {
+      if (entry.origin !== undefined && entry.origin !== sessionOrigin)
+        throw new Error('SessionManager: stored channel origin mismatch')
+      return entry
+    }
     return undefined
   }
 
-  const persistChannel = (entry: ChannelEntry) => persistStoredChannel(backing, entry)
+  const persistChannel = (entry: ChannelEntry) => {
+    if (entry.origin !== undefined && entry.origin !== sessionOrigin)
+      throw new Error('SessionManager: stored channel origin mismatch')
+    entry.origin = sessionOrigin
+    return persistStoredChannel(backing, entry)
+  }
 
   const store: ChannelStore = {
     async get(key) {
@@ -411,7 +456,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   const wrappedFetch = Fetch.from({
-    fetch: config.fetch,
+    fetch: guardedFetch,
+    identity: inheritedIdentity,
     methods: [method],
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
@@ -500,9 +546,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!parameters.bootstrap) return undefined
     if (runtime.channel?.opened) return undefined
 
-    const requestHeaders = input instanceof Request ? input.headers : undefined
+    const requestHeaders = isRequest(input) ? input.headers : undefined
     const { body: _body, method: _method, ...bootstrapInit } = init ?? {}
-    const bootstrapInput = input instanceof Request ? input.url : input
+    const bootstrapInput = isRequest(input) ? input.url : input
     const headInit: RequestInit = {
       ...bootstrapInit,
       method: 'HEAD',
@@ -840,6 +886,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error(
         'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
       )
+    bindOrigin(input)
     runtime.lastUrl = input
     runtime.lastHeaders = init?.headers
 
@@ -1024,6 +1071,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         )
       }
       const probeUrl = webSocketProbeUrl(input)
+      bindOrigin(probeUrl)
       const signalInit = init?.signal ? { signal: init.signal } : undefined
       await bootstrapSession(probeUrl, signalInit)
       // Cold starts resume from `channelStore` after the probe's 402.
@@ -1121,9 +1169,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   registerSessionManagerInternals(self, {
     consumeSseResponse(input, response, options) {
+      const origin = bindOrigin(input)
+      if (response.url && new URL(response.url).origin !== origin)
+        throw new Error('SessionManager: session response origin mismatch')
       return consumeSseSessionResponse(input, response, options, sseDriver)
     },
     rehydrate({ channel, challenge, input, spent }) {
+      const origin = bindOrigin(input)
+      if (channel.origin !== undefined && channel.origin !== origin)
+        throw new Error('SessionManager: stored channel origin mismatch')
       if (!channel.opened) throw new Error('Cannot restore a closed session channel.')
       if (!isTempoSessionChallenge(challenge)) {
         throw new Error('Cannot restore session: challenge is not tempo/session.')

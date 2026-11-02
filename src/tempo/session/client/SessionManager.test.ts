@@ -3,8 +3,10 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
+import * as Fetch from '../../../client/internal/Fetch.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import * as IdentityClient from '../../../identity/Client.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createJsonChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import * as Channel from '../precompile/Channel.js'
@@ -350,6 +352,52 @@ describe('Session', () => {
       )
     })
 
+    test.each([false, true])(
+      'inherits identity and redirect mode through a payment fetch (%s)',
+      async (manual) => {
+        const base = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init)
+          expect(request.headers.get('Signature')).toBe('session-identity')
+          expect(request.redirect).toBe(manual ? 'manual' : 'error')
+          return makeOkResponse('hello')
+        })
+        const identity = IdentityClient.from([
+          {
+            scope: '*',
+            prove(request) {
+              const headers = new Headers(request.headers)
+              headers.set('Signature', 'session-identity')
+              return new Request(request, { headers })
+            },
+          },
+        ])
+        const innerChallenge = vi.fn()
+        const inner = Fetch.from({
+          fetch: base,
+          identity,
+          methods: [],
+          onChallenge: innerChallenge,
+        })
+        const manager = sessionManager({
+          account: '0x0000000000000000000000000000000000000001',
+          fetch: inner,
+        })
+        expect(
+          (
+            await manager.fetch(
+              new Request('https://api.example.com/data', {
+                redirect: manual ? 'manual' : 'follow',
+              }),
+            )
+          ).status,
+        ).toBe(200)
+        expect(base).toHaveBeenCalledOnce()
+        expect(innerChallenge).not.toHaveBeenCalled()
+        await expect(manager.fetch('https://evil.example/data')).rejects.toThrow('origin mismatch')
+        expect(base).toHaveBeenCalledOnce()
+      },
+    )
+
     test('passes through non-402 responses', async () => {
       const mockFetch = vi.fn().mockResolvedValue(makeOkResponse('hello'))
 
@@ -362,6 +410,49 @@ describe('Session', () => {
       expect(res.status).toBe(200)
       expect(await res.text()).toBe('hello')
       expect(mockFetch).toHaveBeenCalledOnce()
+    })
+
+    test.each([
+      'https://evil.example/data',
+      'http://api.example.com/data',
+      'https://api.example.com:8443/data',
+    ])('rejects cross-origin reuse before fetching %s', async (url) => {
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse('hello'))
+      const manager = sessionManager({ account, fetch: mockFetch })
+      await manager.fetch('https://API.example.com:443/data')
+      await expect(manager.fetch(url)).rejects.toThrow('origin mismatch')
+      await expect(manager.sse(url)).rejects.toThrow('origin mismatch')
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+      await manager.fetch('https://api.example.com/another')
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+    })
+
+    test('binds request-like values from other realms by their actual URL', async () => {
+      const fetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const manager = sessionManager({ account, fetch })
+      await manager.fetch('https://api.example.com/data')
+      const foreign = {
+        url: 'https://evil.example/stream',
+        method: 'GET',
+        headers: new Headers(),
+        clone() {
+          return this
+        },
+        toString() {
+          return '[object Request]'
+        },
+      } as Request
+      await expect(manager.fetch(foreign)).rejects.toThrow('origin mismatch')
+      expect(fetch).toHaveBeenCalledTimes(1)
+    })
+
+    test('rejects responses redirected to another origin', async () => {
+      const response = makeOkResponse('hello')
+      Object.defineProperty(response, 'url', { value: 'https://evil.example/data' })
+      const mockFetch = vi.fn().mockResolvedValue(response)
+      const manager = sessionManager({ account, fetch: mockFetch })
+      await expect(manager.fetch('https://api.example.com/data')).rejects.toThrow('origin mismatch')
+      expect(mockFetch.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' })
     })
 
     test('rejects a concurrent request while one is in flight', async () => {
@@ -923,6 +1014,48 @@ describe('Session', () => {
 
       expect(mockFetch).toHaveBeenCalledOnce()
       expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
+    })
+
+    test.each([
+      'app://trusted/data',
+      'ipfs://content/data',
+      'data:text/plain,hello',
+      'file:///tmp/data',
+    ])('rejects opaque payment origin %s before fetching', async (url) => {
+      const fetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const manager = sessionManager({ account, client, fetch })
+      await expect(manager.fetch(url)).rejects.toThrow('require an HTTP origin')
+      expect(fetch).not.toHaveBeenCalled()
+      await manager.fetch('https://api.example.com/data')
+      expect(fetch).toHaveBeenCalledOnce()
+    })
+
+    test('does not authorize a persisted channel for another origin', async () => {
+      const stored = channelEntry({ origin: 'https://trusted.example' })
+      const storage = makeChannelStore([stored])
+      const fetch = vi.fn().mockResolvedValue(make402Response())
+      const manager = sessionManager({ account, client, fetch, channelStore: storage.store })
+      await expect(manager.fetch('https://api.example.com/data')).rejects.toThrow('origin mismatch')
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(storage.set).not.toHaveBeenCalled()
+      expect(storage.delete).not.toHaveBeenCalled()
+    })
+
+    test('rejects foreign SSE before signing or disclosing an active channel', async () => {
+      const fetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const manager = sessionManager({ account, client, fetch })
+      const internals = getSessionManagerInternals(manager)
+      const challenge = makeChallenge()
+      if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+      internals.rehydrate({
+        channel: channelEntry({ origin: 'https://api.example.com' }),
+        challenge,
+        input: 'https://api.example.com/data',
+        spent: 0n,
+      })
+      await expect(manager.sse('https://evil.example/stream')).rejects.toThrow('origin mismatch')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(manager.cumulative).toBe(1_000_000n)
     })
 
     test('uses stored channel details when the server does not return a snapshot', async () => {
@@ -1748,7 +1881,7 @@ describe('Session', () => {
         h.internals.rehydrate({
           channel: change === 'channel' ? { ...h.entry, channelId } : h.entry,
           challenge: h.challenge,
-          input: change === 'url' ? 'https://other.example.com/' : h.input,
+          input: change === 'url' ? new URL('/other', h.input).href : h.input,
           spent: 0n,
         })
         h.release()
