@@ -1,3 +1,4 @@
+import { unwrapFetch } from '../../client/internal/Fetch.js'
 import { pc } from '../utils.js'
 
 export type CheckResult = {
@@ -92,7 +93,7 @@ export function printResults(results: CheckResult[], counts: Counts) {
   }
 }
 
-/** Fetches the validation target without allowing it to redirect probes elsewhere. */
+/** Fetches a validation target without automatic payments or redirected probes. */
 export async function fetchWithTimeout(
   url: RequestInfo | URL,
   init: RequestInit,
@@ -101,7 +102,11 @@ export async function fetchWithTimeout(
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...init, redirect: 'error', signal: controller.signal })
+    return await unwrapFetch(globalThis.fetch)(url, {
+      ...init,
+      redirect: 'error',
+      signal: controller.signal,
+    })
   } finally {
     clearTimeout(timeout)
   }
