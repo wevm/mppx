@@ -43,12 +43,14 @@ export const validityWindowSeconds = 25
 export type ChargeContext = {
   account?: Account.getResolver.Parameters['account'] | undefined
   autoSwap?: AutoSwap.resolve.Value | undefined
+  feeToken?: Address | undefined
   mode?: Methods.ChargeMode | undefined
 }
 
 const chargeContextSchema = z.object({
   account: z.optional(z.custom<ChargeContext['account']>()),
   autoSwap: z.optional(z.custom<ChargeContext['autoSwap']>()),
+  feeToken: z.optional(z.custom<ChargeContext['feeToken']>()),
   mode: z.optional(z.enum(Methods.chargeModes)),
 })
 
@@ -225,8 +227,10 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
       const allowedFeeTokens = defaultFeeTokens(chainId)
-      const feeToken =
-        machineTokenRoute || isMachineTokenCurrency
+      const explicitFeeToken = context?.feeToken ?? parameters.feeToken
+      const feeToken = explicitFeeToken
+        ? explicitFeeToken
+        : machineTokenRoute || isMachineTokenCurrency
           ? await resolveFeeToken({
               account: account.address,
               allowedTokens: allowedFeeTokens,
@@ -459,6 +463,12 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Token the payer pays its transaction fee in, when the challenge is not fee-sponsored.
+     * Set it for an access key whose spending limits do not cover the default fee token,
+     * such as a key limited to OUSD paying a USDC.e charge.
+     */
+    feeToken?: Address | undefined
     /**
      * Chain ID this client is willing to pay on. When set, the client rejects
      * any challenge whose `methodDetails.chainId` differs, and signs on this
