@@ -141,7 +141,15 @@ export async function serve(options: serve.Options): Promise<void> {
     runtime.closed = true
     abortController.abort()
     unsubscribe()
-    await Promise.resolve(socket.close(code, reason))
+    try {
+      await socket.close(code, reason)
+    } catch {
+      // Some adapters reject a close even after the session has stopped.
+      // Retry without application data and contain both sync and async errors.
+      try {
+        await socket.close()
+      } catch {}
+    }
   }
 
   const sendCloseReady = async () => {
@@ -234,7 +242,7 @@ export async function serve(options: serve.Options): Promise<void> {
           status: authorizationResult.responseStatus,
         }),
       )
-      await close(1008, authorizationResult.message)
+      await close(1008, 'payment authorization rejected')
       return
     }
 
@@ -275,14 +283,11 @@ export async function serve(options: serve.Options): Promise<void> {
     if (runtime.closed) return
     const messageBytes = frameByteLength(payload)
     if (messageBytes !== null && messageBytes > maxIncomingMessageBytes) {
-      runtime.closed = true
-      abortController.abort()
-      unsubscribe()
+      void close(1009, 'payment message is too large').catch(() => {})
       void send(
         socket,
         formatErrorMessage({ message: 'payment message is too large', status: 413 }),
       ).catch(() => {})
-      void Promise.resolve(socket.close(1009, 'payment message is too large')).catch(() => {})
       return
     }
     const raw = toText(payload)

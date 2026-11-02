@@ -294,6 +294,42 @@ describe('isows', () => {
     expect(socket.sent).toEqual([])
   })
 
+  test.each(['x'.repeat(1024), '界'.repeat(100)])(
+    'closes rejected payments with a protocol-safe reason',
+    async (message) => {
+      const socket = new MockSocket()
+      let closeReason = ''
+      const close = socket.close.bind(socket)
+      socket.close = (_code?: number, reason = '') => {
+        if (new TextEncoder().encode(reason).length > 123) throw new RangeError('reason too long')
+        closeReason = reason
+        close()
+      }
+      await Ws.serve({
+        socket,
+        store: Store.memory(),
+        url: 'ws://example.test/stream',
+        route: async () => ({ status: 402, challenge: new Response(message, { status: 402 }) }),
+        generate: async function* () {},
+      })
+      socket.receive(
+        Ws.formatAuthorizationMessage(
+          makeCredential({
+            action: 'open',
+            channelId,
+            cumulativeAmount: '1',
+            signature: `0x${'77'.repeat(65)}`,
+            transaction: '0x01',
+            type: 'transaction',
+          }),
+        ),
+      )
+      await expect.poll(() => socket.closed).toBe(true)
+      expect(closeReason).toBe('payment authorization rejected')
+      expect(socket.sent.some((frame) => frame.includes(message))).toBe(true)
+    },
+  )
+
   test('caps queued payment work and closes noisy sockets', async () => {
     const socket = new MockSocket()
     let routeCalls = 0
