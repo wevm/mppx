@@ -187,14 +187,11 @@ Conventions every MPP repository shares, pulled together from their AGENTS.md fi
 
 Use each language's standard toolchain, run through the commands in `## Commands`, and keep it clean with warnings as errors:
 
-| Language | Tooling |
-| --- | --- |
-| TypeScript | pnpm, strict `tsc`, ESM with `.js` relative imports, the repository's configured formatter and linter, Vitest |
-| Python | uv, ruff (format and lint), a strict type checker (pyright or ty), pytest or unittest |
-| Rust | cargo, `cargo fmt`, `cargo clippy -D warnings`, `cargo test` |
-| Go | `gofmt`, `go vet`, golangci-lint, `go test -race` |
-| Swift | SwiftPM, `swift test -Xswiftc -warnings-as-errors` |
-
+- TypeScript: pnpm, strict `tsc`, ESM with `.js` relative imports, the repository's configured formatter and linter, Vitest.
+- Python: uv, ruff (format and lint), a strict type checker (pyright or ty), pytest or unittest.
+- Rust: cargo, `cargo fmt`, `cargo clippy -D warnings`, `cargo test`.
+- Go: `gofmt`, `go vet`, golangci-lint, `go test -race`.
+- Swift: SwiftPM, `swift test -Xswiftc -warnings-as-errors`.
 - Run the checks that cover your change before opening a pull request, and add tests for behavior that matters, next to the existing ones.
 - Pin GitHub Actions by full commit SHA. Workflows start with `tempoxyz/gh-actions/actions/secure-runner` and get write tokens from GitHub STS policies in `.github/sts/`, never stored secrets.
 
