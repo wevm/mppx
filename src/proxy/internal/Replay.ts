@@ -5,7 +5,13 @@ import type * as Store from '../../Store.js'
 
 /** Options for replaying paid proxy deliveries. */
 export type Options = {
-  /** Upstream attempts per credential, including the first, before a retry gets `502`. @default 3 */
+  /**
+   * Upstream attempts per credential, including the first, before a retry gets `502`.
+   * A retry after a failed delivery (an upstream error, a 5xx or a body that broke
+   * off) sends the paid request upstream again without charging, so a
+   * non-idempotent upstream may run the operation twice; set `1` to only ever
+   * replay a recorded response. @default 3
+   */
   maxAttempts?: number | undefined
   /** Largest response body, in bytes, kept for replay. Larger or streamed bodies are delivered but not kept. @default 1_048_576 */
   maxBodySize?: number | undefined
