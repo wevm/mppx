@@ -1,26 +1,68 @@
 # mppx
 
-TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Protocol).
+The TypeScript SDK for MPP and its reference implementation: client and server abstractions for the full HTTP 402 payment flow, payment methods (Tempo, Stripe, EVM, x402), framework middlewares, MCP transport, a proxy and the `mppx` CLI. Other SDKs match its behavior, names and error types, so changes here propagate to them.
 
-## Code Simplicity
+## Commands
 
-All code should be as simple as possible. Prefer existing patterns and avoid unnecessary abstractions.
+```bash
+pnpm install                     # Install dependencies
+pnpm build                       # Sync version, bundle HTML, build the library (zile) and CLI
+pnpm check                       # Lint and format with fixes (vp lint --fix, vp fmt --write)
+pnpm check:ci                    # Lint and format check, as CI runs it
+pnpm check:types                 # Bundle HTML, then type-check (tsgo -b)
+pnpm check:types:html            # Type-check the Tempo and Stripe HTML payment pages
+pnpm check:types:examples        # Type-check every package under examples/
+pnpm check:package               # Check package contents and size
+pnpm audit --ignore-registry-errors  # Audit dependencies
+pnpm changeset status --since=HEAD^1 # CI requires a changeset on pull requests
+pnpm exec vp test --run --project node     # Unit tests, no localnet
+pnpm exec vp test --run --project tempo    # Tests against a Tempo localnet on port 18545
+pnpm exec vp test --run --project cli      # CLI tests (need a keyring: libsecret / gnome-keyring)
+pnpm exec vp test --run --project browser  # Browser unit tests (Playwright Chromium)
+pnpm test:html                   # Playwright tests of the HTML payment pages
+```
 
-## Friction Logging
+Run one test file by project and path, for example `pnpm exec vp test --project node src/server/Mppx.test.ts`. A bare `pnpm test <path>` runs the `tempo` project's global setup and fails without a localnet on port 18545. CI starts that localnet with Docker (`ghcr.io/tempoxyz/tempo`, `--dev`, port 18545 mapped to 54515; see `.github/workflows/verify.yml`) and runs node and tempo tests in shards. Files that use the funded Tempo accounts belong to the `tempo` project through `test/runtime/tempo-suites.ts`; add a new such file there by hand. The x402 end-to-end projects (`x402-localnet`, `x402-coinbase-client`) need an Anvil container on port 18546 and Forge fixtures. `pnpm test:html` uses `MPP_SECRET_KEY` and, for Stripe, `VITE_STRIPE_SECRET_KEY` and `VITE_STRIPE_PUBLIC_KEY`. Run `pnpm build` before tests: they load the bundled HTML.
 
-- Log papercuts and friction (tooling, docs, APIs, tests, conventions) as you hit them with `pnpx frog log`.
-- Do not add global, system, or internal friction.
-- Run `pnpx frog list` first to see what is already known.
+## Layout
 
-## Vision
+- `src/`: the library. Top-level modules are the primitives (`Challenge.ts`, `Credential.ts`, `Receipt.ts`, `Method.ts`, `PaymentRequest.ts`, `Errors.ts`, `Store.ts`, `BodyDigest.ts`, `Expires.ts`).
+- `src/client/` and `src/server/`: the client and server `Mppx` handlers (`mppx/client`, `mppx/server`).
+- `src/tempo/`, `src/stripe/`, `src/evm/`, `src/x402/`: payment methods and their client and server halves.
+- `src/middlewares/`: Hono, Express, Next.js and Elysia integrations.
+- `src/mcp/`: MCP client and server transport. `src/discovery/`: OpenAPI discovery. `src/proxy/`: the payment proxy and its services. `src/identity/`, `src/extensions/`: identity extensions.
+- `src/cli/`, `src/bin.ts`: the `mppx` CLI.
+- `test/`: shared test helpers, setup, HTML Playwright tests (`test/html/`) and shard config (`test/runtime/`).
+- `examples/`: runnable example apps, a pnpm workspace each.
+- `scripts/`: build, publish and maintenance scripts.
+- `vite.config.ts`: test projects and the `mppx/*` import aliases.
 
-mppx provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has two layers:
+## Conventions
 
-### Core Abstractions
+- Keep code as simple as possible. Prefer existing patterns and avoid unnecessary abstractions.
+- Add JSDoc to exported functions and to any complicated function.
+- mppx is pre-v1: always use `patch` bumps, including for new features, additive API surface, refactors and fixes. Use `minor` only for a substantial, unavoidable breaking change that requires consumer migration (removing or renaming a public export, changing a hook signature incompatibly). Never use `major` until v1.
+- Never edit `CHANGELOG.md` by hand; `changeset version` generates it. Add a changeset as `.changeset/<name>.md`, written in past tense ("Added support for …", "Fixed parsing of …"):
 
-1. **`Mppx`** — Top-level payment handler. Groups related `Method`s and handles the HTTP 402 flow (challenge/credential parsing, header serialization, verification).
+  ```md
+  ---
+  'mppx': patch
+  ---
 
-2. **`Method`** — A payment method definition. Each method has a `name` (e.g., `charge`, `session`), a `method` (e.g., `tempo`, `stripe`), and schemas for request validation and credential payloads.
+  Added support for ….
+  ```
+
+- Keep pnpm overrides in `pnpm-workspace.yaml`, not `package.json`; CI fails otherwise.
+- Log papercuts and friction (tooling, docs, APIs, tests, conventions) as you hit them with `pnpx frog log`. Run `pnpx frog list` first to see what is already known. Do not add global, system or internal friction.
+
+## Architecture
+
+mppx has two layers: core abstractions that run the HTTP 402 flow, and primitives they compose.
+
+### Core abstractions
+
+1. **`Mppx`**: the top-level payment handler. Groups related `Method`s and handles the 402 flow (Challenge and Credential parsing, header serialization, verification).
+2. **`Method`**: a payment method definition, with a `method` (such as `tempo`, `stripe`), a `name` (the intent, such as `charge`, `session`) and schemas for request validation and Credential payloads.
 
 ```
 ┌────────────────────┐       ┌────────────────┐
@@ -59,18 +101,15 @@ Client (Mppx)                                       Server (Mppx)
 
 ### Primitives
 
-Low-level data structures that compose into the core abstractions:
+- **`Challenge`** (`src/Challenge.ts`): the server's payment request. Also computes and verifies the HMAC-bound Challenge `id`.
+- **`Credential`** (`src/Credential.ts`): the client's payment proof: the Challenge echo, a method-specific `payload` and an optional `source` (payer identity).
+- **`Receipt`** (`src/Receipt.ts`): the server's settlement confirmation.
+- **`Request`**: method-specific payment parameters (such as `amount`, `currency`, `recipient`), validated by the method's schema and serialized in the Challenge.
+- **`Method`** and **`Mppx`**, as above.
 
-- **`Challenge`** — Server-issued payment request (appears in `WWW-Authenticate` header). Contains `id`, `realm`, `method`, `intent`, `request`, and optional `expires`/`digest`.
-- **`Credential`** — Client-submitted payment proof (appears in `Authorization` header). Contains `challenge` echo, `payload` (method-specific proof), and optional `source` (payer identity).
-- **`Method`** — Payment method definition (e.g., `tempo/charge`, `stripe/charge`). Contains `method`, `name`, and validated `schema` (credential payload + request).
-- **`Mppx`** — Top-level payment handler. Groups related `Method`s and handles the HTTP 402 flow.
-- **`Receipt`** — Server-issued settlement confirmation (appears in `Payment-Receipt` header). Contains `status`, `method`, `timestamp`, and `reference`.
-- **`Request`** — Method-specific payment parameters (e.g., `amount`, `currency`, `recipient`). Validated by the method's schema and serialized in the challenge.
+### Method architecture
 
-### Method Architecture
-
-Methods are flat structural types with `method`, `name`, and `schema`:
+Methods are flat structural types with `method`, `name` and `schema`:
 
 ```ts
 const tempoCharge = Method.from({
@@ -98,7 +137,7 @@ const tempoCharge = Method.from({
 })
 ```
 
-Methods are extended with client or server logic via `Method.toClient()` and `Method.toServer()`:
+`Method.toClient()` and `Method.toServer()` extend a method with client or server logic:
 
 ```ts
 // Client-side: adds credential creation
@@ -112,109 +151,61 @@ const server = Method.toServer(Methods.charge, {
 })
 ```
 
-## Spec Reference
+## Skills
 
-Canonical specs live at [tempoxyz/payment-auth-spec](https://github.com/tempoxyz/payment-auth-spec).
+Load these skills when they are available:
 
-### Spec Documents
+- `payment-auth-scheme-author`: implementing payment methods, the 402 flow, Tempo or Stripe method schemas, or the IETF Specification.
+- `typescript-library-best-practices`: building new modules or structuring exports.
+- `typescript-style-guide`: writing or reviewing TypeScript for style.
+- `tempo-developer`: Tempo protocol specifics, TIP-20 tokens and Tempo transactions (`0x76`).
 
-| Layer         | Spec                                                                                                                                        | Description                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Core**      | [draft-httpauth-payment-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/core/draft-httpauth-payment-00.md)                | 402 flow, `WWW-Authenticate`/`Authorization` headers, `Payment-Receipt` |
-| **Intent**    | [draft-payment-intent-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-charge-00.md)   | One-time immediate payment                                              |
-| **Intent**    | [draft-payment-intent-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-session-00.md) | Pay-as-you-go streaming payments                                        |
-| **Method**    | [draft-tempo-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md)               | TIP-20 token transfers on Tempo                                         |
-| **Method**    | [draft-tempo-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-session-00.md)             | Tempo payment channels for streaming                                    |
-| **Extension** | [draft-payment-discovery-00](https://paymentauth.org/draft-payment-discovery-00.html)                                                       | OpenAPI-first discovery via `/openapi.json`                             |
+<!-- BEGIN MPP SHARED: synced from tempoxyz/mpp-tools agents/shared.md. Edit it there; changes here are overwritten. -->
 
-### Key Protocol Details
+## MPP
 
-- **Challenge**: `WWW-Authenticate: Payment id="...", realm="...", method="...", intent="...", request="<base64url>"`
-- **Credential**: `Authorization: Payment <base64url>` → `{ challenge, payload, source? }`
-- **Receipt**: `Payment-Receipt: <base64url>` → `{ status, method, timestamp, reference }`
-- **Encoding**: All JSON payloads use base64url without padding (RFC 4648)
+Conventions every MPP repository shares, pulled together from their AGENTS.md files. Synced from [`agents/shared.md`](https://github.com/tempoxyz/mpp-tools/blob/main/agents/shared.md) in tempoxyz/mpp-tools: edit it there. The sections above it are this repository's own and win where they are more specific.
 
-Follow `paymentauth.org` as the source of truth for wire-format details:
+### This file
 
-- `request` and `opaque` are base64url-encoded JCS JSON on the wire.
-- In the credential `challenge` object, `opaque` is a `string`, not an expanded JSON object.
-- Clients MUST return `id` unchanged and MUST return `opaque` unchanged when present.
-- Challenge binding includes `opaque` as the final optional slot, using an empty string when absent.
+- Keep it to `# <repository>` and a short paragraph, then `## Commands`, `## Layout`, `## Conventions`, then only the sections this repository needs, then this section.
+- Write rules an agent can act on: commands, paths, constraints. Leave out background, history and anything the code, specs or README already say.
+- When you learn a convention the hard way, add it to the section it belongs to in the same pull request.
 
-### Challenge ID Binding
+### Code
 
-The challenge `id` is an HMAC-SHA256 over the challenge parameters, cryptographically binding the ID to its contents. This prevents tampering and ensures the server can verify challenge integrity without storing state.
+- Make the smallest change that does the job and follow the surrounding code. Start concrete; extract an abstraction only once several real uses share it.
+- Keep the public API narrow. Add rather than remove or rename, and mark what you replace as deprecated before deleting it.
+- Document every exported item (JSDoc, rustdoc, docstrings, Go doc comments). Comments say why, not what.
+- Match mppx, the reference SDK: its names (Challenge, Credential, Receipt, Method), defaults, errors and behavior, unless the language forces otherwise; say why when it does.
+- The IETF drafts in tempoxyz/mpp-specs (paymentauth.org) are the source of truth for the protocol, and mppx settles what they leave open. Link them instead of restating them.
+- Add no dependency without a reason the pull request states. Prefer the standard library and what the repository already uses.
+- Never log or commit keys, credentials, signatures, authorization headers or raw upstream errors.
+- Tempo chain IDs: mainnet `4217`, Moderato testnet `42431`. Never `98865`.
 
-**HMAC input** (concatenated, pipe-delimited):
+### Tooling
 
-```
-realm | method | intent | request | expires | digest | opaque
-```
+Use each language's standard toolchain, run through the commands in `## Commands`, and keep it clean with warnings as errors:
 
-**Generation:**
+- TypeScript: pnpm, strict `tsc`, ESM with `.js` relative imports, the repository's configured formatter and linter, Vitest.
+- Python: uv, ruff (format and lint), a strict type checker (pyright or ty), pytest or unittest.
+- Rust: cargo, `cargo fmt`, `cargo clippy -D warnings`, `cargo test`.
+- Go: `gofmt`, `go vet`, golangci-lint, `go test -race`.
+- Swift: SwiftPM, `swift test -Xswiftc -warnings-as-errors`.
+- Run the checks that cover your change before opening a pull request, and add tests for behavior that matters, next to the existing ones.
+- Pin GitHub Actions by full commit SHA. Workflows start with `tempoxyz/gh-actions/actions/secure-runner` and get write tokens from GitHub STS policies in `.github/sts/`, never stored secrets.
 
-```
-id = base64url(HMAC-SHA256(server_secret, input))
-```
+### Changes
 
-**Verification:** Server recomputes HMAC from echoed challenge parameters and compares to `id`. If mismatch, reject credential.
+- Commits and pull request titles use Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, optionally scoped.
+- Never edit `CHANGELOG.md` by hand. Record a release note the way `## Conventions` says (changeset, `.changelog/` fragment, or none when a workflow writes it), in the past tense.
+- Before 1.0, bump `patch` for everything except a breaking public API change, which is `minor`.
+- Don't edit README files unless asked.
+- Never force-push.
 
-## Versioning
+### Docs and prose
 
-mppx is pre-v1. **Always use `patch` bumps** unless a change is a substantial, unavoidable breaking change to the public API. New features, additive API surface, internal refactors, and bug fixes are all patches. Reserve `minor` for genuinely breaking changes that require consumer migration (e.g., removing/renaming a public export, changing a hook signature incompatibly). Never use `major` until v1.
+- Active voice, present tense, second person. Sentence-case headings. No filler (just, simply, easily) and no Latin abbreviations.
+- Capitalize Challenge, Credential and Receipt as MPP concepts. Say stablecoins, not crypto, and USDC.e for bridged USDC on Tempo. Write `mppx` in lowercase.
 
-## Changesets
-
-**Never manually edit `CHANGELOG.md`.** Use [changesets](https://github.com/changesets/changesets) instead:
-
-Create a `.changeset/<name>.md` file with frontmatter specifying the package and bump type:
-
-```md
----
-'mppx': patch
----
-
-Description of the change.
-```
-
-Changeset descriptions **must use past tense** (e.g. "Added support for …", "Fixed parsing of …"). Describe what the changeset _did_, not what it _does_.
-
-The changelog is auto-generated from changesets during `changeset version`.
-
-## Code Documentation
-
-You MUST add JSDoc to exported functions and to any complicated functions.
-
-## Commands
-
-```bash
-pnpm build                 # Build HTML with rolldown and library with zile
-pnpm check                 # Lint with oxlint + format with oxfmt
-pnpm check:types           # TypeScript type checking
-pnpm check:types:examples  # Examples type checking
-pnpm check:types:html      # HTML type checking
-pnpm test                  # Run tests with vitest
-pnpm test:html             # Run HTML tests with playwright
-```
-
-Run focused tests by project and path, for example `pnpm exec vp test --project node src/server/Mppx.test.ts`. The `node` project needs no Tempo localnet; files that need one run in the `tempo` project. A bare `pnpm test <path>` runs the `tempo` project's global setup and fails without a localnet on port 18545.
-
-## Skills Reference
-
-Load these skills for specialized guidance:
-
-### `payment-auth-scheme-author`
-
-**Use when**: Implementing payment methods, understanding the 402 protocol flow, working with Tempo/Stripe payment method schemas, or referencing the IETF spec.
-
-### `typescript-library-best-practices`
-
-**Use when**: Building new modules, structuring exports, or following library patterns.
-
-### `typescript-style-guide`
-
-**Use when**: Writing or reviewing TypeScript code for style and conventions.
-
-### `tempo-developer`
-
-**Use when**: Referencing Tempo protocol specifics, understanding TIP-20 tokens, Tempo transactions (0x76), or protocol-level details.
+<!-- END MPP SHARED -->
