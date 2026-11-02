@@ -159,6 +159,27 @@ function commandRegistry() {
 }
 
 describe('createSessionRegistry', () => {
+  test('retains channel origin across registry reloads and rejects rebinding', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    const input = {
+      status: 'open' as const,
+      channel: channel({ origin: 'https://api.example.test' }),
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query',
+      challenge: challenge(),
+    }
+    await registry.upsert(input)
+    const reloaded = createSessionRegistry(registryOptions())
+    const retained = await reloaded.upsert({ ...input, channel: channel() })
+    expect(retained.channel.origin).toBe('https://api.example.test')
+    await expect(
+      reloaded.upsert({
+        ...input,
+        channel: channel({ origin: 'https://evil.example' }),
+      }),
+    ).rejects.toThrow('origin mismatch')
+  })
+
   test('uses XDG_STATE_HOME for the versioned state root', () => {
     const registry = createSessionRegistry()
     expect(registry.root).toBe(stateRoot)

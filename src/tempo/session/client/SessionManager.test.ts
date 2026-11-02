@@ -3,8 +3,10 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
+import * as Fetch from '../../../client/internal/Fetch.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import * as IdentityClient from '../../../identity/Client.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createJsonChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import * as Channel from '../precompile/Channel.js'
@@ -348,6 +350,35 @@ describe('Session', () => {
       expect(openPayload.channelId).toBe(
         Channel.computeId({ ...openPayload.descriptor, chainId: 4217, escrow: customEscrow }),
       )
+    })
+
+    test('inherits identity while unwrapping an existing payment fetch', async () => {
+      const base = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        expect(request.headers.get('Signature')).toBe('session-identity')
+        return makeOkResponse('hello')
+      })
+      const identity = IdentityClient.from([
+        {
+          scope: '*',
+          prove(request) {
+            const headers = new Headers(request.headers)
+            headers.set('Signature', 'session-identity')
+            return new Request(request, { headers })
+          },
+        },
+      ])
+      const innerChallenge = vi.fn()
+      const inner = Fetch.from({ fetch: base, identity, methods: [], onChallenge: innerChallenge })
+      const manager = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: inner,
+      })
+      expect((await manager.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(base).toHaveBeenCalledOnce()
+      expect(innerChallenge).not.toHaveBeenCalled()
+      await expect(manager.fetch('https://evil.example/data')).rejects.toThrow('origin mismatch')
+      expect(base).toHaveBeenCalledOnce()
     })
 
     test('passes through non-402 responses', async () => {

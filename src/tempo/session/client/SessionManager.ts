@@ -9,6 +9,7 @@ import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as ProofRealm from '../../../client/internal/ProofRealm.js'
 import { setCredentialHeader } from '../../../client/internal/protocols/Shared.js'
 import * as Constants from '../../../Constants.js'
+import * as IdentityClient from '../../../identity/Client.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
@@ -237,7 +238,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return origin
   }
 
-  const rawFetch = config.fetch
+  const inheritedIdentity = Fetch.identityOf(config.fetch)
+  const rawFetch = Fetch.unwrapFetch(config.fetch)
   config.fetch = async (input, init) => {
     const origin = bindOrigin(input)
     const response = await rawFetch(input, {
@@ -248,6 +250,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error('SessionManager: session response origin mismatch')
     return response
   }
+  const guardedFetch = config.fetch
+  if (inheritedIdentity) config.fetch = IdentityClient.wrapFetch(guardedFetch, inheritedIdentity)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
@@ -446,7 +450,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   const wrappedFetch = Fetch.from({
-    fetch: config.fetch,
+    fetch: guardedFetch,
+    identity: inheritedIdentity,
     methods: [method],
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
