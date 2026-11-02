@@ -40,4 +40,35 @@ describe('verify', () => {
     const result = BodyDigest.verify(digest, '{"amount":"2000"}')
     expect(result).toBe(false)
   })
+
+  test('behavior: accepts the RFC 9530 byte-sequence form', () => {
+    const body = '{"amount":"1000"}'
+    const hash = BodyDigest.compute(body).slice('sha-256='.length)
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, body)).toBe(true)
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, '{"amount":"2000"}')).toBe(false)
+    expect(BodyDigest.verify('sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:', '')).toBe(
+      true,
+    )
+  })
+
+  test('behavior: accepts a byte sequence without padding', () => {
+    const body = '{"amount":"1000"}'
+    const hash = BodyDigest.compute(body).slice('sha-256='.length).replace(/=+$/, '')
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, body)).toBe(true)
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, '{"amount":"2000"}')).toBe(false)
+  })
+
+  test('behavior: rejects malformed byte sequences', () => {
+    const body = '{"amount":"1000"}'
+    const hash = BodyDigest.compute(body).slice('sha-256='.length)
+    for (const digest of [
+      `sha-256=:${hash}`,
+      `sha-256=${hash}:`,
+      `sha-256=::${hash}::`,
+      `sha-256=:${hash}: `,
+      `sha-256=:${hash}:;param=1`,
+      'sha-256=::',
+    ] as const)
+      expect(BodyDigest.verify(digest as BodyDigest.BodyDigest, body)).toBe(false)
+  })
 })
