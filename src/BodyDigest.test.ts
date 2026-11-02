@@ -51,6 +51,13 @@ describe('verify', () => {
     )
   })
 
+  test('behavior: accepts a byte sequence without padding', () => {
+    const body = '{"amount":"1000"}'
+    const hash = BodyDigest.compute(body).slice('sha-256='.length).replace(/=+$/, '')
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, body)).toBe(true)
+    expect(BodyDigest.verify(`sha-256=:${hash}:`, '{"amount":"2000"}')).toBe(false)
+  })
+
   test('behavior: rejects malformed byte sequences', () => {
     const body = '{"amount":"1000"}'
     const hash = BodyDigest.compute(body).slice('sha-256='.length)

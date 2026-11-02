@@ -56,9 +56,12 @@ export function verify(digest: BodyDigest, body: Record<string, unknown> | strin
 
 /**
  * Accepts the RFC 9530 byte-sequence form `sha-256=:base64hash:` (the form the
- * Payment spec shows) by stripping its colons. Other text is left unchanged.
+ * Payment spec shows) by stripping its colons and restoring any padding it
+ * omits (RFC 8941 `4.2.7). Other text is left unchanged.
  */
 function normalize(digest: string): string {
-  const match = /^sha-256=:([^:]+):$/.exec(digest)
-  return match ? `sha-256=${match[1]}` : digest
+  const match = /^sha-256=:([A-Za-z0-9+/]+)=*:$/.exec(digest)
+  if (!match) return digest
+  const hash = match[1]!
+  return `sha-256=${hash}${'='.repeat((4 - (hash.length % 4)) % 4)}`
 }
