@@ -244,7 +244,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const origin = bindOrigin(input)
     const response = await rawFetch(input, {
       ...init,
-      redirect: init?.redirect === 'manual' ? 'manual' : 'error',
+      redirect:
+        (init?.redirect ?? (isRequest(input) ? input.redirect : undefined)) === 'manual'
+          ? 'manual'
+          : 'error',
     })
     if (response.url && new URL(response.url).origin !== origin)
       throw new Error('SessionManager: session response origin mismatch')
