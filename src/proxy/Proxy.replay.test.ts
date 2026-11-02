@@ -535,3 +535,24 @@ describe('replay review fixes (cyclops, round 3)', () => {
     expect(upstreamBody).toBeNull()
   })
 })
+
+describe('replay store failures', () => {
+  test('still delivers a paid request when the store cannot be written', async () => {
+    const onPayment = vi.fn()
+    const memory = Store.memory()
+    const store = Store.from({
+      ...memory,
+      async put() {
+        throw new Error('store down')
+      },
+    }) as Store.AtomicStore
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment, replay: { store } })
+
+    const response = await proxy.fetch(paidRequest())
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('test-receipt')
+    expect(await response.json()).toEqual({ ok: true })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})

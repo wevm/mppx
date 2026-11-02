@@ -221,7 +221,7 @@ export async function deliver(parameters: {
   const { applyReceipt, attempts, replay, replayKey, requestHeaders } = parameters
   // Outcomes are kept for ttl from when they are recorded, not from the start.
   const expires = () => Date.now() + replay.ttl
-  await replay.store.put(replayKey, {
+  await record(replay, replayKey, {
     attempts,
     expires: expires(),
     receipt: null,
@@ -254,12 +254,12 @@ export async function deliver(parameters: {
   }
 
   if (!response.body) {
-    await replay.store.put(replayKey, toRecord(response, new Uint8Array(), expires()))
+    await record(replay, replayKey, toRecord(response, new Uint8Array(), expires()))
     return response
   }
 
   if (/^text\/event-stream/i.test(response.headers.get('content-type') ?? '')) {
-    await replay.store.put(replayKey, { expires: expires(), status: 'delivered' } satisfies Record)
+    await record(replay, replayKey, { expires: expires(), status: 'delivered' } satisfies Record)
     return response
   }
 
@@ -312,6 +312,16 @@ async function keep(stream: ReadableStream<Uint8Array>, maxBodySize: number) {
   return body
 }
 
+/**
+ * Writes a replay record without letting a store failure break the paid
+ * delivery: the payer still gets the upstream response, only replay is lost.
+ */
+async function record(replay: Resolved, replayKey: string, value: Record): Promise<void> {
+  try {
+    await replay.store.put(replayKey, value)
+  } catch {}
+}
+
 async function recordFailure(
   replay: Resolved,
   replayKey: string,
@@ -320,7 +330,7 @@ async function recordFailure(
   expires: number,
   receipt: string | null,
 ) {
-  await replay.store.put(replayKey, {
+  await record(replay, replayKey, {
     attempts,
     expires,
     receipt,
