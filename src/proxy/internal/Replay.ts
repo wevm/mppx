@@ -73,20 +73,30 @@ const keyPrefix = 'mppx:proxy:replay:'
 
 /** Applies defaults to replay options. */
 export function resolve(options: Options): Resolved {
+  const ttl = options.ttl ?? 900_000
+  // AbortSignal.timeout needs a positive integer that fits a 32-bit timer.
+  if (!Number.isSafeInteger(ttl) || ttl <= 0 || ttl > 2_147_483_647)
+    throw new RangeError(
+      'replay.ttl must be a positive integer number of milliseconds up to 2147483647.',
+    )
   return {
     maxAttempts: options.maxAttempts ?? 3,
     maxBodySize: options.maxBodySize ?? 1_048_576,
     maxRequestBodySize: options.maxRequestBodySize ?? 1_048_576,
     retryAfter: options.retryAfter ?? 5,
     store: options.store,
-    ttl: options.ttl ?? 900_000,
+    ttl,
     waitUntil: options.waitUntil,
   }
 }
 
 /** Returns the request's Payment credential header value, if it carries one. */
-export function credentialOf(request: Request): string | undefined {
-  for (const name of ['payment-authorization', 'authorization']) {
+export function credentialOf(
+  request: Request,
+  headerNames: readonly string[] = ['authorization'],
+): string | undefined {
+  // Only the headers the route's payment handler verifies can name a replay.
+  for (const name of headerNames) {
     const header = request.headers.get(name)
     const payment = header ? Credential.extractPaymentScheme(header) : null
     if (payment) return payment
@@ -129,7 +139,9 @@ export function withBody(
   const method = request.method.toUpperCase()
   const hasBody = method !== 'GET' && method !== 'HEAD'
   return new globalThis.Request(request.url, {
-    body: hasBody ? (body as BodyInit) : null,
+    // An empty body stays absent, as on the original request: payment
+    // transports tell management requests apart by a missing body.
+    body: hasBody && body.byteLength > 0 ? (body as BodyInit) : null,
     headers: headers ?? request.headers,
     method: request.method,
     redirect: request.redirect,
@@ -198,7 +210,7 @@ function respond(replay: Resolved, record: Record): Response {
 
 /** Runs a paid upstream delivery detached from the client and records its outcome. */
 export async function deliver(parameters: {
-  applyReceipt: (response: Response) => Response
+  applyReceipt: (response: Response) => Response | Promise<Response>
   attempts: number
   replay: Resolved
   replayKey: string
@@ -219,9 +231,9 @@ export async function deliver(parameters: {
 
   let response: Response
   try {
-    response = applyReceipt(await parameters.run(AbortSignal.timeout(replay.ttl)))
+    response = await applyReceipt(await parameters.run(AbortSignal.timeout(replay.ttl)))
   } catch {
-    const failed = applyReceipt(
+    const failed = await applyReceipt(
       Response.json({ error: 'The paid upstream request failed.' }, { status: 502 }),
     )
     await recordFailure(

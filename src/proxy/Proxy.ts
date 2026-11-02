@@ -153,7 +153,7 @@ export function create(config: create.Config): Proxy {
     // Routes with identity verifiers keep paying normally: a replay would skip them.
     const credential =
       replay && !fallbackMatch && !requiresIdentity(handler)
-        ? Replay.credentialOf(request)
+        ? Replay.credentialOf(request, credentialHeaders(handler))
         : undefined
     if (replay && credential) {
       const body = await Replay.readBody(request, replay.maxRequestBodySize)
@@ -219,7 +219,7 @@ export function create(config: create.Config): Proxy {
     if (replay && replayKey && replayBody) {
       const body = replayBody
       return Replay.deliver({
-        applyReceipt: (response) => result.withReceipt(response),
+        applyReceipt: (response) => result.withReceipt(response) as Response | Promise<Response>,
         attempts: 1,
         replay,
         replayKey,
@@ -467,6 +467,21 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
       }
     }),
   )
+}
+
+/** Headers the handler reads Payment credentials from, lowercased (Authorization by default). */
+function credentialHeaders(handler: Service.IntentHandler): string[] {
+  const internal = ('_internal' in handler ? handler._internal : undefined) as
+    | {
+        credentialHeaders?: readonly string[]
+        offers?: readonly { credentialHeaders?: readonly string[] }[]
+      }
+    | undefined
+  const headers = internal?.offers
+    ? internal.offers.flatMap((offer) => offer.credentialHeaders ?? [])
+    : (internal?.credentialHeaders ?? [])
+  const names = [...new Set(headers.map((header) => header.toLowerCase()))]
+  return names.length > 0 ? names : ['authorization']
 }
 
 /** Whether a paid handler, or any offer of a composed one, requires identity verifiers. */

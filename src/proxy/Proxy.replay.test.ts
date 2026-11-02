@@ -452,3 +452,86 @@ describe('replay retry headers', () => {
     expect(onPayment).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('replay review fixes (cyclops, round 3)', () => {
+  test('rejects a ttl the timer cannot hold', () => {
+    expect(() =>
+      Proxy.create({
+        replay: { store: Store.memory(), ttl: Number.POSITIVE_INFINITY },
+        services: [],
+      }),
+    ).toThrow(RangeError)
+    expect(() =>
+      Proxy.create({ replay: { store: Store.memory(), ttl: 2 ** 31 }, services: [] }),
+    ).toThrow(RangeError)
+  })
+
+  test('ignores Payment-Authorization when the route verifies Authorization', async () => {
+    const onPayment = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+    const request = (credential: string) =>
+      new Request('https://proxy.example/api/generate', {
+        body: '{}',
+        headers: {
+          Authorization: 'Payment ' + credential,
+          'Payment-Authorization': 'Payment label',
+        },
+        method: 'POST',
+      })
+
+    await (await proxy.fetch(request('credential-1'))).text()
+    await new Promise((r) => setTimeout(r, 0))
+    await (await proxy.fetch(request('credential-2'))).text()
+    expect(onPayment).toHaveBeenCalledTimes(2)
+  })
+
+  test('awaits a withReceipt that returns a promise', async () => {
+    const onPayment = vi.fn()
+    const handler: Service.IntentHandler = async () => {
+      onPayment()
+      return {
+        status: 200,
+        withReceipt: ((response?: Response) => {
+          if (!response) throw new Mppx.MissingReceiptResponseError()
+          const headers = new Headers(response.headers)
+          headers.set('Payment-Receipt', 'async-receipt')
+          return Promise.resolve(new Response(response.body, { headers, status: response.status }))
+        }) as never,
+      }
+    }
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = Proxy.create({
+      fetch,
+      replay: { store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+
+    const response = await proxy.fetch(paidRequest())
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBe('async-receipt')
+  })
+
+  test('keeps a bodyless POST bodyless', async () => {
+    const onPayment = vi.fn()
+    let upstreamBody: unknown = 'unset'
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      upstreamBody = init?.body ?? null
+      return Response.json({ ok: true })
+    }) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+
+    await proxy.fetch(
+      new Request('https://proxy.example/api/generate', {
+        headers: { Authorization: 'Payment credential-1' },
+        method: 'POST',
+      }),
+    )
+    expect(upstreamBody).toBeNull()
+  })
+})
