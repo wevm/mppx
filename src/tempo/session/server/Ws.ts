@@ -141,6 +141,10 @@ export async function serve(options: serve.Options): Promise<void> {
     runtime.closed = true
     abortController.abort()
     unsubscribe()
+    await closeSocket(code, reason)
+  }
+
+  const closeSocket = async (code?: number, reason?: string) => {
     try {
       await socket.close(code, reason)
     } catch {
@@ -150,6 +154,18 @@ export async function serve(options: serve.Options): Promise<void> {
         await socket.close()
       } catch {}
     }
+  }
+
+  const rejectAndClose = (message: string, status: number, code: number) => {
+    runtime.closed = true
+    abortController.abort()
+    unsubscribe()
+    // Queue the small final diagnostic synchronously before close changes socket state.
+    // Do not wait for an adapter's send promise: a stalled peer must still be closed.
+    try {
+      void Promise.resolve(socket.send(formatErrorMessage({ message, status }))).catch(() => {})
+    } catch {}
+    void closeSocket(code, message)
   }
 
   const sendCloseReady = async () => {
@@ -283,11 +299,7 @@ export async function serve(options: serve.Options): Promise<void> {
     if (runtime.closed) return
     const messageBytes = frameByteLength(payload)
     if (messageBytes !== null && messageBytes > maxIncomingMessageBytes) {
-      void close(1009, 'payment message is too large').catch(() => {})
-      void send(
-        socket,
-        formatErrorMessage({ message: 'payment message is too large', status: 413 }),
-      ).catch(() => {})
+      rejectAndClose('payment message is too large', 413, 1009)
       return
     }
     const raw = toText(payload)
@@ -309,13 +321,7 @@ export async function serve(options: serve.Options): Promise<void> {
 
     if (!work) return
     if (runtime.queuedActions >= maxQueuedPaymentMessages) {
-      void sendFrame(
-        formatErrorMessage({
-          message: 'too many queued payment messages',
-          status: 429,
-        }),
-      ).catch(() => {})
-      void close(1008, 'too many queued payment messages')
+      rejectAndClose('too many queued payment messages', 429, 1008)
       return
     }
 

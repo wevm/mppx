@@ -52,6 +52,7 @@ class MockSocket implements Ws.Socket {
   }
 
   send(data: string) {
+    if (this.closed) throw new Error('socket is closing')
     this.sent.push(data)
   }
 }
