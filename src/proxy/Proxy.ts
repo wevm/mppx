@@ -152,7 +152,8 @@ export function create(config: create.Config): Proxy {
     let replayKey: string | undefined
     const credential = replay && !fallbackMatch ? Replay.credentialOf(request) : undefined
     if (replay && credential) {
-      const body = new Uint8Array(await request.arrayBuffer())
+      const body = await Replay.readBody(request, replay.maxRequestBodySize)
+      if (!body) return new Response('Payload Too Large', { status: 413 })
       replayBody = body
       paidRequest = Replay.withBody(request, body)
       replayKey = Replay.key({

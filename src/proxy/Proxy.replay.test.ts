@@ -227,3 +227,129 @@ describe('replay', () => {
     expect(onPayment).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('replay review fixes', () => {
+  test('rejects paid request bodies over maxRequestBodySize with 413 before payment', async () => {
+    const onPayment = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment, replay: { maxRequestBodySize: 8 } })
+
+    const response = await proxy.fetch(paidRequest({ body: 'x'.repeat(64) }))
+    expect(response.status).toBe(413)
+    expect(onPayment).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('keys on the Payment scheme alone when Authorization carries several', async () => {
+    const onPayment = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+    const request = (bearer: string) =>
+      new Request('https://proxy.example/api/generate', {
+        body: '{}',
+        headers: { Authorization: `Bearer ${bearer}, Payment credential-1` },
+        method: 'POST',
+      })
+
+    await (await proxy.fetch(request('a'))).text()
+    await new Promise((r) => setTimeout(r, 0))
+    const retry = await proxy.fetch(request('b'))
+
+    expect(retry.status).toBe(200)
+    expect(onPayment).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('lets the payer retry when the upstream body breaks off', async () => {
+    const onPayment = vi.fn()
+    const pending: Promise<unknown>[] = []
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      calls++
+      if (calls === 1)
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('partial'))
+              controller.error(new Error('reset'))
+            },
+          }),
+        )
+      return Response.json({ ok: true })
+    }) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment, replay: { waitUntil: (p) => pending.push(p) } })
+
+    await (await proxy.fetch(paidRequest())).text().catch(() => {})
+    await Promise.all(pending)
+    const retry = await proxy.fetch(paidRequest())
+
+    expect(retry.status).toBe(200)
+    expect(retry.headers.get('Payment-Receipt')).toBe('test-receipt')
+    expect(onPayment).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  test('keeps upstream Cache-Control directives on a retried delivery', async () => {
+    const onPayment = vi.fn()
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      calls++
+      if (calls === 1) throw new Error('reset')
+      return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } })
+    }) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+
+    await proxy.fetch(paidRequest())
+    const retry = await proxy.fetch(paidRequest())
+
+    expect(retry.headers.get('Cache-Control')).toBe('no-store, private')
+  })
+
+  test('does not leave an unhandled rejection when the background store write fails', async () => {
+    const onPayment = vi.fn()
+    const memory = Store.memory()
+    let puts = 0
+    const store = Store.from({
+      ...memory,
+      async put(key: string, value: unknown) {
+        puts++
+        if (puts > 1) throw new Error('store down')
+        return memory.put(key, value)
+      },
+    }) as Store.AtomicStore
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const fetch = vi.fn(async () => new Response('ok')) as typeof globalThis.fetch
+      const proxy = createProxy({ fetch, onPayment, replay: { store } })
+
+      expect(await (await proxy.fetch(paidRequest())).text()).toBe('ok')
+      await new Promise((r) => setTimeout(r, 10))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
+  test('keeps a slow delivery for ttl after it completes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const onPayment = vi.fn()
+      const fetch = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + 900)
+        return Response.json({ ok: true })
+      }) as typeof globalThis.fetch
+      const proxy = createProxy({ fetch, onPayment, replay: { ttl: 1_000 } })
+
+      await (await proxy.fetch(paidRequest())).text()
+      await new Promise((r) => setTimeout(r, 0))
+      vi.setSystemTime(Date.now() + 500)
+      const retry = await proxy.fetch(paidRequest())
+
+      expect(retry.status).toBe(200)
+      expect(onPayment).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

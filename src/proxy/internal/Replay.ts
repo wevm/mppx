@@ -1,5 +1,6 @@
 import { Base64, Bytes, Hash } from 'ox'
 
+import * as Credential from '../../Credential.js'
 import type * as Store from '../../Store.js'
 
 /** Options for replaying paid proxy deliveries. */
@@ -8,11 +9,18 @@ export type Options = {
   maxAttempts?: number | undefined
   /** Largest response body, in bytes, kept for replay. Larger or streamed bodies are delivered but not kept. @default 1_048_576 */
   maxBodySize?: number | undefined
+  /** Largest request body, in bytes, a paid request may carry; larger ones get `413`. @default 1_048_576 */
+  maxRequestBodySize?: number | undefined
   /** `Retry-After` seconds returned while a delivery is still in flight. @default 5 */
   retryAfter?: number | undefined
   /** Atomic store shared by every proxy instance that may receive a retry. */
   store: Store.AtomicStore
-  /** How long a delivery may run and its record is kept, in milliseconds. @default 900_000 */
+  /**
+   * How long a delivery may run, and how long its outcome is kept after it is
+   * recorded, in milliseconds. Expired records are removed when they are next
+   * looked up, as with mppx's replay markers; give the backing store its own
+   * key expiry to reclaim records nobody retries. @default 900_000
+   */
   ttl?: number | undefined
   /** Keeps background work alive after the response returns, such as Cloudflare's `ctx.waitUntil`. */
   waitUntil?: ((promise: Promise<unknown>) => void) | undefined
@@ -22,6 +30,7 @@ export type Options = {
 export type Resolved = {
   maxAttempts: number
   maxBodySize: number
+  maxRequestBodySize: number
   retryAfter: number
   store: Store.AtomicStore
   ttl: number
@@ -49,6 +58,7 @@ export function resolve(options: Options): Resolved {
   return {
     maxAttempts: options.maxAttempts ?? 3,
     maxBodySize: options.maxBodySize ?? 1_048_576,
+    maxRequestBodySize: options.maxRequestBodySize ?? 1_048_576,
     retryAfter: options.retryAfter ?? 5,
     store: options.store,
     ttl: options.ttl ?? 900_000,
@@ -58,11 +68,20 @@ export function resolve(options: Options): Resolved {
 
 /** Returns the request's Payment credential header value, if it carries one. */
 export function credentialOf(request: Request): string | undefined {
-  const paymentAuthorization = request.headers.get('payment-authorization')
-  if (paymentAuthorization) return paymentAuthorization
-  const authorization = request.headers.get('authorization')
-  if (authorization && /^payment\s/i.test(authorization)) return authorization
+  for (const name of ['payment-authorization', 'authorization']) {
+    const header = request.headers.get(name)
+    const payment = header ? Credential.extractPaymentScheme(header) : null
+    if (payment) return payment
+  }
   return undefined
+}
+
+/** Reads a request body, or returns null when it is larger than maxRequestBodySize. */
+export async function readBody(request: Request, maxRequestBodySize: number) {
+  const length = Number(request.headers.get('content-length'))
+  if (Number.isFinite(length) && length > maxRequestBodySize) return null
+  if (!request.body) return new Uint8Array()
+  return keep(request.body, maxRequestBodySize)
 }
 
 /** Derives the replay key from the credential and the exact request it paid for. */
@@ -152,10 +171,11 @@ export async function deliver(parameters: {
   run: (signal: AbortSignal) => Promise<Response>
 }): Promise<Response> {
   const { applyReceipt, attempts, replay, replayKey } = parameters
-  const expires = Date.now() + replay.ttl
+  // Outcomes are kept for ttl from when they are recorded, not from the start.
+  const expires = () => Date.now() + replay.ttl
   await replay.store.put(replayKey, {
     attempts,
-    expires,
+    expires: expires(),
     receipt: null,
     status: 'pending',
   } satisfies Record)
@@ -167,38 +187,49 @@ export async function deliver(parameters: {
     const failed = applyReceipt(
       Response.json({ error: 'The paid upstream request failed.' }, { status: 502 }),
     )
-    await recordFailure(replay, replayKey, attempts, expires, failed)
+    await recordFailure(
+      replay,
+      replayKey,
+      attempts,
+      expires(),
+      failed.headers.get('Payment-Receipt'),
+    )
     return failed
   }
 
+  const receipt = response.headers.get('Payment-Receipt')
   if (response.status >= 500) {
-    await recordFailure(replay, replayKey, attempts, expires, response)
+    await recordFailure(replay, replayKey, attempts, expires(), receipt)
     return response
   }
 
   if (!response.body) {
-    await replay.store.put(replayKey, toRecord(response, new Uint8Array(), expires))
+    await replay.store.put(replayKey, toRecord(response, new Uint8Array(), expires()))
     return response
   }
 
   if (/^text\/event-stream/i.test(response.headers.get('content-type') ?? '')) {
-    await replay.store.put(replayKey, { expires, status: 'delivered' } satisfies Record)
+    await replay.store.put(replayKey, { expires: expires(), status: 'delivered' } satisfies Record)
     return response
   }
 
   // Keep a copy while the client reads the other branch, so a client that
   // disconnects mid-body can still collect the response on retry.
   const [client, kept] = response.body.tee()
-  const stored = keep(kept, replay.maxBodySize).then(
-    (body) =>
-      replay.store.put(
-        replayKey,
-        body
-          ? toRecord(response, body, expires)
-          : ({ expires, status: 'delivered' } satisfies Record),
-      ),
-    () => replay.store.put(replayKey, { expires, status: 'delivered' } satisfies Record),
-  )
+  const stored = keep(kept, replay.maxBodySize)
+    .then(
+      (body) =>
+        replay.store.put(
+          replayKey,
+          body
+            ? toRecord(response, body, expires())
+            : ({ expires: expires(), status: 'delivered' } satisfies Record),
+        ),
+      // The upstream body broke off: let the payer retry the delivery.
+      () => recordFailure(replay, replayKey, attempts, expires(), receipt),
+    )
+    // A failed background write leaves the record pending until it expires.
+    .catch(() => {})
   replay.waitUntil?.(stored)
   return new Response(client, {
     headers: response.headers,
@@ -236,12 +267,12 @@ async function recordFailure(
   replayKey: string,
   attempts: number,
   expires: number,
-  response: Response,
+  receipt: string | null,
 ) {
   await replay.store.put(replayKey, {
     attempts,
     expires,
-    receipt: response.headers.get('Payment-Receipt'),
+    receipt,
     status: 'failed',
   } satisfies Record)
 }
@@ -251,12 +282,19 @@ export function withReceiptHeader(response: Response, receipt: string | null): R
   if (!receipt) return response
   const headers = new Headers(response.headers)
   headers.set('Payment-Receipt', receipt)
-  headers.set('Cache-Control', 'private')
+  headers.set('Cache-Control', withPrivateCacheControl(headers.get('Cache-Control')))
   return new Response(response.body, {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
+}
+
+function withPrivateCacheControl(value: string | null): string {
+  if (!value) return 'private'
+  const directives = value.split(',').map((directive) => directive.trim().toLowerCase())
+  if (directives.includes('private')) return value
+  return `${value}, private`
 }
 
 function toRecord(response: Response, body: Uint8Array, expires: number): Record {
