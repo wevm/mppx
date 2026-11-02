@@ -46,9 +46,14 @@ describe('fetchWithTimeout', () => {
   )
 })
 
-test.each([false, true])(
-  'validation probes bypass payments and preserve identity (%s)',
-  async (withIdentity) => {
+test.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  'validation probes bypass payments and preserve identity (%s, layered %s)',
+  async (withIdentity, layered) => {
     const original = globalThis.fetch
     const createCredential = vi.fn(async () => 'credential')
     const method = Method.toClient(
@@ -92,6 +97,8 @@ test.each([false, true])(
           ],
         }),
       })
+      const installed = globalThis.fetch
+      if (layered) globalThis.fetch = (input, init) => installed(input, { ...init })
       const wrapped = globalThis.fetch
       await validate({ url: 'https://example.test', endpoint: 'GET:/paid', skipPayment: true })
       expect(createCredential).not.toHaveBeenCalled()

@@ -19,6 +19,8 @@ import * as ProofRealm from './ProofRealm.js'
 const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
 /** Identity runner of an mppx fetch wrapper, inherited when that wrapper is wrapped again. */
 const MPPX_FETCH_IDENTITY = Symbol.for('mppx.fetch.identity')
+/** Per-request payment opt-out preserved by forwarding fetch layers. @internal */
+export const skipPayment = Symbol.for('mppx.fetch.skipPayment')
 const defaultMaxPaymentRetries = 3
 const maxErrorBodyBytes = 64 * 1024
 const errorBodyTimeoutMs = 2_000
@@ -293,6 +295,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let response = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
+    if ((init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment])
+      return response
     if (!(await transport.isPaymentRequired(response, transportRequest as never))) return response
 
     // Only extract context for payment handling after confirming 402.

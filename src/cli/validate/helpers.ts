@@ -1,4 +1,4 @@
-import { identityOf, unwrapFetch } from '../../client/internal/Fetch.js'
+import { identityOf, skipPayment, unwrapFetch } from '../../client/internal/Fetch.js'
 import { pc } from '../utils.js'
 
 export type CheckResult = {
@@ -105,13 +105,19 @@ export async function fetchWithTimeout(
     const fetch = globalThis.fetch
     const base = unwrapFetch(fetch)
     const identity = identityOf(fetch)
-    const options: RequestInit = {
+    const options = {
+      [skipPayment]: true,
       ...init,
-      redirect: 'error',
+      redirect: 'error' as const,
       signal: controller.signal,
     }
     return identity
-      ? (await identity.send(base, new Request(url, options))).response
+      ? (
+          await identity.send(
+            (input, init) => base(input, { ...init, [skipPayment]: true } as RequestInit),
+            new Request(url, options),
+          )
+        ).response
       : await base(url, options)
   } finally {
     clearTimeout(timeout)
