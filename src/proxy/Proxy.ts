@@ -150,7 +150,11 @@ export function create(config: create.Config): Proxy {
     let paidRequest = request
     let replayBody: Uint8Array | undefined
     let replayKey: string | undefined
-    const credential = replay && !fallbackMatch ? Replay.credentialOf(request) : undefined
+    // Routes with identity verifiers keep paying normally: a replay would skip them.
+    const credential =
+      replay && !fallbackMatch && !requiresIdentity(handler)
+        ? Replay.credentialOf(request)
+        : undefined
     if (replay && credential) {
       const body = await Replay.readBody(request, replay.maxRequestBodySize)
       if (!body) return new Response('Payload Too Large', { status: 413 })
@@ -460,6 +464,17 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
       }
     }),
   )
+}
+
+/** Whether a paid handler, or any offer of a composed one, requires identity verifiers. */
+function requiresIdentity(handler: Service.IntentHandler): boolean {
+  if (!('_internal' in handler)) return false
+  const internal = handler._internal as
+    | { _identity?: boolean; offers?: readonly { _identity?: boolean }[] }
+    | undefined
+  if (!internal) return false
+  if (internal.offers) return internal.offers.some((offer) => offer._identity)
+  return internal._identity === true
 }
 
 function getConfiguredScope(handler: Service.IntentHandler): string | undefined {

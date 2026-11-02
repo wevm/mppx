@@ -377,3 +377,51 @@ describe('replay key scope', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('replay review fixes (cyclops)', () => {
+  test('replays a stored 205 response', async () => {
+    const onPayment = vi.fn()
+    const fetch = vi.fn(async () => new Response(null, { status: 205 })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+
+    expect((await proxy.fetch(paidRequest())).status).toBe(205)
+    const retry = await proxy.fetch(paidRequest())
+    expect(retry.status).toBe(205)
+    expect(onPayment).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not write to the store for an unknown credential', async () => {
+    const onPayment = vi.fn()
+    const memory = Store.memory()
+    const update = vi.fn(memory.update)
+    const store = { ...memory, update } as Store.AtomicStore
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment, replay: { store } })
+
+    await (await proxy.fetch(paidRequest())).text()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  test('skips replay on routes with identity verifiers', async () => {
+    const onPayment = vi.fn()
+    const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
+    const handler = Object.assign(createPaidHandler(onPayment), {
+      _internal: { _canonicalRequest: {}, _identity: true, intent: 'charge', name: 'tempo' },
+    }) as Service.IntentHandler
+    const proxy = Proxy.create({
+      fetch,
+      replay: { store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+
+    await (await proxy.fetch(paidRequest())).text()
+    await new Promise((r) => setTimeout(r, 0))
+    await (await proxy.fetch(paidRequest())).text()
+    expect(onPayment).toHaveBeenCalledTimes(2)
+  })
+})

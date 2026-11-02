@@ -1173,6 +1173,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _paymentIdentity: paymentVerifiers.length > 0 ? paymentVerifiers : undefined,
+      _identity: identity.length > 0,
       _stableBinding: stableBinding as never,
       _transport: transport,
     } as unknown as ConfiguredHandler['_internal']
@@ -2708,6 +2709,8 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
     /** The offer's payment-stage identity verifiers, if any. */
     _paymentIdentity?: readonly Identity.Verifier[] | undefined
+    /** Whether the route requires identity verifiers (request or payment stage). */
+    _identity?: boolean | undefined
     _transport: Transport.AnyTransport
   }
 }

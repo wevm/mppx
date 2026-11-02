@@ -123,6 +123,12 @@ export type Lookup =
 /** Looks up a delivery and, for a failed one, claims the next upstream attempt. */
 export async function lookup(replay: Resolved, replayKey: string): Promise<Lookup> {
   const now = Date.now()
+  // Read first: only a failed delivery needs an atomic claim, so unknown
+  // credentials never cause a store write.
+  const seen = (await replay.store.get(replayKey)) as Record | null
+  if (!seen) return { type: 'none' }
+  if (seen.expires > now && seen.status !== 'failed')
+    return { response: respond(replay, seen), type: 'respond' }
   const result = await replay.store.update(
     replayKey,
     (current): Store.Change<unknown, Lookup | Record> => {
@@ -309,7 +315,7 @@ function toRecord(response: Response, body: Uint8Array, expires: number): Record
 }
 
 function fromRecord(record: Extract<Record, { status: 'complete' }>): Response {
-  const nullBody = record.responseStatus === 204 || record.responseStatus === 304
+  const nullBody = [101, 204, 205, 304].includes(record.responseStatus)
   return new Response(nullBody ? null : (Base64.toBytes(record.body) as BodyInit), {
     headers: record.headers,
     status: record.responseStatus,
