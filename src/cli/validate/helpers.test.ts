@@ -46,46 +46,69 @@ describe('fetchWithTimeout', () => {
   )
 })
 
-test('validation probes bypass the installed payment polyfill', async () => {
-  const original = globalThis.fetch
-  const createCredential = vi.fn(async () => 'credential')
-  const method = Method.toClient(
-    Method.from({
-      name: 'test',
-      intent: 'charge',
-      schema: { credential: { payload: z.object({}) }, request: z.object({}) },
-    }),
-    { createCredential },
-  )
-  const challenge = Challenge.from({
-    id: 'probe',
-    realm: 'example.test',
-    method: 'test',
-    intent: 'charge',
-    request: {},
-  })
-  const requests: Request[] = []
-  globalThis.fetch = async (input, init) => {
-    requests.push(new Request(input, init))
-    return new Response('', {
-      status: 402,
-      headers: {
-        'WWW-Authenticate': Challenge.serialize(challenge),
-      },
-    })
-  }
-  try {
-    Mppx.create({ methods: [method] })
-    const wrapped = globalThis.fetch
-    await validate({ url: 'https://example.test', endpoint: 'GET:/paid', skipPayment: true })
-    expect(createCredential).not.toHaveBeenCalled()
-    expect(requests.length).toBeGreaterThan(0)
-    expect(requests.every((request) => request.headers.get('Authorization') !== 'credential')).toBe(
-      true,
+test.each([false, true])(
+  'validation probes bypass payments and preserve identity (%s)',
+  async (withIdentity) => {
+    const original = globalThis.fetch
+    const createCredential = vi.fn(async () => 'credential')
+    const method = Method.toClient(
+      Method.from({
+        name: 'test',
+        intent: 'charge',
+        schema: { credential: { payload: z.object({}) }, request: z.object({}) },
+      }),
+      { createCredential },
     )
-    expect(globalThis.fetch).toBe(wrapped)
-  } finally {
-    Fetch.restore()
-    globalThis.fetch = original
-  }
-})
+    const challenge = Challenge.from({
+      id: 'probe',
+      realm: 'example.test',
+      method: 'test',
+      intent: 'charge',
+      request: {},
+    })
+    const requests: Request[] = []
+    globalThis.fetch = async (input, init) => {
+      requests.push(new Request(input, init))
+      return new Response('', {
+        status: 402,
+        headers: {
+          'WWW-Authenticate': Challenge.serialize(challenge),
+        },
+      })
+    }
+    try {
+      Mppx.create({
+        methods: [method],
+        ...(withIdentity && {
+          identity: [
+            {
+              scope: '*',
+              prove(request: Request) {
+                const headers = new Headers(request.headers)
+                headers.set('Signature', 'probe-identity')
+                return new Request(request, { headers })
+              },
+            },
+          ],
+        }),
+      })
+      const wrapped = globalThis.fetch
+      await validate({ url: 'https://example.test', endpoint: 'GET:/paid', skipPayment: true })
+      expect(createCredential).not.toHaveBeenCalled()
+      expect(requests.length).toBeGreaterThan(0)
+      expect(
+        requests.every((request) => request.headers.get('Authorization') !== 'credential'),
+      ).toBe(true)
+      expect(
+        requests.every(
+          (request) =>
+            request.headers.get('Signature') === (withIdentity ? 'probe-identity' : null),
+        ),
+      ).toBe(true)
+      expect(globalThis.fetch).toBe(wrapped)
+    } finally {
+      Fetch.restore()
+      globalThis.fetch = original
+    }
+  },
+)
