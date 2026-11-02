@@ -249,7 +249,9 @@ export function session(parameters: session.Parameters = {}) {
     })
 
   const method = Method.toClient(Methods.session, {
-    // Skip offers that violate client policy so an acceptable offer can be chosen.
+    // Skip offers that violate client policy so an acceptable offer can be chosen. Selection
+    // sees no credential context, so an explicit close for such an offer goes through
+    // `createCredential` directly.
     canHandleChallenge: ({ challenge }) =>
       isTip1034SessionChallenge(challenge) && satisfiesSpendingPolicy(policy, challenge.request),
     context: sessionContextSchema,
@@ -417,9 +419,9 @@ export function session(parameters: session.Parameters = {}) {
 
   MethodChallenge.register(method, async ({ challenge, context, fetch, input, signal }) => {
     if (!isTip1034SessionChallenge(challenge)) return
-    assertSpendingPolicy(policy, challenge.request)
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
+    assertSpendingPolicy(policy, challenge.request)
     const resolved = await resolveChallengeContext({
       allowCustomEscrow,
       challenge,

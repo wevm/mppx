@@ -1834,6 +1834,20 @@ describe('session spending policy', () => {
     expect(rawFetch).toHaveBeenCalledTimes(1)
   })
 
+  test('leaves explicit actions to createCredential in the top-up hook', async () => {
+    const fetch = vi.fn()
+    const method = session({ account, currencies: [otherCurrency], getClient: () => client })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: { action: 'close', descriptor, cumulativeAmountRaw: '100' },
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).resolves.toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   test('still signs explicit closes for offers outside the policy', async () => {
     const method = session({ account, currencies: [otherCurrency], getClient: () => client })
     const payload = deserialize(
