@@ -113,6 +113,50 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('pays an unsponsored pull charge with the configured fee token', async () => {
+    vi.resetModules()
+    const chainId = 42431
+    const prepareTransactionRequest = vi.fn(async (_client: unknown, parameters: object) => ({
+      ...parameters,
+      gas: 100n,
+    }))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      sendTransactionSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        feeToken: otherCurrency,
+        getClient: () => client,
+      })
+
+      await method.createCredential({
+        challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
+        context: {},
+      })
+
+      expect(signTransaction).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feeToken: otherCurrency }),
+      )
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   test('uses client chain ID when the challenge omits chainId', async () => {
     const client = createClient({
       account,
