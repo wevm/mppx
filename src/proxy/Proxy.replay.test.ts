@@ -425,3 +425,30 @@ describe('replay review fixes (cyclops)', () => {
     expect(onPayment).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('replay retry headers', () => {
+  test('a retried delivery sends the paid request headers, not the retry headers', async () => {
+    const onPayment = vi.fn()
+    const seen: (string | null)[] = []
+    let calls = 0
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get('x-tier'))
+      calls++
+      if (calls === 1) throw new Error('reset')
+      return Response.json({ ok: true })
+    }) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment })
+    const request = (tier: string) =>
+      new Request('https://proxy.example/api/generate', {
+        body: '{}',
+        headers: { Authorization: 'Payment credential-1', 'X-Tier': tier },
+        method: 'POST',
+      })
+
+    expect((await proxy.fetch(request('basic'))).status).toBe(502)
+    expect((await proxy.fetch(request('premium'))).status).toBe(200)
+
+    expect(seen).toEqual(['basic', 'basic'])
+    expect(onPayment).toHaveBeenCalledTimes(1)
+  })
+})

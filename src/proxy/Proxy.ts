@@ -175,8 +175,10 @@ export function create(config: create.Config): Proxy {
           attempts: found.attempts,
           replay,
           replayKey,
+          requestHeaders: found.requestHeaders,
           run: (signal) => {
-            const upstream = Replay.withBody(paidRequest, body, signal)
+            // Send the headers of the request that was paid for, not the retry's.
+            const upstream = Replay.withBody(paidRequest, body, signal, found.requestHeaders)
             return proxyUpstream({
               request: upstream,
               service,
@@ -221,6 +223,7 @@ export function create(config: create.Config): Proxy {
         attempts: 1,
         replay,
         replayKey,
+        requestHeaders: [...Headers.scrub(paidRequest.headers).entries()],
         run: (signal) => {
           const upstream = Replay.withBody(paidRequest, body, signal)
           return proxyUpstream({

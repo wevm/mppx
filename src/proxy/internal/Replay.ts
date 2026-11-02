@@ -39,8 +39,20 @@ export type Resolved = {
 
 /** A delivery record, keyed by credential and request. */
 export type Record =
-  | { attempts: number; expires: number; receipt: string | null; status: 'pending' }
-  | { attempts: number; expires: number; receipt: string | null; status: 'failed' }
+  | {
+      attempts: number
+      expires: number
+      receipt: string | null
+      requestHeaders: [string, string][]
+      status: 'pending'
+    }
+  | {
+      attempts: number
+      expires: number
+      receipt: string | null
+      requestHeaders: [string, string][]
+      status: 'failed'
+    }
   | { expires: number; status: 'delivered' }
   | {
       body: string
@@ -102,12 +114,17 @@ export function key(parameters: {
 }
 
 /** Rebuilds a request around an already-read body, optionally with another abort signal. */
-export function withBody(request: Request, body: Uint8Array, signal?: AbortSignal): Request {
+export function withBody(
+  request: Request,
+  body: Uint8Array,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+): Request {
   const method = request.method.toUpperCase()
   const hasBody = method !== 'GET' && method !== 'HEAD'
   return new globalThis.Request(request.url, {
     body: hasBody ? (body as BodyInit) : null,
-    headers: request.headers,
+    headers: headers ?? request.headers,
     method: request.method,
     redirect: request.redirect,
     signal: signal ?? request.signal,
@@ -118,7 +135,7 @@ export function withBody(request: Request, body: Uint8Array, signal?: AbortSigna
 export type Lookup =
   | { type: 'none' }
   | { response: Response; type: 'respond' }
-  | { attempts: number; receipt: string | null; type: 'retry' }
+  | { attempts: number; receipt: string | null; requestHeaders: [string, string][]; type: 'retry' }
 
 /** Looks up a delivery and, for a failed one, claims the next upstream attempt. */
 export async function lookup(replay: Resolved, replayKey: string): Promise<Lookup> {
@@ -141,7 +158,12 @@ export async function lookup(replay: Resolved, replayKey: string): Promise<Looku
       return {
         op: 'set',
         value: { ...record, attempts, status: 'pending' } satisfies Record,
-        result: { attempts, receipt: record.receipt, type: 'retry' },
+        result: {
+          attempts,
+          receipt: record.receipt,
+          requestHeaders: record.requestHeaders,
+          type: 'retry',
+        },
       }
     },
   )
@@ -174,15 +196,18 @@ export async function deliver(parameters: {
   attempts: number
   replay: Resolved
   replayKey: string
+  /** The upstream headers of the paid request; a retried delivery reuses them. */
+  requestHeaders: [string, string][]
   run: (signal: AbortSignal) => Promise<Response>
 }): Promise<Response> {
-  const { applyReceipt, attempts, replay, replayKey } = parameters
+  const { applyReceipt, attempts, replay, replayKey, requestHeaders } = parameters
   // Outcomes are kept for ttl from when they are recorded, not from the start.
   const expires = () => Date.now() + replay.ttl
   await replay.store.put(replayKey, {
     attempts,
     expires: expires(),
     receipt: null,
+    requestHeaders,
     status: 'pending',
   } satisfies Record)
 
@@ -197,6 +222,7 @@ export async function deliver(parameters: {
       replay,
       replayKey,
       attempts,
+      requestHeaders,
       expires(),
       failed.headers.get('Payment-Receipt'),
     )
@@ -205,7 +231,7 @@ export async function deliver(parameters: {
 
   const receipt = response.headers.get('Payment-Receipt')
   if (response.status >= 500) {
-    await recordFailure(replay, replayKey, attempts, expires(), receipt)
+    await recordFailure(replay, replayKey, attempts, requestHeaders, expires(), receipt)
     return response
   }
 
@@ -232,7 +258,7 @@ export async function deliver(parameters: {
             : ({ expires: expires(), status: 'delivered' } satisfies Record),
         ),
       // The upstream body broke off: let the payer retry the delivery.
-      () => recordFailure(replay, replayKey, attempts, expires(), receipt),
+      () => recordFailure(replay, replayKey, attempts, requestHeaders, expires(), receipt),
     )
     // A failed background write leaves the record pending until it expires.
     .catch(() => {})
@@ -272,6 +298,7 @@ async function recordFailure(
   replay: Resolved,
   replayKey: string,
   attempts: number,
+  requestHeaders: [string, string][],
   expires: number,
   receipt: string | null,
 ) {
@@ -279,6 +306,7 @@ async function recordFailure(
     attempts,
     expires,
     receipt,
+    requestHeaders,
     status: 'failed',
   } satisfies Record)
 }
