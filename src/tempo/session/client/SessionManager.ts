@@ -57,6 +57,7 @@ import {
   closeHttpSession,
   getSessionSnapshot,
   isTempoSessionChallenge,
+  isRequest,
   postTopUp,
   retryHttpPaymentRequired,
   type TempoSessionChallenge,
@@ -160,7 +161,7 @@ function requestInitWithSessionHint(
   channelId: Hex.Hex | undefined,
 ): RequestInit | undefined {
   if (!channelId) return init
-  const requestHeaders = input instanceof Request ? input.headers : undefined
+  const requestHeaders = isRequest(input) ? input.headers : undefined
   const headers = {
     ...Fetch.normalizeHeaders(requestHeaders),
     ...Fetch.normalizeHeaders(init?.headers),
@@ -227,7 +228,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   function bindOrigin(input: RequestInfo | URL): string {
     const origin = new URL(
-      input instanceof Request ? input.url : String(input),
+      isRequest(input) ? input.url : String(input),
       typeof location === 'undefined' ? undefined : location.href,
     ).origin
     if (sessionOrigin !== undefined && sessionOrigin !== origin)
@@ -534,9 +535,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!parameters.bootstrap) return undefined
     if (runtime.channel?.opened) return undefined
 
-    const requestHeaders = input instanceof Request ? input.headers : undefined
+    const requestHeaders = isRequest(input) ? input.headers : undefined
     const { body: _body, method: _method, ...bootstrapInit } = init ?? {}
-    const bootstrapInput = input instanceof Request ? input.url : input
+    const bootstrapInput = isRequest(input) ? input.url : input
     const headInit: RequestInit = {
       ...bootstrapInit,
       method: 'HEAD',

@@ -379,6 +379,25 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2)
     })
 
+    test('binds request-like values from other realms by their actual URL', async () => {
+      const fetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const manager = sessionManager({ account, fetch })
+      await manager.fetch('https://api.example.com/data')
+      const foreign = {
+        url: 'https://evil.example/stream',
+        method: 'GET',
+        headers: new Headers(),
+        clone() {
+          return this
+        },
+        toString() {
+          return '[object Request]'
+        },
+      } as Request
+      await expect(manager.fetch(foreign)).rejects.toThrow('origin mismatch')
+      expect(fetch).toHaveBeenCalledTimes(1)
+    })
+
     test('rejects responses redirected to another origin', async () => {
       const response = makeOkResponse('hello')
       Object.defineProperty(response, 'url', { value: 'https://evil.example/data' })
