@@ -269,8 +269,8 @@ export declare namespace create {
     /**
      * Lets a payer collect a paid response after losing the connection.
      *
-     * The paid upstream request runs detached from the client (bounded by
-     * `ttl`), and its outcome is recorded under a key derived from the
+     * The paid upstream request runs detached from the client (its response must
+     * start within `ttl`), and its outcome is recorded under a key derived from the
      * credential and the request's method, target and body. A retry with the
      * same credential and request never pays again: it gets the stored
      * response, `202` while the delivery runs, or, after a failed delivery, a

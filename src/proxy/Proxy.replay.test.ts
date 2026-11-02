@@ -556,3 +556,28 @@ describe('replay store failures', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('replay ttl scope', () => {
+  test('does not cut off a body that streams past ttl', async () => {
+    const onPayment = vi.fn()
+    let upstreamSignal: AbortSignal | undefined
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      upstreamSignal = init?.signal ?? undefined
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            controller.enqueue(new TextEncoder().encode('a'))
+            await new Promise((r) => setTimeout(r, 60))
+            controller.enqueue(new TextEncoder().encode('b'))
+            controller.close()
+          },
+        }),
+      )
+    }) as typeof globalThis.fetch
+    const proxy = createProxy({ fetch, onPayment, replay: { ttl: 20 } })
+
+    const response = await proxy.fetch(paidRequest())
+    expect(await response.text()).toBe('ab')
+    expect(upstreamSignal?.aborted).toBe(false)
+  })
+})

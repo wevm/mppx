@@ -22,7 +22,7 @@ export type Options = {
   /** Atomic store shared by every proxy instance that may receive a retry. */
   store: Store.AtomicStore
   /**
-   * How long a delivery may run, and how long its outcome is kept after it is
+   * How long to wait for the upstream to start responding, and how long its outcome is kept after it is
    * recorded, in milliseconds. Expired records are removed when they are next
    * looked up, as with mppx's replay markers; give the backing store its own
    * key expiry to reclaim records nobody retries. @default 900_000
@@ -231,7 +231,20 @@ export async function deliver(parameters: {
 
   let response: Response
   try {
-    response = await applyReceipt(await parameters.run(AbortSignal.timeout(replay.ttl)))
+    // ttl bounds the wait for the upstream to respond, not how long its body
+    // streams: a paid stream keeps going once it has started.
+    const controller = new AbortController()
+    const timer = setTimeout(
+      () => controller.abort(new DOMException('Replay ttl elapsed.', 'TimeoutError')),
+      replay.ttl,
+    )
+    let upstream: Response
+    try {
+      upstream = await parameters.run(controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
+    response = await applyReceipt(upstream)
   } catch {
     const failed = await applyReceipt(
       Response.json({ error: 'The paid upstream request failed.' }, { status: 502 }),
