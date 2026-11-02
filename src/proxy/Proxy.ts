@@ -6,8 +6,12 @@ import * as Scope from '../server/internal/scope.js'
 import * as Mppx from '../server/Mppx.js'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
+import * as Replay from './internal/Replay.js'
 import * as Route from './internal/Route.js'
 import * as Service from './Service.js'
+
+/** Options for {@link create.Config.replay}. */
+export type ReplayOptions = Replay.Options
 
 /** A paid API proxy that gates upstream services behind the mppx 402 protocol. */
 export type Proxy = {
@@ -45,6 +49,7 @@ export type Proxy = {
  */
 export function create(config: create.Config): Proxy {
   const fetchImpl = config.fetch ?? globalThis.fetch
+  const replay = config.replay ? Replay.resolve(config.replay) : undefined
 
   const services = new Map(
     config.services.map((s) => {
@@ -140,6 +145,45 @@ export function create(config: create.Config): Proxy {
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
+    // With replay, a paid request whose credential already paid for this exact
+    // request collects its recorded delivery instead of paying again.
+    let paidRequest = request
+    let replayBody: Uint8Array | undefined
+    let replayKey: string | undefined
+    const credential = replay && !fallbackMatch ? Replay.credentialOf(request) : undefined
+    if (replay && credential) {
+      const body = new Uint8Array(await request.arrayBuffer())
+      replayBody = body
+      paidRequest = Replay.withBody(request, body)
+      replayKey = Replay.key({
+        body,
+        credential,
+        method: request.method,
+        target: url.pathname + url.search,
+      })
+      const found = await Replay.lookup(replay, replayKey)
+      if (found.type === 'respond') return found.response
+      if (found.type === 'retry') {
+        const options = Service.getOptions(endpoint)
+        return Replay.deliver({
+          applyReceipt: (response) => Replay.withReceiptHeader(response, found.receipt),
+          attempts: found.attempts,
+          replay,
+          replayKey,
+          run: (signal) => {
+            const upstream = Replay.withBody(paidRequest, body, signal)
+            return proxyUpstream({
+              request: upstream,
+              service,
+              ctx: { ...ctx, request: upstream, ...options },
+              proxy,
+              onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
+            })
+          },
+        })
+      }
+    }
+
     const scope =
       getConfiguredScope(handler) ??
       deriveRouteScope({
@@ -148,7 +192,7 @@ export function create(config: create.Config): Proxy {
         serviceId,
       })
     const result = await handler(
-      getConfiguredScope(handler) ? request : Scope.attach(request, scope),
+      getConfiguredScope(handler) ? paidRequest : Scope.attach(paidRequest, scope),
     )
     if (result.status === 402) return result.challenge
 
@@ -165,6 +209,25 @@ export function create(config: create.Config): Proxy {
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
     const options = Service.getOptions(endpoint)
+    if (replay && replayKey && replayBody) {
+      const body = replayBody
+      return Replay.deliver({
+        applyReceipt: (response) => result.withReceipt(response),
+        attempts: 1,
+        replay,
+        replayKey,
+        run: (signal) => {
+          const upstream = Replay.withBody(paidRequest, body, signal)
+          return proxyUpstream({
+            request: upstream,
+            service,
+            ctx: { ...ctx, request: upstream, ...options },
+            proxy,
+            onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
+          })
+        },
+      })
+    }
     const upstreamRes = await proxyUpstream({
       request,
       service,
@@ -195,6 +258,18 @@ export declare namespace create {
     fetch?: typeof globalThis.fetch | undefined
     /** Default handler for failed upstream attempts. Services may override it. */
     onUpstreamError?: Service.UpstreamErrorHandler | undefined
+    /**
+     * Lets a payer collect a paid response after losing the connection.
+     *
+     * The paid upstream request runs detached from the client (bounded by
+     * `ttl`), and its outcome is recorded under a key derived from the
+     * credential and the request's method, target and body. A retry with the
+     * same credential and request never pays again: it gets the stored
+     * response, `202` while the delivery runs, or, after a failed delivery, a
+     * new upstream attempt up to `maxAttempts`. Streamed (`text/event-stream`)
+     * and oversized responses are delivered but not stored. Off by default.
+     */
+    replay?: ReplayOptions | undefined
     /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
     /** Human-readable title for the proxy shown in `llms.txt`. */
