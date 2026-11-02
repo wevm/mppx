@@ -1016,6 +1016,20 @@ describe('Session', () => {
       expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
     })
 
+    test.each([
+      'app://trusted/data',
+      'ipfs://content/data',
+      'data:text/plain,hello',
+      'file:///tmp/data',
+    ])('rejects opaque payment origin %s before fetching', async (url) => {
+      const fetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const manager = sessionManager({ account, client, fetch })
+      await expect(manager.fetch(url)).rejects.toThrow('require an HTTP origin')
+      expect(fetch).not.toHaveBeenCalled()
+      await manager.fetch('https://api.example.com/data')
+      expect(fetch).toHaveBeenCalledOnce()
+    })
+
     test('does not authorize a persisted channel for another origin', async () => {
       const stored = channelEntry({ origin: 'https://trusted.example' })
       const storage = makeChannelStore([stored])

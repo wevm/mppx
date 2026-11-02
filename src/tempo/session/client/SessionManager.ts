@@ -228,10 +228,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let sessionOrigin: string | undefined
 
   function bindOrigin(input: RequestInfo | URL): string {
-    const origin = new URL(
+    const url = new URL(
       isRequest(input) ? input.url : String(input),
       typeof location === 'undefined' ? undefined : location.href,
-    ).origin
+    )
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      throw new Error('SessionManager: session payments require an HTTP origin')
+    const origin = url.origin
     if (sessionOrigin !== undefined && sessionOrigin !== origin)
       throw new Error('SessionManager: session payment origin mismatch')
     sessionOrigin = origin
