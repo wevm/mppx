@@ -27,6 +27,11 @@ const url = 'https://rpc.example.com'
 // Ambiguous: the transaction may be pooled, so its receipt is polled for.
 const alreadyKnown = { code: -32000, message: 'already known' }
 const knownTransaction = { code: -32000, message: 'known transaction: 0x12' }
+const expiringNonceReplay = {
+  code: -32000,
+  message:
+    'nonce manager error: Tempo Transaction nonce error: ExpiringNonceReplay(ExpiringNonceReplay)',
+}
 const syncTimeout = { code: 4, message: 'Transaction was added to the mempool but not confirmed' }
 const transportTimeout = new TimeoutError({ body: {}, url })
 const aborted = new DOMException('The operation was aborted.', 'AbortError')
@@ -256,6 +261,18 @@ test.each([
   { name: 'normal broadcast', sponsored: false, outcome: 'normal', error: gateway },
   { name: 'already known', sponsored: false, outcome: 'pending', error: alreadyKnown },
   { name: 'known transaction', sponsored: false, outcome: 'pending', error: knownTransaction },
+  {
+    name: 'expiring nonce replay',
+    sponsored: false,
+    outcome: 'included',
+    error: expiringNonceReplay,
+  },
+  {
+    name: 'sponsored expiring nonce replay',
+    sponsored: true,
+    outcome: 'included',
+    error: expiringNonceReplay,
+  },
   { name: 'sync timeout', sponsored: false, outcome: 'pending', error: syncTimeout },
   { name: 'transport timeout', sponsored: false, outcome: 'pending', error: transportTimeout },
   { name: 'aborted', sponsored: false, outcome: 'pending', error: aborted },
