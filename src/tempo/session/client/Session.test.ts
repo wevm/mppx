@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as Mppx from '../../../client/Mppx.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -1858,6 +1859,121 @@ describe('session spending policy', () => {
     )
     expect(payload.action).toBe('close')
   })
+
+  test.each([
+    { name: 'allowed recipient', recipients: [descriptor.payee], recipient: descriptor.payee },
+    {
+      name: 'allowed recipient in another case',
+      recipients: [descriptor.payee.toUpperCase().replace('0X', '0x') as Address],
+      recipient: descriptor.payee,
+    },
+    {
+      name: 'unexpected recipient',
+      recipients: [otherCurrency],
+      recipient: descriptor.payee,
+      error: 'Unexpected session recipient',
+    },
+    {
+      name: 'missing recipient',
+      recipients: [descriptor.payee],
+      recipient: undefined,
+      error: 'Unexpected session recipient',
+    },
+    {
+      name: 'empty recipients',
+      recipients: [],
+      recipient: descriptor.payee,
+      error: 'Unexpected session recipient',
+    },
+  ] as const)('tempo() applies expectedRecipients to sessions: $name', async (row) => {
+    const getClient = vi.fn(() => client)
+    const signTypedData = vi.spyOn(account, 'signTypedData')
+    const [, method] = tempo({ account, expectedRecipients: row.recipients, getClient })
+    const challenge = makeSessionChallenge({ recipient: row.recipient })
+    try {
+      expect(method.canHandleChallenge?.({ challenge })).toBe(!('error' in row))
+      const credential = method.createCredential({ challenge, context: voucher })
+      if ('error' in row) {
+        await expect(credential).rejects.toThrow(row.error)
+        expect(getClient).not.toHaveBeenCalled()
+        expect(signTypedData).not.toHaveBeenCalled()
+      } else await expect(credential).resolves.toBeTypeOf('string')
+    } finally {
+      signTypedData.mockRestore()
+    }
+  })
+
+  test('rejects an unexpected recipient in the automatic top-up hook', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn()
+    const method = session({ account, expectedRecipients: [otherCurrency], getClient })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: {},
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).rejects.toThrow('Unexpected session recipient')
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('does not pay a session offer to an unexpected recipient through fetch', async () => {
+    const challenge = makeSessionChallenge()
+    const rawFetch = vi.fn(async () => paymentRequired(challenge))
+    const [charge, sessionMethod] = tempo({
+      account,
+      expectedRecipients: [otherCurrency],
+      getClient: () => client,
+    })
+    const fetch = Fetch.from({ fetch: rawFetch, methods: [charge, sessionMethod] })
+
+    await expect(fetch('https://example.com/paid')).rejects.toThrow('No method found')
+    expect(rawFetch).toHaveBeenCalledTimes(1)
+  })
+
+  const close = { action: 'close', descriptor, cumulativeAmountRaw: '100' } as const
+  const outsidePolicy = [
+    { name: 'currency', options: { currencies: [otherCurrency] } },
+    { name: 'amount', options: { currencies: [descriptor.token], maxAtomicAmount: '99' } },
+    { name: 'recipient', options: { expectedRecipients: [otherCurrency] } },
+  ] as const
+
+  test.each(outsidePolicy)(
+    'Mppx.createCredential signs an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const method = session({ account, getClient: () => client, ...options })
+      const mppx = Mppx.create({ methods: [method], polyfill: false })
+      const challenge = makeSessionChallenge()
+
+      const credential = await mppx.createCredential(paymentRequired(challenge), close)
+      expect(deserialize(credential).action).toBe('close')
+      await expect(mppx.createCredential(paymentRequired(challenge), voucher)).rejects.toThrow(
+        'No method found',
+      )
+    },
+  )
+
+  test.each(outsidePolicy)(
+    'fetch sends an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const challenge = makeSessionChallenge()
+      const authorizations: (string | null)[] = []
+      const rawFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        authorizations.push(authorization)
+        return authorization ? new Response('closed') : paymentRequired(challenge)
+      })
+      const method = session({ account, getClient: () => client, ...options })
+      const fetch = Fetch.from({ fetch: rawFetch, methods: [method] })
+
+      const response = await fetch('https://example.com/paid', { context: close } as never)
+      expect(response.status).toBe(200)
+      expect(rawFetch).toHaveBeenCalledTimes(2)
+      expect(deserialize(authorizations[1]!).action).toBe('close')
+    },
+  )
 
   test.each([
     {

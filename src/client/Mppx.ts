@@ -291,6 +291,9 @@ export function create<
   async function preparePayment(
     response: Transport.ResponseOf<transport>,
     options?: preparePayment.Options<FlattenMethods<methods>, transport>,
+    // Credential context known before selection, such as an explicit session close passed to
+    // `createCredential`, so methods can accept offers they would otherwise skip.
+    selectionContext?: unknown,
   ): Promise<PreparedPayment<FlattenMethods<methods>, transport>> {
     const eventResponse = snapshotResponse(response)
     const challenges = await transport.getChallenges(response as never, options?.request as never)
@@ -302,7 +305,12 @@ export function create<
     let challenge: Challenge.Challenge | undefined
     let mi: FlattenMethods<methods>[number] | undefined
     try {
-      const candidates = AcceptPayment.selectChallengeCandidates(challenges, methods, preferences)
+      const candidates = AcceptPayment.selectChallengeCandidates(
+        challenges,
+        methods,
+        preferences,
+        selectionContext,
+      )
       const orderedCandidates = await resolveChallengeOrder(
         candidates,
         options?.orderChallenges ?? orderChallenges,
@@ -516,7 +524,7 @@ export function create<
       context?: AnyContextFor<FlattenMethods<methods>>,
       options?: createCredential.Options<FlattenMethods<methods>, transport>,
     ) {
-      const prepared = await preparePayment(response, options)
+      const prepared = await preparePayment(response, options, context)
       return prepared.createCredential(context)
     },
   }

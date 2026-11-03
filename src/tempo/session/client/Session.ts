@@ -117,18 +117,22 @@ function acknowledgesOpen(
 
 type SpendingPolicy = {
   currencies: readonly string[] | undefined
+  expectedRecipients: ReadonlySet<string> | undefined
   maxAmount: bigint | undefined
   maxAtomicAmount: bigint | undefined
 }
 
 /** Validates and parses the client's session spending options once, at construction. */
 function resolveSpendingPolicy(parameters: session.Parameters): SpendingPolicy {
-  const { currencies, decimals, maxAmount, maxAtomicAmount } = parameters
+  const { currencies, decimals, expectedRecipients, maxAmount, maxAtomicAmount } = parameters
   // Caps are denominated in the challenge currency, so they require a currency pin.
   if ((maxAmount !== undefined || maxAtomicAmount !== undefined) && currencies === undefined)
     throw new Error('Tempo session maxAmount and maxAtomicAmount require currencies.')
   return {
     currencies: currencies?.map((currency) => currency.toLowerCase()),
+    expectedRecipients: expectedRecipients
+      ? new Set(expectedRecipients.map((recipient) => recipient.toLowerCase()))
+      : undefined,
     maxAmount: parseMaxAmount(maxAmount, decimals),
     maxAtomicAmount: maxAtomicAmount === undefined ? undefined : BigInt(maxAtomicAmount),
   }
@@ -147,15 +151,21 @@ function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefi
 }
 
 /**
- * Rejects a session challenge whose currency or per-unit amount violates the client policy.
- * Runs during challenge selection, in the automatic top-up hook, and before any signing work.
+ * Rejects a session challenge whose currency, recipient or per-unit amount violates the client
+ * policy. Runs during challenge selection, in the automatic top-up hook, and before any signing work.
  */
 function assertSpendingPolicy(
   policy: SpendingPolicy,
-  request: { amount: string; currency: string },
+  request: { amount: string; currency: string; recipient?: string | undefined },
 ) {
   if (policy.currencies && !policy.currencies.includes(request.currency.toLowerCase()))
     throw new Error(`Tempo session currency is not allowed: ${request.currency}.`)
+  // The recipient is the channel payee, so it must be one the client expects, as for charge.
+  if (
+    policy.expectedRecipients &&
+    (!request.recipient || !policy.expectedRecipients.has(request.recipient.toLowerCase()))
+  )
+    throw new Error(`Unexpected session recipient: ${request.recipient}`)
   const amount = BigInt(request.amount)
   if (policy.maxAtomicAmount !== undefined && amount > policy.maxAtomicAmount)
     throw new Error('Tempo session amount exceeds maxAtomicAmount.')
@@ -166,7 +176,7 @@ function assertSpendingPolicy(
 /** Returns whether a session challenge satisfies the client policy. */
 function satisfiesSpendingPolicy(
   policy: SpendingPolicy,
-  request: { amount: string; currency: string },
+  request: { amount: string; currency: string; recipient?: string | undefined },
 ) {
   try {
     assertSpendingPolicy(policy, request)
@@ -174,6 +184,15 @@ function satisfiesSpendingPolicy(
   } catch {
     return false
   }
+}
+
+/** Returns whether a caller-supplied credential context asks to close a channel. */
+function isExplicitClose(context: unknown) {
+  return (
+    typeof context === 'object' &&
+    context !== null &&
+    (context as { action?: unknown }).action === 'close'
+  )
 }
 
 /**
@@ -249,11 +268,11 @@ export function session(parameters: session.Parameters = {}) {
     })
 
   const method = Method.toClient(Methods.session, {
-    // Skip offers that violate client policy so an acceptable offer can be chosen. Selection
-    // sees no credential context, so an explicit close for such an offer goes through
-    // `createCredential` directly.
-    canHandleChallenge: ({ challenge }) =>
-      isTip1034SessionChallenge(challenge) && satisfiesSpendingPolicy(policy, challenge.request),
+    // Skip offers that violate client policy so an acceptable offer can be chosen. An explicit
+    // close, when the caller supplies it before selection, stays available for any offer.
+    canHandleChallenge: ({ challenge, context }) =>
+      isTip1034SessionChallenge(challenge) &&
+      (isExplicitClose(context) || satisfiesSpendingPolicy(policy, challenge.request)),
     context: sessionContextSchema,
     async createCredential(parameters) {
       const { challenge, context } = parameters
@@ -532,6 +551,12 @@ export declare namespace session {
        * `maxAtomicAmount`, which are denominated in the challenge currency.
        */
       currencies?: readonly Address[] | undefined
+      /**
+       * Allowlist of session recipients (the channel payee), compared case-insensitively. Offers
+       * to other recipients, or without one, are skipped during selection and rejected before
+       * signing, as for charge. Explicit closes are exempt.
+       */
+      expectedRecipients?: readonly Address[] | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). `maxAmount` requires it explicitly. */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
