@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as Mppx from '../../../client/Mppx.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -1713,4 +1714,297 @@ describe('session chain allowlists', () => {
       }
     },
   )
+})
+
+describe('session spending policy', () => {
+  const otherCurrency = '0x0000000000000000000000000000000000000009' as Address
+  const voucher = { action: 'voucher', descriptor, cumulativeAmountRaw: '100' } as const
+
+  test.each([
+    { name: 'allowed currency', options: { currencies: [descriptor.token] }, error: undefined },
+    {
+      name: 'allowed currency in another case',
+      options: { currencies: [descriptor.token.toUpperCase().replace('0X', '0x') as Address] },
+      error: undefined,
+    },
+    {
+      name: 'disallowed currency',
+      options: { currencies: [otherCurrency] },
+      error: 'Tempo session currency is not allowed',
+    },
+    {
+      name: 'empty currencies',
+      options: { currencies: [] },
+      error: 'Tempo session currency is not allowed',
+    },
+    {
+      name: 'atomic equal to cap',
+      options: { currencies: [descriptor.token], maxAtomicAmount: '100' },
+      error: undefined,
+    },
+    {
+      name: 'atomic above cap',
+      options: { currencies: [descriptor.token], maxAtomicAmount: '99' },
+      error: 'Tempo session amount exceeds maxAtomicAmount.',
+    },
+    {
+      name: 'display equal to cap',
+      options: { currencies: [descriptor.token], decimals: 2, maxAmount: '1' },
+      error: undefined,
+    },
+    {
+      name: 'display above cap',
+      options: { currencies: [descriptor.token], decimals: 2, maxAmount: '0.99' },
+      error: 'Tempo session amount exceeds maxAmount.',
+    },
+  ] as const)('tempo() applies $name to sessions', async ({ options, error }) => {
+    const getClient = vi.fn(() => client)
+    const [, method] = tempo({ account, getClient, ...options })
+    const challenge = makeSessionChallenge()
+
+    expect(method.canHandleChallenge?.({ challenge })).toBe(error === undefined)
+    const credential = method.createCredential({ challenge, context: voucher })
+    if (error) {
+      await expect(credential).rejects.toThrow(error)
+      expect(getClient).not.toHaveBeenCalled()
+    } else await expect(credential).resolves.toBeTypeOf('string')
+  })
+
+  test.each(['automatic', 'open', 'topUp', 'voucher', 'recover'] as const)(
+    'rejects an over-cap offer before signing for %s',
+    async (action) => {
+      const getClient = vi.fn(() => client)
+      const signTypedData = vi.spyOn(account, 'signTypedData')
+      const method = session({
+        account,
+        currencies: [descriptor.token],
+        getClient,
+        maxAtomicAmount: '99',
+      })
+      const context =
+        action === 'automatic'
+          ? {}
+          : action === 'recover'
+            ? { descriptor }
+            : { action, descriptor, transaction: '0x1234' as const, cumulativeAmountRaw: '100' }
+      try {
+        await expect(
+          method.createCredential({ challenge: makeSessionChallenge(), context }),
+        ).rejects.toThrow('Tempo session amount exceeds maxAtomicAmount.')
+        expect(getClient).not.toHaveBeenCalled()
+        expect(signTypedData).not.toHaveBeenCalled()
+      } finally {
+        signTypedData.mockRestore()
+      }
+    },
+  )
+
+  test('rejects an over-cap offer in the automatic top-up hook', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn()
+    const method = session({
+      account,
+      currencies: [descriptor.token],
+      getClient,
+      maxAtomicAmount: '99',
+    })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: {},
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).rejects.toThrow('Tempo session amount exceeds maxAtomicAmount.')
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('does not pay an over-cap session offer through fetch', async () => {
+    const challenge = makeSessionChallenge()
+    const rawFetch = vi.fn(async () => paymentRequired(challenge))
+    const [charge, sessionMethod] = tempo({
+      account,
+      currencies: [descriptor.token],
+      getClient: () => client,
+      maxAtomicAmount: '99',
+    })
+    const fetch = Fetch.from({ fetch: rawFetch, methods: [charge, sessionMethod] })
+
+    await expect(fetch('https://example.com/paid')).rejects.toThrow()
+    expect(rawFetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('leaves explicit actions to createCredential in the top-up hook', async () => {
+    const fetch = vi.fn()
+    const method = session({ account, currencies: [otherCurrency], getClient: () => client })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: { action: 'close', descriptor, cumulativeAmountRaw: '100' },
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).resolves.toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('still signs explicit closes for offers outside the policy', async () => {
+    const method = session({ account, currencies: [otherCurrency], getClient: () => client })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeSessionChallenge(),
+        context: { action: 'close', descriptor, cumulativeAmountRaw: '100' },
+      }),
+    )
+    expect(payload.action).toBe('close')
+  })
+
+  test.each([
+    { name: 'allowed recipient', recipients: [descriptor.payee], recipient: descriptor.payee },
+    {
+      name: 'allowed recipient in another case',
+      recipients: [descriptor.payee.toUpperCase().replace('0X', '0x') as Address],
+      recipient: descriptor.payee,
+    },
+    {
+      name: 'unexpected recipient',
+      recipients: [otherCurrency],
+      recipient: descriptor.payee,
+      error: 'Unexpected session recipient',
+    },
+    {
+      name: 'missing recipient',
+      recipients: [descriptor.payee],
+      recipient: undefined,
+      error: 'Unexpected session recipient',
+    },
+    {
+      name: 'empty recipients',
+      recipients: [],
+      recipient: descriptor.payee,
+      error: 'Unexpected session recipient',
+    },
+  ] as const)('tempo() applies expectedRecipients to sessions: $name', async (row) => {
+    const getClient = vi.fn(() => client)
+    const signTypedData = vi.spyOn(account, 'signTypedData')
+    const [, method] = tempo({ account, expectedRecipients: row.recipients, getClient })
+    const challenge = makeSessionChallenge({ recipient: row.recipient })
+    try {
+      expect(method.canHandleChallenge?.({ challenge })).toBe(!('error' in row))
+      const credential = method.createCredential({ challenge, context: voucher })
+      if ('error' in row) {
+        await expect(credential).rejects.toThrow(row.error)
+        expect(getClient).not.toHaveBeenCalled()
+        expect(signTypedData).not.toHaveBeenCalled()
+      } else await expect(credential).resolves.toBeTypeOf('string')
+    } finally {
+      signTypedData.mockRestore()
+    }
+  })
+
+  test('rejects an unexpected recipient in the automatic top-up hook', async () => {
+    const getClient = vi.fn(() => client)
+    const fetch = vi.fn()
+    const method = session({ account, expectedRecipients: [otherCurrency], getClient })
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge: makeSessionChallenge(),
+        context: {},
+        fetch,
+        input: 'https://example.com/paid',
+      }),
+    ).rejects.toThrow('Unexpected session recipient')
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('does not pay a session offer to an unexpected recipient through fetch', async () => {
+    const challenge = makeSessionChallenge()
+    const rawFetch = vi.fn(async () => paymentRequired(challenge))
+    const [charge, sessionMethod] = tempo({
+      account,
+      expectedRecipients: [otherCurrency],
+      getClient: () => client,
+    })
+    const fetch = Fetch.from({ fetch: rawFetch, methods: [charge, sessionMethod] })
+
+    await expect(fetch('https://example.com/paid')).rejects.toThrow('No method found')
+    expect(rawFetch).toHaveBeenCalledTimes(1)
+  })
+
+  const close = { action: 'close', descriptor, cumulativeAmountRaw: '100' } as const
+  const outsidePolicy = [
+    { name: 'currency', options: { currencies: [otherCurrency] } },
+    { name: 'amount', options: { currencies: [descriptor.token], maxAtomicAmount: '99' } },
+    { name: 'recipient', options: { expectedRecipients: [otherCurrency] } },
+  ] as const
+
+  test.each(outsidePolicy)(
+    'Mppx.createCredential signs an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const method = session({ account, getClient: () => client, ...options })
+      const mppx = Mppx.create({ methods: [method], polyfill: false })
+      const challenge = makeSessionChallenge()
+
+      const credential = await mppx.createCredential(paymentRequired(challenge), close)
+      expect(deserialize(credential).action).toBe('close')
+      await expect(mppx.createCredential(paymentRequired(challenge), voucher)).rejects.toThrow(
+        'No method found',
+      )
+    },
+  )
+
+  test.each(outsidePolicy)(
+    'preparePayment signs an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const method = session({ account, getClient: () => client, ...options })
+      const mppx = Mppx.create({ methods: [method], polyfill: false })
+      const challenge = makeSessionChallenge()
+
+      const prepared = await mppx.preparePayment(paymentRequired(challenge))
+      const credential = await prepared.createCredential(close)
+      expect(deserialize(credential).action).toBe('close')
+
+      const unpaid = await mppx.preparePayment(paymentRequired(challenge))
+      await expect(unpaid.createCredential(voucher)).rejects.toThrow()
+    },
+  )
+
+  test.each(outsidePolicy)(
+    'fetch sends an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const challenge = makeSessionChallenge()
+      const authorizations: (string | null)[] = []
+      const rawFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        authorizations.push(authorization)
+        return authorization ? new Response('closed') : paymentRequired(challenge)
+      })
+      const method = session({ account, getClient: () => client, ...options })
+      const fetch = Fetch.from({ fetch: rawFetch, methods: [method] })
+
+      const response = await fetch('https://example.com/paid', { context: close } as never)
+      expect(response.status).toBe(200)
+      expect(rawFetch).toHaveBeenCalledTimes(2)
+      expect(deserialize(authorizations[1]!).action).toBe('close')
+    },
+  )
+
+  test.each([
+    {
+      options: { maxAtomicAmount: '1' },
+      error: 'Tempo session maxAmount and maxAtomicAmount require currencies.',
+    },
+    {
+      options: { currencies: [descriptor.token], maxAmount: '1' },
+      error: 'Tempo session maxAmount requires currency decimals.',
+    },
+    {
+      options: { currencies: [descriptor.token], decimals: 2, maxAmount: '0.001' },
+      error: 'has more fractional digits than 2 decimals allow',
+    },
+  ])('rejects invalid options $options', ({ options, error }) => {
+    expect(() => session({ account, getClient: () => client, ...options })).toThrow(error)
+  })
 })

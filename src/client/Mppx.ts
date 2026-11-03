@@ -291,6 +291,9 @@ export function create<
   async function preparePayment(
     response: Transport.ResponseOf<transport>,
     options?: preparePayment.Options<FlattenMethods<methods>, transport>,
+    // Credential context known before selection, such as an explicit session close passed to
+    // `createCredential`, so methods can accept offers they would otherwise skip.
+    selectionContext?: unknown,
   ): Promise<PreparedPayment<FlattenMethods<methods>, transport>> {
     const eventResponse = snapshotResponse(response)
     const challenges = await transport.getChallenges(response as never, options?.request as never)
@@ -302,7 +305,22 @@ export function create<
     let challenge: Challenge.Challenge | undefined
     let mi: FlattenMethods<methods>[number] | undefined
     try {
-      const candidates = AcceptPayment.selectChallengeCandidates(challenges, methods, preferences)
+      let candidates = AcceptPayment.selectChallengeCandidates(
+        challenges,
+        methods,
+        preferences,
+        selectionContext,
+      )
+      // Without a context yet, as in `preparePayment(response).createCredential(context)`, fall back
+      // to offers a method skips only by policy: an explicit close may still use them, and the
+      // method enforces the policy for anything else when the credential is created.
+      if (candidates.length === 0 && selectionContext === undefined)
+        candidates = AcceptPayment.selectChallengeCandidates(
+          challenges,
+          methods,
+          preferences,
+          AcceptPayment.deferredContext,
+        )
       const orderedCandidates = await resolveChallengeOrder(
         candidates,
         options?.orderChallenges ?? orderChallenges,
@@ -516,7 +534,7 @@ export function create<
       context?: AnyContextFor<FlattenMethods<methods>>,
       options?: createCredential.Options<FlattenMethods<methods>, transport>,
     ) {
-      const prepared = await preparePayment(response, options)
+      const prepared = await preparePayment(response, options, context)
       return prepared.createCredential(context)
     },
   }

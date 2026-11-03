@@ -3,10 +3,19 @@ import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import type { MaybePromise } from './types.js'
 
 type MethodLike = {
-  canHandleChallenge?: ((parameters: { challenge: Challenge.Challenge }) => boolean) | undefined
+  canHandleChallenge?:
+    | ((parameters: { challenge: Challenge.Challenge; context?: unknown }) => boolean)
+    | undefined
   intent: string
   name: string
 }
+
+/**
+ * Selection context for flows that receive the credential context only after an offer is chosen,
+ * such as `preparePayment()`. Methods may accept offers they would otherwise skip by policy and
+ * enforce that policy when the credential is created.
+ */
+export const deferredContext: unique symbol = Symbol('mppx.deferredContext')
 
 /** Supported challenge paired with the configured client method that can sign it. */
 export type ChallengeCandidate<method extends MethodLike = MethodLike> = method extends MethodLike
@@ -174,11 +183,15 @@ export function selectChallenge<const methods extends readonly MethodLike[]>(
   }
 }
 
-/** Returns supported challenge candidates ordered by client payment preferences. */
+/**
+ * Returns supported challenge candidates ordered by client payment preferences.
+ * `context` is the caller's credential context, when known before selection.
+ */
 export function selectChallengeCandidates<const methods extends readonly MethodLike[]>(
   challenges: readonly Challenge.Challenge[],
   methods: methods,
   preferences: readonly Entry[],
+  context?: unknown,
 ): ChallengeCandidate<methods[number]>[] {
   const methodsByKey = new Map<string, methods[number][]>()
   for (const method of methods) {
@@ -197,7 +210,12 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
       if (!match || match.q <= 0) return []
 
       return matchingMethods
-        .filter((method) => method.canHandleChallenge?.({ challenge }) ?? true)
+        .filter(
+          (method) =>
+            method.canHandleChallenge?.(
+              context === undefined ? { challenge } : { challenge, context },
+            ) ?? true,
+        )
         .map(
           (method) =>
             ({
