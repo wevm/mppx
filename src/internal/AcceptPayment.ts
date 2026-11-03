@@ -10,6 +10,13 @@ type MethodLike = {
   name: string
 }
 
+/**
+ * Selection context for flows that receive the credential context only after an offer is chosen,
+ * such as `preparePayment()`. Methods may accept offers they would otherwise skip by policy and
+ * enforce that policy when the credential is created.
+ */
+export const deferredContext: unique symbol = Symbol('mppx.deferredContext')
+
 /** Supported challenge paired with the configured client method that can sign it. */
 export type ChallengeCandidate<method extends MethodLike = MethodLike> = method extends MethodLike
   ? {

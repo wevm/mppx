@@ -305,12 +305,22 @@ export function create<
     let challenge: Challenge.Challenge | undefined
     let mi: FlattenMethods<methods>[number] | undefined
     try {
-      const candidates = AcceptPayment.selectChallengeCandidates(
+      let candidates = AcceptPayment.selectChallengeCandidates(
         challenges,
         methods,
         preferences,
         selectionContext,
       )
+      // Without a context yet, as in `preparePayment(response).createCredential(context)`, fall back
+      // to offers a method skips only by policy: an explicit close may still use them, and the
+      // method enforces the policy for anything else when the credential is created.
+      if (candidates.length === 0 && selectionContext === undefined)
+        candidates = AcceptPayment.selectChallengeCandidates(
+          challenges,
+          methods,
+          preferences,
+          AcceptPayment.deferredContext,
+        )
       const orderedCandidates = await resolveChallengeOrder(
         candidates,
         options?.orderChallenges ?? orderChallenges,

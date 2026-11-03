@@ -5,6 +5,7 @@ import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import * as AcceptPayment from '../../../internal/AcceptPayment.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -269,10 +270,13 @@ export function session(parameters: session.Parameters = {}) {
 
   const method = Method.toClient(Methods.session, {
     // Skip offers that violate client policy so an acceptable offer can be chosen. An explicit
-    // close, when the caller supplies it before selection, stays available for any offer.
+    // close, when the caller supplies it before selection, stays available for any offer. Flows
+    // that learn the context only after selection defer the policy to createCredential.
     canHandleChallenge: ({ challenge, context }) =>
       isTip1034SessionChallenge(challenge) &&
-      (isExplicitClose(context) || satisfiesSpendingPolicy(policy, challenge.request)),
+      (isExplicitClose(context) ||
+        context === AcceptPayment.deferredContext ||
+        satisfiesSpendingPolicy(policy, challenge.request)),
     context: sessionContextSchema,
     async createCredential(parameters) {
       const { challenge, context } = parameters

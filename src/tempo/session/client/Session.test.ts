@@ -1956,6 +1956,22 @@ describe('session spending policy', () => {
   )
 
   test.each(outsidePolicy)(
+    'preparePayment signs an explicit close for an offer outside the $name policy',
+    async ({ options }) => {
+      const method = session({ account, getClient: () => client, ...options })
+      const mppx = Mppx.create({ methods: [method], polyfill: false })
+      const challenge = makeSessionChallenge()
+
+      const prepared = await mppx.preparePayment(paymentRequired(challenge))
+      const credential = await prepared.createCredential(close)
+      expect(deserialize(credential).action).toBe('close')
+
+      const unpaid = await mppx.preparePayment(paymentRequired(challenge))
+      await expect(unpaid.createCredential(voucher)).rejects.toThrow()
+    },
+  )
+
+  test.each(outsidePolicy)(
     'fetch sends an explicit close for an offer outside the $name policy',
     async ({ options }) => {
       const challenge = makeSessionChallenge()
