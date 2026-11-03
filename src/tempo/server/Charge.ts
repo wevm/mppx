@@ -1581,6 +1581,8 @@ const ambiguousErrorNames = new Set([
  * - JSON-RPC code `4`: the EIP-7966 timeout for a pooled, unconfirmed transaction.
  * - Messages containing the words "already known" or "known transaction": already
  *   pooled ("unknown transaction type" does not match).
+ * - Tempo's `ExpiringNonceReplay`: an expiring-nonce transaction with this hash was
+ *   already accepted, such as when a transport retries a send the node took.
  */
 function isAmbiguousBroadcastError(error: unknown): boolean {
   for (let cause = error; cause; cause = (cause as { cause?: unknown }).cause) {
@@ -1589,7 +1591,10 @@ function isAmbiguousBroadcastError(error: unknown): boolean {
     if (name === 'HttpRequestError') return status === undefined || Number(status) >= 500
     if (ambiguousErrorNames.has(name as string)) return true
     if (code === 4) return true
-    if (typeof message === 'string' && /\balready ?known\b|\bknown transaction\b/i.test(message))
+    if (
+      typeof message === 'string' &&
+      /\balready ?known\b|\bknown transaction\b|\bExpiringNonceReplay\b/i.test(message)
+    )
       return true
   }
   return false
