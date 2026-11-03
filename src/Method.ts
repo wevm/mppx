@@ -292,7 +292,14 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
 ) => Promise<string>
 
 /** Predicate used when multiple client implementations share a wire method/intent. */
-export type CanHandleChallengeFn = (parameters: { challenge: Challenge.Challenge }) => boolean
+/**
+ * Returns whether a client method can sign a challenge. `context` is the caller's credential
+ * context when the caller supplied it before selection, such as an explicit session close.
+ */
+export type CanHandleChallengeFn = (parameters: {
+  challenge: Challenge.Challenge
+  context?: unknown
+}) => boolean
 
 /** Request transform function for a single method. */
 export type RequestFn<method extends Method> = (
