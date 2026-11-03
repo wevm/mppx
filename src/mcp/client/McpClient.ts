@@ -210,6 +210,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
       challenges,
       methods,
       paymentPreferences.entries,
+      call.context,
     )
     const orderedCandidates = config.orderChallenges
       ? await config.orderChallenges(candidates)

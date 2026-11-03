@@ -322,6 +322,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           challenges,
           methods,
           paymentPreferences.entries,
+          context,
         )
         const orderedCandidates = await resolveChallengeOrder(
           candidates,
