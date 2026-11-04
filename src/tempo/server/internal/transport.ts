@@ -17,6 +17,7 @@ import * as Sse_core from '../../session/server/Sse.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+const prepaidRefundKey = Symbol('mppx.prepaidRefundKey')
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -24,10 +25,15 @@ export type Sse = Transport.Sse<Sse_core.SessionController>
 /** Receipt marker used to avoid double-charging a request already charged during verification. */
 export type PrepaidSessionReceipt = SessionReceipt & {
   [prepaidSessionTick]?: true | undefined
+  [prepaidRefundKey]?: string | undefined
 }
 
 /** Marks a session receipt as already charged for the current request. */
 export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt {
+  if (hasPrepaidSessionTick(receipt)) return receipt
+  Object.defineProperty(receipt, prepaidRefundKey, {
+    value: `stream:${globalThis.crypto.randomUUID()}`,
+  })
   Object.defineProperty(receipt, prepaidSessionTick, {
     configurable: false,
     enumerable: false,
@@ -135,6 +141,8 @@ export function sse(
           beforeCharge: () => options.beforeCharge?.(channelId),
           onChargeCommitted: options.settleCharged,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
+          refundIdempotencyKey: (receipt as PrepaidSessionReceipt)[prepaidRefundKey],
+          onRefundRequired: options.onRefundRequired,
           signal: input.signal,
         })
         return Sse_core.toResponse(stream)
@@ -263,6 +271,8 @@ export declare namespace sse {
      * @default false
      */
     poll?: boolean | undefined
+    /** Merchant reconciliation hook for prepaid items that fail before delivery; see `Sse.serve.Options.onRefundRequired`. */
+    onRefundRequired?: Sse_core.serve.Options['onRefundRequired']
     /** Polling interval (in milliseconds). @default 10 */
     pollingInterval?: number | undefined
   }

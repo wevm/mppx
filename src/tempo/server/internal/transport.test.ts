@@ -723,6 +723,44 @@ describe('sse transport', () => {
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
+  test('passes stable prepaid refund keys and the merchant hook through managed SSE', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10_000_000n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1_000_000n,
+      units: 1,
+      settledOnChain: 1_000_000n,
+    }))
+    const keys: string[] = []
+    const transport = sse({
+      store,
+      beforeCharge: async () => {
+        throw new Error('escrow unavailable')
+      },
+      onRefundRequired(refund) {
+        keys.push(refund.idempotencyKey)
+      },
+    })
+    const receipt = markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 }))
+    expect(markPrepaidSessionTick(receipt)).toBe(receipt)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await transport.respondReceipt({
+        credential: makeCredential(),
+        input: makeAuthorizedRequest(),
+        receipt,
+        response: (async function* () {
+          yield 'blocked'
+        })(),
+        challengeId,
+      })
+      await expect(response.text()).rejects.toThrow('escrow unavailable')
+    }
+    expect(keys).toHaveLength(2)
+    expect(keys[0]).toBe(keys[1])
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1_000_000n, units: 1 })
+  })
+
   test('respondReceipt with prepaid plain Response does not deduct again', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
