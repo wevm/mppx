@@ -605,6 +605,7 @@ describe.runIf(isPrecompileTestnet)('sponsored session open with a fresh access 
       to: root.address,
       token: asset,
     })
+    const rawStore = Store.memory()
     const keyAuthorizationManager = KeyAuthorizationManager.memory()
     const accessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey(), {
       access: root,
@@ -627,7 +628,7 @@ describe.runIf(isPrecompileTestnet)('sponsored session open with a fresh access 
       feePayer,
       feeToken: asset,
       recipient: payee.address,
-      store: Store.memory(),
+      store: rawStore,
       unitType: 'request',
       getClient: () => client,
     })
@@ -660,7 +661,15 @@ describe.runIf(isPrecompileTestnet)('sponsored session open with a fresh access 
         },
         request: request as never,
       })
-    return { channelId: payload.channelId, verify }
+    return {
+      accessKey,
+      channelId: payload.channelId,
+      descriptor: payload.descriptor,
+      method,
+      rawStore,
+      request,
+      verify,
+    }
   }
 
   test('sponsors the open that installs the access key', async () => {
@@ -672,5 +681,59 @@ describe.runIf(isPrecompileTestnet)('sponsored session open with a fresh access 
     expect(txReceipt.feePayer?.toLowerCase()).toBe(feePayer.address.toLowerCase())
     const state = await getChannelState(client, channelId, tip20ChannelEscrow)
     expect(state.deposit).toBe(1_000n)
+  })
+
+  test('pays and closes a session with the access key', async () => {
+    const { accessKey, channelId, descriptor, method, rawStore, request, verify } =
+      await freshAccessKeyOpen()
+    const openReceipt = await verify()
+    if (!('txHash' in openReceipt)) throw new Error('expected open txHash')
+    await waitForTransactionReceipt(client, { hash: openReceipt.txHash as Hex.Hex })
+
+    const challenge = {
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'session',
+      request,
+    }
+    const voucher = await createVoucherPayload(
+      client,
+      accessKey,
+      descriptor,
+      uint96(300n),
+      chain.id,
+    )
+    const voucherReceipt = await method.verify({
+      credential: {
+        challenge: { ...challenge, id: 'chain-access-key-voucher' } as never,
+        payload: voucher,
+        source: sourceFor(accessKey),
+      },
+      request: request as never,
+    })
+    expect(voucherReceipt.reference).toBe(channelId)
+    // A charge records spend; the close settles what was spent.
+    await ChannelStore.fromStore(rawStore as never).updateChannel(
+      channelId,
+      (current) => current && { ...current, spent: 300n },
+    )
+
+    const close = await createClosePayload(client, accessKey, descriptor, uint96(300n), chain.id)
+    const closeReceipt = await method.verify({
+      credential: {
+        challenge: { ...challenge, id: 'chain-access-key-close' } as never,
+        payload: close,
+        source: sourceFor(accessKey),
+      },
+      request: request as never,
+    })
+    if (!('txHash' in closeReceipt)) throw new Error('expected close txHash')
+    const txReceipt = await waitForTransactionReceipt(client, {
+      hash: closeReceipt.txHash as Hex.Hex,
+    })
+    expect(txReceipt.status).toBe('success')
+    const closed = getSingleEvent(txReceipt, 'ChannelClosed')
+    expect(closed.args.channelId).toBe(channelId)
+    expect(closed.args.settledToPayee).toBe(300n)
   })
 })

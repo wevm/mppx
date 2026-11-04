@@ -11,7 +11,9 @@ import { uint96 } from './Protocol.js'
 import {
   getVoucherDomain,
   parseVoucherFromPayload,
+  signCloseAuthorization,
   signVoucher,
+  verifyCloseAuthorization,
   voucherTypes,
   verifyVoucher,
 } from './Voucher.js'
@@ -299,6 +301,45 @@ describe('Precompile Voucher', () => {
         accessKey.accessKeyAddress,
       ),
     ).toBe(true)
+  })
+
+  test('signs p256 access-key close authorizations as primitives', async () => {
+    const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), {
+      access: rootAccount,
+    })
+    const accessKeyClient = createClient({
+      account: accessKey,
+      transport: http('http://127.0.0.1'),
+    })
+
+    const signature = await signCloseAuthorization(
+      accessKeyClient,
+      accessKey,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+
+    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+    expect(envelope.type).toBe('p256')
+    expect(
+      verifyCloseAuthorization(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature },
+        [rootAccount.address, accessKey.accessKeyAddress],
+      ),
+    ).toBe(true)
+    // A close authorization is not a voucher.
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature },
+        accessKey.accessKeyAddress,
+      ),
+    ).toBe(false)
   })
 
   test('signs and verifies webAuthn root vouchers as primitives', async () => {

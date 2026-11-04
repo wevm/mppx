@@ -83,6 +83,11 @@ function isPrimitiveEnvelope(type: string): boolean {
   return type === 'secp256k1' || type === 'p256' || type === 'webAuthn'
 }
 
+/** Detects a viem/tempo access key account the same way `Account.signVoucher` does. */
+function isAccessKeyAccount(account: Account): account is TempoAccount.AccessKeyAccount {
+  return account.source === 'accessKey' && 'accessKeyAddress' in account
+}
+
 function signCanonicalTempoVoucher(
   account: Account,
   parameters: {
@@ -149,13 +154,22 @@ export async function signCloseAuthorization(
   verifyingContract: Address,
   chainId: number,
 ): Promise<Hex> {
-  const signature = await signTypedData(client, {
-    account,
-    domain: getVoucherDomain(verifyingContract, chainId),
-    types: closeAuthorizationTypes,
-    primaryType: 'CloseAuthorization',
-    message: authorization,
-  })
+  // `signTypedData` wraps access key signatures in a keychain envelope, which
+  // TIP-1034 rejects. Sign the hash raw instead, as viem/tempo's
+  // `Account.signVoucher` does for vouchers: the access key is the channel's
+  // authorized signer.
+  const signature = isAccessKeyAccount(account)
+    ? await account.sign({
+        hash: getCloseAuthorizationPayload(verifyingContract, chainId, authorization),
+        raw: true,
+      })
+    : await signTypedData(client, {
+        account,
+        domain: getVoucherDomain(verifyingContract, chainId),
+        types: closeAuthorizationTypes,
+        primaryType: 'CloseAuthorization',
+        message: authorization,
+      })
   const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
   if (!isPrimitiveEnvelope(envelope.type))
     throw new Error(
