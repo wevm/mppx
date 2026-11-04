@@ -3145,11 +3145,14 @@ function composeHandlers(
       mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
 
       const firstData = Object.values(dataMap)[0]!
-      const body = Html.render({
-        entries: htmlEntries.map((entry) => ({
+      const entries = await Promise.all(
+        htmlEntries.map(async (entry) => ({
           challenge: entry.challenge,
-          content: entry.handler._internal.html!.content,
+          content: await Html.resolveContent(entry.handler._internal.html!.content),
         })),
+      )
+      const body = Html.render({
+        entries,
         dataMap,
         formattedAmount: firstData.formattedAmount,
         panels: true,

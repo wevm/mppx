@@ -20,7 +20,6 @@ import type {
 } from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { buildAnalytics } from './internal/analytics.js'
-import { html as htmlContent } from './internal/html.gen.js'
 
 /**
  * Stripe's general minimum charge amounts in each currency's smallest unit.
@@ -125,7 +124,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       'publishableKey' in htmlConfig && htmlConfig.publishableKey && htmlConfig.createTokenUrl
         ? {
             config: htmlConfig,
-            content: htmlContent,
+            content: async () => (await import('./internal/html.gen.js')).html,
             formatAmount: (request: z.output<typeof Methods.charge.schema.request>) => {
               try {
                 const formatter = new Intl.NumberFormat('en', {

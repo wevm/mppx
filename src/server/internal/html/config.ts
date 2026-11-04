@@ -6,7 +6,11 @@ import { tabScript } from './compose.main.gen.js'
 
 export type Options = {
   config: Record<string, unknown>
-  content: string
+  /**
+   * The payment page's script, or a function that loads it. A loader lets a
+   * method import its (large) page bundle only when a page is rendered.
+   */
+  content: string | (() => Promise<string>)
   formatAmount: (request: any) => string | Promise<string>
   text: Text | undefined
   theme: Theme | undefined
@@ -29,6 +33,11 @@ export type Data<
 
 export { attrs, classNames, ids, params } from './constants.js'
 import { attrs, classNames, ids } from './constants.js'
+
+/** Resolves {@link Options.content}, loading it when it is a loader function. */
+export async function resolveContent(content: Options['content']): Promise<string> {
+  return typeof content === 'function' ? content() : content
+}
 
 function logoColorScheme(colorScheme: string) {
   return colorScheme === 'dark' || colorScheme === 'light'

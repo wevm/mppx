@@ -177,6 +177,33 @@ describe('http', () => {
       expect(body).toContain('__MPPX_DATA__')
     })
 
+    test('loads lazy content only when rendering html', async () => {
+      const transport = Transport.http()
+      let loads = 0
+      const html = {
+        ...htmlOptions,
+        content: async () => {
+          loads++
+          return '<script src="/lazy.js"></script>'
+        },
+      }
+
+      await transport.respondChallenge({
+        challenge,
+        input: new Request('https://example.com'),
+        html,
+      })
+      expect(loads).toBe(0)
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: new Request('https://example.com', { headers: { Accept: 'text/html' } }),
+        html,
+      })
+      expect(loads).toBe(1)
+      expect(await response.text()).toContain('<script src="/lazy.js"></script>')
+    })
+
     test('returns service worker script when __mppx_worker param is set', async () => {
       const transport = Transport.http()
       const request = new Request('https://example.com?__mppx_worker')
