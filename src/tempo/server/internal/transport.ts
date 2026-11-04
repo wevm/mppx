@@ -17,6 +17,8 @@ import * as Sse_core from '../../session/server/Sse.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+const consumedPrepaidReceipts = new WeakSet<SessionReceipt>()
+const prepaidRefundKey = Symbol('mppx.prepaidRefundKey')
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -24,10 +26,15 @@ export type Sse = Transport.Sse<Sse_core.SessionController>
 /** Receipt marker used to avoid double-charging a request already charged during verification. */
 export type PrepaidSessionReceipt = SessionReceipt & {
   [prepaidSessionTick]?: true | undefined
+  [prepaidRefundKey]?: string | undefined
 }
 
 /** Marks a session receipt as already charged for the current request. */
 export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt {
+  if (hasPrepaidSessionTick(receipt)) return receipt
+  Object.defineProperty(receipt, prepaidRefundKey, {
+    value: `stream:${globalThis.crypto.randomUUID()}`,
+  })
   Object.defineProperty(receipt, prepaidSessionTick, {
     configurable: false,
     enumerable: false,
@@ -94,6 +101,13 @@ export function sse(
     },
 
     async respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
+      if (hasPrepaidSessionTick(receipt as SessionReceipt)) {
+        if (consumedPrepaidReceipts.has(receipt as SessionReceipt))
+          throw new Error(
+            'Prepaid receipt already used; verify a new payment before retrying delivery',
+          )
+        consumedPrepaidReceipts.add(receipt as SessionReceipt)
+      }
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
       const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
@@ -124,20 +138,25 @@ export function sse(
         // Pass async generator functions directly so Sse.serve gives them
         // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
-        const generate = resolveMeteredGenerate(resolved, unitType)
-        const stream = Sse_core.serve({
+        const generate = resolved as Sse_core.serve.Options['generate']
+        const streamOptions: Sse_core.serve.Options = {
           store,
           channelId,
           challengeId: verifiedChallengeId,
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
+          chargeOnce: unitType === 'request',
           beforeCharge: () => options.beforeCharge?.(channelId),
           onChargeCommitted: options.settleCharged,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
+          refundIdempotencyKey: (receipt as PrepaidSessionReceipt)[prepaidRefundKey],
+          onRefundRequired: options.onRefundRequired,
+          autoCreditPrepaid: options.autoCreditPrepaid,
           signal: input.signal,
-        })
-        return Sse_core.toResponse(stream)
+        }
+        await Sse_core.preparePrepaidRefund(streamOptions)
+        return Sse_core.toResponse(Sse_core.serve(streamOptions))
       }
 
       const baseResponse = base.respondReceipt({
@@ -263,6 +282,10 @@ export declare namespace sse {
      * @default false
      */
     poll?: boolean | undefined
+    /** Opt in to SDK-owned prepaid credits; leave false with an existing merchant refund handler. */
+    autoCreditPrepaid?: boolean | undefined
+    /** Merchant reconciliation hook for prepaid items that fail before delivery; see `Sse.serve.Options.onRefundRequired`. */
+    onRefundRequired?: Sse_core.serve.Options['onRefundRequired']
     /** Polling interval (in milliseconds). @default 10 */
     pollingInterval?: number | undefined
   }
@@ -320,26 +343,6 @@ function isAsyncGeneratorFunction(
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
   return value !== null && typeof value === 'object' && Symbol.asyncIterator in (value as object)
-}
-
-function resolveMeteredGenerate(
-  value: AsyncIterable<string> | ((...args: unknown[]) => AsyncIterable<string>),
-  unitType: string | undefined,
-): Sse_core.serve.Options['generate'] {
-  if (isAsyncGeneratorFunction(value)) return value as Sse_core.serve.Options['generate']
-  if (unitType !== 'request') return value as AsyncIterable<string>
-
-  const iterable = value as AsyncIterable<string>
-  return async function* chargeOnce(stream) {
-    let charged = false
-    for await (const chunk of iterable) {
-      if (!charged) {
-        await stream.charge()
-        charged = true
-      }
-      yield chunk
-    }
-  }
 }
 
 function isNullBodyStatus(status: number): boolean {

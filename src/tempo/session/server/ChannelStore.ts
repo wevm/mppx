@@ -345,6 +345,13 @@ export interface BaseState {
   pendingSettlement?: PendingSettlement | undefined
   /** Outcomes of keyed charges and credits, by `charge:<key>` and `credit:<key>`, until they expire. */
   idempotencyMarkers?: Record<string, IdempotencyMarker> | undefined
+  /** Durable prepaid delivery obligations. Pending entries require delivery reconciliation, never blind refunds. */
+  prepaidRefunds?:
+    | Record<
+        string,
+        { amount: string; units: number; status: 'pending' | 'failed'; createdAt: number }
+      >
+    | undefined
   /** First block at which the close supervisor read this channel open on-chain. */
   closeSupervisedFromBlock?: bigint | undefined
 }
@@ -1134,6 +1141,8 @@ export type ChargeOptions = {
 
 /** Options for returning an amount to a channel at most once per key. */
 export type CreditOptions = {
+  /** Maximum live idempotency markers; existing keys remain replayable at capacity. */
+  maxMarkers?: number | undefined
   /**
    * Key of the credit. Its first outcome, credited or declined, is final: a retry with the same key
    * and terms returns it without crediting again, and the same key with other terms throws
@@ -1314,28 +1323,40 @@ export async function creditChannel(
   if (amount <= 0n) throw new Error('Credit amount must be positive.')
   if (!Number.isSafeInteger(units) || units < 0)
     throw new Error('`units` must be a non-negative integer.')
+  const maxMarkers = options.maxMarkers ?? 1024
+  if (!Number.isSafeInteger(maxMarkers) || maxMarkers < 1)
+    throw new Error('maxMarkers must be a positive safe integer')
   const now = Date.now()
   const expiresAt = now + (options.retention ?? defaultIdempotencyRetention)
   let result: CreditPlan
   try {
     result = await applyChange(store, channelId, (current) =>
-      planCredit(current, { amount, expiresAt, idempotencyKey, now, units }),
+      planCredit(current, { amount, expiresAt, idempotencyKey, now, units, maxMarkers }),
     )
   } catch (error) {
     return { status: 'unknown', error }
   }
   if (!result) throw new ChannelNotFoundError({ reason: 'channel not found' })
+  if (result === 'capacity')
+    throw new Error('Credit idempotency marker capacity reached; reconcile manually')
   if (result === 'conflict')
     throw new IdempotencyKeyConflictError({ idempotencyKey, operation: 'credit' })
   return result
 }
 
 /** Decided credit, a key reused with other terms, or a missing channel. */
-type CreditPlan = Exclude<CreditResult, { status: 'unknown' }> | 'conflict' | null
+type CreditPlan = Exclude<CreditResult, { status: 'unknown' }> | 'conflict' | 'capacity' | null
 
 function planCredit(
   current: State | null,
-  terms: { amount: bigint; expiresAt: number; idempotencyKey: string; now: number; units: number },
+  terms: {
+    amount: bigint
+    expiresAt: number
+    idempotencyKey: string
+    now: number
+    units: number
+    maxMarkers: number
+  },
 ): Store.Change<State, CreditPlan> {
   const { amount, expiresAt, idempotencyKey, now, units } = terms
   if (!current) return { op: 'noop', result: null }
@@ -1357,6 +1378,7 @@ function planCredit(
           : { status: 'declined', reason: recorded.outcome, channel: current, replayed: true },
     }
   }
+  if (Object.keys(markers).length >= terms.maxMarkers) return { op: 'noop', result: 'capacity' }
   const reason = creditDeclineReason(current, amount, now)
   const marker: IdempotencyMarker = {
     amount,

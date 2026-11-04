@@ -723,6 +723,88 @@ describe('sse transport', () => {
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
+  test('credits automatic request-priced prepaid delivery after its second escrow check fails', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10_000_000n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1_000_000n,
+      units: 1,
+    }))
+    let checks = 0
+    const transport = sse({
+      autoCreditPrepaid: true,
+      store,
+      beforeCharge: async () => {
+        if (++checks === 2) throw new Error('escrow unavailable')
+      },
+    })
+    const response = await transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: makeAuthorizedRequest(),
+      receipt: markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 })),
+      response: (async function* () {
+        yield 'blocked'
+      })(),
+      challengeId,
+    })
+    await expect(response.text()).rejects.toThrow('escrow unavailable')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+  })
+
+  test.each([0n, 1_000_000n])(
+    'rejects reuse of a refunded prepaid receipt (settled=%s)',
+    async (settledOnChain) => {
+      const store = memoryStore()
+      await seedChannel(store, 10_000_000n)
+      await store.updateChannel(channelId, (current) => ({
+        ...current!,
+        spent: 1_000_000n,
+        units: 1,
+        settledOnChain,
+      }))
+      const keys: string[] = []
+      let blocked = true
+      const transport = sse({
+        autoCreditPrepaid: true,
+        store,
+        beforeCharge: async () => {
+          if (blocked) throw new Error('escrow unavailable')
+        },
+        onRefundRequired(refund) {
+          keys.push(refund.idempotencyKey)
+        },
+      })
+      const receipt = markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 }))
+      expect(markPrepaidSessionTick(receipt)).toBe(receipt)
+      const parameters = {
+        credential: makeCredential(),
+        input: makeAuthorizedRequest(),
+        receipt,
+        response: (async function* () {
+          yield 'blocked'
+        })(),
+        challengeId,
+      }
+      const response = await transport.respondReceipt(parameters)
+      await expect(response.text()).rejects.toThrow('escrow unavailable')
+      blocked = false
+      await expect(
+        transport.respondReceipt({
+          ...parameters,
+          response: (async function* () {
+            yield 'free retry'
+          })(),
+        }),
+      ).rejects.toThrow('Prepaid receipt already used')
+      expect(keys).toHaveLength(settledOnChain === 0n ? 0 : 1)
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: settledOnChain,
+        units: settledOnChain === 0n ? 0 : 1,
+      })
+    },
+  )
+
   test('respondReceipt with prepaid plain Response does not deduct again', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)

@@ -4,12 +4,16 @@ import { describe, expect, test } from 'vp/test'
 import { ChannelClosedError } from '../../../Errors.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js'
-import type * as ChannelStore from './ChannelStore.js'
+import * as ChannelStore from './ChannelStore.js'
 import {
   formatNeedVoucherEvent,
   formatReceiptEvent,
   iterateData,
   parseEvent,
+  PrepaidRefundError,
+  preparePrepaidRefund,
+  maxPrepaidRefunds,
+  type PrepaidRefund,
   serve,
 } from './Sse.js'
 
@@ -344,6 +348,484 @@ describe('serve', () => {
     expect((await storage.getChannel(channelId))!.spent).toBe(1000000n)
   })
 
+  test.each(['generator', 'first check', 'delivery check'] as const)(
+    'credits an unsettled prepaid item after failure in %s',
+    async (failure) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+      let checks = 0
+      const stream = serve({
+        store,
+        channelId,
+        challengeId,
+        tickCost: 1n,
+        autoCreditPrepaid: true,
+        prepaidUnits: 1,
+        beforeCharge() {
+          checks++
+          if (checks === (failure === 'first check' ? 1 : 2)) throw new Error('delivery failed')
+        },
+        generate: (async function* () {
+          if (failure === 'generator') throw new Error('delivery failed')
+          yield 'not delivered'
+        })(),
+      })
+      await expect(readStream(stream)).rejects.toThrow('delivery failed')
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+    },
+  )
+
+  test.each([
+    { settledOnChain: 1n, reason: 'belowSettled' },
+    { closeRequestedAt: 1n, reason: 'closing' },
+    { finalized: true, settledOnChain: 1n, reason: 'finalized' },
+  ])('requests merchant reconciliation when credit is $reason', async ({ reason, ...state }) => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1n,
+      units: 1,
+      ...state,
+    }))
+    const refunds: PrepaidRefund[] = []
+    await expect(
+      readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          autoCreditPrepaid: true,
+          prepaidUnits: 1,
+          refundIdempotencyKey: 'prepaid-request',
+          generate: generate(['blocked']),
+          beforeCharge() {
+            throw new Error('delivery failed')
+          },
+          onRefundRequired(refund) {
+            refunds.push(refund)
+          },
+        }),
+      ),
+    ).rejects.toThrow('delivery failed')
+    expect(refunds).toHaveLength(1)
+    expect(refunds[0]).toMatchObject({
+      channelId,
+      amount: 1n,
+      units: 1,
+      idempotencyKey: 'prepaid-request',
+      credit: { status: 'declined', reason },
+    })
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
+  test.each([0n, 1n])(
+    'retains a manually consumed prepaid unit when generation fails (settled=%s)',
+    async (settledOnChain) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({
+        ...current!,
+        spent: 1n,
+        units: 1,
+        settledOnChain,
+      }))
+      let refunds = 0
+      await expect(
+        readStream(
+          serve({
+            store,
+            channelId,
+            challengeId,
+            tickCost: 1n,
+            autoCreditPrepaid: true,
+            prepaidUnits: 1,
+            generate: async function* (stream) {
+              await stream.charge()
+              yield await Promise.reject(new Error('billable work failed'))
+            },
+            onRefundRequired() {
+              refunds++
+            },
+          }),
+        ),
+      ).rejects.toThrow('billable work failed')
+      expect(refunds).toBe(0)
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+    },
+  )
+
+  test('does not count a manually consumed prepaid unit twice when it is delivered', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 2n, units: 2 }))
+    const reader = serve({
+      store,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      autoCreditPrepaid: true,
+      prepaidUnits: 2,
+      generate: async function* (stream) {
+        await stream.charge()
+        yield 'paid'
+        throw new Error('later failure')
+      },
+    }).getReader()
+    await reader.read()
+    await expect(reader.read()).rejects.toThrow('later failure')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
+  test('does not credit an already delivered prepaid item after a later failure', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+    const reader = serve({
+      store,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      autoCreditPrepaid: true,
+      prepaidUnits: 1,
+      generate: (async function* () {
+        yield 'delivered'
+        throw new Error('later failure')
+      })(),
+    }).getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('delivered')
+    await expect(reader.read()).rejects.toThrow('later failure')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
+  test('retries a failed prepaid credit idempotently', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 2n, units: 2 }))
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(
+        readStream(
+          serve({
+            store,
+            channelId,
+            challengeId,
+            tickCost: 1n,
+            autoCreditPrepaid: true,
+            prepaidUnits: 1,
+            refundIdempotencyKey: 'same-charge',
+            generate: generate(['blocked']),
+            beforeCharge() {
+              throw new Error('delivery failed')
+            },
+          }),
+        ),
+      ).rejects.toThrow('delivery failed')
+    }
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
+  test('reports ambiguous credits without requesting a definite external refund', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 10n)
+    await storage.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+    let failed = false
+    const store: ChannelStore.ChannelStore = {
+      ...storage,
+      async updateChannel(id, fn) {
+        const result = await storage.updateChannel(id, fn)
+        if (
+          Object.keys(result?.idempotencyMarkers ?? {}).some((key) => key.startsWith('credit:')) &&
+          !failed
+        ) {
+          failed = true
+          throw new Error('write acknowledged late')
+        }
+        return result
+      },
+    }
+    const refunds: PrepaidRefund[] = []
+    await expect(
+      readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          autoCreditPrepaid: true,
+          prepaidUnits: 1,
+          generate: generate(['blocked']),
+          beforeCharge() {
+            throw new Error('delivery failed')
+          },
+          onRefundRequired(refund) {
+            refunds.push(refund)
+          },
+        }),
+      ),
+    ).rejects.toThrow('delivery failed')
+    expect(refunds[0]?.credit).toMatchObject({ status: 'unknown', error: expect.any(Error) })
+    expect(await storage.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+  })
+
+  test.each([false, true])(
+    'preserves refund retry data when the merchant hook fails or is absent: %s',
+    async (hook) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({
+        ...current!,
+        spent: 1n,
+        units: 1,
+        settledOnChain: 1n,
+      }))
+      const error = await readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          autoCreditPrepaid: true,
+          prepaidUnits: 1,
+          generate: generate(['blocked']),
+          beforeCharge() {
+            throw new Error('delivery failed')
+          },
+          ...(hook
+            ? {
+                onRefundRequired() {
+                  throw new Error('queue unavailable')
+                },
+              }
+            : {}),
+        }),
+      ).catch((error: AggregateError) => error)
+      expect(error).toBeInstanceOf(AggregateError)
+      const failure = (error as AggregateError).errors.find(
+        (error) => error instanceof PrepaidRefundError,
+      )
+      expect(failure!.refund).toMatchObject({
+        channelId,
+        amount: 1n,
+        units: 1,
+        credit: { status: 'declined' },
+      })
+      expect(failure!.refund.idempotencyKey).toMatch(/^stream:/)
+      expect(
+        (await store.getChannel(channelId))?.prepaidRefunds?.[failure!.refund.idempotencyKey],
+      ).toMatchObject({
+        amount: '1',
+        units: 1,
+        status: 'failed',
+      })
+    },
+  )
+
+  test('leaves merchant-owned refunds alone unless automatic credits are enabled', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 2n, units: 2 }))
+    await expect(
+      readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          prepaidUnits: 1,
+          generate: (async function* () {
+            await ChannelStore.creditChannel(store, channelId, 1n, {
+              idempotencyKey: 'merchant',
+              units: 1,
+            })
+            yield await Promise.reject(new Error('merchant refunded'))
+          })(),
+        }),
+      ),
+    ).rejects.toThrow('merchant refunded')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
+  test.each([0n, 1n, 2n])(
+    'only requests the captured portion of finalized failed delivery: %s',
+    async (settledOnChain) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({
+        ...current!,
+        spent: 3n,
+        units: 3,
+        finalized: true,
+        settledOnChain,
+      }))
+      const refunds: PrepaidRefund[] = []
+      await expect(
+        readStream(
+          serve({
+            store,
+            channelId,
+            challengeId,
+            tickCost: 2n,
+            prepaidUnits: 1,
+            autoCreditPrepaid: true,
+            generate: generate(['blocked']),
+            beforeCharge() {
+              throw new Error('closed')
+            },
+            onRefundRequired(refund) {
+              refunds.push(refund)
+            },
+          }),
+        ),
+      ).rejects.toThrow('closed')
+      expect(refunds).toHaveLength(settledOnChain <= 1n ? 0 : 1)
+      if (refunds.length) expect(refunds[0]).toMatchObject({ amount: 2n, externalRefundAmount: 1n })
+      expect((await store.getChannel(channelId))?.prepaidRefunds).toEqual({})
+    },
+  )
+
+  test('rejects an empty refund key before streaming', () => {
+    expect(() =>
+      serve({
+        store: memoryStore(),
+        channelId,
+        challengeId,
+        tickCost: 1n,
+        prepaidUnits: 1,
+        autoCreditPrepaid: true,
+        refundIdempotencyKey: '',
+        generate: generate([]),
+      }),
+    ).toThrow('non-empty string')
+  })
+
+  test('reports a definite conflicting credit separately from an uncertain write', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 4n, units: 4 }))
+    await ChannelStore.creditChannel(store, channelId, 2n, { idempotencyKey: 'conflict', units: 2 })
+    const refunds: PrepaidRefund[] = []
+    await expect(
+      readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          prepaidUnits: 1,
+          autoCreditPrepaid: true,
+          refundIdempotencyKey: 'conflict',
+          generate: generate(['blocked']),
+          beforeCharge() {
+            throw new Error('blocked')
+          },
+          onRefundRequired(refund) {
+            refunds.push(refund)
+          },
+        }),
+      ),
+    ).rejects.toThrow('blocked')
+    expect(refunds[0]).toMatchObject({
+      credit: { status: 'failed', error: expect.any(ChannelStore.IdempotencyKeyConflictError) },
+      externalRefundAmount: null,
+    })
+  })
+
+  test('reports a lost channel as a definite failure for merchant reconciliation', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+    const refunds: PrepaidRefund[] = []
+    await expect(
+      readStream(
+        serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          prepaidUnits: 1,
+          autoCreditPrepaid: true,
+          generate: (async function* () {
+            await store.updateChannel(channelId, () => null)
+            yield await Promise.reject(new Error('delivery failed'))
+          })(),
+          onRefundRequired(refund) {
+            refunds.push(refund)
+          },
+        }),
+      ),
+    ).rejects.toThrow('delivery failed')
+    expect(refunds[0]).toMatchObject({ credit: { status: 'failed' }, externalRefundAmount: null })
+  })
+
+  test.each(['cancel', 'abort'] as const)(
+    'clears pending obligations on %s without crediting cancellation',
+    async (mode) => {
+      const store = memoryStore()
+      await seedChannel(store, 1000n)
+      await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+      for (let i = 0; i <= maxPrepaidRefunds; i++) {
+        const controller = new AbortController()
+        const stream = serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          prepaidUnits: 1,
+          autoCreditPrepaid: true,
+          signal: controller.signal,
+          generate: generate(['not delivered']),
+        })
+        if (mode === 'abort') controller.abort()
+        await stream.cancel()
+      }
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 1n,
+        units: 1,
+        prepaidRefunds: {},
+      })
+    },
+  )
+
+  test('bounds refund records without evicting unexpired retry outcomes', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 1000n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 500n, units: 500 }))
+    for (let i = 0; i < maxPrepaidRefunds; i++)
+      await ChannelStore.creditChannel(store, channelId, 1n, {
+        idempotencyKey: String(i),
+        maxMarkers: maxPrepaidRefunds,
+      })
+    await expect(
+      preparePrepaidRefund({
+        store,
+        channelId,
+        challengeId,
+        tickCost: 1n,
+        prepaidUnits: 1,
+        autoCreditPrepaid: true,
+        refundIdempotencyKey: 'new',
+        generate: generate([]),
+      }),
+    ).rejects.toThrow('capacity reached')
+    await expect(
+      ChannelStore.creditChannel(store, channelId, 1n, {
+        idempotencyKey: 'new',
+        maxMarkers: maxPrepaidRefunds,
+      }),
+    ).rejects.toThrow('capacity reached')
+    expect(
+      await ChannelStore.creditChannel(store, channelId, 1n, {
+        idempotencyKey: '0',
+        maxMarkers: maxPrepaidRefunds,
+      }),
+    ).toMatchObject({ status: 'credited', replayed: true })
+    expect(Object.keys((await store.getChannel(channelId))!.idempotencyMarkers!)).toHaveLength(
+      maxPrepaidRefunds,
+    )
+  })
+
   test('uses a prepaid unit for the first generated value', async () => {
     const storage = memoryStore()
     const committed: Array<{ spent: bigint; units: number }> = []
@@ -361,6 +843,7 @@ describe('serve', () => {
       onChargeCommitted(channel) {
         committed.push({ spent: channel.spent, units: channel.units })
       },
+      autoCreditPrepaid: true,
       prepaidUnits: 1,
     })
 
@@ -390,6 +873,7 @@ describe('serve', () => {
         await stream.charge(4014n)
         yield 'charged'
       },
+      autoCreditPrepaid: true,
       prepaidUnits: 1,
     })
 

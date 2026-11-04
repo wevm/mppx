@@ -918,7 +918,9 @@ export async function closeHttpSession(
       challengeId: closeChallenge.id,
       channelId: parameters.target.channelId,
       expectedCloseAmount: signedCloseAmount,
-      minimumSpent: parameters.getMinimumSpent?.() ?? 0n,
+      // HTTP credits can reduce previously acknowledged spend. Authorization and receipt scope
+      // remain bound to the exact close credential; a lower final charge benefits the payer.
+      minimumSpent: 0n,
       receipt,
     })
   )
