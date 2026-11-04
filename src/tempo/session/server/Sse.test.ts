@@ -759,6 +759,35 @@ describe('serve', () => {
     expect(refunds[0]).toMatchObject({ credit: { status: 'failed' }, externalRefundAmount: null })
   })
 
+  test.each(['cancel', 'abort'] as const)(
+    'clears pending obligations on %s without crediting cancellation',
+    async (mode) => {
+      const store = memoryStore()
+      await seedChannel(store, 1000n)
+      await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+      for (let i = 0; i <= maxPrepaidRefunds; i++) {
+        const controller = new AbortController()
+        const stream = serve({
+          store,
+          channelId,
+          challengeId,
+          tickCost: 1n,
+          prepaidUnits: 1,
+          autoCreditPrepaid: true,
+          signal: controller.signal,
+          generate: generate(['not delivered']),
+        })
+        if (mode === 'abort') controller.abort()
+        await stream.cancel()
+      }
+      expect(await store.getChannel(channelId)).toMatchObject({
+        spent: 1n,
+        units: 1,
+        prepaidRefunds: {},
+      })
+    },
+  )
+
   test('bounds refund records without evicting unexpired retry outcomes', async () => {
     const store = memoryStore()
     await seedChannel(store, 1000n)

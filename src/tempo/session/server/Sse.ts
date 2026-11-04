@@ -149,6 +149,8 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   const abortController = new AbortController()
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
   let terminal = false
+  let preparation: Promise<void> = Promise.resolve()
+  let termination: Promise<void> | undefined
   let committedPrepaidAwaitingDelivery = 0
   let undeliveredPrepaidUnits = options.prepaidUnits ?? 0
   if (!Number.isSafeInteger(undeliveredPrepaidUnits) || undeliveredPrepaidUnits < 0)
@@ -251,24 +253,33 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
 
   const cleanup = () => signal?.removeEventListener('abort', abort)
   const terminate = (reason?: unknown) => {
-    if (terminal) return
+    if (terminal) return termination
     terminal = true
     abortController.abort(reason)
     cleanup()
     void Promise.resolve()
       .then(() => iterator.return?.(undefined))
       .catch(() => {})
-    try {
-      streamController?.close()
-    } catch {}
+    termination = preparation
+      .catch(() => {})
+      .then(clearObligation)
+      .finally(() => {
+        try {
+          streamController?.close()
+        } catch {}
+      })
+    return termination
   }
-  const abort = () => terminate(signal?.reason)
+  const abort = () => {
+    void terminate(signal?.reason)?.catch(() => {})
+  }
   signal?.addEventListener('abort', abort, { once: true })
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       streamController = controller
-      await preparePrepaidRefund(refundOptions)
+      preparation = preparePrepaidRefund(refundOptions)
+      await preparation
       if (signal?.aborted) abort()
     },
     async pull(controller) {
@@ -323,7 +334,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
       }
     },
     cancel(reason) {
-      terminate(reason)
+      return terminate(reason)
     },
   })
 }
