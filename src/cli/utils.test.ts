@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import {
   fetchTokenInfo,
+  fmtProblemValue,
   isAgentEnvironment,
   networkRpcUrls,
   resolveChain,
@@ -169,5 +170,20 @@ describe('fetchTokenInfo', () => {
     await expect(
       fetchTokenInfo({} as never, token, account, { requireDecimals: true }),
     ).rejects.toThrow('Token decimals are unavailable.')
+  })
+})
+
+describe('fmtProblemValue', () => {
+  test('serializes nested objects and arrays as JSON', () => {
+    expect(fmtProblemValue({ code: 'temporarily_unavailable', retry: 'same_credential' })).toBe(
+      '{"code":"temporarily_unavailable","retry":"same_credential"}',
+    )
+    expect(fmtProblemValue(['a', 1])).toBe('["a",1]')
+  })
+
+  test('formats primitives as strings', () => {
+    expect(fmtProblemValue('Verification Failed')).toBe('Verification Failed')
+    expect(fmtProblemValue(402)).toBe('402')
+    expect(fmtProblemValue(null)).toBe('null')
   })
 })

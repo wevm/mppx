@@ -48,6 +48,7 @@ import {
   fetchBalanceLines,
   fmtBalance,
   fmtChallengeValue,
+  fmtProblemValue,
   fmtRequestValue,
   isTempoAccount,
   link,
@@ -970,7 +971,7 @@ const cli = Cli.create('mppx', {
           const rows: [string, string][] = []
           for (const [key, value] of Object.entries(problem)) {
             if (value === undefined) continue
-            rows.push([key, String(value)])
+            rows.push([key, fmtProblemValue(value)])
           }
           rows.sort(([a], [b]) => a.localeCompare(b))
           const pad = Math.max(...rows.map(([k]) => k.length))
