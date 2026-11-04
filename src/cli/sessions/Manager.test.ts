@@ -185,61 +185,84 @@ describe('CLI session manager adapter', () => {
     expect(remove).toHaveBeenCalledOnce()
   })
 
-  test('rehydrates durable context and closes at receipt-confirmed spend', async () => {
-    const { challenge } = challengeResponse(
-      'challenge-1',
-      sessionSnapshot({ acceptedCumulative: '3', requiredCumulative: '3', spent: '3' }),
-    )
+  test('does not migrate a legacy close to a foreign challenge realm', async () => {
     const entry = channelEntry()
-    entry.cumulativeAmount = 5n
-    const refreshed = challengeResponse('challenge-2', sessionSnapshot())
-    const { remove, store } = channelStore(entry)
-    const closeUrl = 'https://api.example.test/resource?chainId=testnet'
-    let closeRequests = 0
-    const closeAmounts: string[] = []
-    const onChallenge = vi.fn()
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(input.toString()).toBe(closeUrl)
-      expect(init?.method).toBe('POST')
-      const payload = credentialPayload(init)
-      if (payload?.action !== 'close') throw new Error('expected close credential')
-      expect(payload.channelId).toBe(channelId)
-      closeAmounts.push(payload.cumulativeAmount)
-      closeRequests++
-      if (closeRequests === 1) return refreshed.response
-      return new Response(null, {
-        headers: {
-          [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
-            createSessionReceipt({
-              acceptedCumulative: 4n,
-              challengeId: refreshed.challenge.id,
-              channelId,
-              spent: 4n,
-              txHash: `0x${'aa'.repeat(32)}` as Hex,
-            }),
-          ),
-        },
-      })
-    })
-
-    const result = await closeWithSessionManager({
-      channel: entry,
-      challenge,
-      fetch,
-      input: closeUrl,
-      manager: managerParameters(store),
-      onChallenge,
-      spent: 2n,
-    })
-
-    expect(result.receipt).toMatchObject({ channelId, spent: '4' })
-    expect(result.manager.state).toMatchObject({ status: 'closed', channelId })
-    expect(closeAmounts).toEqual(['3', '4'])
-    expect(onChallenge).toHaveBeenCalledOnce()
-    expect(onChallenge).toHaveBeenCalledWith(refreshed.challenge)
-    expect(fetch).toHaveBeenCalledTimes(2)
-    expect(remove).toHaveBeenCalledOnce()
+    entry.origin = undefined
+    const { store } = channelStore(entry)
+    const fetch = vi.fn()
+    await expect(
+      closeWithSessionManager({
+        channel: entry,
+        challenge: challengeResponse().challenge,
+        input: 'https://foreign.example/resource',
+        fetch,
+        manager: managerParameters(store),
+        spent: 0n,
+      }),
+    ).rejects.toThrow('Refusing to sign')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(entry.origin).toBeUndefined()
   })
+
+  test.each([false, true])(
+    'rehydrates durable context and closes at receipt-confirmed spend (legacy=%s)',
+    async (legacy) => {
+      const { challenge } = challengeResponse(
+        'challenge-1',
+        sessionSnapshot({ acceptedCumulative: '3', requiredCumulative: '3', spent: '3' }),
+      )
+      const entry = channelEntry()
+      if (legacy) entry.origin = undefined
+      entry.cumulativeAmount = 5n
+      const refreshed = challengeResponse('challenge-2', sessionSnapshot())
+      const { remove, store } = channelStore(entry)
+      const closeUrl = 'https://api.example.test/resource?chainId=testnet'
+      let closeRequests = 0
+      const closeAmounts: string[] = []
+      const onChallenge = vi.fn()
+      const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(input.toString()).toBe(closeUrl)
+        expect(init?.method).toBe('POST')
+        const payload = credentialPayload(init)
+        if (payload?.action !== 'close') throw new Error('expected close credential')
+        expect(payload.channelId).toBe(channelId)
+        closeAmounts.push(payload.cumulativeAmount)
+        closeRequests++
+        if (closeRequests === 1) return refreshed.response
+        return new Response(null, {
+          headers: {
+            [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+              createSessionReceipt({
+                acceptedCumulative: 4n,
+                challengeId: refreshed.challenge.id,
+                channelId,
+                spent: 4n,
+                txHash: `0x${'aa'.repeat(32)}` as Hex,
+              }),
+            ),
+          },
+        })
+      })
+
+      const result = await closeWithSessionManager({
+        channel: entry,
+        challenge,
+        fetch,
+        input: closeUrl,
+        manager: managerParameters(store),
+        onChallenge,
+        spent: 2n,
+      })
+
+      expect(result.receipt).toMatchObject({ channelId, spent: '4' })
+      expect(result.manager.state).toMatchObject({ status: 'closed', channelId })
+      expect(closeAmounts).toEqual(['3', '4'])
+      expect(onChallenge).toHaveBeenCalledOnce()
+      expect(onChallenge).toHaveBeenCalledWith(refreshed.challenge)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(remove).toHaveBeenCalledOnce()
+    },
+  )
 
   test('rejects refreshed snapshot spend beyond local cumulative authorization', async () => {
     const { challenge } = challengeResponse()

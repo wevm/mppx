@@ -294,6 +294,11 @@ export function session(parameters: session.Parameters = {}) {
       })
       const attempt = MethodResponse.getAttempt(parameters)
       const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
+      if (
+        origin !== undefined &&
+        (origin === 'null' || !['http:', 'https:'].includes(new URL(origin).protocol))
+      )
+        throw new Error('Session payments require an HTTP or HTTPS origin')
       if (configuredOrigin && origin !== configuredOrigin.origin)
         throw new Error('Session channel origin mismatch')
       const scopedSink = { ...sink, origin }
@@ -306,10 +311,16 @@ export function session(parameters: session.Parameters = {}) {
         }
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
+        if (origin && !entry && resolved.snapshot && !context?.descriptor && !configuredOrigin)
+          throw new Error(
+            'Session snapshot recovery requires an explicitly configured origin or descriptor',
+          )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
           const nextEntry = await store.get(resolved.key)
+          if (nextEntry && nextEntry.origin !== origin)
+            throw new Error('Session channel origin mismatch')
           if (nextEntry?.channelId !== entry?.channelId) {
             entry = nextEntry
             if (entry?.opened) {
@@ -582,7 +593,11 @@ export declare namespace session {
       allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: AutoSwap.resolve.Value | undefined
-      /** HTTP origin authorized for direct credential creation. Fetch supplies its origin automatically. */
+      /**
+       * HTTP origin authorized for credential creation and server-snapshot recovery.
+       * Fetch supplies the request origin, but recovering an unknown channel from its snapshot
+       * requires this explicit origin pin or a caller-supplied descriptor.
+       */
       origin?: string | undefined
       /**
        * Pluggable persistence for reusable channels. Defaults to an in-memory store.
@@ -640,8 +655,11 @@ export declare namespace session {
 }
 
 function resolveInputOrigin(input: RequestInfo | URL): string {
-  return new URL(
+  const url = new URL(
     input instanceof Request ? input.url : input,
     typeof globalThis.location === 'undefined' ? undefined : globalThis.location.href,
-  ).origin
+  )
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('Session payments require an HTTP or HTTPS origin')
+  return url.origin
 }

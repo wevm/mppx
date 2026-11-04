@@ -135,15 +135,15 @@ export function create(config: create.Config): Proxy {
     const matched = exactMatch ?? fallbackMatch
     if (!matched) return new Response('Not Found', { status: 404 })
 
-    if (request.body) {
+    const endpoint = matched.value as Service.Endpoint
+    const handler = Service.getHandler(endpoint)
+    if (!handler && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)
       if (!body) return new Response('Payload Too Large', { status: 413 })
       request = Replay.withBody(request, body)
     }
-    const endpoint = matched.value as Service.Endpoint
     const ctx: Service.Context = { request, service, upstreamPath }
 
-    const handler = Service.getHandler(endpoint)
     if (!handler)
       return proxyUpstream({
         request,
@@ -164,7 +164,10 @@ export function create(config: create.Config): Proxy {
         ? Replay.credentialOf(request, credentialHeaders(handler))
         : undefined
     if (replay && credential) {
-      const body = await Replay.readBody(request, replay.maxRequestBodySize)
+      const body = await Replay.readBody(
+        request,
+        Math.min(maxRequestBodySize, replay.maxRequestBodySize),
+      )
       if (!body) return new Response('Payload Too Large', { status: 413 })
       replayBody = body
       paidRequest = Replay.withBody(request, body)
@@ -223,6 +226,12 @@ export function create(config: create.Config): Proxy {
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
+    if (!replayBody && request.body) {
+      const body = await Replay.readBody(request, maxRequestBodySize)
+      if (!body) return new Response('Payload Too Large', { status: 413 })
+      request = Replay.withBody(request, body)
+      ctx.request = request
+    }
     const options = Service.getOptions(endpoint)
     if (replay && replayKey && replayBody) {
       const body = replayBody

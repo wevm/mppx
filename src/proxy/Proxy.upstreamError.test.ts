@@ -405,3 +405,80 @@ test.each(['service', 'proxy', 'none'] as const)(
     expect(onUpstreamError).not.toHaveBeenCalled()
   },
 )
+
+test('challenges an unpaid streaming upload without reading its body', async () => {
+  const upstream = vi.fn()
+  const handler = vi.fn(async () => ({
+    status: 402 as const,
+    challenge: new Response(null, { status: 402 }),
+  }))
+  const proxy = Proxy.create({
+    fetch: upstream,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /resource': handler },
+      }),
+    ],
+  })
+  let reads = 0
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull() {
+        reads++
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  const response = await proxy.fetch(
+    new Request('https://proxy.example/api/resource', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit),
+  )
+  expect(response.status).toBe(402)
+  expect(reads).toBe(0)
+  expect(upstream).not.toHaveBeenCalled()
+  await body.cancel()
+})
+
+test('rejects a tee-backed oversized upload without waiting for the unread sibling', async () => {
+  const upstream = vi.fn()
+  const proxy = Proxy.create({
+    fetch: upstream,
+    maxRequestBodySize: 8,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /resource': true },
+      }),
+    ],
+  })
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const [body, sibling] = new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value
+      value.enqueue(new Uint8Array(10))
+    },
+  }).tee()
+  try {
+    const response = await Promise.race([
+      proxy.fetch(
+        new Request('https://proxy.example/api/resource', {
+          method: 'POST',
+          body,
+          duplex: 'half',
+        } as RequestInit),
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('overflow cancellation blocked')), 500),
+      ),
+    ])
+    expect(response.status).toBe(413)
+    expect(upstream).not.toHaveBeenCalled()
+  } finally {
+    controller.close()
+    await sibling.cancel()
+  }
+})

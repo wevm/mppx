@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Mppx from '../../../client/Mppx.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
@@ -1166,6 +1167,71 @@ describe('precompile client session', () => {
     expect(payload.channelId).toBe(channelId)
     expect(payload.cumulativeAmount).toBe('200')
   })
+
+  test.each([false, true])(
+    'requires explicit origin trust for transport snapshot recovery (trusted=%s)',
+    async (trusted) => {
+      const channelStore = createChannelStore()
+      const method = session({
+        account,
+        decimals: 0,
+        maxDeposit: '1000',
+        getClient: () => client,
+        channelStore,
+        ...(trusted ? { origin: 'https://example.com' } : {}),
+      })
+      const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+      const parameters = {
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId,
+            escrowContract: tip20ChannelEscrow,
+            sessionSnapshot: {
+              acceptedCumulative: '400',
+              chainId,
+              channelId,
+              deposit: '1000',
+              descriptor,
+              escrow: tip20ChannelEscrow,
+              requiredCumulative: '400',
+              settled: '0',
+              spent: '300',
+              units: 3,
+            },
+          },
+        }),
+        context: {},
+      }
+      MethodResponse.attachOrigin(parameters, 'https://example.com')
+      if (trusted) {
+        expect(deserialize(await method.createCredential(parameters)).action).toBe('voucher')
+      } else {
+        await expect(method.createCredential(parameters)).rejects.toThrow(
+          'explicitly configured origin or descriptor',
+        )
+        expect(
+          await channelStore.get(
+            channelKey({
+              chainId,
+              escrow: tip20ChannelEscrow,
+              payee: descriptor.payee,
+              token: descriptor.token,
+            }),
+          ),
+        ).toBeUndefined()
+      }
+    },
+  )
+
+  test.each(['null', 'app://merchant', 'ipfs://merchant'])(
+    'rejects opaque origin %s before signing',
+    async (origin) => {
+      const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
+      const parameters = { challenge: makeChallenge(), context: {} }
+      MethodResponse.attachOrigin(parameters, origin)
+      await expect(method.createCredential(parameters)).rejects.toThrow('HTTP or HTTPS origin')
+    },
+  )
 
   test('uses required server snapshot cumulative when recovering a channel', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
