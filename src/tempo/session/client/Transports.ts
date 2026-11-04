@@ -471,6 +471,8 @@ export type CreateSessionCredential = (
 
 /** Inputs for posting a precompile session top-up credential. */
 export type PostTopUpParameters = {
+  /** Request-local swap policy; undefined inherits the method default. */
+  autoSwap?: SessionContext['autoSwap'] | undefined
   /** Additional deposit in raw token units. */
   additionalDeposit: bigint
   /** Challenge used to authorize the management request. */
@@ -678,6 +680,7 @@ export async function postTopUp(
     challenge: parameters.challenge,
     context: {
       action: 'topUp',
+      ...(parameters.autoSwap === undefined ? {} : { autoSwap: parameters.autoSwap }),
       channelId,
       descriptor: channel.descriptor,
       additionalDepositRaw: parameters.additionalDeposit.toString(),

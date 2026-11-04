@@ -65,6 +65,7 @@ export function readCredentialCumulativeAmount(
  * can react to the close.
  */
 async function storeChannelEntry(sink: ChannelSink, entry: ChannelEntry): Promise<void> {
+  if (sink.origin !== undefined) entry = { ...entry, origin: sink.origin }
   if (entry.opened) await persistChannel(sink.store, entry)
   else await deleteChannel(sink.store, entryKey(entry))
   sink.notifyUpdate(entry)

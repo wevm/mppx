@@ -362,3 +362,157 @@ describe('onUpstreamError', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
+
+test.each(['service', 'proxy', 'none'] as const)(
+  'bounds streamed free-route uploads with %s error handling',
+  async (scope) => {
+    const upstream = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(await new Request(input, init).text()),
+    )
+    const onUpstreamError = vi.fn(() => ({ retry: false as const }))
+    const proxy = Proxy.create({
+      fetch: upstream,
+      maxRequestBodySize: 8,
+      ...(scope === 'proxy' ? { onUpstreamError } : {}),
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          ...(scope === 'service' ? { onUpstreamError } : {}),
+          routes: { 'POST /resource': true },
+        }),
+      ],
+    })
+    const upload = (size: number) =>
+      new Request('https://proxy.example/api/resource', {
+        method: 'POST',
+        duplex: 'half',
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(size / 2))
+            controller.enqueue(new Uint8Array(size / 2))
+            controller.close()
+          },
+        }),
+      } as RequestInit)
+    const responses = await Promise.all([proxy.fetch(upload(10)), proxy.fetch(upload(12))])
+    expect(responses.map((r) => r.status)).toEqual([413, 413])
+    expect(upstream).not.toHaveBeenCalled()
+    const accepted = await proxy.fetch(upload(8))
+    expect(accepted.status).toBe(200)
+    expect((await accepted.text()).length).toBe(8)
+    expect(upstream).toHaveBeenCalledOnce()
+    expect(onUpstreamError).not.toHaveBeenCalled()
+  },
+)
+
+test('challenges an unpaid streaming upload without reading its body', async () => {
+  const upstream = vi.fn()
+  const handler = vi.fn(async () => ({
+    status: 402 as const,
+    challenge: new Response(null, { status: 402 }),
+  }))
+  const proxy = Proxy.create({
+    fetch: upstream,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /resource': handler },
+      }),
+    ],
+  })
+  let reads = 0
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull() {
+        reads++
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  const response = await proxy.fetch(
+    new Request('https://proxy.example/api/resource', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit),
+  )
+  expect(response.status).toBe(402)
+  expect(reads).toBe(0)
+  expect(upstream).not.toHaveBeenCalled()
+  await body.cancel()
+})
+
+test('rejects a tee-backed oversized upload without waiting for the unread sibling', async () => {
+  const upstream = vi.fn()
+  const proxy = Proxy.create({
+    fetch: upstream,
+    maxRequestBodySize: 8,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /resource': true },
+      }),
+    ],
+  })
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const [body, sibling] = new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value
+      value.enqueue(new Uint8Array(10))
+    },
+  }).tee()
+  try {
+    const response = await Promise.race([
+      proxy.fetch(
+        new Request('https://proxy.example/api/resource', {
+          method: 'POST',
+          body,
+          duplex: 'half',
+        } as RequestInit),
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('overflow cancellation blocked')), 500),
+      ),
+    ])
+    expect(response.status).toBe(413)
+    expect(upstream).not.toHaveBeenCalled()
+  } finally {
+    controller.close()
+    await sibling.cancel()
+  }
+})
+
+test.each(['declared', 'streamed'] as const)(
+  'rejects %s oversized paid uploads before payment',
+  async (mode) => {
+    const payment = vi.fn()
+    const upstream = vi.fn()
+    const proxy = Proxy.create({
+      maxRequestBodySize: 8,
+      fetch: upstream,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /resource': createPaidHandler(payment) },
+        }),
+      ],
+    })
+    const response = await proxy.fetch(
+      paidRequest({
+        method: 'POST',
+        headers: mode === 'declared' ? { 'Content-Length': '10' } : undefined,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(10))
+            controller.close()
+          },
+        }),
+        duplex: 'half',
+      } as RequestInit),
+    )
+    expect(response.status).toBe(413)
+    expect(payment).not.toHaveBeenCalled()
+    expect(upstream).not.toHaveBeenCalled()
+  },
+)

@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Mppx from '../../../client/Mppx.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
@@ -18,7 +19,7 @@ import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
-import { channelKey, createChannelStore } from './ChannelStore.js'
+import { channelKey, createChannelStore, persistChannel } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
@@ -83,7 +84,7 @@ function makeChallenge(overrides: Partial<SessionChallenge['request']> = {}): Se
 
   return {
     id: 'test-id',
-    realm: 'test.com',
+    realm: 'example.com',
     method: 'tempo',
     intent: 'session',
     request: Object.assign(request, overrides),
@@ -151,6 +152,7 @@ function makeSessionMethod(
     decimals: 0,
     getClient: () => client,
     maxDeposit: '1000',
+    origin: 'https://example.com',
     ...parameters,
   })
 }
@@ -281,6 +283,7 @@ describe('precompile client session', () => {
       decimals: 0,
       getClient: () => client,
       maxDeposit: '300',
+      origin: 'https://example.com',
     } as const
     // The response handler must follow the credential selected by `onChallenge`.
     const externalCredential = await session(parameters).createCredential({
@@ -645,6 +648,7 @@ describe('precompile client session', () => {
       descriptor: { ...descriptor, authorizedSigner: foreign, payer: foreign },
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     })
     const actions: Types.SessionCredentialPayload['action'][] = []
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
@@ -661,6 +665,7 @@ describe('precompile client session', () => {
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({
       descriptor: { authorizedSigner: account.address, payer: account.address },
       opened: true,
+      origin: 'https://example.com',
     })
   })
 
@@ -675,6 +680,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     })
     const challenge = makeChallenge({
       methodDetails: {
@@ -730,6 +736,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     } as const
     await backing.set(channel)
     let firstRead = true
@@ -775,6 +782,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     } as const
     await channelStore.set(channel)
     const method = session({
@@ -1160,6 +1168,71 @@ describe('precompile client session', () => {
     expect(payload.cumulativeAmount).toBe('200')
   })
 
+  test.each([false, true])(
+    'requires explicit origin trust for transport snapshot recovery (trusted=%s)',
+    async (trusted) => {
+      const channelStore = createChannelStore()
+      const method = session({
+        account,
+        decimals: 0,
+        maxDeposit: '1000',
+        getClient: () => client,
+        channelStore,
+        ...(trusted ? { origin: 'https://example.com' } : {}),
+      })
+      const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+      const parameters = {
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId,
+            escrowContract: tip20ChannelEscrow,
+            sessionSnapshot: {
+              acceptedCumulative: '400',
+              chainId,
+              channelId,
+              deposit: '1000',
+              descriptor,
+              escrow: tip20ChannelEscrow,
+              requiredCumulative: '400',
+              settled: '0',
+              spent: '300',
+              units: 3,
+            },
+          },
+        }),
+        context: {},
+      }
+      MethodResponse.attachOrigin(parameters, 'https://example.com')
+      if (trusted) {
+        expect(deserialize(await method.createCredential(parameters)).action).toBe('voucher')
+      } else {
+        await expect(method.createCredential(parameters)).rejects.toThrow(
+          'explicitly configured origin or descriptor',
+        )
+        expect(
+          await channelStore.get(
+            channelKey({
+              chainId,
+              escrow: tip20ChannelEscrow,
+              payee: descriptor.payee,
+              token: descriptor.token,
+            }),
+          ),
+        ).toBeUndefined()
+      }
+    },
+  )
+
+  test.each(['null', 'app://merchant', 'ipfs://merchant'])(
+    'rejects opaque origin %s before signing',
+    async (origin) => {
+      const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
+      const parameters = { challenge: makeChallenge(), context: {} }
+      MethodResponse.attachOrigin(parameters, origin)
+      await expect(method.createCredential(parameters)).rejects.toThrow('HTTP or HTTPS origin')
+    },
+  )
+
   test('uses required server snapshot cumulative when recovering a channel', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
@@ -1432,7 +1505,7 @@ describe('precompile client session', () => {
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
     expect(decoded.challenge.id).toBe('test-id')
-    expect(decoded.challenge.realm).toBe('test.com')
+    expect(decoded.challenge.realm).toBe('example.com')
     expect(decoded.challenge.method).toBe('tempo')
     expect(decoded.challenge.intent).toBe('session')
     expect(payload.action).toBe('voucher')
@@ -2007,4 +2080,235 @@ describe('session spending policy', () => {
   ])('rejects invalid options $options', ({ options, error }) => {
     expect(() => session({ account, getClient: () => client, ...options })).toThrow(error)
   })
+})
+
+test.each([
+  false,
+  { tokenIn: ['0x0000000000000000000000000000000000000007'], fallback: false, maxAmountIn: 150n },
+  undefined,
+] as const)('automatic top-up preserves request autoSwap %s', async (autoSwap) => {
+  const channelStore = createChannelStore()
+  await channelStore.set({
+    chainId,
+    channelId: Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow }),
+    cumulativeAmount: 100n,
+    deposit: 100n,
+    descriptor,
+    escrow: tip20ChannelEscrow,
+    opened: true,
+    origin: 'https://example.com',
+  })
+  const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue([])
+  try {
+    const method = session({
+      account,
+      autoSwap: true,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+    })
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }))
+    await MethodChallenge.handle(method, {
+      challenge: makeSessionChallenge(),
+      context: { autoSwap },
+      fetch,
+      input: 'https://example.com/resource',
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+    if (autoSwap === false) expect(findCalls).not.toHaveBeenCalled()
+    else
+      expect(findCalls).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining(
+          autoSwap === undefined
+            ? { tokenIn: AutoSwap.defaultCurrencies }
+            : { tokenIn: autoSwap.tokenIn, maxAmountIn: autoSwap.maxAmountIn },
+        ),
+      )
+  } finally {
+    findCalls.mockRestore()
+  }
+})
+
+test.each([undefined, 'https://other.example'])(
+  'rejects shared-store channels with origin %s before signing',
+  async (origin) => {
+    const channelStore = createChannelStore()
+    const original = makeSessionMethod(channelStore)
+    await original.createCredential({ challenge: makeSessionChallenge(), context: {} })
+    const entry = await channelStore.get(defaultChannelKey)
+    if (!entry) throw new Error('Expected channel')
+    await channelStore.set({ ...entry, origin })
+    const before = await channelStore.get(defaultChannelKey)
+    const resolveAccount = vi.fn()
+    const method = makeSessionMethod(channelStore, { origin: undefined, resolveAccount })
+    const fetch = Fetch.from({
+      methods: [method],
+      fetch: async () =>
+        new Response(null, {
+          status: 402,
+          headers: { 'WWW-Authenticate': serializeChallenge(makeSessionChallenge()) },
+        }),
+    })
+    await expect(fetch('https://example.com/data')).rejects.toThrow('origin mismatch')
+    expect(resolveAccount).not.toHaveBeenCalled()
+    expect(await channelStore.get(defaultChannelKey)).toEqual(before)
+  },
+)
+
+test('reuses a channel for relative browser requests with synthetic responses', async () => {
+  vi.stubGlobal('location', new URL('https://example.com/app'))
+  try {
+    const channelStore = createChannelStore()
+    const method = makeSessionMethod(channelStore)
+    await method.createCredential({ challenge: makeSessionChallenge(), context: {} })
+    const createCredential = vi.spyOn(method, 'createCredential')
+    const fetch = Fetch.from({
+      methods: [method],
+      fetch: async (_input, init) =>
+        new Headers(init?.headers).has('Authorization')
+          ? new Response('paid')
+          : paymentRequired(makeSessionChallenge()),
+    })
+    expect(await (await fetch('/resource')).text()).toBe('paid')
+    expect(createCredential).toHaveBeenCalled()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('direct credential APIs enforce and retain the response origin', async () => {
+  const channelStore = createChannelStore()
+  await makeSessionMethod(channelStore).createCredential({
+    challenge: makeSessionChallenge(),
+    context: {},
+  })
+  const resolveAccount = vi.fn()
+  const method = makeSessionMethod(channelStore, { origin: undefined, resolveAccount })
+  const mppx = Mppx.create({ methods: [method], polyfill: false })
+  const response = (origin: string) => {
+    const challenge = { ...makeSessionChallenge(), realm: new URL(origin).hostname }
+    const result = paymentRequired(challenge)
+    Object.defineProperty(result, 'url', { value: `${origin}/resource` })
+    return result
+  }
+  await expect(mppx.createCredential(response('https://other.example'))).rejects.toThrow(
+    'origin mismatch',
+  )
+  await expect(
+    method.createCredential({ challenge: makeSessionChallenge(), context: {} }),
+  ).rejects.toThrow('origin mismatch')
+  expect(resolveAccount).not.toHaveBeenCalled()
+  await expect(mppx.createCredential(response('https://example.com'))).resolves.toBeTypeOf('string')
+  expect((await channelStore.get(defaultChannelKey))?.origin).toBe('https://example.com')
+})
+
+test('origin-bound voucher persistence shares the uncertain-funding write lock', async () => {
+  const backing = createChannelStore()
+  await makeSessionMethod(backing).createCredential({
+    challenge: makeSessionChallenge(),
+    context: {},
+  })
+  const entry = await backing.get(defaultChannelKey)
+  if (!entry) throw new Error('Expected channel')
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const signed = Promise.withResolvers<void>()
+  const store = {
+    ...backing,
+    get: (key: string) => structuredClone(backing.get(key)),
+    async set(next: typeof entry) {
+      if (next.uncertainTopUp) {
+        entered.resolve()
+        await release.promise
+      }
+      backing.set(next)
+    },
+  }
+  const method = makeSessionMethod(store, {
+    account: {
+      ...account,
+      async sign(parameters) {
+        const signature = await account.sign(parameters)
+        signed.resolve()
+        return signature
+      },
+    },
+  })
+  const funding = persistChannel(store, { ...entry, uncertainTopUp: true })
+  await entered.promise
+  const credential = method.createCredential({ challenge: makeSessionChallenge(), context: {} })
+  let completed = false
+  void credential.then(() => {
+    completed = true
+  })
+  try {
+    await signed.promise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(completed).toBe(false)
+  } finally {
+    release.resolve()
+  }
+  await Promise.all([funding, credential])
+  expect((await backing.get(defaultChannelKey))?.uncertainTopUp).toBe(true)
+})
+
+test('SSE top-ups retain the swap policy narrowed by the approval hook', async () => {
+  const channelStore = createChannelStore()
+  const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+  await channelStore.set({
+    channelId,
+    descriptor,
+    chainId,
+    escrow: tip20ChannelEscrow,
+    cumulativeAmount: 0n,
+    deposit: 100n,
+    opened: true,
+    origin: 'https://example.com',
+  })
+  const challenge = makeSessionChallenge({ suggestedDeposit: '100' })
+  const actions: string[] = []
+  const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue([])
+  try {
+    const fetch = Fetch.from({
+      methods: [makeSessionMethod(channelStore, { autoSwap: false, maxDeposit: '300' })],
+      onChallenge: (_challenge, { createCredential }) => createCredential({ autoSwap: false }),
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) return paymentRequired(challenge)
+        const payload = deserialize(authorization)
+        actions.push(payload.action)
+        if (init?.method === 'POST') return new Response(null, { status: 204 })
+        return new Response(
+          [
+            Types.formatNeedVoucherEvent({
+              channelId,
+              acceptedCumulative: '100',
+              deposit: '100',
+              requiredCumulative: '200',
+            }),
+            Types.formatMessageEvent('paid'),
+            Types.formatReceiptEvent(
+              Types.createSessionReceipt({
+                channelId,
+                challengeId: challenge.id,
+                acceptedCumulative: 200n,
+                spent: 200n,
+              }),
+            ),
+          ].join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      },
+    })
+    const response = await fetch('https://example.com/stream', {
+      context: { autoSwap: true },
+      headers: { accept: 'text/event-stream' },
+    })
+    expect(await response.text()).toContain('paid')
+    expect(actions).toEqual(['voucher', 'topUp', 'voucher'])
+    expect(findCalls).not.toHaveBeenCalled()
+  } finally {
+    findCalls.mockRestore()
+  }
 })

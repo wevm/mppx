@@ -22,7 +22,7 @@ describe('assert', () => {
     { name: 'non-numeric amount', challenge: challenge({ request: { amount: 'x' } }) },
     { name: 'missing amount', challenge: challenge({ request: {} }) },
     { name: 'non-tempo method', challenge: challenge({ method: 'stripe' }) },
-    { name: 'non-charge intent', challenge: challenge({ intent: 'session' }) },
+    { name: 'non-charge intent', challenge: challenge({ intent: 'subscription' }) },
     { name: 'matching hostname', challenge: challenge({ realm: 'Attacker.Example' }) },
   ])('ignores $name', ({ challenge }) => {
     expect(() => ProofRealm.assert(challenge, url, undefined)).not.toThrow()
@@ -85,4 +85,14 @@ describe('assertWithoutOrigin', () => {
   test('accepts a listed realm', () => {
     expect(() => ProofRealm.assertWithoutOrigin(challenge(), ['target.example'])).not.toThrow()
   })
+})
+
+test.each(['0', '100'])('binds session challenges before signing, amount %s', (amount) => {
+  const session = challenge({ intent: 'session', request: { amount } })
+  expect(() => ProofRealm.assert(session, url, undefined)).toThrow('Refusing to sign')
+  expect(() => ProofRealm.assertWithoutOrigin(session, undefined)).toThrow('Refusing to sign')
+  expect(() =>
+    ProofRealm.assert(session, new URL('https://target.example'), undefined),
+  ).not.toThrow()
+  expect(() => ProofRealm.assert(session, url, { [url.origin]: 'target.example' })).not.toThrow()
 })

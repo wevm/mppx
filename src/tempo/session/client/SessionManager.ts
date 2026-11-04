@@ -292,7 +292,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function getReusable(key: string): Promise<ChannelEntry | undefined> {
     const entry = await backing.get(key)
     if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) {
-      if (entry.origin !== undefined && entry.origin !== sessionOrigin)
+      if (entry.origin !== sessionOrigin)
         throw new Error('SessionManager: stored channel origin mismatch')
       return entry
     }
@@ -456,6 +456,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   const wrappedFetch = Fetch.from({
+    trustedTempoProofRealms: parameters.trustedTempoProofRealms,
     fetch: guardedFetch,
     identity: inheritedIdentity,
     methods: [method],
@@ -480,10 +481,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   function createSessionCredential(challenge: TempoSessionChallenge, context: SessionContext) {
-    return method.createCredential({
+    const parameters = {
       challenge,
       context: mergeSessionCredentialContext(credentialContext, context),
-    })
+    }
+    if (sessionOrigin) MethodResponse.attachOrigin(parameters, sessionOrigin)
+    return method.createCredential(parameters)
   }
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
@@ -1176,7 +1179,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
     rehydrate({ channel, challenge, input, spent }) {
       const origin = bindOrigin(input)
-      if (channel.origin !== undefined && channel.origin !== origin)
+      if (channel.origin !== origin)
         throw new Error('SessionManager: stored channel origin mismatch')
       if (!channel.opened) throw new Error('Cannot restore a closed session channel.')
       if (!isTempoSessionChallenge(challenge)) {
@@ -1222,7 +1225,7 @@ export namespace sessionManager {
       /** Enables same-route HEAD bootstrap from a server session snapshot before opening a new channel. */
       bootstrap?: boolean | undefined
       /**
-       * Server origins allowed to request bootstrap proofs for a realm other than their hostname,
+       * Server origins allowed to request bootstrap proofs or session payments for a realm other than their hostname,
        * mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
        */
       trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined

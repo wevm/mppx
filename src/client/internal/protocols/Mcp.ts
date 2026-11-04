@@ -19,6 +19,24 @@ function jsonRpcRequestId(body: unknown): number | string | undefined {
   }
 }
 
+/** Metadata that delegates all payment decisions to the MCP client adapter. */
+export const adapterPaymentMetaKey = 'mppx/payment-client'
+
+/** Whether the caller's MCP adapter owns approval and payment retry for this request. */
+export function adapterOwnsPayment(request?: RequestInit): boolean {
+  if (typeof request?.body !== 'string') return false
+  try {
+    const message = JSON.parse(request.body)
+    return (
+      message?.jsonrpc === '2.0' &&
+      message?.method === 'tools/call' &&
+      message.params?._meta?.[adapterPaymentMetaKey] === true
+    )
+  } catch {
+    return false
+  }
+}
+
 // Bound automatic inspection; the caller retains the original response stream.
 const maxInspectionBytes = 1024 * 1024
 

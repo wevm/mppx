@@ -1,4 +1,5 @@
 import * as Challenge from '../../Challenge.js'
+import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { resolveEscrow } from '../../tempo/session/client/ChannelOps.js'
 import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
@@ -66,6 +67,16 @@ export async function closeWithSessionManager(
   parameters: CloseWithSessionManagerParameters,
 ): Promise<CloseWithSessionManagerResult> {
   assertCloseChallengeScope(parameters.challenge, parameters.channel)
+  let channel = parameters.channel
+  if (channel.origin === undefined) {
+    const url = new URL(
+      parameters.input instanceof Request ? parameters.input.url : parameters.input,
+    )
+    if (!['http:', 'https:'].includes(url.protocol))
+      throw new Error('Legacy session close requires an HTTP origin')
+    ProofRealm.assert(parameters.challenge, url, parameters.manager.trustedTempoProofRealms)
+    channel = { ...channel, origin: url.origin }
+  }
   const networkFetch = resolveFetch(parameters.fetch)
   let pendingChallenge: TempoSessionChallenge | undefined
   const validatedFetch: typeof globalThis.fetch = async (input, init) => {
@@ -87,7 +98,8 @@ export async function closeWithSessionManager(
     escrow: parameters.channel.escrow,
     fetch: validatedFetch,
   })
-  getSessionManagerInternals(manager).rehydrate(parameters)
+  getSessionManagerInternals(manager).rehydrate({ ...parameters, channel })
+  if (channel !== parameters.channel) await parameters.manager.channelStore?.set(channel)
   const receipt = await manager.close()
   if (!receipt) throw new Error('Session close response did not include a payment receipt.')
   return { manager, receipt }

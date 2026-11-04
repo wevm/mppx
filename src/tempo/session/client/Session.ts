@@ -229,6 +229,9 @@ export function session(parameters: session.Parameters = {}) {
     maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
   const topUpAmount =
     topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined
+  const configuredOrigin = parameters.origin === undefined ? undefined : new URL(parameters.origin)
+  if (configuredOrigin && !['http:', 'https:'].includes(configuredOrigin.protocol))
+    throw new Error('Session origins require HTTP or HTTPS')
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
@@ -290,6 +293,15 @@ export function session(parameters: session.Parameters = {}) {
         getClient,
       })
       const attempt = MethodResponse.getAttempt(parameters)
+      const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
+      if (
+        origin !== undefined &&
+        (origin === 'null' || !['http:', 'https:'].includes(new URL(origin).protocol))
+      )
+        throw new Error('Session payments require an HTTP or HTTPS origin')
+      if (configuredOrigin && origin !== configuredOrigin.origin)
+        throw new Error('Session channel origin mismatch')
+      const scopedSink = { ...sink, origin }
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
@@ -298,10 +310,17 @@ export function session(parameters: session.Parameters = {}) {
           if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         }
         let entry = await store.get(resolved.key)
+        if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
+        if (origin && !entry && resolved.snapshot && !context?.descriptor && !configuredOrigin)
+          throw new Error(
+            'Session snapshot recovery requires an explicitly configured origin or descriptor',
+          )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
           const nextEntry = await store.get(resolved.key)
+          if (nextEntry && nextEntry.origin !== origin)
+            throw new Error('Session channel origin mismatch')
           if (nextEntry?.channelId !== entry?.channelId) {
             entry = nextEntry
             if (entry?.opened) {
@@ -320,13 +339,13 @@ export function session(parameters: session.Parameters = {}) {
                 store: {
                   get: (key: string) => store.get(key),
                   async set(next: ChannelEntry) {
-                    pendingOpen = next
+                    pendingOpen = origin ? { ...next, origin } : next
                   },
                   delete: (key: string) => store.delete(key),
                 },
                 notifyUpdate() {},
               }
-            : sink
+            : scopedSink
         const payload = await executeCredentialPlan(
           plan,
           credentialSink,
@@ -369,7 +388,18 @@ export function session(parameters: session.Parameters = {}) {
     },
   })
 
+  function createSessionCredential(
+    challenge: TempoSessionChallenge,
+    context: CredentialContext,
+    input: RequestInfo | URL,
+  ) {
+    const parameters = { challenge, context }
+    MethodResponse.attachOrigin(parameters, resolveInputOrigin(input))
+    return method.createCredential(parameters)
+  }
+
   const topUpChannelIfNeeded = async ({
+    autoSwap,
     challenge,
     channel,
     deposit,
@@ -378,6 +408,7 @@ export function session(parameters: session.Parameters = {}) {
     requiredCumulative,
     signal,
   }: {
+    autoSwap?: CredentialContext['autoSwap'] | undefined
     challenge: TempoSessionChallenge
     channel: ChannelEntry
     deposit: bigint
@@ -407,12 +438,13 @@ export function session(parameters: session.Parameters = {}) {
       })
       if (additionalDeposit > 0n)
         await postTopUp({
+          autoSwap,
           additionalDeposit,
           challenge,
           channel,
           channelId: channel.channelId,
           createSessionCredential: (challenge, context) =>
-            method.createCredential({ challenge, context }),
+            createSessionCredential(challenge, context, input),
           onUncertainFunding: async (entry) => {
             const current = await store.get(entryKey(entry))
             const unresolved = {
@@ -454,6 +486,8 @@ export function session(parameters: session.Parameters = {}) {
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
+    const origin = resolveInputOrigin(input)
+    if (channel.origin !== origin) throw new Error('Session channel origin mismatch')
     const snapshot =
       resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()
         ? resolved.snapshot
@@ -467,6 +501,7 @@ export function session(parameters: session.Parameters = {}) {
     const account = await resolveCredentialAccount(resolved, sessionContext, channel)
     if (!canSignDescriptor(account, channel.descriptor)) return
     await topUpChannelIfNeeded({
+      autoSwap: sessionContext?.autoSwap,
       challenge,
       channel,
       deposit,
@@ -479,7 +514,17 @@ export function session(parameters: session.Parameters = {}) {
 
   return MethodResponse.register(
     method,
-    async ({ challenge, credential, fetch, headers, input, refetch, response, signal }) => {
+    async ({
+      challenge,
+      context,
+      credential,
+      fetch,
+      headers,
+      input,
+      refetch,
+      response,
+      signal,
+    }) => {
       if (!isTip1034SessionChallenge(challenge)) return response
       if (!isEventStream(response)) {
         const credentialContext = requireSessionCredentialContext(
@@ -507,12 +552,14 @@ export function session(parameters: session.Parameters = {}) {
         assertVoucherWithinLocalLimit: (cumulativeAmount) =>
           assertWithinMaxDeposit(cumulativeAmount, maxDeposit),
         createSessionCredential: (challenge, context) =>
-          method.createCredential({ challenge, context }),
+          createSessionCredential(challenge, context, input),
         fetch,
         getChannel: () => channel ?? null,
         async topUpIfNeeded({ deposit, requiredCumulative, signal: topUpSignal }) {
           if (!channel) return
           await topUpChannelIfNeeded({
+            autoSwap:
+              context === undefined ? undefined : sessionContextSchema.parse(context).autoSwap,
             challenge,
             channel,
             deposit: channel.deposit > deposit ? channel.deposit : deposit,
@@ -546,7 +593,17 @@ export declare namespace session {
       allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: AutoSwap.resolve.Value | undefined
-      /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
+      /**
+       * HTTP origin authorized for credential creation and server-snapshot recovery.
+       * Fetch supplies the request origin, but recovering an unknown channel from its snapshot
+       * requires this explicit origin pin or a caller-supplied descriptor.
+       */
+      origin?: string | undefined
+      /**
+       * Pluggable persistence for reusable channels. Defaults to an in-memory store.
+       * Use a separate store per HTTP origin: each payment scope holds one channel, and a
+       * channel already bound to another origin is rejected rather than overwritten or reused.
+       */
       channelStore?: ChannelStore | undefined
       /**
        * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
@@ -595,4 +652,14 @@ export declare namespace session {
       /** Selects the account that signs this session credential after the challenge is known. */
       resolveAccount?: ResolveAccount | undefined
     }
+}
+
+function resolveInputOrigin(input: RequestInfo | URL): string {
+  const url = new URL(
+    input instanceof Request ? input.url : input,
+    typeof globalThis.location === 'undefined' ? undefined : globalThis.location.href,
+  )
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('Session payments require an HTTP or HTTPS origin')
+  return url.origin
 }

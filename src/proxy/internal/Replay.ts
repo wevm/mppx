@@ -311,7 +311,7 @@ async function keep(stream: ReadableStream<Uint8Array>, maxBodySize: number) {
     if (done) break
     size += value.byteLength
     if (size > maxBodySize) {
-      await reader.cancel()
+      void reader.cancel().catch(() => {})
       return null
     }
     chunks.push(value)

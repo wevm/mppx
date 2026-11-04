@@ -1692,7 +1692,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-multifetch',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
@@ -1736,7 +1736,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             'WWW-Authenticate': Challenge.serialize(
               Challenge.from({
                 id: 'cli-deposit-override',
-                realm: 'cli-test-deposit-override',
+                realm: 'localhost',
                 method: 'tempo',
                 intent: 'session',
                 request: {
@@ -1832,7 +1832,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             feePayerPolicy: cliSessionFeePayerPolicy,
           }),
         ],
-        realm: 'cli-test-double-charge',
+        realm: 'localhost',
         secretKey: 'cli-test-secret-cli-test-secret-32',
       })
 
@@ -1929,7 +1929,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-close-action',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
@@ -2031,7 +2031,7 @@ describe('session sse (examples/session/sse)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-sse',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
@@ -2977,7 +2977,7 @@ test('configured session handles SSE voucher requests with its own channel store
     const channelStore = createChannelStore()
     await channelStore.set({ descriptor, escrow, chainId: 42431,
       channelId: computeId({ ...descriptor, escrow, chainId: 42431 }),
-      deposit: 1000n, cumulativeAmount: 0n, opened: true,
+      deposit: 1000n, cumulativeAmount: 0n, opened: true, origin: process.env.MPPX_TEST_ORIGIN,
     })
     const client = createClient({ account, chain: { id: 42431 }, transport: custom({
       async request({ method }) {
@@ -3053,7 +3053,7 @@ test('configured session handles SSE voucher requests with its own channel store
     const { output, exitCode } = await serve(
       [server.url, '-s', '--config', configPath, '-H', 'accept: text/event-stream'],
       {
-        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        env: { MPPX_PRIVATE_KEY: testPrivateKey, MPPX_TEST_ORIGIN: new URL(server.url).origin },
         onOutput(chunk) {
           if (!chunk.includes('first')) return
           outputBeforeClose = !streamClosed

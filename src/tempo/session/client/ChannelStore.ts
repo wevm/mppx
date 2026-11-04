@@ -18,6 +18,8 @@ export type ChannelStore = {
 
 /** Channel persistence and update notification for credential results. */
 export type ChannelSink = {
+  /** Origin attached to newly created or recovered channels before persistence. */
+  origin?: string | undefined
   store: ChannelStore
   notifyUpdate: (entry: ChannelEntry) => void
 }

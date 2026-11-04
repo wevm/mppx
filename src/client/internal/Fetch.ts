@@ -12,6 +12,7 @@ import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as ProofRealm from './ProofRealm.js'
+import { adapterOwnsPayment } from './protocols/Mcp.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -34,6 +35,8 @@ type WrappedFetch = typeof globalThis.fetch & {
 
 /** Credential state retained between payment retries until its method settles it. */
 type PreparedCredential = {
+  /** Effective policy used to create this credential, including approval-hook overrides. */
+  context: unknown
   /** Method-owned preparation and settlement hooks. */
   attempt: MethodResponse.Attempt
   /** Serialized challenge used to recognize the same retry. */
@@ -297,6 +300,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
     if ((init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment])
       return response
+    if (adapterOwnsPayment(transportRequest)) return response
     if (!(await transport.isPaymentRequired(response, transportRequest as never))) return response
 
     // Only extract context for payment handling after confirming 402.
@@ -395,6 +399,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             if (!MethodChallenge.has(selected.method))
               return resolveCredential(selectedChallenge, selected.method, credentialContext)
             const attempt: MethodResponse.Attempt = {
+              origin: resolveRequestUrl(paymentInput).origin,
               prepare: () =>
                 MethodChallenge.handle(selected.method, {
                   challenge: selectedChallenge,
@@ -415,6 +420,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                 resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
               )
             preparedCredential = {
+              context: credentialContext,
               attempt,
               key: overrideContext === undefined ? key : undefined,
               method: selected.method,
@@ -448,6 +454,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           await settleAttempt(prepared, { status: 'rejected' })
           preparedCredential = undefined
         }
+        const effectiveContext = preparedCredential ? preparedCredential.context : context
         validateCredentialHeaderValue(credential)
         await events.emit(
           'credential.created',
@@ -551,6 +558,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }
           if (!response.ok) return response
           return MethodResponse.handle(selected.method, {
+            context: effectiveContext,
             challenge: selectedChallenge,
             credential,
             fetch: baseFetch,
@@ -652,7 +660,7 @@ export declare namespace from {
     /** Transport to use for challenge extraction and credential attachment. */
     transport?: Transport.AnyTransport | undefined
     /**
-     * Server origins allowed to request zero-amount Tempo proofs for a realm other than their
+     * Server origins allowed to request zero-amount Tempo proofs or session payments for a realm other than their
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
      */
     trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined
@@ -1168,6 +1176,7 @@ async function resolveCredential(
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+  if (attempt?.origin) MethodResponse.attachOrigin(parameters, attempt.origin)
   if (attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
   return mi.createCredential(parameters as never)
 }

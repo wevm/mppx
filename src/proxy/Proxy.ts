@@ -48,6 +48,9 @@ export type Proxy = {
  * ```
  */
 export function create(config: create.Config): Proxy {
+  const maxRequestBodySize = config.maxRequestBodySize ?? 10 * 1024 * 1024
+  if (!Number.isSafeInteger(maxRequestBodySize) || maxRequestBodySize < 0)
+    throw new RangeError('maxRequestBodySize must be a non-negative safe integer')
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
 
@@ -133,9 +136,22 @@ export function create(config: create.Config): Proxy {
     if (!matched) return new Response('Not Found', { status: 404 })
 
     const endpoint = matched.value as Service.Endpoint
+    const handler = Service.getHandler(endpoint)
+    const declaredLength = Number(request.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > maxRequestBodySize)
+      return new Response('Payload Too Large', { status: 413 })
+    const paymentCredential = handler
+      ? Replay.credentialOf(request, credentialHeaders(handler))
+      : undefined
+    let boundedBody: Uint8Array | undefined
+    if ((!handler || paymentCredential) && request.body) {
+      const body = await Replay.readBody(request, maxRequestBodySize)
+      if (!body) return new Response('Payload Too Large', { status: 413 })
+      boundedBody = body
+      request = Replay.withBody(request, body)
+    }
     const ctx: Service.Context = { request, service, upstreamPath }
 
-    const handler = Service.getHandler(endpoint)
     if (!handler)
       return proxyUpstream({
         request,
@@ -152,11 +168,13 @@ export function create(config: create.Config): Proxy {
     let replayKey: string | undefined
     // Routes with identity verifiers keep paying normally: a replay would skip them.
     const credential =
-      replay && !fallbackMatch && !requiresIdentity(handler)
-        ? Replay.credentialOf(request, credentialHeaders(handler))
-        : undefined
+      replay && !fallbackMatch && !requiresIdentity(handler) ? paymentCredential : undefined
     if (replay && credential) {
-      const body = await Replay.readBody(request, replay.maxRequestBodySize)
+      const body =
+        boundedBody ??
+        (await Replay.readBody(request, Math.min(maxRequestBodySize, replay.maxRequestBodySize)))
+      if (body && body.length > replay.maxRequestBodySize)
+        return new Response('Payload Too Large', { status: 413 })
       if (!body) return new Response('Payload Too Large', { status: 413 })
       replayBody = body
       paidRequest = Replay.withBody(request, body)
@@ -215,6 +233,13 @@ export function create(config: create.Config): Proxy {
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
+    if (!boundedBody && !replayBody && request.body) {
+      const body = await Replay.readBody(request, maxRequestBodySize)
+      if (!body)
+        return result.withReceipt(new Response('Payload Too Large', { status: 413 })) as Response
+      request = Replay.withBody(request, body)
+      ctx.request = request
+    }
     const options = Service.getOptions(endpoint)
     if (replay && replayKey && replayBody) {
       const body = replayBody
@@ -248,7 +273,7 @@ export function create(config: create.Config): Proxy {
 
   return {
     fetch: handle,
-    listener: Request.toNodeListener(handle),
+    listener: Request.toNodeListener(handle, { maxBodySize: maxRequestBodySize }),
   }
 }
 
@@ -264,6 +289,8 @@ export declare namespace create {
     docs?: Service.Docs | undefined
     /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
+    /** Maximum request body bytes on every route, including free routes. Defaults to 10 MiB. */
+    maxRequestBodySize?: number | undefined
     /** Default handler for failed upstream attempts. Services may override it. */
     onUpstreamError?: Service.UpstreamErrorHandler | undefined
     /**

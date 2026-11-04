@@ -12,7 +12,7 @@ import { sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
-const realm = 'test.example.com'
+const realm = 'api.example.com'
 const escrowContract = '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70'
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {

@@ -27,7 +27,7 @@ import { isTempoSessionChallenge } from './Transports.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
-const realm = 'test.example.com'
+const realm = 'api.example.com'
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
@@ -95,6 +95,7 @@ const storedChannelId = Channel.computeId({
 
 function channelEntry(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
   return {
+    origin: 'https://api.example.com',
     channelId: storedChannelId,
     cumulativeAmount: 1_000_000n,
     deposit: 10_000_000n,
@@ -1028,6 +1029,27 @@ describe('Session', () => {
       expect(fetch).not.toHaveBeenCalled()
       await manager.fetch('https://api.example.com/data')
       expect(fetch).toHaveBeenCalledOnce()
+    })
+
+    test('rejects an originless legacy channel before signing or rebinding', async () => {
+      const stored = channelEntry({ origin: undefined })
+      const storage = makeChannelStore([stored])
+      const fetch = vi.fn().mockResolvedValue(make402Response())
+      const manager = sessionManager({ account, client, fetch, channelStore: storage.store })
+      await expect(manager.fetch('https://api.example.com/data')).rejects.toThrow('origin mismatch')
+      expect(storage.set).not.toHaveBeenCalled()
+      expect(storage.delete).not.toHaveBeenCalled()
+      const challenge = makeChallenge()
+      if (!isTempoSessionChallenge(challenge)) throw new Error('Expected session challenge')
+      expect(() =>
+        getSessionManagerInternals(manager).rehydrate({
+          channel: stored,
+          challenge,
+          input: 'https://api.example.com/data',
+          spent: 0n,
+        }),
+      ).toThrow('origin mismatch')
+      expect(stored.origin).toBeUndefined()
     })
 
     test('does not authorize a persisted channel for another origin', async () => {
@@ -2789,4 +2811,13 @@ describe('allowedChainIds', () => {
       expect(getClient).toHaveBeenCalledWith({ chainId: 4217 })
     },
   )
+})
+
+test('rejects an unchanged foreign session challenge before account resolution', async () => {
+  const resolveAccount = vi.fn()
+  const fetch = vi.fn().mockResolvedValue(make402Response())
+  const manager = sessionManager({ account, client, fetch, resolveAccount })
+  await expect(manager.fetch('https://relay.example/data')).rejects.toThrow('Refusing to sign')
+  expect(resolveAccount).not.toHaveBeenCalled()
+  expect(fetch).toHaveBeenCalledOnce()
 })

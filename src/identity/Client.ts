@@ -3,6 +3,8 @@ import * as Credential from '../Credential.js'
 import * as SigningContext from './internal/SigningContext.js'
 import type * as Types from './Types.js'
 
+const skipPayment = Symbol.for('mppx.fetch.skipPayment')
+
 /** Sends HTTP attempts with every in-scope prover applied. */
 export type Client = {
   /**
@@ -131,7 +133,17 @@ export function wrapFetch(
     // A retry may answer a refreshed challenge: bind proofs to the challenge its credential
     // carries, and let provers prepare for a refreshed 402 of the same method and intent.
     const challenge = credentialChallenge(request.headers) ?? context?.challenge
-    const { response } = await client.send(fetch, request, { ...context, challenge })
+    const { response } = await client.send(
+      (input, options) =>
+        fetch(input, {
+          ...options,
+          ...((init as RequestInit & { [skipPayment]?: boolean })?.[skipPayment]
+            ? { [skipPayment]: true }
+            : {}),
+        }),
+      request,
+      { ...context, challenge },
+    )
     if (response.status === 402 && challenge)
       // A 402 without a parseable Payment challenge is returned as is: the caller decides.
       for (const next of challengesOf(response))
