@@ -482,3 +482,37 @@ test('rejects a tee-backed oversized upload without waiting for the unread sibli
     await sibling.cancel()
   }
 })
+
+test.each(['declared', 'streamed'] as const)(
+  'rejects %s oversized paid uploads before payment',
+  async (mode) => {
+    const payment = vi.fn()
+    const upstream = vi.fn()
+    const proxy = Proxy.create({
+      maxRequestBodySize: 8,
+      fetch: upstream,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /resource': createPaidHandler(payment) },
+        }),
+      ],
+    })
+    const response = await proxy.fetch(
+      paidRequest({
+        method: 'POST',
+        headers: mode === 'declared' ? { 'Content-Length': '10' } : undefined,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(10))
+            controller.close()
+          },
+        }),
+        duplex: 'half',
+      } as RequestInit),
+    )
+    expect(response.status).toBe(413)
+    expect(payment).not.toHaveBeenCalled()
+    expect(upstream).not.toHaveBeenCalled()
+  },
+)

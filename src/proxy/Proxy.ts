@@ -137,9 +137,17 @@ export function create(config: create.Config): Proxy {
 
     const endpoint = matched.value as Service.Endpoint
     const handler = Service.getHandler(endpoint)
-    if (!handler && request.body) {
+    const declaredLength = Number(request.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > maxRequestBodySize)
+      return new Response('Payload Too Large', { status: 413 })
+    const paymentCredential = handler
+      ? Replay.credentialOf(request, credentialHeaders(handler))
+      : undefined
+    let boundedBody: Uint8Array | undefined
+    if ((!handler || paymentCredential) && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)
       if (!body) return new Response('Payload Too Large', { status: 413 })
+      boundedBody = body
       request = Replay.withBody(request, body)
     }
     const ctx: Service.Context = { request, service, upstreamPath }
@@ -160,14 +168,13 @@ export function create(config: create.Config): Proxy {
     let replayKey: string | undefined
     // Routes with identity verifiers keep paying normally: a replay would skip them.
     const credential =
-      replay && !fallbackMatch && !requiresIdentity(handler)
-        ? Replay.credentialOf(request, credentialHeaders(handler))
-        : undefined
+      replay && !fallbackMatch && !requiresIdentity(handler) ? paymentCredential : undefined
     if (replay && credential) {
-      const body = await Replay.readBody(
-        request,
-        Math.min(maxRequestBodySize, replay.maxRequestBodySize),
-      )
+      const body =
+        boundedBody ??
+        (await Replay.readBody(request, Math.min(maxRequestBodySize, replay.maxRequestBodySize)))
+      if (body && body.length > replay.maxRequestBodySize)
+        return new Response('Payload Too Large', { status: 413 })
       if (!body) return new Response('Payload Too Large', { status: 413 })
       replayBody = body
       paidRequest = Replay.withBody(request, body)
@@ -226,9 +233,10 @@ export function create(config: create.Config): Proxy {
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
-    if (!replayBody && request.body) {
+    if (!boundedBody && !replayBody && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)
-      if (!body) return new Response('Payload Too Large', { status: 413 })
+      if (!body)
+        return result.withReceipt(new Response('Payload Too Large', { status: 413 })) as Response
       request = Replay.withBody(request, body)
       ctx.request = request
     }
