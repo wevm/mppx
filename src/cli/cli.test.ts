@@ -2977,7 +2977,7 @@ test('configured session handles SSE voucher requests with its own channel store
     const channelStore = createChannelStore()
     await channelStore.set({ descriptor, escrow, chainId: 42431,
       channelId: computeId({ ...descriptor, escrow, chainId: 42431 }),
-      deposit: 1000n, cumulativeAmount: 0n, opened: true,
+      deposit: 1000n, cumulativeAmount: 0n, opened: true, origin: process.env.MPPX_TEST_ORIGIN,
     })
     const client = createClient({ account, chain: { id: 42431 }, transport: custom({
       async request({ method }) {
@@ -3053,7 +3053,7 @@ test('configured session handles SSE voucher requests with its own channel store
     const { output, exitCode } = await serve(
       [server.url, '-s', '--config', configPath, '-H', 'accept: text/event-stream'],
       {
-        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        env: { MPPX_PRIVATE_KEY: testPrivateKey, MPPX_TEST_ORIGIN: new URL(server.url).origin },
         onOutput(chunk) {
           if (!chunk.includes('first')) return
           outputBeforeClose = !streamClosed

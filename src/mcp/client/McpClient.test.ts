@@ -10,6 +10,7 @@ import { createClient } from 'viem'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vp/test'
 import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 
+import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
@@ -159,7 +160,7 @@ describe('McpClient.wrap', () => {
 
     expect(result.content).toEqual([{ type: 'text', text: 'Free tool executed' }])
     expect(rawCallTool).toHaveBeenCalledWith(
-      { name: 'free_tool', arguments: {} },
+      { name: 'free_tool', arguments: {}, _meta: { [adapterPaymentMetaKey]: true } },
       undefined,
       undefined,
     )
@@ -401,9 +402,13 @@ describe('McpClient.wrap (in-place)', () => {
 
     expect(result.content).toEqual([{ type: 'text', text: 'Free tool executed' }])
     expect(result.receipt).toBeUndefined()
-    expect(rawCallTool).toHaveBeenCalledWith({ name: 'free_tool', arguments: {} }, undefined, {
-      timeout: 30_000,
-    })
+    expect(rawCallTool).toHaveBeenCalledWith(
+      { name: 'free_tool', arguments: {}, _meta: { [adapterPaymentMetaKey]: true } },
+      undefined,
+      {
+        timeout: 30_000,
+      },
+    )
     expect(createCredential).not.toHaveBeenCalled()
   })
 
@@ -422,9 +427,13 @@ describe('McpClient.wrap (in-place)', () => {
       timeout: 30_000,
     })
 
-    expect(rawCallTool).toHaveBeenCalledWith({ name: 'free_tool', arguments: {} }, undefined, {
-      timeout: 30_000,
-    })
+    expect(rawCallTool).toHaveBeenCalledWith(
+      { name: 'free_tool', arguments: {}, _meta: { [adapterPaymentMetaKey]: true } },
+      undefined,
+      {
+        timeout: 30_000,
+      },
+    )
   })
 
   test('behavior: re-wrapping replaces config without stacking wrappers', async () => {
