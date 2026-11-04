@@ -7246,7 +7246,7 @@ describe('verifyCredential', () => {
           chainId: client.chain!.id,
         }),
       ],
-      realm,
+      realm: 'localhost',
       secretKey,
     })
     const clientMppx = Mppx_client.create({

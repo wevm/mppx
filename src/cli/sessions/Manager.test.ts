@@ -55,6 +55,7 @@ function channelEntry(): ChannelEntry {
     descriptor,
     escrow: tip20ChannelEscrow,
     opened: true,
+    origin: 'https://api.example.test',
   }
 }
 
