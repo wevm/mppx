@@ -22,14 +22,18 @@ import {
 export type PrepaidRefund = {
   /** Channel that paid for the undelivered items. */
   channelId: Hex
-  /** Undelivered prepaid amount in raw token units. */
+  /** Undelivered prepaid amount in raw token units; use externalRefundAmount for transfers. */
   amount: bigint
+  /** Captured share safe to refund externally, or null until reconciliation establishes it. */
+  externalRefundAmount: bigint | null
   /** Charge units included in the credit attempt. */
   units: number
   /** Use this key for both credit retries and an idempotent merchant refund. */
   idempotencyKey: string
   /** An unknown credit must be reconciled with the same key before refunding externally. */
-  credit: { status: 'unknown' } | Extract<ChannelStore.CreditResult, { status: 'declined' }>
+  credit:
+    | { status: 'failed'; error: unknown }
+    | Exclude<ChannelStore.CreditResult, { status: 'credited' }>
 }
 
 /** Exposes durable retry information when no refund hook is configured or it fails. */
@@ -38,6 +42,49 @@ export class PrepaidRefundError extends Error {
   constructor(readonly refund: PrepaidRefund) {
     super('Prepaid stream delivery failed and requires merchant refund reconciliation.')
   }
+}
+
+/** Maximum retained automatic refund operations per channel. Never evict live retry keys. */
+export const maxPrepaidRefunds = 128
+
+/**
+ * Persist a delivery obligation before returning a managed response. Failed hook deliveries remain
+ * in `channel.prepaidRefunds` for a merchant worker. Pending entries require manual delivery
+ * reconciliation; failed entries may retry the credit with their original terms within 24 hours.
+ * Acknowledging the hook means the merchant has durably accepted responsibility for the job.
+ */
+export async function preparePrepaidRefund(options: serve.Options): Promise<void> {
+  if (!options.autoCreditPrepaid || !options.prepaidUnits || options.tickCost === 0n) return
+  if (!options.refundIdempotencyKey)
+    throw new Error('Automatic refunds require a stable refundIdempotencyKey')
+  const key = options.refundIdempotencyKey
+  const amount = (BigInt(options.prepaidUnits) * options.tickCost).toString()
+  await options.store.updateChannel(options.channelId, (current) => {
+    if (!current) throw new Error('Cannot prepare prepaid refund: channel not found')
+    const existing = current.prepaidRefunds?.[key]
+    if (existing) {
+      if (existing.amount !== amount || existing.units !== options.prepaidUnits)
+        throw new Error('Prepaid refund key conflicts with an existing delivery')
+      return current
+    }
+    const liveMarkers = Object.values(current.idempotencyMarkers ?? {}).filter(
+      (marker) => marker.expiresAt > Date.now(),
+    ).length
+    if (Object.keys(current.prepaidRefunds ?? {}).length + liveMarkers >= maxPrepaidRefunds)
+      throw new Error('Prepaid refund capacity reached; reconcile outstanding deliveries')
+    return {
+      ...current,
+      prepaidRefunds: {
+        ...current.prepaidRefunds,
+        [key]: {
+          amount,
+          units: options.prepaidUnits!,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        },
+      },
+    }
+  })
 }
 
 /**
@@ -82,7 +129,7 @@ export type { SessionController } from './MeteredStream.js'
  *    `stream.charge()` resolves, retaining them on cancellation or failure.
  * 5. On generator completion, emits a final `event: payment-receipt`.
  *
- * A failure before a prepaid item is enqueued attempts an idempotent credit.
+ * With `autoCreditPrepaid`, a failure before a prepaid item is enqueued attempts an idempotent credit.
  * If credit is declined or uncertain, `onRefundRequired` handles merchant reconciliation.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
@@ -108,24 +155,77 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     throw new Error('prepaidUnits must be a non-negative safe integer')
   const refundIdempotencyKey =
     options.refundIdempotencyKey ?? `stream:${globalThis.crypto.randomUUID()}`
+  ChannelStore.assertIdempotencyOptions({ idempotencyKey: refundIdempotencyKey })
+  const refundOptions = { ...options, refundIdempotencyKey }
+  const clearObligation = async () => {
+    if (!options.autoCreditPrepaid) return
+    await store.updateChannel(channelId, (current) => {
+      if (!current?.prepaidRefunds?.[refundIdempotencyKey]) return current
+      const prepaidRefunds = { ...current.prepaidRefunds }
+      delete prepaidRefunds[refundIdempotencyKey]
+      return { ...current, prepaidRefunds }
+    })
+  }
   const creditFailedDelivery = async () => {
-    if (undeliveredPrepaidUnits === 0 || tickCost === 0n) return
+    if (!options.autoCreditPrepaid) return
+    if (undeliveredPrepaidUnits === 0 || tickCost === 0n) {
+      await clearObligation()
+      return
+    }
+    const recordFailure = await store
+      .updateChannel(channelId, (current) => {
+        if (!current?.prepaidRefunds?.[refundIdempotencyKey])
+          throw new Error('Prepaid refund obligation missing')
+        return {
+          ...current,
+          prepaidRefunds: {
+            ...current.prepaidRefunds,
+            [refundIdempotencyKey]: {
+              ...current.prepaidRefunds[refundIdempotencyKey]!,
+              status: 'failed',
+              amount: (BigInt(undeliveredPrepaidUnits) * tickCost).toString(),
+              units: undeliveredPrepaidUnits,
+            },
+          },
+        }
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => ({ error }),
+      )
     const amount = BigInt(undeliveredPrepaidUnits) * tickCost
-    const result = await ChannelStore.creditChannel(store, channelId, amount, {
-      idempotencyKey: refundIdempotencyKey,
-      units: undeliveredPrepaidUnits,
-    }).catch(() => ({ status: 'unknown' as const }))
-    if (result.status === 'credited') return
+    const result = recordFailure
+      ? { status: 'failed' as const, error: recordFailure.error }
+      : await ChannelStore.creditChannel(store, channelId, amount, {
+          idempotencyKey: refundIdempotencyKey,
+          units: undeliveredPrepaidUnits,
+          maxMarkers: maxPrepaidRefunds,
+        }).catch((error: unknown) => ({ status: 'failed' as const, error }))
+    if (result.status === 'credited') {
+      await clearObligation()
+      return
+    }
+    let externalRefundAmount: bigint | null = null
+    if (result.status === 'declined' && result.reason === 'finalized') {
+      const captured = result.channel.settledOnChain - (result.channel.spent - amount)
+      externalRefundAmount = captured < 0n ? 0n : captured > amount ? amount : captured
+      if (externalRefundAmount === 0n) {
+        await clearObligation()
+        return
+      }
+    }
     const refund: PrepaidRefund = {
       channelId,
       amount,
+      externalRefundAmount,
       units: undeliveredPrepaidUnits,
       idempotencyKey: refundIdempotencyKey,
-      credit: result.status === 'unknown' ? { status: 'unknown' } : result,
+      credit: result,
     }
     if (!options.onRefundRequired) throw new PrepaidRefundError(refund)
     try {
       await options.onRefundRequired(refund)
+      await clearObligation()
     } catch {
       throw new PrepaidRefundError(refund)
     }
@@ -166,8 +266,9 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   signal?.addEventListener('abort', abort, { once: true })
 
   return new ReadableStream<Uint8Array>({
-    start(controller) {
+    async start(controller) {
       streamController = controller
+      await preparePrepaidRefund(refundOptions)
       if (signal?.aborted) abort()
     },
     async pull(controller) {
@@ -184,6 +285,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           return
         }
 
+        await clearObligation()
         if (!abortController.signal.aborted) {
           const channel = await store.getChannel(channelId)
           if (channel) {
@@ -241,7 +343,9 @@ export declare namespace serve {
     /** Callback invoked after each nonzero stream charge is committed. */
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     pollIntervalMs?: number | undefined
-    /** Units charged before streaming. Failures before enqueueing these items attempt an automatic credit. */
+    /** Opt in to SDK-owned credits. Leave disabled when the merchant already refunds failed requests. @default false */
+    autoCreditPrepaid?: boolean | undefined
+    /** Units charged before streaming. */
     prepaidUnits?: number | undefined
     /** Stable per-charge key used for automatic credit and merchant refund retries. Defaults to a random stream key. */
     refundIdempotencyKey?: string | undefined
@@ -250,7 +354,11 @@ export declare namespace serve {
      * For `credit.status === 'unknown'`, retry `Session.Server.credit` with the supplied key,
      * amount and units before refunding externally; the credit may already have committed.
      * Retry within the credit marker retention (24 hours); later retries need manual reconciliation.
-     * Settled, settling, closing and finalized channels can require a merchant refund.
+     * Only transfer `externalRefundAmount` when non-null; closing, pending settlement and definite
+     * failures require reconciliation first. `failed` is a definite non-credit, not an uncertain write.
+     * Successful return must mean durable acceptance. Missing/throwing hooks leave obligations in
+     * `channel.prepaidRefunds`; run a recovery worker and reconcile pending delivery records manually.
+     * Records are bounded and never evicted while unresolved. A full ledger rejects new streams.
      * Hook failures surface a `PrepaidRefundError` containing the retry information.
      * Delivered items, explicit manual charges and client cancellation are not automatically refunded.
      */

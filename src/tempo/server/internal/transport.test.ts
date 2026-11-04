@@ -733,6 +733,7 @@ describe('sse transport', () => {
     }))
     let checks = 0
     const transport = sse({
+      autoCreditPrepaid: true,
       store,
       beforeCharge: async () => {
         if (++checks === 2) throw new Error('escrow unavailable')
@@ -765,6 +766,7 @@ describe('sse transport', () => {
       const keys: string[] = []
       let blocked = true
       const transport = sse({
+        autoCreditPrepaid: true,
         store,
         beforeCharge: async () => {
           if (blocked) throw new Error('escrow unavailable')

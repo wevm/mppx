@@ -557,7 +557,7 @@ describe('HttpManagement', () => {
       expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe('close-challenge-2')
     })
 
-    test('closeHttpSession rejects spend below the locally confirmed high-water mark', async () => {
+    test('closeHttpSession accepts a credited final spend below an earlier receipt', async () => {
       await expect(
         closeHttpSession({
           createSessionCredential: async () => 'close-credential',
@@ -570,7 +570,7 @@ describe('HttpManagement', () => {
           signedCloseAmount: '5',
           target: { challenge: challenge(), channel: channel(), channelId },
         }),
-      ).rejects.toThrow('Session close response included a mismatched payment receipt.')
+      ).resolves.toMatchObject({ spent: '3' })
     })
 
     describe('challenge with a Payment-Authorization credential header', () => {

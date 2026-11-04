@@ -139,7 +139,7 @@ export function sse(
         // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
         const generate = resolved as Sse_core.serve.Options['generate']
-        const stream = Sse_core.serve({
+        const streamOptions: Sse_core.serve.Options = {
           store,
           channelId,
           challengeId: verifiedChallengeId,
@@ -152,9 +152,11 @@ export function sse(
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
           refundIdempotencyKey: (receipt as PrepaidSessionReceipt)[prepaidRefundKey],
           onRefundRequired: options.onRefundRequired,
+          autoCreditPrepaid: options.autoCreditPrepaid,
           signal: input.signal,
-        })
-        return Sse_core.toResponse(stream)
+        }
+        await Sse_core.preparePrepaidRefund(streamOptions)
+        return Sse_core.toResponse(Sse_core.serve(streamOptions))
       }
 
       const baseResponse = base.respondReceipt({
@@ -280,6 +282,8 @@ export declare namespace sse {
      * @default false
      */
     poll?: boolean | undefined
+    /** Opt in to SDK-owned prepaid credits; leave false with an existing merchant refund handler. */
+    autoCreditPrepaid?: boolean | undefined
     /** Merchant reconciliation hook for prepaid items that fail before delivery; see `Sse.serve.Options.onRefundRequired`. */
     onRefundRequired?: Sse_core.serve.Options['onRefundRequired']
     /** Polling interval (in milliseconds). @default 10 */
