@@ -1,5 +1,22 @@
 # mppx
 
+## 0.17.1
+
+### Patch Changes
+
+- 95dd056: Fixed closing a Tempo session paid with a Viem Tempo access key account. `signCloseAuthorization` now signs the close authorization hash raw with the access key, as vouchers already do, instead of returning a keychain signature that TIP-1034 rejects.
+- ed76e8e: Accepted the RFC 9530 byte-sequence form (`sha-256=:base64:`) in `BodyDigest.verify`, alongside the existing bare form. `BodyDigest.compute` still emits the bare form.
+- 20eca32: Added `feeToken` to the Tempo charge client, so an access key whose spending limits exclude the default fee token can pay an unsponsored charge's fee in a token it may spend.
+- 2b747bf: Fixed Tempo charge settlement returning a fresh 402 after a paid transaction was mined: a broadcast rejected with `ExpiringNonceReplay` (for example, a retried send) now recovers the transaction's receipt instead of failing.
+- cd6a2a7: Fixed payment retries losing Request-carried HTTP methods and bodies, including valid body overrides. Rejected automatic payment after redirects with ambiguous method rewriting before creating credentials.
+- 807376f: Fixed cooperative HTTP session close inheriting the resource Request's body and abort signal while preserving its transport settings and the same resource URL.
+- 2ca12d1: Charged request-priced SSE-enabled content before invoking application handlers, including POST requests that return plain responses. Marked the receipt prepaid to avoid charging the first stream unit twice. Per-item pricing remained stream-driven. Applications must refund request charges when they cannot serve the accepted request.
+- 3fca0d6: Added an opt-in `replay` option to `Proxy.create`, so a payer who loses the connection during a long paid request can collect the response. The paid upstream request runs detached from the client, and a retry with the same credential and request gets the stored response, `202` while it runs, or a new upstream attempt after a failed delivery, without paying again.
+- afb9924: Fixed rejected WebSocket payments leaving sockets open when detailed error messages exceeded the close-frame reason limit.
+- 3c2bc84: Bound each session manager to its first HTTP origin and persisted that binding with reusable channels. Rejected cross-origin HTTP, SSE, and WebSocket reuse before disclosing channel hints or payment credentials, and prevented redirects from forwarding session requests. Existing unbound channel entries acquired an origin on their next validated reuse.
+- 9957b10: Applied the `currencies`, `maxAmount`, `maxAtomicAmount` and `expectedRecipients` client options to Tempo session payments. `tempo()` passed them only to its charge method; its session method, and `tempo.session()` given them directly, now skip offers in other currencies, to other recipients or above the cap during selection and reject them before signing or topping up a channel. An explicit close passed to `Mppx.createCredential`, `fetch` or the MCP client stays available for any offer: `canHandleChallenge` now receives the caller's credential context when it is known before selection.
+- 5d353bb: Prevented validation probes from authorizing payments through an installed global Mppx fetch wrapper.
+
 ## 0.17.0
 
 ### Minor Changes
