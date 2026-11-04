@@ -1,4 +1,9 @@
-import type { Appearance } from '@stripe/stripe-js'
+import type {
+  Appearance,
+  CreatePaymentMethodFromElements,
+  StripeElementsOptionsMode,
+  StripePaymentElementOptions,
+} from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
 
 import { stripe } from '../../../../client/index.js'
@@ -9,6 +14,28 @@ import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
 const c = Html.init<typeof Methods.charge, NonNullable<charge.Parameters['html']>>('stripe')
+
+/** `html.elements` with the Stripe.js types that mppx's public structural types mirror. */
+type ElementsConfig = {
+  options?:
+    | Omit<
+        Extract<StripeElementsOptionsMode, { mode: 'payment' }>,
+        | 'amount'
+        | 'currency'
+        | 'mode'
+        | 'excludedPaymentMethodTypes'
+        | 'paymentMethodCreation'
+        | 'paymentMethodTypes'
+        | 'payment_method_types'
+      >
+    | undefined
+  paymentOptions?: StripePaymentElementOptions | undefined
+  createPaymentMethodOptions?: Omit<CreatePaymentMethodFromElements, 'elements'> | undefined
+}
+// Values typed with `@stripe/stripe-js` must stay assignable to mppx's public types.
+type PublicElementsConfig = NonNullable<NonNullable<charge.Parameters['html']>['elements']>
+true satisfies ElementsConfig extends PublicElementsConfig ? true : false
+const elementsConfig = c.config.elements as ElementsConfig | undefined
 
 const css = String.raw
 const style = document.createElement('style')
@@ -66,8 +93,8 @@ c.root.append(style)
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
   const getAppearance = () => {
     const theme = (() => {
-      if (c.config.elements?.options?.appearance?.theme)
-        return c.config.elements?.options?.appearance?.theme
+      if (elementsConfig?.options?.appearance?.theme)
+        return elementsConfig?.options?.appearance?.theme
       switch (c.theme.colorScheme) {
         case 'light dark':
           return (darkQuery.matches ? 'night' : 'stripe') as 'night' | 'stripe'
@@ -94,13 +121,13 @@ c.root.append(style)
           spacingUnit: c.theme.spacingUnit,
         },
       } satisfies Appearance,
-      (c.config.elements?.options?.appearance as never) ?? {},
+      (elementsConfig?.options?.appearance as never) ?? {},
     )
   }
 
   const elements = stripeJs.elements({
     appearance: getAppearance(),
-    ...c.config.elements?.options,
+    ...elementsConfig?.options,
     amount: Number(c.challenge.request.amount),
     currency: c.challenge.request.currency,
     mode: 'payment',
@@ -113,7 +140,7 @@ c.root.append(style)
   })
 
   const form = document.createElement('form')
-  elements.create('payment', c.config.elements?.paymentOptions).mount(form)
+  elements.create('payment', elementsConfig?.paymentOptions).mount(form)
   c.root.appendChild(form)
 
   const button = document.createElement('button')
@@ -128,7 +155,7 @@ c.root.append(style)
     try {
       await elements.submit()
       const { paymentMethod, error: stripeError } = await stripeJs.createPaymentMethod({
-        ...c.config.elements?.createPaymentMethodOptions,
+        ...elementsConfig?.createPaymentMethodOptions,
         elements,
       })
       if (stripeError || !paymentMethod)

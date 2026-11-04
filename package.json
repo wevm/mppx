@@ -319,7 +319,6 @@
     }
   },
   "dependencies": {
-    "@stripe/stripe-js": "9.17.0",
     "eventsource-parser": "4.1.1",
     "ox": "catalog:",
     "structured-headers": "2.1.0",
