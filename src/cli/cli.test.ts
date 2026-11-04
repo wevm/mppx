@@ -1692,7 +1692,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-multifetch',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
@@ -1736,7 +1736,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             'WWW-Authenticate': Challenge.serialize(
               Challenge.from({
                 id: 'cli-deposit-override',
-                realm: 'cli-test-deposit-override',
+                realm: 'localhost',
                 method: 'tempo',
                 intent: 'session',
                 request: {
@@ -1832,7 +1832,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             feePayerPolicy: cliSessionFeePayerPolicy,
           }),
         ],
-        realm: 'cli-test-double-charge',
+        realm: 'localhost',
         secretKey: 'cli-test-secret-cli-test-secret-32',
       })
 
@@ -1929,7 +1929,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-close-action',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
@@ -2031,7 +2031,7 @@ describe('session sse (examples/session/sse)', () => {
           feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
-      realm: 'cli-test-sse',
+      realm: 'localhost',
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 

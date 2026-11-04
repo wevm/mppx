@@ -680,7 +680,7 @@ export async function postTopUp(
     challenge: parameters.challenge,
     context: {
       action: 'topUp',
-      autoSwap: parameters.autoSwap,
+      ...(parameters.autoSwap === undefined ? {} : { autoSwap: parameters.autoSwap }),
       channelId,
       descriptor: channel.descriptor,
       additionalDepositRaw: parameters.additionalDeposit.toString(),

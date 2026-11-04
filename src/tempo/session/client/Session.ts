@@ -477,7 +477,10 @@ export function session(parameters: session.Parameters = {}) {
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
-    const origin = new URL(input instanceof Request ? input.url : input).origin
+    const origin = new URL(
+      input instanceof Request ? input.url : input,
+      typeof globalThis.location === 'undefined' ? undefined : globalThis.location.href,
+    ).origin
     if (channel.origin !== origin) throw new Error('Session channel origin mismatch')
     const snapshot =
       resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()

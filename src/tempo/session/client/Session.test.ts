@@ -2089,3 +2089,24 @@ test.each([undefined, 'https://other.example'])(
     expect(await channelStore.get(defaultChannelKey)).toEqual(before)
   },
 )
+
+test('reuses a channel for relative browser requests with synthetic responses', async () => {
+  vi.stubGlobal('location', new URL('https://example.com/app'))
+  try {
+    const channelStore = createChannelStore()
+    const method = makeSessionMethod(channelStore)
+    await method.createCredential({ challenge: makeSessionChallenge(), context: {} })
+    const createCredential = vi.spyOn(method, 'createCredential')
+    const fetch = Fetch.from({
+      methods: [method],
+      fetch: async (_input, init) =>
+        new Headers(init?.headers).has('Authorization')
+          ? new Response('paid')
+          : paymentRequired(makeSessionChallenge()),
+    })
+    expect(await (await fetch('/resource')).text()).toBe('paid')
+    expect(createCredential).toHaveBeenCalled()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})

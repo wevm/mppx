@@ -16,6 +16,7 @@ import {
 } from '../precompile/Protocol.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import { initialState, type SessionState } from './Runtime.js'
+import { mergeSessionCredentialContext } from './SessionManager.js'
 import {
   applyTopUpResult,
   closeHttpSession,
@@ -255,6 +256,30 @@ describe('HttpManagement', () => {
         }),
       ).toBeUndefined()
     })
+
+    test.each([undefined, false, { fallback: false, maxAmountIn: 5n }] as const)(
+      'top-up preserves inherited policy and explicit override %s',
+      async (autoSwap) => {
+        const createSessionCredential = vi.fn(async (_challenge, context: SessionContext) => {
+          expect(Object.hasOwn(context, 'autoSwap')).toBe(autoSwap !== undefined)
+          expect(mergeSessionCredentialContext({ autoSwap: false }, context).autoSwap).toEqual(
+            autoSwap ?? false,
+          )
+          return 'top-up-credential'
+        })
+        await postTopUp({
+          additionalDeposit: 3n,
+          challenge: challenge(),
+          channel: channel(),
+          channelId,
+          autoSwap,
+          createSessionCredential,
+          fetch: async () => new Response(null, { status: 204 }),
+          input: 'https://example.test/resource',
+        })
+        expect(createSessionCredential).toHaveBeenCalledOnce()
+      },
+    )
 
     test('postTopUp sends a top-up credential to the management URL', async () => {
       const createSessionCredential = vi.fn(async (_challenge, context: SessionContext) => {

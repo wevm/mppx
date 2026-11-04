@@ -543,6 +543,7 @@ async function createHarness(options?: {
     { callTool: sdkClient.callTool.bind(sdkClient) as Client['callTool'] },
     {
       methods: [chargeMethod, sessionMethod],
+      trustedTempoProofRealms: [realm],
     },
   )
 
