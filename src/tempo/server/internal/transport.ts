@@ -17,6 +17,7 @@ import * as Sse_core from '../../session/server/Sse.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+const consumedPrepaidReceipts = new WeakSet<SessionReceipt>()
 const prepaidRefundKey = Symbol('mppx.prepaidRefundKey')
 
 /** SSE transport with Tempo session controller. */
@@ -100,6 +101,13 @@ export function sse(
     },
 
     async respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
+      if (hasPrepaidSessionTick(receipt as SessionReceipt)) {
+        if (consumedPrepaidReceipts.has(receipt as SessionReceipt))
+          throw new Error(
+            'Prepaid receipt already used; verify a new payment before retrying delivery',
+          )
+        consumedPrepaidReceipts.add(receipt as SessionReceipt)
+      }
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
       const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
