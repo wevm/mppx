@@ -161,6 +161,12 @@ export function fmtChallengeValue(key: string, value: unknown): string {
   return String(value)
 }
 
+/** Formats a problem-details field for display, serializing nested objects and arrays as JSON. */
+export function fmtProblemValue(value: unknown): string {
+  if (value !== null && typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
 export function link(url: string, text: string): string {
   return pc.link(url, text)
 }
