@@ -481,10 +481,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   })
 
   function createSessionCredential(challenge: TempoSessionChallenge, context: SessionContext) {
-    return method.createCredential({
+    const parameters = {
       challenge,
       context: mergeSessionCredentialContext(credentialContext, context),
-    })
+    }
+    if (sessionOrigin) MethodResponse.attachOrigin(parameters, sessionOrigin)
+    return method.createCredential(parameters)
   }
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {

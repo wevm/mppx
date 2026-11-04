@@ -35,6 +35,8 @@ type WrappedFetch = typeof globalThis.fetch & {
 
 /** Credential state retained between payment retries until its method settles it. */
 type PreparedCredential = {
+  /** Effective policy used to create this credential, including approval-hook overrides. */
+  context: unknown
   /** Method-owned preparation and settlement hooks. */
   attempt: MethodResponse.Attempt
   /** Serialized challenge used to recognize the same retry. */
@@ -418,6 +420,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                 resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
               )
             preparedCredential = {
+              context: credentialContext,
               attempt,
               key: overrideContext === undefined ? key : undefined,
               method: selected.method,
@@ -451,6 +454,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           await settleAttempt(prepared, { status: 'rejected' })
           preparedCredential = undefined
         }
+        const effectiveContext = preparedCredential ? preparedCredential.context : context
         validateCredentialHeaderValue(credential)
         await events.emit(
           'credential.created',
@@ -554,7 +558,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }
           if (!response.ok) return response
           return MethodResponse.handle(selected.method, {
-            context,
+            context: effectiveContext,
             challenge: selectedChallenge,
             credential,
             fetch: baseFetch,
@@ -1172,6 +1176,7 @@ async function resolveCredential(
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+  if (attempt?.origin) MethodResponse.attachOrigin(parameters, attempt.origin)
   if (attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
   return mi.createCredential(parameters as never)
 }

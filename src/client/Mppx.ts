@@ -8,6 +8,7 @@ import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
+import * as MethodResponse from './internal/MethodResponse.js'
 import * as ProofRealm from './internal/ProofRealm.js'
 import * as Transport from './Transport.js'
 
@@ -361,6 +362,7 @@ export function create<
                   selectedChallenge,
                   selectedMethod,
                   overrideContext ?? context,
+                  responseUrl?.origin,
                 ),
             )
             const eventCredential = await events.emit(
@@ -965,11 +967,13 @@ async function createCredentialForMethod(
   challenge: Challenge.Challenge,
   mi: Method.AnyClient,
   context: unknown,
+  origin?: string,
 ): Promise<string> {
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
-  return mi.createCredential(
-    parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
-  )
+  const parameters =
+    parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+  if (origin) MethodResponse.attachOrigin(parameters, origin)
+  return mi.createCredential(parameters as never)
 }
 
 /** Returns the URL of the HTTP server that sent `response`, or `undefined` when it has none. */

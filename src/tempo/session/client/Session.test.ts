@@ -18,7 +18,7 @@ import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
-import { channelKey, createChannelStore } from './ChannelStore.js'
+import { channelKey, createChannelStore, persistChannel } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
@@ -2108,5 +2108,141 @@ test('reuses a channel for relative browser requests with synthetic responses', 
     expect(createCredential).toHaveBeenCalled()
   } finally {
     vi.unstubAllGlobals()
+  }
+})
+
+test('direct credential APIs enforce and retain the response origin', async () => {
+  const channelStore = createChannelStore()
+  await makeSessionMethod(channelStore).createCredential({
+    challenge: makeSessionChallenge(),
+    context: {},
+  })
+  const resolveAccount = vi.fn()
+  const method = makeSessionMethod(channelStore, { origin: undefined, resolveAccount })
+  const mppx = Mppx.create({ methods: [method], polyfill: false })
+  const response = (origin: string) => {
+    const challenge = { ...makeSessionChallenge(), realm: new URL(origin).hostname }
+    const result = paymentRequired(challenge)
+    Object.defineProperty(result, 'url', { value: `${origin}/resource` })
+    return result
+  }
+  await expect(mppx.createCredential(response('https://other.example'))).rejects.toThrow(
+    'origin mismatch',
+  )
+  await expect(
+    method.createCredential({ challenge: makeSessionChallenge(), context: {} }),
+  ).rejects.toThrow('origin mismatch')
+  expect(resolveAccount).not.toHaveBeenCalled()
+  await expect(mppx.createCredential(response('https://example.com'))).resolves.toBeTypeOf('string')
+  expect((await channelStore.get(defaultChannelKey))?.origin).toBe('https://example.com')
+})
+
+test('origin-bound voucher persistence shares the uncertain-funding write lock', async () => {
+  const backing = createChannelStore()
+  await makeSessionMethod(backing).createCredential({
+    challenge: makeSessionChallenge(),
+    context: {},
+  })
+  const entry = await backing.get(defaultChannelKey)
+  if (!entry) throw new Error('Expected channel')
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const signed = Promise.withResolvers<void>()
+  const store = {
+    ...backing,
+    get: (key: string) => structuredClone(backing.get(key)),
+    async set(next: typeof entry) {
+      if (next.uncertainTopUp) {
+        entered.resolve()
+        await release.promise
+      }
+      backing.set(next)
+    },
+  }
+  const method = makeSessionMethod(store, {
+    account: {
+      ...account,
+      async sign(parameters) {
+        const signature = await account.sign(parameters)
+        signed.resolve()
+        return signature
+      },
+    },
+  })
+  const funding = persistChannel(store, { ...entry, uncertainTopUp: true })
+  await entered.promise
+  const credential = method.createCredential({ challenge: makeSessionChallenge(), context: {} })
+  let completed = false
+  void credential.then(() => {
+    completed = true
+  })
+  try {
+    await signed.promise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(completed).toBe(false)
+  } finally {
+    release.resolve()
+  }
+  await Promise.all([funding, credential])
+  expect((await backing.get(defaultChannelKey))?.uncertainTopUp).toBe(true)
+})
+
+test('SSE top-ups retain the swap policy narrowed by the approval hook', async () => {
+  const channelStore = createChannelStore()
+  const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+  await channelStore.set({
+    channelId,
+    descriptor,
+    chainId,
+    escrow: tip20ChannelEscrow,
+    cumulativeAmount: 0n,
+    deposit: 100n,
+    opened: true,
+    origin: 'https://example.com',
+  })
+  const challenge = makeSessionChallenge({ suggestedDeposit: '100' })
+  const actions: string[] = []
+  const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue([])
+  try {
+    const fetch = Fetch.from({
+      methods: [makeSessionMethod(channelStore, { autoSwap: false, maxDeposit: '300' })],
+      onChallenge: (_challenge, { createCredential }) => createCredential({ autoSwap: false }),
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) return paymentRequired(challenge)
+        const payload = deserialize(authorization)
+        actions.push(payload.action)
+        if (init?.method === 'POST') return new Response(null, { status: 204 })
+        return new Response(
+          [
+            Types.formatNeedVoucherEvent({
+              channelId,
+              acceptedCumulative: '100',
+              deposit: '100',
+              requiredCumulative: '200',
+            }),
+            Types.formatMessageEvent('paid'),
+            Types.formatReceiptEvent(
+              Types.createSessionReceipt({
+                channelId,
+                challengeId: challenge.id,
+                acceptedCumulative: 200n,
+                spent: 200n,
+              }),
+            ),
+          ].join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      },
+    })
+    const response = await fetch('https://example.com/stream', {
+      context: { autoSwap: true },
+      headers: { accept: 'text/event-stream' },
+    })
+    expect(await response.text()).toContain('paid')
+    expect(actions).toEqual(['voucher', 'topUp', 'voucher'])
+    expect(findCalls).not.toHaveBeenCalled()
+  } finally {
+    findCalls.mockRestore()
   }
 })

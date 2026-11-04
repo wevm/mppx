@@ -293,21 +293,10 @@ export function session(parameters: session.Parameters = {}) {
         getClient,
       })
       const attempt = MethodResponse.getAttempt(parameters)
-      const origin = attempt?.origin ?? configuredOrigin?.origin
+      const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
       if (configuredOrigin && origin !== configuredOrigin.origin)
         throw new Error('Session channel origin mismatch')
-      const credentialStore: ChannelStore = origin
-        ? {
-            get: (key) => store.get(key),
-            delete: (key) => store.delete(key),
-            set: (entry) => store.set({ ...entry, origin }),
-          }
-        : store
-      const scopedSink = {
-        store: credentialStore,
-        notifyUpdate: (entry: ChannelEntry) =>
-          sink.notifyUpdate(origin ? { ...entry, origin } : entry),
-      }
+      const scopedSink = { ...sink, origin }
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
@@ -316,8 +305,7 @@ export function session(parameters: session.Parameters = {}) {
           if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         }
         let entry = await store.get(resolved.key)
-        if (origin && entry && entry.origin !== origin)
-          throw new Error('Session channel origin mismatch')
+        if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
@@ -389,6 +377,16 @@ export function session(parameters: session.Parameters = {}) {
     },
   })
 
+  function createSessionCredential(
+    challenge: TempoSessionChallenge,
+    context: CredentialContext,
+    input: RequestInfo | URL,
+  ) {
+    const parameters = { challenge, context }
+    MethodResponse.attachOrigin(parameters, resolveInputOrigin(input))
+    return method.createCredential(parameters)
+  }
+
   const topUpChannelIfNeeded = async ({
     autoSwap,
     challenge,
@@ -435,7 +433,7 @@ export function session(parameters: session.Parameters = {}) {
           channel,
           channelId: channel.channelId,
           createSessionCredential: (challenge, context) =>
-            method.createCredential({ challenge, context }),
+            createSessionCredential(challenge, context, input),
           onUncertainFunding: async (entry) => {
             const current = await store.get(entryKey(entry))
             const unresolved = {
@@ -477,10 +475,7 @@ export function session(parameters: session.Parameters = {}) {
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
-    const origin = new URL(
-      input instanceof Request ? input.url : input,
-      typeof globalThis.location === 'undefined' ? undefined : globalThis.location.href,
-    ).origin
+    const origin = resolveInputOrigin(input)
     if (channel.origin !== origin) throw new Error('Session channel origin mismatch')
     const snapshot =
       resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()
@@ -546,7 +541,7 @@ export function session(parameters: session.Parameters = {}) {
         assertVoucherWithinLocalLimit: (cumulativeAmount) =>
           assertWithinMaxDeposit(cumulativeAmount, maxDeposit),
         createSessionCredential: (challenge, context) =>
-          method.createCredential({ challenge, context }),
+          createSessionCredential(challenge, context, input),
         fetch,
         getChannel: () => channel ?? null,
         async topUpIfNeeded({ deposit, requiredCumulative, signal: topUpSignal }) {
@@ -589,7 +584,11 @@ export declare namespace session {
       autoSwap?: AutoSwap.resolve.Value | undefined
       /** HTTP origin authorized for direct credential creation. Fetch supplies its origin automatically. */
       origin?: string | undefined
-      /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
+      /**
+       * Pluggable persistence for reusable channels. Defaults to an in-memory store.
+       * Use a separate store per HTTP origin: each payment scope holds one channel, and a
+       * channel already bound to another origin is rejected rather than overwritten or reused.
+       */
       channelStore?: ChannelStore | undefined
       /**
        * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
@@ -638,4 +637,11 @@ export declare namespace session {
       /** Selects the account that signs this session credential after the challenge is known. */
       resolveAccount?: ResolveAccount | undefined
     }
+}
+
+function resolveInputOrigin(input: RequestInfo | URL): string {
+  return new URL(
+    input instanceof Request ? input.url : input,
+    typeof globalThis.location === 'undefined' ? undefined : globalThis.location.href,
+  ).origin
 }

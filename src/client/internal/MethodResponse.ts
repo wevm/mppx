@@ -4,6 +4,7 @@ import type * as Method from '../../Method.js'
 
 const handlers = new WeakMap<Method.AnyClient, Handler>()
 const attempts = new WeakMap<object, Attempt>()
+const origins = new WeakMap<object, string>()
 const transactionHashes = new WeakMap<Method.AnyClient, TransactionHash>()
 
 export type AttemptOutcome = {
@@ -94,4 +95,14 @@ export function getTransactionHash(
     // Reconciliation metadata must never mask the payment outcome itself.
     return undefined
   }
+}
+
+/** Associates an explicitly verified HTTP origin with credential creation. */
+export function attachOrigin(parameters: object, origin: string): void {
+  origins.set(parameters, origin)
+}
+
+/** Returns the authorized origin for direct or fetch-owned credential creation. */
+export function getOrigin(parameters: object): string | undefined {
+  return origins.get(parameters) ?? attempts.get(parameters)?.origin
 }
