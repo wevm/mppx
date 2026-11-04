@@ -3121,6 +3121,7 @@ describe('precompile server session unit guardrails', () => {
           decimals: 0,
           fetch,
           maxDeposit: '3',
+          trustedTempoProofRealms: { [`http://localhost:${address.port}`]: 'api.example.com' },
         })
 
         const chunks: string[] = []

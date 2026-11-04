@@ -13,6 +13,8 @@ export type AttemptOutcome = {
 }
 
 export type Attempt = {
+  /** Authorized HTTP origin, checked before any credential is signed. */
+  origin?: string | undefined
   /** Re-runs method preparation when serialized state changed before signing. */
   prepare: () => Promise<void>
   /** Settles state created for one credential attempt. */
@@ -21,6 +23,8 @@ export type Attempt = {
 
 /** Inputs available when a client method handles a successful paid response. */
 export type HandlerParameters = {
+  /** Original request policy for automatic follow-up payments. */
+  context?: unknown
   challenge: Challenge.Challenge
   credential: string
   fetch: typeof globalThis.fetch

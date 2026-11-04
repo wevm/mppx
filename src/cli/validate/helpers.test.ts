@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
 import * as Mppx from '../../client/Mppx.js'
+import * as Identity from '../../identity/index.js'
 import * as Method from '../../Method.js'
 import { validate } from '../../validation/core.js'
 import * as z from '../../zod.js'
@@ -119,3 +120,58 @@ test.each([
     }
   },
 )
+
+test('validation stays unpaid through a manually nested identity wrapper', async () => {
+  const original = globalThis.fetch
+  const createCredential = vi.fn(async () => 'unexpected-payment')
+  const method = Method.toClient(
+    Method.from({
+      name: 'test',
+      intent: 'charge',
+      schema: { request: z.object({ amount: z.string() }), credential: { payload: z.object({}) } },
+    }),
+    { createCredential },
+  )
+  const challenge = Challenge.from({
+    id: 'probe',
+    realm: 'example.test',
+    method: 'test',
+    intent: 'charge',
+    request: { amount: '100' },
+  })
+  const requests: Request[] = []
+  const paymentFetch = Fetch.from({
+    methods: [method],
+    fetch: async (input, init) => {
+      requests.push(new Request(input, init))
+      return new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+      })
+    },
+  })
+  globalThis.fetch = Identity.Client.wrapFetch(
+    paymentFetch,
+    Identity.Client.from([
+      {
+        scope: '*',
+        prove(request) {
+          const headers = new Headers(request.headers)
+          headers.set('X-Identity', 'proof')
+          return new Request(request, { headers })
+        },
+      },
+    ]),
+  )
+  try {
+    await validate({ url: 'https://example.test', endpoint: 'GET:/paid', skipPayment: true })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(requests.length).toBeGreaterThan(0)
+    expect(requests.every((request) => request.headers.get('X-Identity') === 'proof')).toBe(true)
+    expect(
+      requests.every((request) => request.headers.get('Authorization') !== 'unexpected-payment'),
+    ).toBe(true)
+  } finally {
+    globalThis.fetch = original
+  }
+})

@@ -229,6 +229,9 @@ export function session(parameters: session.Parameters = {}) {
     maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
   const topUpAmount =
     topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined
+  const configuredOrigin = parameters.origin === undefined ? undefined : new URL(parameters.origin)
+  if (configuredOrigin && !['http:', 'https:'].includes(configuredOrigin.protocol))
+    throw new Error('Session origins require HTTP or HTTPS')
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
@@ -290,6 +293,21 @@ export function session(parameters: session.Parameters = {}) {
         getClient,
       })
       const attempt = MethodResponse.getAttempt(parameters)
+      const origin = attempt?.origin ?? configuredOrigin?.origin
+      if (configuredOrigin && origin !== configuredOrigin.origin)
+        throw new Error('Session channel origin mismatch')
+      const credentialStore: ChannelStore = origin
+        ? {
+            get: (key) => store.get(key),
+            delete: (key) => store.delete(key),
+            set: (entry) => store.set({ ...entry, origin }),
+          }
+        : store
+      const scopedSink = {
+        store: credentialStore,
+        notifyUpdate: (entry: ChannelEntry) =>
+          sink.notifyUpdate(origin ? { ...entry, origin } : entry),
+      }
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
@@ -298,6 +316,8 @@ export function session(parameters: session.Parameters = {}) {
           if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         }
         let entry = await store.get(resolved.key)
+        if (origin && entry && entry.origin !== origin)
+          throw new Error('Session channel origin mismatch')
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
@@ -320,13 +340,13 @@ export function session(parameters: session.Parameters = {}) {
                 store: {
                   get: (key: string) => store.get(key),
                   async set(next: ChannelEntry) {
-                    pendingOpen = next
+                    pendingOpen = origin ? { ...next, origin } : next
                   },
                   delete: (key: string) => store.delete(key),
                 },
                 notifyUpdate() {},
               }
-            : sink
+            : scopedSink
         const payload = await executeCredentialPlan(
           plan,
           credentialSink,
@@ -370,6 +390,7 @@ export function session(parameters: session.Parameters = {}) {
   })
 
   const topUpChannelIfNeeded = async ({
+    autoSwap,
     challenge,
     channel,
     deposit,
@@ -378,6 +399,7 @@ export function session(parameters: session.Parameters = {}) {
     requiredCumulative,
     signal,
   }: {
+    autoSwap?: CredentialContext['autoSwap'] | undefined
     challenge: TempoSessionChallenge
     channel: ChannelEntry
     deposit: bigint
@@ -407,6 +429,7 @@ export function session(parameters: session.Parameters = {}) {
       })
       if (additionalDeposit > 0n)
         await postTopUp({
+          autoSwap,
           additionalDeposit,
           challenge,
           channel,
@@ -454,6 +477,8 @@ export function session(parameters: session.Parameters = {}) {
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
+    const origin = new URL(input instanceof Request ? input.url : input).origin
+    if (channel.origin !== origin) throw new Error('Session channel origin mismatch')
     const snapshot =
       resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()
         ? resolved.snapshot
@@ -467,6 +492,7 @@ export function session(parameters: session.Parameters = {}) {
     const account = await resolveCredentialAccount(resolved, sessionContext, channel)
     if (!canSignDescriptor(account, channel.descriptor)) return
     await topUpChannelIfNeeded({
+      autoSwap: sessionContext?.autoSwap,
       challenge,
       channel,
       deposit,
@@ -479,7 +505,17 @@ export function session(parameters: session.Parameters = {}) {
 
   return MethodResponse.register(
     method,
-    async ({ challenge, credential, fetch, headers, input, refetch, response, signal }) => {
+    async ({
+      challenge,
+      context,
+      credential,
+      fetch,
+      headers,
+      input,
+      refetch,
+      response,
+      signal,
+    }) => {
       if (!isTip1034SessionChallenge(challenge)) return response
       if (!isEventStream(response)) {
         const credentialContext = requireSessionCredentialContext(
@@ -513,6 +549,8 @@ export function session(parameters: session.Parameters = {}) {
         async topUpIfNeeded({ deposit, requiredCumulative, signal: topUpSignal }) {
           if (!channel) return
           await topUpChannelIfNeeded({
+            autoSwap:
+              context === undefined ? undefined : sessionContextSchema.parse(context).autoSwap,
             challenge,
             channel,
             deposit: channel.deposit > deposit ? channel.deposit : deposit,
@@ -546,6 +584,8 @@ export declare namespace session {
       allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: AutoSwap.resolve.Value | undefined
+      /** HTTP origin authorized for direct credential creation. Fetch supplies its origin automatically. */
+      origin?: string | undefined
       /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
       channelStore?: ChannelStore | undefined
       /**

@@ -634,7 +634,7 @@ export declare namespace create {
     /** Transport to use (defaults to HTTP). */
     transport?: transport | undefined
     /**
-     * Server origins allowed to request zero-amount Tempo proofs for a realm other than their
+     * Server origins allowed to request zero-amount Tempo proofs or session payments for a realm other than their
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
      * With `Transport.mcp()`, which has no origin, only realms listed here are trusted,
      * whatever their origin.

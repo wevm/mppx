@@ -1,14 +1,14 @@
 import type * as Challenge from '../../Challenge.js'
 
 /**
- * Pins that let a server origin request zero-amount Tempo proofs for a realm other than its
+ * Pins that let a server origin request zero-amount Tempo proofs or session payments for a realm other than its
  * hostname, keyed by origin (`scheme://host[:port]`), such as
  * `{ 'https://api.example.com': 'MPP Payment' }`.
  */
 export type TrustedRealms = Readonly<Record<string, string>>
 
 /**
- * Refuses a zero-amount Tempo proof whose realm the HTTP server that sent the Challenge does not
+ * Refuses a Tempo proof or session payment whose realm the HTTP server that sent the Challenge does not
  * own. A proof authenticates the payer at the Challenge realm, so a foreign origin could otherwise
  * relay another server's Challenge and replay the signed proof there. The server owns the realm
  * when it is the request hostname, or when `trustedRealms` pins it to the request origin. Pass
@@ -19,7 +19,8 @@ export function assert(
   url: URL | (() => URL),
   trustedRealms: TrustedRealms | undefined,
 ): void {
-  if (!isProof(challenge)) return
+  if (!isProof(challenge) && !(challenge.method === 'tempo' && challenge.intent === 'session'))
+    return
   url = typeof url === 'function' ? url() : url
   const { realm } = challenge
   if (realm.toLowerCase() === url.hostname.toLowerCase()) return
@@ -32,14 +33,15 @@ export function assert(
 }
 
 /**
- * Refuses a zero-amount Tempo proof on a transport without an origin, such as MCP, unless
+ * Refuses a Tempo proof or session payment on a transport without an origin, such as MCP, unless
  * `trustedRealms` lists its realm.
  */
 export function assertWithoutOrigin(
   challenge: Challenge.Challenge,
   trustedRealms: readonly string[] | undefined,
 ): void {
-  if (!isProof(challenge)) return
+  if (!isProof(challenge) && !(challenge.method === 'tempo' && challenge.intent === 'session'))
+    return
   if (trustedRealms?.includes(challenge.realm)) return
   throw new Error(
     `Refusing to sign Tempo proof for untrusted realm ${JSON.stringify(challenge.realm)}. Add it to \`trustedTempoProofRealms\` if this server is expected to issue it.`,

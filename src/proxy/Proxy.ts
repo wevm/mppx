@@ -48,6 +48,9 @@ export type Proxy = {
  * ```
  */
 export function create(config: create.Config): Proxy {
+  const maxRequestBodySize = config.maxRequestBodySize ?? 10 * 1024 * 1024
+  if (!Number.isSafeInteger(maxRequestBodySize) || maxRequestBodySize < 0)
+    throw new RangeError('maxRequestBodySize must be a non-negative safe integer')
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
 
@@ -132,6 +135,11 @@ export function create(config: create.Config): Proxy {
     const matched = exactMatch ?? fallbackMatch
     if (!matched) return new Response('Not Found', { status: 404 })
 
+    if (request.body) {
+      const body = await Replay.readBody(request, maxRequestBodySize)
+      if (!body) return new Response('Payload Too Large', { status: 413 })
+      request = Replay.withBody(request, body)
+    }
     const endpoint = matched.value as Service.Endpoint
     const ctx: Service.Context = { request, service, upstreamPath }
 
@@ -248,7 +256,7 @@ export function create(config: create.Config): Proxy {
 
   return {
     fetch: handle,
-    listener: Request.toNodeListener(handle),
+    listener: Request.toNodeListener(handle, { maxBodySize: maxRequestBodySize }),
   }
 }
 
@@ -264,6 +272,8 @@ export declare namespace create {
     docs?: Service.Docs | undefined
     /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
+    /** Maximum request body bytes on every route, including free routes. Defaults to 10 MiB. */
+    maxRequestBodySize?: number | undefined
     /** Default handler for failed upstream attempts. Services may override it. */
     onUpstreamError?: Service.UpstreamErrorHandler | undefined
     /**

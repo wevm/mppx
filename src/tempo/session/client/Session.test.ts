@@ -83,7 +83,7 @@ function makeChallenge(overrides: Partial<SessionChallenge['request']> = {}): Se
 
   return {
     id: 'test-id',
-    realm: 'test.com',
+    realm: 'example.com',
     method: 'tempo',
     intent: 'session',
     request: Object.assign(request, overrides),
@@ -151,6 +151,7 @@ function makeSessionMethod(
     decimals: 0,
     getClient: () => client,
     maxDeposit: '1000',
+    origin: 'https://example.com',
     ...parameters,
   })
 }
@@ -281,6 +282,7 @@ describe('precompile client session', () => {
       decimals: 0,
       getClient: () => client,
       maxDeposit: '300',
+      origin: 'https://example.com',
     } as const
     // The response handler must follow the credential selected by `onChallenge`.
     const externalCredential = await session(parameters).createCredential({
@@ -645,6 +647,7 @@ describe('precompile client session', () => {
       descriptor: { ...descriptor, authorizedSigner: foreign, payer: foreign },
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     })
     const actions: Types.SessionCredentialPayload['action'][] = []
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
@@ -661,6 +664,7 @@ describe('precompile client session', () => {
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({
       descriptor: { authorizedSigner: account.address, payer: account.address },
       opened: true,
+      origin: 'https://example.com',
     })
   })
 
@@ -675,6 +679,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     })
     const challenge = makeChallenge({
       methodDetails: {
@@ -730,6 +735,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     } as const
     await backing.set(channel)
     let firstRead = true
@@ -775,6 +781,7 @@ describe('precompile client session', () => {
       descriptor,
       escrow: tip20ChannelEscrow,
       opened: true,
+      origin: 'https://example.com',
     } as const
     await channelStore.set(channel)
     const method = session({
@@ -1432,7 +1439,7 @@ describe('precompile client session', () => {
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
     expect(decoded.challenge.id).toBe('test-id')
-    expect(decoded.challenge.realm).toBe('test.com')
+    expect(decoded.challenge.realm).toBe('example.com')
     expect(decoded.challenge.method).toBe('tempo')
     expect(decoded.challenge.intent).toBe('session')
     expect(payload.action).toBe('voucher')
@@ -2008,3 +2015,77 @@ describe('session spending policy', () => {
     expect(() => session({ account, getClient: () => client, ...options })).toThrow(error)
   })
 })
+
+test.each([
+  false,
+  { tokenIn: ['0x0000000000000000000000000000000000000007'], fallback: false, maxAmountIn: 150n },
+  undefined,
+] as const)('automatic top-up preserves request autoSwap %s', async (autoSwap) => {
+  const channelStore = createChannelStore()
+  await channelStore.set({
+    chainId,
+    channelId: Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow }),
+    cumulativeAmount: 100n,
+    deposit: 100n,
+    descriptor,
+    escrow: tip20ChannelEscrow,
+    opened: true,
+    origin: 'https://example.com',
+  })
+  const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue([])
+  try {
+    const method = session({
+      account,
+      autoSwap: true,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+    })
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }))
+    await MethodChallenge.handle(method, {
+      challenge: makeSessionChallenge(),
+      context: { autoSwap },
+      fetch,
+      input: 'https://example.com/resource',
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+    if (autoSwap === false) expect(findCalls).not.toHaveBeenCalled()
+    else
+      expect(findCalls).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining(
+          autoSwap === undefined
+            ? { tokenIn: AutoSwap.defaultCurrencies }
+            : { tokenIn: autoSwap.tokenIn, maxAmountIn: autoSwap.maxAmountIn },
+        ),
+      )
+  } finally {
+    findCalls.mockRestore()
+  }
+})
+
+test.each([undefined, 'https://other.example'])(
+  'rejects shared-store channels with origin %s before signing',
+  async (origin) => {
+    const channelStore = createChannelStore()
+    const original = makeSessionMethod(channelStore)
+    await original.createCredential({ challenge: makeSessionChallenge(), context: {} })
+    const entry = await channelStore.get(defaultChannelKey)
+    if (!entry) throw new Error('Expected channel')
+    await channelStore.set({ ...entry, origin })
+    const before = await channelStore.get(defaultChannelKey)
+    const resolveAccount = vi.fn()
+    const method = makeSessionMethod(channelStore, { origin: undefined, resolveAccount })
+    const fetch = Fetch.from({
+      methods: [method],
+      fetch: async () =>
+        new Response(null, {
+          status: 402,
+          headers: { 'WWW-Authenticate': serializeChallenge(makeSessionChallenge()) },
+        }),
+    })
+    await expect(fetch('https://example.com/data')).rejects.toThrow('origin mismatch')
+    expect(resolveAccount).not.toHaveBeenCalled()
+    expect(await channelStore.get(defaultChannelKey)).toEqual(before)
+  },
+)

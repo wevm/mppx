@@ -362,3 +362,46 @@ describe('onUpstreamError', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
+
+test.each(['service', 'proxy', 'none'] as const)(
+  'bounds streamed free-route uploads with %s error handling',
+  async (scope) => {
+    const upstream = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) =>
+        new Response(await new Request(input, init).text()),
+    )
+    const onUpstreamError = vi.fn(() => ({ retry: false as const }))
+    const proxy = Proxy.create({
+      fetch: upstream,
+      maxRequestBodySize: 8,
+      ...(scope === 'proxy' ? { onUpstreamError } : {}),
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          ...(scope === 'service' ? { onUpstreamError } : {}),
+          routes: { 'POST /resource': true },
+        }),
+      ],
+    })
+    const upload = (size: number) =>
+      new Request('https://proxy.example/api/resource', {
+        method: 'POST',
+        duplex: 'half',
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(size / 2))
+            controller.enqueue(new Uint8Array(size / 2))
+            controller.close()
+          },
+        }),
+      } as RequestInit)
+    const responses = await Promise.all([proxy.fetch(upload(10)), proxy.fetch(upload(12))])
+    expect(responses.map((r) => r.status)).toEqual([413, 413])
+    expect(upstream).not.toHaveBeenCalled()
+    const accepted = await proxy.fetch(upload(8))
+    expect(accepted.status).toBe(200)
+    expect((await accepted.text()).length).toBe(8)
+    expect(upstream).toHaveBeenCalledOnce()
+    expect(onUpstreamError).not.toHaveBeenCalled()
+  },
+)

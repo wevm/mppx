@@ -286,3 +286,15 @@ test('prepare runs only on 402s and retry only on other rejections', async () =>
   expect(prepare).toHaveBeenCalledTimes(1)
   expect(retry).toHaveBeenCalledTimes(1)
 })
+
+test('wrapFetch preserves payment suppression through identity request conversion', async () => {
+  const skipPayment = Symbol.for('mppx.fetch.skipPayment')
+  const identity = Identity.Client.from([{ scope: '*', prove: header('X-Identity', 'proof') }])
+  const send = vi.fn(async (_request: RequestInfo | URL, init?: RequestInit) => {
+    expect((init as RequestInit & { [skipPayment]?: boolean })[skipPayment]).toBe(true)
+    return new Response(null, { status: 402 })
+  })
+  const wrapped = Identity.Client.wrapFetch(send, identity)
+  await wrapped('https://merchant.example', { [skipPayment]: true } as RequestInit)
+  expect(send).toHaveBeenCalledOnce()
+})
