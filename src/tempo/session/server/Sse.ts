@@ -102,6 +102,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   const abortController = new AbortController()
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
   let terminal = false
+  let committedPrepaidAwaitingDelivery = 0
   let undeliveredPrepaidUnits = options.prepaidUnits ?? 0
   if (!Number.isSafeInteger(undeliveredPrepaidUnits) || undeliveredPrepaidUnits < 0)
     throw new Error('prepaidUnits must be a non-negative safe integer')
@@ -134,6 +135,11 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     channelId,
     tickCost,
     generate,
+    chargeOnce: options.chargeOnce,
+    onPrepaidChargeCommitted() {
+      undeliveredPrepaidUnits = Math.max(0, undeliveredPrepaidUnits - 1)
+      committedPrepaidAwaitingDelivery += 1
+    },
     beforeCharge: options.beforeCharge,
     onChargeCommitted: options.onChargeCommitted,
     pollIntervalMs,
@@ -173,7 +179,8 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           if (abortController.signal.aborted) return
           const value = next.value
           controller.enqueue(encoder.encode(formatMessageEvent(value)))
-          undeliveredPrepaidUnits = Math.max(0, undeliveredPrepaidUnits - 1)
+          if (committedPrepaidAwaitingDelivery > 0) committedPrepaidAwaitingDelivery -= 1
+          else undeliveredPrepaidUnits = Math.max(0, undeliveredPrepaidUnits - 1)
           return
         }
 
@@ -227,6 +234,8 @@ export declare namespace serve {
     challengeId: string
     tickCost: bigint
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Charge automatic iterables once per request; explicit manual charges are unaffected. */
+    chargeOnce?: boolean | undefined
     /** Verifies live escrow before charging and delivering stream items. */
     beforeCharge?: MeteredStreamOptions['beforeCharge']
     /** Callback invoked after each nonzero stream charge is committed. */

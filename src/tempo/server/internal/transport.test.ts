@@ -723,6 +723,34 @@ describe('sse transport', () => {
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
+  test('credits automatic request-priced prepaid delivery after its second escrow check fails', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10_000_000n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1_000_000n,
+      units: 1,
+    }))
+    let checks = 0
+    const transport = sse({
+      store,
+      beforeCharge: async () => {
+        if (++checks === 2) throw new Error('escrow unavailable')
+      },
+    })
+    const response = await transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: makeAuthorizedRequest(),
+      receipt: markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 })),
+      response: (async function* () {
+        yield 'blocked'
+      })(),
+      challengeId,
+    })
+    await expect(response.text()).rejects.toThrow('escrow unavailable')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+  })
+
   test('passes stable prepaid refund keys and the merchant hook through managed SSE', async () => {
     const store = memoryStore()
     await seedChannel(store, 10_000_000n)

@@ -417,6 +417,62 @@ describe('serve', () => {
     expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
   })
 
+  test.each([0n, 1n])(
+    'retains a manually consumed prepaid unit when generation fails (settled=%s)',
+    async (settledOnChain) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({
+        ...current!,
+        spent: 1n,
+        units: 1,
+        settledOnChain,
+      }))
+      let refunds = 0
+      await expect(
+        readStream(
+          serve({
+            store,
+            channelId,
+            challengeId,
+            tickCost: 1n,
+            prepaidUnits: 1,
+            generate: async function* (stream) {
+              await stream.charge()
+              yield await Promise.reject(new Error('billable work failed'))
+            },
+            onRefundRequired() {
+              refunds++
+            },
+          }),
+        ),
+      ).rejects.toThrow('billable work failed')
+      expect(refunds).toBe(0)
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+    },
+  )
+
+  test('does not count a manually consumed prepaid unit twice when it is delivered', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 2n, units: 2 }))
+    const reader = serve({
+      store,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      prepaidUnits: 2,
+      generate: async function* (stream) {
+        await stream.charge()
+        yield 'paid'
+        throw new Error('later failure')
+      },
+    }).getReader()
+    await reader.read()
+    await expect(reader.read()).rejects.toThrow('later failure')
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
+  })
+
   test('does not credit an already delivered prepaid item after a later failure', async () => {
     const store = memoryStore()
     await seedChannel(store, 10n)

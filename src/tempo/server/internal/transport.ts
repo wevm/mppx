@@ -130,7 +130,7 @@ export function sse(
         // Pass async generator functions directly so Sse.serve gives them
         // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
-        const generate = resolveMeteredGenerate(resolved, unitType)
+        const generate = resolved as Sse_core.serve.Options['generate']
         const stream = Sse_core.serve({
           store,
           channelId,
@@ -138,6 +138,7 @@ export function sse(
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
+          chargeOnce: unitType === 'request',
           beforeCharge: () => options.beforeCharge?.(channelId),
           onChargeCommitted: options.settleCharged,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
@@ -330,26 +331,6 @@ function isAsyncGeneratorFunction(
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
   return value !== null && typeof value === 'object' && Symbol.asyncIterator in (value as object)
-}
-
-function resolveMeteredGenerate(
-  value: AsyncIterable<string> | ((...args: unknown[]) => AsyncIterable<string>),
-  unitType: string | undefined,
-): Sse_core.serve.Options['generate'] {
-  if (isAsyncGeneratorFunction(value)) return value as Sse_core.serve.Options['generate']
-  if (unitType !== 'request') return value as AsyncIterable<string>
-
-  const iterable = value as AsyncIterable<string>
-  return async function* chargeOnce(stream) {
-    let charged = false
-    for await (const chunk of iterable) {
-      if (!charged) {
-        await stream.charge()
-        charged = true
-      }
-      yield chunk
-    }
-  }
 }
 
 function isNullBodyStatus(status: number): boolean {

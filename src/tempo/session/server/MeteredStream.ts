@@ -40,6 +40,10 @@ export type MeteredStreamOptions = {
   generate: SessionStreamGenerator
   /** Verifies that the channel can still fund work and delivery; failures stop the stream. */
   beforeCharge?: (() => MaybePromise<void>) | undefined
+  /** Charges automatic streams once per request instead of once per value. */
+  chargeOnce?: boolean | undefined
+  /** Runs when an explicit manual charge consumes a prepaid unit. */
+  onPrepaidChargeCommitted?: (() => void) | undefined
   /** Runs after a nonzero reserved charge has been committed. */
   onChargeCommitted?: ((channel: ChannelStore.State) => MaybePromise<unknown>) | undefined
   /** Store polling interval when `waitForUpdate` is unavailable. */
@@ -64,6 +68,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     channelId: options.channelId,
     reservationId: globalThis.crypto.randomUUID(),
   }
+  let charged = false
   let pending = false
   const releaseOnAbort = () => {
     void releaseReservedCharges(reservation).catch(() => {})
@@ -76,6 +81,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     signal.throwIfAborted()
     if (amount === undefined && prepaidUnits > 0) {
       prepaidUnits -= 1
+      if (manual) options.onPrepaidChargeCommitted?.()
       return
     }
     if ((amount ?? options.tickCost) === 0n) return
@@ -116,7 +122,10 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
           if (manual && pending) await commit()
           break
         }
-        if (!manual) await charge()
+        if (!manual && (!options.chargeOnce || !charged)) {
+          await charge()
+          charged = true
+        }
         await commit()
         yield value
       }
