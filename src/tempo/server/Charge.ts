@@ -41,7 +41,6 @@ import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { fallbackStore } from './internal/fallback-store.js'
-import { html as htmlContent } from './internal/html.gen.js'
 import * as Relay from './Relay.js'
 import * as SponsorBudget from './SponsorBudget.js'
 
@@ -492,7 +491,7 @@ export function charge<const parameters extends charge.Parameters>(
     html: html
       ? {
           config: {},
-          content: htmlContent,
+          content: async () => (await import('./internal/html.gen.js')).html,
           formatAmount: async (request: z.output<typeof Methods.charge.schema.request>) => {
             try {
               const chainId = request.methodDetails?.chainId
