@@ -634,6 +634,7 @@ export async function broadcastOpenTransaction(
         })
 
       const completed = await FeePayer.preflightSponsorship({
+        policy: feePayerPolicy,
         transaction,
         simulate: (request) => call(client, request as never),
         async complete() {
@@ -784,6 +785,7 @@ export async function broadcastTopUpTransaction(
 
       const defaultFeeToken = defaults.currency[client.chain?.id as keyof typeof defaults.currency]
       const completed = await FeePayer.preflightSponsorship({
+        policy: feePayerPolicy,
         transaction,
         simulate: (request) => call(client, request as never),
         async complete() {

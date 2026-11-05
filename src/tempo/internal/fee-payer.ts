@@ -260,26 +260,52 @@ export async function fillHostedFeePayerTransaction(parameters: {
 /**
  * Returns a transaction shape suitable for pre-broadcast simulation.
  *
- * Sponsored transactions are first simulated as calls from the sender with no
- * fee fields or signatures. This checks call execution without requiring the
- * sender to hold the fee token; transferred value and call-level balances are
- * still checked by the RPC.
+ * Sponsored transactions are first simulated as calls from the sender, without
+ * signatures, fee payer or fee token, and with zero fee fields: Tempo nodes
+ * (v1.18+) skip the fee-token balance check for a zero-fee `eth_call`, so the
+ * sender's fee balance is irrelevant. The call keeps the transaction's exact
+ * gas limit and the fields that set its intrinsic gas (nonce, nonce key,
+ * validity window, key authorization, signature type), so it is the gas-bounded
+ * check at the broadcast limit: a transaction whose gas is too low fails here
+ * with out of gas instead of reverting onchain at the sponsor's expense.
+ * Transferred value and call-level balances are still checked by the RPC.
  */
 export function simulationTransaction(
   transaction: SponsoredTransaction,
   options: { feePayer: boolean },
 ) {
-  if (options.feePayer)
+  if (options.feePayer) {
+    const keyType = senderKeyType(transaction.signature)
     return {
       account: transaction.from,
       calls: transaction.calls,
+      ...(transaction.accessList?.length ? { accessList: transaction.accessList } : {}),
+      ...(transaction.gas !== undefined ? { gas: transaction.gas } : {}),
+      ...(transaction.keyAuthorization !== undefined
+        ? { keyAuthorization: transaction.keyAuthorization }
+        : {}),
+      ...(keyType ? { keyType } : {}),
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+      ...(transaction.nonce !== undefined ? { nonce: transaction.nonce } : {}),
+      ...(transaction.nonceKey !== undefined ? { nonceKey: transaction.nonceKey } : {}),
+      ...(transaction.validAfter !== undefined ? { validAfter: transaction.validAfter } : {}),
+      ...(transaction.validBefore !== undefined ? { validBefore: transaction.validBefore } : {}),
     }
+  }
   return {
     ...transaction,
     account: transaction.from,
     calls: transaction.calls,
     feePayerSignature: undefined,
   }
+}
+
+/** The key type hint for a sender signature whose verification costs more than secp256k1. */
+function senderKeyType(signature: unknown): 'p256' | 'webAuthn' | undefined {
+  const envelope = signature as { inner?: { type?: unknown }; type?: unknown } | undefined
+  const type = envelope?.type === 'keychain' ? envelope.inner?.type : envelope?.type
+  return type === 'p256' || type === 'webAuthn' ? type : undefined
 }
 
 /**
@@ -357,55 +383,134 @@ export async function signFeePayerSimulation(
 }
 
 /**
- * Runs execution-only sender and final-envelope simulations around sponsorship.
+ * Runs the sender and final-envelope simulations around sponsorship.
  *
- * First, it simulates the calls with the sender as `from`, omitting fee fields
- * and signatures so the sender's fee balance is irrelevant. Next, `complete`
- * resolves the sponsor and produces the co-signed transaction. Finally, it
- * simulates that transaction with its concrete fee payer, fee token and fee
- * payer signature, so the node bills the sponsor rather than the sender.
+ * First, it simulates the sender's calls at the transaction's exact gas limit
+ * with zero fee fields (see {@link simulationTransaction}). This is the
+ * gas-bounded check at the broadcast limit, and needs no fee-token balance.
+ * Next, `complete` resolves the sponsor and produces the co-signed transaction.
+ * Finally, it simulates that transaction with its concrete fee payer, fee token
+ * and fee payer signature, so the node bills the sponsor rather than the sender
+ * and checks the sponsor's fee balance.
+ *
+ * A sponsored `eth_call` charges more gas than the mined transaction uses. A
+ * local fee payer therefore signs a simulation-only copy whose gas is raised by
+ * up to {@link sponsoredSimulationGasBuffer}, clamped so the copy stays within
+ * the same fee payer `policy` (`maxGas`, `maxTotalFee`) as the real
+ * transaction. The copy is never returned or broadcast. When the final
+ * simulation runs without the full buffer (hosted signatures cover the client's
+ * gas and cannot be padded, or the padding was clamped), a failure that is only
+ * out of gas is tolerated, since the sender simulation already bounded gas at
+ * the broadcast limit. Every other failure, such as an insufficient fee balance
+ * or a revert, is rethrown.
  *
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
  */
 export async function preflightSponsorship<sponsorship extends PreflightSponsorship>(parameters: {
   complete: () => Promise<sponsorship>
+  /** The fee payer policy the completed transaction was checked against. */
+  policy?: Partial<Policy> | undefined
   simulate: (request: Record<string, unknown>) => Promise<unknown>
   transaction: SponsoredTransaction
 }): Promise<sponsorship> {
-  const { complete, simulate, transaction } = parameters
+  const { complete, policy, simulate, transaction } = parameters
   await simulate(simulationTransaction(transaction, { feePayer: true }))
   const completed = await complete()
+  const { gas } = completed.transaction as { gas?: bigint | undefined }
   const simulated = await (async () => {
     if (completed.feePayerSignature)
       return { feePayerSignature: completed.feePayerSignature, transaction: completed.transaction }
     // The signature binds the gas limit, so a local fee payer signs a simulation-only copy
     // with headroom for the node's sponsored `eth_call` overhead. The broadcast keeps its gas.
-    const { gas } = completed.transaction as { gas?: bigint | undefined }
-    const transaction =
+    const padded =
       gas === undefined
         ? completed.transaction
-        : { ...completed.transaction, gas: gas + sponsoredSimulationGasBuffer }
-    const feePayerSignature = await signFeePayerSimulation(transaction)
+        : {
+            ...completed.transaction,
+            gas: sponsoredSimulationGas(completed.transaction, policy),
+          }
+    const feePayerSignature = await signFeePayerSimulation(padded)
     return feePayerSignature
-      ? { feePayerSignature, transaction }
+      ? { feePayerSignature, transaction: padded }
       : { feePayerSignature: undefined, transaction: completed.transaction }
   })()
-  await simulate(
-    sponsoredSimulationTransaction(simulated.transaction, {
-      feePayer: completed.feePayer,
-      feePayerSignature: simulated.feePayerSignature,
-      feeToken: completed.feeToken,
-    }),
-  )
+  const simulatedGas = (simulated.transaction as { gas?: bigint | undefined }).gas
+  try {
+    await simulate(
+      sponsoredSimulationTransaction(simulated.transaction, {
+        feePayer: completed.feePayer,
+        feePayerSignature: simulated.feePayerSignature,
+        feeToken: completed.feeToken,
+      }),
+    )
+  } catch (error) {
+    const unpadded =
+      gas !== undefined &&
+      simulatedGas !== undefined &&
+      simulatedGas < gas + sponsoredSimulationGasBuffer
+    if (!unpadded || !isOutOfGasError(error)) throw error
+  }
   return completed
+}
+
+/**
+ * Returns the gas limit of a local fee payer's simulation-only copy: the
+ * transaction's gas plus {@link sponsoredSimulationGasBuffer}, clamped to the
+ * fee payer policy's `maxGas` and to `maxTotalFee / maxFeePerGas`, so the
+ * signed copy never exceeds a cap the real transaction is held to.
+ */
+export function sponsoredSimulationGas(
+  transaction: Pick<SponsoredTransaction, 'chainId' | 'gas' | 'maxFeePerGas'>,
+  policyOverrides?: Partial<Policy> | undefined,
+): bigint {
+  const { chainId, gas, maxFeePerGas } = transaction
+  if (gas === undefined)
+    throw new FeePayerValidationError('fee-sponsored transaction must declare gas', {})
+  const policy = getPolicy(Number(chainId), policyOverrides)
+  let cap = policy.maxGas
+  if (maxFeePerGas !== undefined && maxFeePerGas > 0n) {
+    const feeCap = policy.maxTotalFee / maxFeePerGas
+    if (feeCap < cap) cap = feeCap
+  }
+  if (gas > cap)
+    throw new FeePayerValidationError('fee-sponsored transaction gas exceeds sponsor policy', {
+      gas: gas.toString(),
+    })
+  const padded = gas + sponsoredSimulationGasBuffer
+  return padded < cap ? padded : cap
+}
+
+/**
+ * Returns true when a simulation failed only because it ran out of gas.
+ *
+ * Tempo nodes report out of gas as `out of gas: …` (code -32003, shared with
+ * `insufficient fee token balance`) or `intrinsic gas too low` (code -32000),
+ * so this matches the node's message anywhere in the error's cause chain rather
+ * than the code.
+ */
+export function isOutOfGasError(error: unknown): boolean {
+  const pattern = /out of gas|intrinsic gas too low/i
+  for (let current = error, depth = 0; current && depth < 10; depth++) {
+    const { cause, details, message } = current as {
+      cause?: unknown
+      details?: unknown
+      message?: unknown
+    }
+    if (typeof details === 'string' && pattern.test(details)) return true
+    if (typeof message === 'string' && pattern.test(message)) return true
+    current = cause
+  }
+  return false
 }
 
 /**
  * Extra gas a local fee payer signs into its simulation-only envelope. Tempo's sponsored
  * `eth_call` charges more gas than the same transaction uses when mined (about 6,000 for a
  * session top-up on v1.18.1), so simulating at the signed limit would reject transactions
- * that succeed onchain. Hosted signatures cover the client's gas and are simulated as signed.
+ * that succeed onchain. The padding is clamped to the fee payer policy; hosted signatures
+ * cover the client's gas and are simulated as signed. In both cases the gas bound at the
+ * broadcast limit comes from the sender simulation.
  */
 export const sponsoredSimulationGasBuffer = 10_000n
 

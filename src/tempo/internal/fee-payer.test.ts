@@ -15,10 +15,12 @@ import {
   defaultAllowedFeeTokens,
   FeePayerValidationError,
   fillHostedFeePayerTransaction,
+  isOutOfGasError,
   preflightSponsorship,
   prepareSponsoredTransaction,
   signFeePayerSimulation,
   simulationTransaction,
+  sponsoredSimulationGas,
   sponsoredSimulationGasBuffer,
   sponsoredSimulationTransaction,
   validateCalls,
@@ -948,6 +950,41 @@ describe('simulationTransaction', () => {
     expect(simulationTransaction(transaction as any, { feePayer: true })).toEqual({
       account: bogus,
       calls: transaction.calls,
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+    })
+  })
+
+  test('keeps the broadcast gas limit and intrinsic-gas fields with zero fees', () => {
+    const keyAuthorization = { address: bogus } as any
+    const transaction = {
+      calls: [{ to: bogus }],
+      feePayerSignature,
+      feeToken: swapTokenIn,
+      from: bogus,
+      gas: 67_894n,
+      keyAuthorization,
+      maxFeePerGas: 20_000_000_000n,
+      maxPriorityFeePerGas: 1n,
+      nonce: 0n,
+      nonceKey: maxUint256,
+      signature: { type: 'keychain', inner: { type: 'webAuthn' } },
+      validAfter: 1,
+      validBefore: 1_800_000_000,
+    }
+
+    expect(simulationTransaction(transaction as any, { feePayer: true })).toEqual({
+      account: bogus,
+      calls: transaction.calls,
+      gas: 67_894n,
+      keyAuthorization,
+      keyType: 'webAuthn',
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+      nonce: 0n,
+      nonceKey: maxUint256,
+      validAfter: 1,
+      validBefore: 1_800_000_000,
     })
   })
 
@@ -1135,7 +1172,7 @@ describe('preflightSponsorship', () => {
     expect(completions).toBe(1)
     expect(result.feePayer).toBe(swapTokenOut)
     expect(simulations).toEqual([
-      { account: bogus, calls: transaction.calls },
+      { account: bogus, calls: transaction.calls, maxFeePerGas: 0n, maxPriorityFeePerGas: 0n },
       {
         ...transaction,
         account: bogus,
@@ -1303,6 +1340,172 @@ describe('preflightSponsorship', () => {
       }),
     ).rejects.toThrow('sender reverted')
     expect(sign).not.toHaveBeenCalled()
+  })
+})
+
+describe('preflightSponsorship gas bounds', () => {
+  const feePayer = privateKeyToAccount(
+    '0x0000000000000000000000000000000000000000000000000000000000000054',
+  )
+  const sender = { calls: [{ to: bogus }], feeToken: swapTokenIn, from: bogus }
+  const signed = (gas: bigint, maxFeePerGas = 1n) => ({
+    calls: [{ to: bogus }],
+    chainId: defaults.chainId.mainnet,
+    feePayer,
+    feeToken: defaults.tokens.pathUsd,
+    from: bogus,
+    gas,
+    maxFeePerGas,
+    nonce: 0n,
+    nonceKey: maxUint256,
+    type: 'tempo',
+    validBefore: 1_800_000_000,
+  })
+  // Tempo nodes report both errors with code -32003, wrapped by viem.
+  const rpcError = (message: string) =>
+    Object.assign(new Error('Execution reverted.'), {
+      cause: Object.assign(new Error('RPC Request failed.'), { details: message }),
+    })
+  const outOfGas = () =>
+    rpcError('out of gas: gas exhausted during precompiled contract execution: 44069')
+  const insufficientBalance = () =>
+    rpcError('insufficient fee token balance: required 922, but only have 0')
+
+  test('rejects a gas limit too low for the sender calls before completion', async () => {
+    const transaction = { ...sender, gas: 44_069n, nonce: 0n, nonceKey: maxUint256 }
+    const complete = vi.fn()
+    const simulations: Record<string, any>[] = []
+
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate(request) {
+          simulations.push(request)
+          // The sender's calls need 46,069 gas.
+          if ((request.gas as bigint) < 46_069n) throw outOfGas()
+        },
+        complete,
+      }),
+    ).rejects.toThrow('Execution reverted.')
+    expect(simulations[0]).toMatchObject({ gas: 44_069n, maxFeePerGas: 0n, nonceKey: maxUint256 })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  test('rejects a local fee payer when the padded sponsored simulation runs out of gas', async () => {
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw outOfGas()
+        },
+        async complete() {
+          return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+        },
+      }),
+    ).rejects.toThrow('Execution reverted.')
+  })
+
+  test('clamps the padded simulation copy to the policy maxGas', async () => {
+    const simulations: Record<string, any>[] = []
+    const completed = await preflightSponsorship({
+      policy: { maxGas: 55_000n },
+      transaction: { ...sender, gas: 50_000n } as any,
+      async simulate(request) {
+        simulations.push(request)
+      },
+      async complete() {
+        return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+      },
+    })
+
+    expect(simulations[0]!.gas).toBe(50_000n)
+    expect(simulations[1]!.gas).toBe(55_000n)
+    expect((completed.transaction as any).gas).toBe(50_000n)
+  })
+
+  test('clamps the padded simulation copy to the policy maxTotalFee', () => {
+    // 52,000 * 1,000 = maxTotalFee: the copy may not go above 52,000 gas.
+    expect(
+      sponsoredSimulationGas(signed(50_000n, 1_000n) as any, { maxTotalFee: 52_000_000n }),
+    ).toBe(52_000n)
+    expect(sponsoredSimulationGas(signed(50_000n, 1_000n) as any)).toBe(
+      50_000n + sponsoredSimulationGasBuffer,
+    )
+  })
+
+  test('never signs a copy for a transaction already over the policy caps', () => {
+    expect(() => sponsoredSimulationGas(signed(60_000n) as any, { maxGas: 55_000n })).toThrow(
+      'gas exceeds sponsor policy',
+    )
+    expect(() =>
+      sponsoredSimulationGas(signed(60_000n, 1_000n) as any, { maxTotalFee: 59_999_999n }),
+    ).toThrow('gas exceeds sponsor policy')
+  })
+
+  test('tolerates out of gas in a clamped local sponsored simulation', async () => {
+    await expect(
+      preflightSponsorship({
+        policy: { maxGas: 50_000n },
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw outOfGas()
+        },
+        async complete() {
+          return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+        },
+      }),
+    ).resolves.toMatchObject({ feePayer: feePayer.address })
+  })
+
+  test.each([
+    { case: 'out of gas', error: outOfGas },
+    { case: 'intrinsic gas too low', error: () => rpcError('intrinsic gas too low') },
+  ])('tolerates $case in the hosted sponsored simulation', async ({ error }) => {
+    const signature = { r: 9n, s: 10n, yParity: 0 }
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw error()
+        },
+        async complete() {
+          return {
+            feePayer: swapTokenOut,
+            feePayerSignature: signature,
+            transaction: { ...sender, gas: 50_000n } as any,
+          }
+        },
+      }),
+    ).resolves.toMatchObject({ feePayer: swapTokenOut })
+  })
+
+  test.each([
+    { case: 'an insufficient fee balance', error: insufficientBalance },
+    { case: 'a revert', error: () => rpcError('execution reverted') },
+  ])('rejects $case in the hosted sponsored simulation', async ({ error }) => {
+    const signature = { r: 9n, s: 10n, yParity: 0 }
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw error()
+        },
+        async complete() {
+          return {
+            feePayer: swapTokenOut,
+            feePayerSignature: signature,
+            transaction: { ...sender, gas: 50_000n } as any,
+          }
+        },
+      }),
+    ).rejects.toThrow('Execution reverted.')
+  })
+
+  test('isOutOfGasError matches only out-of-gas messages', () => {
+    expect(isOutOfGasError(outOfGas())).toBe(true)
+    expect(isOutOfGasError(new Error('intrinsic gas too low'))).toBe(true)
+    expect(isOutOfGasError(insufficientBalance())).toBe(false)
+    expect(isOutOfGasError(undefined)).toBe(false)
   })
 })
 

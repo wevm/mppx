@@ -688,6 +688,7 @@ export function charge<const parameters extends charge.Parameters>(
                 const selectableFeeTokens =
                   allowedFeeTokens ?? FeePayer.defaultAllowedFeeTokens(chainId)
                 const completed = await FeePayer.preflightSponsorship({
+                  policy: transactionFeePayerPolicy,
                   transaction,
                   simulate: (request) => viem_call(client, request as never),
                   async complete() {

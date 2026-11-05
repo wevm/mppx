@@ -987,6 +987,7 @@ async function submitSubscriptionPayment(parameters: {
       userSerialized as Transaction.TransactionSerializedTempo,
     )
     const completed = await FeePayer.preflightSponsorship({
+      policy: feePayerPolicy,
       transaction: userTransaction,
       simulate: (request) => viem_call(client, request as never),
       async complete() {
