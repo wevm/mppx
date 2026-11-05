@@ -376,17 +376,38 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
   const { complete, simulate, transaction } = parameters
   await simulate(simulationTransaction(transaction, { feePayer: true }))
   const completed = await complete()
-  const feePayerSignature =
-    completed.feePayerSignature ?? (await signFeePayerSimulation(completed.transaction))
+  const simulated = await (async () => {
+    if (completed.feePayerSignature)
+      return { feePayerSignature: completed.feePayerSignature, transaction: completed.transaction }
+    // The signature binds the gas limit, so a local fee payer signs a simulation-only copy
+    // with headroom for the node's sponsored `eth_call` overhead. The broadcast keeps its gas.
+    const { gas } = completed.transaction as { gas?: bigint | undefined }
+    const transaction =
+      gas === undefined
+        ? completed.transaction
+        : { ...completed.transaction, gas: gas + sponsoredSimulationGasBuffer }
+    const feePayerSignature = await signFeePayerSimulation(transaction)
+    return feePayerSignature
+      ? { feePayerSignature, transaction }
+      : { feePayerSignature: undefined, transaction: completed.transaction }
+  })()
   await simulate(
-    sponsoredSimulationTransaction(completed.transaction, {
+    sponsoredSimulationTransaction(simulated.transaction, {
       feePayer: completed.feePayer,
-      feePayerSignature,
+      feePayerSignature: simulated.feePayerSignature,
       feeToken: completed.feeToken,
     }),
   )
   return completed
 }
+
+/**
+ * Extra gas a local fee payer signs into its simulation-only envelope. Tempo's sponsored
+ * `eth_call` charges more gas than the same transaction uses when mined (about 6,000 for a
+ * session top-up on v1.18.1), so simulating at the signed limit would reject transactions
+ * that succeed onchain. Hosted signatures cover the client's gas and are simulated as signed.
+ */
+export const sponsoredSimulationGasBuffer = 10_000n
 
 /**
  * maxTotalFee must be high enough to cover `transferWithMemo` and

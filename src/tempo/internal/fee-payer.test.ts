@@ -19,6 +19,7 @@ import {
   prepareSponsoredTransaction,
   signFeePayerSimulation,
   simulationTransaction,
+  sponsoredSimulationGasBuffer,
   sponsoredSimulationTransaction,
   validateCalls,
 } from './fee-payer.js'
@@ -1228,7 +1229,7 @@ describe('preflightSponsorship', () => {
     }
     const simulations: Record<string, any>[] = []
 
-    await preflightSponsorship({
+    const completed = await preflightSponsorship({
       transaction: transaction as any,
       async simulate(request) {
         events.push('simulate')
@@ -1241,8 +1242,16 @@ describe('preflightSponsorship', () => {
     })
 
     expect(events).toEqual(['simulate', 'complete', 'sign', 'simulate'])
+    // The simulation-only copy carries the gas buffer; the returned envelope keeps its gas.
+    const simulatedGas = completedTransaction.gas + sponsoredSimulationGasBuffer
+    expect(simulations[1]!.gas).toBe(simulatedGas)
+    expect((completed.transaction as any).gas).toBe(completedTransaction.gas)
     const payload = TxEnvelopeTempo.getFeePayerSignPayload(
-      TxEnvelopeTempo.from({ ...completedTransaction, feePayer: undefined } as any) as any,
+      TxEnvelopeTempo.from({
+        ...completedTransaction,
+        feePayer: undefined,
+        gas: simulatedGas,
+      } as any) as any,
       { sender: bogus },
     )
     expect(
