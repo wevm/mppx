@@ -1,4 +1,5 @@
-import { type ZodMiniOptional, type ZodMiniType, z } from 'zod/mini'
+import type { ZodMiniOptional, ZodMiniType } from 'zod/mini'
+import * as z from 'zod/mini'
 
 export * from 'zod/mini'
 
