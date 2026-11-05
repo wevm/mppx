@@ -284,6 +284,9 @@ importers:
       eslint-plugin-compat:
         specifier: ^7.0.2
         version: 7.0.2(eslint@10.1.0)
+      eventsource-parser:
+        specifier: 4.1.1
+        version: 4.1.1
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -3488,6 +3491,10 @@ packages:
   eventsource-parser@3.1.1:
     resolution: {integrity: sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ==}
     engines: {node: '>=18.0.0'}
+
+  eventsource-parser@4.1.1:
+    resolution: {integrity: sha512-zaWNqeSLeyzEAAt2Q6aDBRDRk/VnPmsKqvToyGvv6aahvLv71A4Jw7jG93Hckf11zXurbqgsffvpSgKPoeU1Qw==}
+    engines: {node: '>=22.12'}
 
   eventsource@3.0.7:
     resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
@@ -7462,6 +7469,8 @@ snapshots:
   events@3.3.0: {}
 
   eventsource-parser@3.1.1: {}
+
+  eventsource-parser@4.1.1: {}
 
   eventsource@3.0.7:
     dependencies:
