@@ -1507,6 +1507,22 @@ describe('preflightSponsorship gas bounds', () => {
     expect(isOutOfGasError(insufficientBalance())).toBe(false)
     expect(isOutOfGasError(undefined)).toBe(false)
   })
+
+  test('isOutOfGasError ignores gas keywords outside the node message', () => {
+    // A revert reason that mentions gas is a revert, not gas exhaustion.
+    expect(isOutOfGasError(rpcError('execution reverted: out of gas'))).toBe(false)
+    // A wrapper mentioning out of gas must not hide an underlying balance failure.
+    const wrapped = Object.assign(new Error('simulation ran out of gas'), {
+      cause: insufficientBalance(),
+    })
+    expect(isOutOfGasError(wrapped)).toBe(false)
+    // Revert data on any error in the chain means the call reverted.
+    const withData = Object.assign(outOfGas(), { data: '0x08c379a0' })
+    expect(isOutOfGasError(withData)).toBe(false)
+    // The node's own message still matches through viem's wrappers.
+    const wrappedOutOfGas = Object.assign(new Error('Execution reverted.'), { cause: outOfGas() })
+    expect(isOutOfGasError(wrappedOutOfGas)).toBe(true)
+  })
 })
 
 describe('prepareSponsoredTransaction', () => {

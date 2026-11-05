@@ -486,22 +486,32 @@ export function sponsoredSimulationGas(
  *
  * Tempo nodes report out of gas as `out of gas: …` (code -32003, shared with
  * `insufficient fee token balance`) or `intrinsic gas too low` (code -32000),
- * so this matches the node's message anywhere in the error's cause chain rather
- * than the code.
+ * so this reads the node's own message rather than the code. Only the terminal
+ * RPC failure counts: the deepest `details` in the cause chain (viem's
+ * `RpcRequestError` carries the node's message there), or the deepest message
+ * when no error has details. Wrapper messages are ignored, the match is anchored
+ * to the start of the node's message, and an error carrying revert data is never
+ * treated as gas exhaustion, so a revert reason or wrapper text that merely
+ * mentions gas cannot hide another failure.
  */
 export function isOutOfGasError(error: unknown): boolean {
-  const pattern = /out of gas|intrinsic gas too low/i
+  let terminal: string | undefined
+  let fallback: string | undefined
   for (let current = error, depth = 0; current && depth < 10; depth++) {
-    const { cause, details, message } = current as {
+    const { cause, data, details, message } = current as {
       cause?: unknown
+      data?: unknown
       details?: unknown
       message?: unknown
     }
-    if (typeof details === 'string' && pattern.test(details)) return true
-    if (typeof message === 'string' && pattern.test(message)) return true
+    if (typeof data === 'string' && data !== '0x') return false
+    if (typeof details === 'string') terminal = details
+    if (typeof message === 'string') fallback = message
     current = cause
   }
-  return false
+  const nodeMessage = (terminal ?? fallback)?.trim()
+  if (!nodeMessage) return false
+  return /^(?:out of gas(?::|$)|intrinsic gas too low(?::|$))/i.test(nodeMessage)
 }
 
 /**
