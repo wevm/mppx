@@ -1,6 +1,7 @@
-import { Address, Secp256k1 } from 'ox'
+import { Address, Secp256k1, Signature } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { encodeFunctionData, maxUint256, toHex } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
@@ -14,9 +15,13 @@ import {
   defaultAllowedFeeTokens,
   FeePayerValidationError,
   fillHostedFeePayerTransaction,
+  isOutOfGasError,
   preflightSponsorship,
   prepareSponsoredTransaction,
+  signFeePayerSimulation,
   simulationTransaction,
+  sponsoredSimulationGas,
+  sponsoredSimulationGasBuffer,
   sponsoredSimulationTransaction,
   validateCalls,
 } from './fee-payer.js'
@@ -730,6 +735,69 @@ describe('fillHostedFeePayerTransaction', () => {
     expect(BigInt(transaction.feePayerSignature!.s)).toBe(realFeePayerSignature!.s)
   })
 
+  test('returns the sponsor signature so the final envelope can be simulated as sponsored', async () => {
+    const sponsorPrivateKey =
+      '0x0000000000000000000000000000000000000000000000000000000000000042' as const
+    let signature: ReturnType<typeof Secp256k1.sign> | undefined
+    const result = await fillHostedFeePayerTransaction({
+      ...hostedContext,
+      request: vi.fn(async (args: any) => {
+        signature = Secp256k1.sign({
+          payload: hostedFeePayerSignPayload(args.params[0], swapTokenIn),
+          privateKey: sponsorPrivateKey,
+        })
+        // Nodes return quantities as hex, including a yParity of `0x0`.
+        return { tx: { feePayerSignature: Signature.toRpc(signature), feeToken: swapTokenIn } }
+      }),
+      transaction: hostedTransaction as any,
+    })
+
+    expect(result.feePayerSignature).toEqual({
+      r: signature!.r,
+      s: signature!.s,
+      yParity: signature!.yParity,
+    })
+    expect(
+      Secp256k1.recoverAddress({
+        payload: hostedFeePayerSignPayload(await hostedRequest(hostedTransaction), swapTokenIn),
+        signature: result.feePayerSignature,
+      }).toLowerCase(),
+    ).toBe(result.feePayer.toLowerCase())
+  })
+
+  test.each([0, 1])(
+    'decodes a hosted signature whose yParity is %i, including the falsy 0',
+    async (yParity) => {
+      const sponsorPrivateKey =
+        '0x0000000000000000000000000000000000000000000000000000000000000043' as const
+      // Search nonces for a signature with the wanted parity, so both encodings are covered.
+      let nonce = 1n
+      let signature: ReturnType<typeof Secp256k1.sign>
+      for (;;) {
+        const rpc = await hostedRequest({ ...hostedTransaction, nonce })
+        signature = Secp256k1.sign({
+          payload: hostedFeePayerSignPayload(rpc, swapTokenIn),
+          privateKey: sponsorPrivateKey,
+        })
+        if (signature.yParity === yParity) break
+        nonce += 1n
+      }
+      const result = await fillHostedFeePayerTransaction({
+        ...hostedContext,
+        request: vi.fn(async () => ({
+          tx: {
+            feePayerSignature: { ...Signature.toRpc(signature), yParity },
+            feeToken: swapTokenIn,
+          },
+        })),
+        transaction: { ...hostedTransaction, nonce } as any,
+      })
+
+      expect(result.feePayerSignature.yParity).toBe(yParity)
+      expect(result.feePayerSignature.r).toBe(signature.r)
+    },
+  )
+
   test('error: requires hosted fee payer to return a feeToken', async () => {
     await expect(
       fillHostedFeePayerTransaction({
@@ -882,6 +950,41 @@ describe('simulationTransaction', () => {
     expect(simulationTransaction(transaction as any, { feePayer: true })).toEqual({
       account: bogus,
       calls: transaction.calls,
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+    })
+  })
+
+  test('keeps the broadcast gas limit and intrinsic-gas fields with zero fees', () => {
+    const keyAuthorization = { address: bogus } as any
+    const transaction = {
+      calls: [{ to: bogus }],
+      feePayerSignature,
+      feeToken: swapTokenIn,
+      from: bogus,
+      gas: 67_894n,
+      keyAuthorization,
+      maxFeePerGas: 20_000_000_000n,
+      maxPriorityFeePerGas: 1n,
+      nonce: 0n,
+      nonceKey: maxUint256,
+      signature: { type: 'keychain', inner: { type: 'webAuthn' } },
+      validAfter: 1,
+      validBefore: 1_800_000_000,
+    }
+
+    expect(simulationTransaction(transaction as any, { feePayer: true })).toEqual({
+      account: bogus,
+      calls: transaction.calls,
+      gas: 67_894n,
+      keyAuthorization,
+      keyType: 'webAuthn',
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+      nonce: 0n,
+      nonceKey: maxUint256,
+      validAfter: 1,
+      validBefore: 1_800_000_000,
     })
   })
 
@@ -928,6 +1031,122 @@ describe('simulationTransaction', () => {
   })
 })
 
+describe('sponsoredSimulationTransaction', () => {
+  test('carries the sponsor signature in RPC form so the node bills the sponsor', () => {
+    const transaction = {
+      calls: [{ to: bogus }],
+      from: bogus,
+      signature: { r: 1n, s: 2n, yParity: 0 },
+    }
+    const signature = { r: 5n, s: 6n, yParity: 1 }
+
+    expect(
+      sponsoredSimulationTransaction(transaction as any, {
+        feePayer: swapTokenOut,
+        feePayerSignature: signature,
+        feeToken: swapTokenIn,
+      }),
+    ).toEqual({
+      account: bogus,
+      calls: transaction.calls,
+      feePayer: swapTokenOut,
+      feePayerSignature: {
+        r: '0x0000000000000000000000000000000000000000000000000000000000000005',
+        s: '0x0000000000000000000000000000000000000000000000000000000000000006',
+        yParity: '0x1',
+      },
+      feeToken: swapTokenIn,
+      from: bogus,
+      signature: undefined,
+    })
+  })
+
+  test('replaces a stale envelope signature with the one passed in', () => {
+    const transaction = { calls: [{ to: bogus }], feePayerSignature, from: bogus }
+    const signature = { r: 7n, s: 8n, yParity: 0 }
+
+    const request = sponsoredSimulationTransaction(transaction as any, {
+      feePayer: swapTokenOut,
+      feePayerSignature: signature,
+    })
+
+    expect(request.feePayerSignature).toEqual(Signature.toRpc(signature))
+  })
+})
+
+describe('signFeePayerSimulation', () => {
+  const sender = privateKeyToAccount(
+    '0x0000000000000000000000000000000000000000000000000000000000000051',
+  )
+  const feePayer = privateKeyToAccount(
+    '0x0000000000000000000000000000000000000000000000000000000000000052',
+  )
+  const transaction = {
+    calls: [
+      {
+        data: encodeFunctionData({ abi: Abis.tip20, functionName: 'transfer', args: [bogus, 1n] }),
+        to: defaults.tokens.pathUsd,
+      },
+    ],
+    chainId: defaults.chainId.mainnet,
+    feeToken: defaults.tokens.pathUsd,
+    from: sender.address,
+    gas: 100_000n,
+    maxFeePerGas: 2_000_000_000n,
+    maxPriorityFeePerGas: 0n,
+    nonce: 0n,
+    nonceKey: maxUint256,
+    type: 'tempo' as const,
+    validBefore: 1_800_000_000,
+  }
+
+  test('signs the same payload Transaction.serialize signs for a local fee payer', async () => {
+    const serialized = await Transaction.serialize(
+      { ...transaction, feePayer } as any,
+      { r: 1n, s: 1n, yParity: 0 } as any,
+    )
+    const broadcast = Transaction.deserialize(serialized as Transaction.TransactionSerializedTempo)
+
+    const signature = await signFeePayerSimulation({
+      ...transaction,
+      account: sender,
+      feePayer,
+    } as any)
+
+    expect(signature).toEqual({
+      r: BigInt(broadcast.feePayerSignature!.r),
+      s: BigInt(broadcast.feePayerSignature!.s),
+      yParity: Number(broadcast.feePayerSignature!.yParity),
+    })
+  })
+
+  test('recovers to the fee payer address', async () => {
+    const signature = await signFeePayerSimulation({ ...transaction, feePayer } as any)
+    const payload = TxEnvelopeTempo.getFeePayerSignPayload(
+      TxEnvelopeTempo.from(transaction as any) as any,
+      { sender: sender.address },
+    )
+
+    expect(Secp256k1.recoverAddress({ payload, signature: signature! }).toLowerCase()).toBe(
+      feePayer.address.toLowerCase(),
+    )
+  })
+
+  test.each([
+    { case: 'an address', feePayer: bogus },
+    { case: 'true', feePayer: true },
+    { case: 'a json-rpc account', feePayer: { address: bogus, type: 'json-rpc' } },
+    { case: 'missing', feePayer: undefined },
+  ])('returns undefined when the fee payer is $case', async ({ feePayer }) => {
+    expect(await signFeePayerSimulation({ ...transaction, feePayer } as any)).toBeUndefined()
+  })
+
+  test('returns undefined without a sender', async () => {
+    const { from: _, ...rest } = transaction
+    expect(await signFeePayerSimulation({ ...rest, feePayer } as any)).toBeUndefined()
+  })
+})
+
 describe('preflightSponsorship', () => {
   const transaction = {
     calls: [{ to: bogus }],
@@ -953,7 +1172,7 @@ describe('preflightSponsorship', () => {
     expect(completions).toBe(1)
     expect(result.feePayer).toBe(swapTokenOut)
     expect(simulations).toEqual([
-      { account: bogus, calls: transaction.calls },
+      { account: bogus, calls: transaction.calls, maxFeePerGas: 0n, maxPriorityFeePerGas: 0n },
       {
         ...transaction,
         account: bogus,
@@ -992,6 +1211,318 @@ describe('preflightSponsorship', () => {
       expect(simulations).toBe(simulationCalls)
     },
   )
+
+  test('simulates the completed envelope with the hosted sponsor signature', async () => {
+    const simulations: Record<string, unknown>[] = []
+    const signature = { r: 9n, s: 10n, yParity: 0 }
+
+    await preflightSponsorship({
+      transaction: transaction as any,
+      async simulate(request) {
+        simulations.push(request)
+      },
+      async complete() {
+        return {
+          feePayer: swapTokenOut,
+          feePayerSignature: signature,
+          feeToken: defaults.tokens.pathUsd,
+          transaction: transaction as any,
+        }
+      },
+    })
+
+    expect(simulations[1]).toMatchObject({
+      feePayer: swapTokenOut,
+      feePayerSignature: Signature.toRpc(signature),
+      feeToken: defaults.tokens.pathUsd,
+      signature: undefined,
+    })
+  })
+
+  test('signs the simulation with a local fee payer after the sender simulation passes', async () => {
+    const feePayer = privateKeyToAccount(
+      '0x0000000000000000000000000000000000000000000000000000000000000053',
+    )
+    const events: string[] = []
+    const local = {
+      ...feePayer,
+      async sign(parameters: { hash: `0x${string}` }) {
+        events.push('sign')
+        return feePayer.sign(parameters)
+      },
+    }
+    const completedTransaction = {
+      calls: [{ to: bogus }],
+      chainId: defaults.chainId.mainnet,
+      feePayer: local,
+      feeToken: defaults.tokens.pathUsd,
+      from: bogus,
+      gas: 1n,
+      maxFeePerGas: 1n,
+      nonce: 0n,
+      nonceKey: maxUint256,
+      type: 'tempo',
+      validBefore: 1_800_000_000,
+    }
+    const simulations: Record<string, any>[] = []
+
+    const completed = await preflightSponsorship({
+      transaction: transaction as any,
+      async simulate(request) {
+        events.push('simulate')
+        simulations.push(request)
+      },
+      async complete() {
+        events.push('complete')
+        return { feePayer: feePayer.address, transaction: completedTransaction as any }
+      },
+    })
+
+    expect(events).toEqual(['simulate', 'complete', 'sign', 'simulate'])
+    // The simulation-only copy carries the gas buffer; the returned envelope keeps its gas.
+    const simulatedGas = completedTransaction.gas + sponsoredSimulationGasBuffer
+    expect(simulations[1]!.gas).toBe(simulatedGas)
+    expect((completed.transaction as any).gas).toBe(completedTransaction.gas)
+    const payload = TxEnvelopeTempo.getFeePayerSignPayload(
+      TxEnvelopeTempo.from({
+        ...completedTransaction,
+        feePayer: undefined,
+        gas: simulatedGas,
+      } as any) as any,
+      { sender: bogus },
+    )
+    expect(
+      Secp256k1.recoverAddress({
+        payload,
+        signature: Signature.fromRpc(simulations[1]!.feePayerSignature),
+      }).toLowerCase(),
+    ).toBe(feePayer.address.toLowerCase())
+  })
+
+  test('prefers the completed signature over signing locally', async () => {
+    const sign = vi.fn()
+    const signature = { r: 11n, s: 12n, yParity: 1 }
+    const simulations: Record<string, any>[] = []
+
+    await preflightSponsorship({
+      transaction: transaction as any,
+      async simulate(request) {
+        simulations.push(request)
+      },
+      async complete() {
+        return {
+          feePayer: swapTokenOut,
+          feePayerSignature: signature,
+          transaction: { ...transaction, feePayer: { address: swapTokenOut, sign } } as any,
+        }
+      },
+    })
+
+    expect(sign).not.toHaveBeenCalled()
+    expect(simulations[1]!.feePayerSignature).toEqual(Signature.toRpc(signature))
+  })
+
+  test('never signs when the sender simulation fails', async () => {
+    const sign = vi.fn()
+
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate() {
+          throw new Error('sender reverted')
+        },
+        async complete() {
+          return {
+            feePayer: swapTokenOut,
+            transaction: { ...transaction, feePayer: { address: swapTokenOut, sign } } as any,
+          }
+        },
+      }),
+    ).rejects.toThrow('sender reverted')
+    expect(sign).not.toHaveBeenCalled()
+  })
+})
+
+describe('preflightSponsorship gas bounds', () => {
+  const feePayer = privateKeyToAccount(
+    '0x0000000000000000000000000000000000000000000000000000000000000054',
+  )
+  const sender = { calls: [{ to: bogus }], feeToken: swapTokenIn, from: bogus }
+  const signed = (gas: bigint, maxFeePerGas = 1n) => ({
+    calls: [{ to: bogus }],
+    chainId: defaults.chainId.mainnet,
+    feePayer,
+    feeToken: defaults.tokens.pathUsd,
+    from: bogus,
+    gas,
+    maxFeePerGas,
+    nonce: 0n,
+    nonceKey: maxUint256,
+    type: 'tempo',
+    validBefore: 1_800_000_000,
+  })
+  // Tempo nodes report both errors with code -32003, wrapped by viem.
+  const rpcError = (message: string) =>
+    Object.assign(new Error('Execution reverted.'), {
+      cause: Object.assign(new Error('RPC Request failed.'), { details: message }),
+    })
+  const outOfGas = () =>
+    rpcError('out of gas: gas exhausted during precompiled contract execution: 44069')
+  const insufficientBalance = () =>
+    rpcError('insufficient fee token balance: required 922, but only have 0')
+
+  test('rejects a gas limit too low for the sender calls before completion', async () => {
+    const transaction = { ...sender, gas: 44_069n, nonce: 0n, nonceKey: maxUint256 }
+    const complete = vi.fn()
+    const simulations: Record<string, any>[] = []
+
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate(request) {
+          simulations.push(request)
+          // The sender's calls need 46,069 gas.
+          if ((request.gas as bigint) < 46_069n) throw outOfGas()
+        },
+        complete,
+      }),
+    ).rejects.toThrow('Execution reverted.')
+    expect(simulations[0]).toMatchObject({ gas: 44_069n, maxFeePerGas: 0n, nonceKey: maxUint256 })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  test('rejects a local fee payer when the padded sponsored simulation runs out of gas', async () => {
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw outOfGas()
+        },
+        async complete() {
+          return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+        },
+      }),
+    ).rejects.toThrow('Execution reverted.')
+  })
+
+  test('clamps the padded simulation copy to the policy maxGas', async () => {
+    const simulations: Record<string, any>[] = []
+    const completed = await preflightSponsorship({
+      policy: { maxGas: 55_000n },
+      transaction: { ...sender, gas: 50_000n } as any,
+      async simulate(request) {
+        simulations.push(request)
+      },
+      async complete() {
+        return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+      },
+    })
+
+    expect(simulations[0]!.gas).toBe(50_000n)
+    expect(simulations[1]!.gas).toBe(55_000n)
+    expect((completed.transaction as any).gas).toBe(50_000n)
+  })
+
+  test('clamps the padded simulation copy to the policy maxTotalFee', () => {
+    // 52,000 * 1,000 = maxTotalFee: the copy may not go above 52,000 gas.
+    expect(
+      sponsoredSimulationGas(signed(50_000n, 1_000n) as any, { maxTotalFee: 52_000_000n }),
+    ).toBe(52_000n)
+    expect(sponsoredSimulationGas(signed(50_000n, 1_000n) as any)).toBe(
+      50_000n + sponsoredSimulationGasBuffer,
+    )
+  })
+
+  test('never signs a copy for a transaction already over the policy caps', () => {
+    expect(() => sponsoredSimulationGas(signed(60_000n) as any, { maxGas: 55_000n })).toThrow(
+      'gas exceeds sponsor policy',
+    )
+    expect(() =>
+      sponsoredSimulationGas(signed(60_000n, 1_000n) as any, { maxTotalFee: 59_999_999n }),
+    ).toThrow('gas exceeds sponsor policy')
+  })
+
+  test('tolerates out of gas in a clamped local sponsored simulation', async () => {
+    await expect(
+      preflightSponsorship({
+        policy: { maxGas: 50_000n },
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw outOfGas()
+        },
+        async complete() {
+          return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
+        },
+      }),
+    ).resolves.toMatchObject({ feePayer: feePayer.address })
+  })
+
+  test.each([
+    { case: 'out of gas', error: outOfGas },
+    { case: 'intrinsic gas too low', error: () => rpcError('intrinsic gas too low') },
+  ])('tolerates $case in the hosted sponsored simulation', async ({ error }) => {
+    const signature = { r: 9n, s: 10n, yParity: 0 }
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw error()
+        },
+        async complete() {
+          return {
+            feePayer: swapTokenOut,
+            feePayerSignature: signature,
+            transaction: { ...sender, gas: 50_000n } as any,
+          }
+        },
+      }),
+    ).resolves.toMatchObject({ feePayer: swapTokenOut })
+  })
+
+  test.each([
+    { case: 'an insufficient fee balance', error: insufficientBalance },
+    { case: 'a revert', error: () => rpcError('execution reverted') },
+  ])('rejects $case in the hosted sponsored simulation', async ({ error }) => {
+    const signature = { r: 9n, s: 10n, yParity: 0 }
+    await expect(
+      preflightSponsorship({
+        transaction: { ...sender, gas: 50_000n } as any,
+        async simulate(request) {
+          if (request.feePayerSignature) throw error()
+        },
+        async complete() {
+          return {
+            feePayer: swapTokenOut,
+            feePayerSignature: signature,
+            transaction: { ...sender, gas: 50_000n } as any,
+          }
+        },
+      }),
+    ).rejects.toThrow('Execution reverted.')
+  })
+
+  test('isOutOfGasError matches only out-of-gas messages', () => {
+    expect(isOutOfGasError(outOfGas())).toBe(true)
+    expect(isOutOfGasError(new Error('intrinsic gas too low'))).toBe(true)
+    expect(isOutOfGasError(insufficientBalance())).toBe(false)
+    expect(isOutOfGasError(undefined)).toBe(false)
+  })
+
+  test('isOutOfGasError ignores gas keywords outside the node message', () => {
+    // A revert reason that mentions gas is a revert, not gas exhaustion.
+    expect(isOutOfGasError(rpcError('execution reverted: out of gas'))).toBe(false)
+    // A wrapper mentioning out of gas must not hide an underlying balance failure.
+    const wrapped = Object.assign(new Error('simulation ran out of gas'), {
+      cause: insufficientBalance(),
+    })
+    expect(isOutOfGasError(wrapped)).toBe(false)
+    // Revert data on any error in the chain means the call reverted.
+    const withData = Object.assign(outOfGas(), { data: '0x08c379a0' })
+    expect(isOutOfGasError(withData)).toBe(false)
+    // The node's own message still matches through viem's wrappers.
+    const wrappedOutOfGas = Object.assign(new Error('Execution reverted.'), { cause: outOfGas() })
+    expect(isOutOfGasError(wrappedOutOfGas)).toBe(true)
+  })
 })
 
 describe('prepareSponsoredTransaction', () => {
@@ -1420,3 +1951,43 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('call value is not allowed')
   })
 })
+
+/** Captures the `eth_fillTransaction` request body that `fillHostedFeePayerTransaction` sends. */
+async function hostedRequest(transaction: Record<string, any>): Promise<Record<string, any>> {
+  let body: Record<string, any> | undefined
+  await fillHostedFeePayerTransaction({
+    chainId: defaults.chainId.mainnet,
+    details,
+    request: async (args: any) => {
+      body = args.params[0]
+      throw new Error('captured')
+    },
+    transaction: transaction as any,
+  }).catch(() => {})
+  return body!
+}
+
+/** The fee-payer payload a hosted sponsor signs for an `eth_fillTransaction` request body. */
+function hostedFeePayerSignPayload(rpc: Record<string, any>, feeToken: `0x${string}`) {
+  const quantity = (value: unknown) => (value === undefined ? undefined : BigInt(value as string))
+  return TxEnvelopeTempo.getFeePayerSignPayload(
+    TxEnvelopeTempo.from({
+      accessList: rpc.accessList,
+      calls: rpc.calls.map(({ value, ...call }: any) => ({
+        ...call,
+        ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
+      })),
+      chainId: defaults.chainId.mainnet,
+      feeToken,
+      from: rpc.from,
+      gas: quantity(rpc.gas),
+      maxFeePerGas: quantity(rpc.maxFeePerGas),
+      maxPriorityFeePerGas: quantity(rpc.maxPriorityFeePerGas),
+      nonce: quantity(rpc.nonce),
+      nonceKey: quantity(rpc.nonceKey),
+      type: 'tempo',
+      validBefore: rpc.validBefore === undefined ? undefined : Number(BigInt(rpc.validBefore)),
+    } as any) as any,
+    { sender: rpc.from },
+  )
+}

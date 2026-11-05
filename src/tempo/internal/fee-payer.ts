@@ -1,7 +1,7 @@
-import { Address, Secp256k1 } from 'ox'
+import { Address, Secp256k1, Signature } from 'ox'
 import { TempoAddress, TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
-import type { Account } from 'viem'
+import type { Account, LocalAccount } from 'viem'
 import { decodeFunctionData, encodeFunctionData, maxUint256, toFunctionSelector, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
@@ -210,7 +210,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
   assertAllowedFeeToken({ feeToken: filled.feeToken }, allowedFeeTokens)
 
   const feePayerSignature = {
-    ...(filled.feePayerSignature as Record<string, unknown>),
+    ...(filled.feePayerSignature as { r: Hex; s: Hex }),
     yParity: Number((filled.feePayerSignature as { yParity?: unknown }).yParity),
   }
   const feeToken = filled.feeToken as TempoAddress.Address
@@ -241,6 +241,12 @@ export async function fillHostedFeePayerTransaction(parameters: {
 
   return {
     feePayer,
+    // `Signature.fromRpc` rejects a yParity of 0 that arrives without `v`.
+    feePayerSignature: Signature.from({
+      r: BigInt(feePayerSignature.r),
+      s: BigInt(feePayerSignature.s),
+      yParity: feePayerSignature.yParity,
+    }),
     feeToken,
     serializedTransaction: await Transaction.serialize({
       ...transaction,
@@ -254,20 +260,39 @@ export async function fillHostedFeePayerTransaction(parameters: {
 /**
  * Returns a transaction shape suitable for pre-broadcast simulation.
  *
- * Sponsored transactions are first simulated as calls from the sender with no
- * fee fields or signatures. This checks call execution without requiring the
- * sender to hold the fee token; transferred value and call-level balances are
- * still checked by the RPC.
+ * Sponsored transactions are first simulated as calls from the sender, without
+ * signatures, fee payer or fee token, and with zero fee fields: Tempo nodes
+ * (v1.18+) skip the fee-token balance check for a zero-fee `eth_call`, so the
+ * sender's fee balance is irrelevant. The call keeps the transaction's exact
+ * gas limit and the fields that set its intrinsic gas (nonce, nonce key,
+ * validity window, key authorization, signature type), so it is the gas-bounded
+ * check at the broadcast limit: a transaction whose gas is too low fails here
+ * with out of gas instead of reverting onchain at the sponsor's expense.
+ * Transferred value and call-level balances are still checked by the RPC.
  */
 export function simulationTransaction(
   transaction: SponsoredTransaction,
   options: { feePayer: boolean },
 ) {
-  if (options.feePayer)
+  if (options.feePayer) {
+    const keyType = senderKeyType(transaction.signature)
     return {
       account: transaction.from,
       calls: transaction.calls,
+      ...(transaction.accessList?.length ? { accessList: transaction.accessList } : {}),
+      ...(transaction.gas !== undefined ? { gas: transaction.gas } : {}),
+      ...(transaction.keyAuthorization !== undefined
+        ? { keyAuthorization: transaction.keyAuthorization }
+        : {}),
+      ...(keyType ? { keyType } : {}),
+      maxFeePerGas: 0n,
+      maxPriorityFeePerGas: 0n,
+      ...(transaction.nonce !== undefined ? { nonce: transaction.nonce } : {}),
+      ...(transaction.nonceKey !== undefined ? { nonceKey: transaction.nonceKey } : {}),
+      ...(transaction.validAfter !== undefined ? { validAfter: transaction.validAfter } : {}),
+      ...(transaction.validBefore !== undefined ? { validBefore: transaction.validBefore } : {}),
     }
+  }
   return {
     ...transaction,
     account: transaction.from,
@@ -276,21 +301,38 @@ export function simulationTransaction(
   }
 }
 
+/** The key type hint for a sender signature whose verification costs more than secp256k1. */
+function senderKeyType(signature: unknown): 'p256' | 'webAuthn' | undefined {
+  const envelope = signature as { inner?: { type?: unknown }; type?: unknown } | undefined
+  const type = envelope?.type === 'keychain' ? envelope.inner?.type : envelope?.type
+  return type === 'p256' || type === 'webAuthn' ? type : undefined
+}
+
 /**
  * Returns the final fee-sponsored transaction shape for pre-broadcast
- * simulation. RPC `eth_call` does not carry either transaction signature.
+ * simulation.
+ *
+ * Tempo nodes recover the fee payer of an `eth_call` only from
+ * `feePayerSignature`; a bare `feePayer` address is ignored and the sender is
+ * billed instead. Pass the sponsor's signature so the node charges the fee
+ * token to the sponsor, not to a sender that may not hold it. The sender's own
+ * signature is never sent.
  */
 export function sponsoredSimulationTransaction(
   transaction: SponsoredTransaction,
-  options: { feePayer: TempoAddress.Address; feeToken?: TempoAddress.Address | undefined },
+  options: {
+    feePayer: TempoAddress.Address
+    feePayerSignature?: Signature.Signature | undefined
+    feeToken?: TempoAddress.Address | undefined
+  },
 ) {
-  const { feePayer, feeToken } = options
+  const { feePayer, feePayerSignature, feeToken } = options
   return {
     ...transaction,
     account: transaction.from,
     calls: transaction.calls,
     feePayer,
-    feePayerSignature: undefined,
+    feePayerSignature: feePayerSignature ? Signature.toRpc(feePayerSignature) : undefined,
     ...(feeToken !== undefined ? { feeToken } : {}),
     signature: undefined,
   }
@@ -299,37 +341,188 @@ export function sponsoredSimulationTransaction(
 /** A completed sponsorship envelope that can be simulated before signing or broadcast. */
 export type PreflightSponsorship = {
   feePayer: TempoAddress.Address
+  /**
+   * The sponsor's signature over the final envelope. Hosted sponsors return it
+   * from `eth_fillTransaction`; local accounts are signed in `preflightSponsorship`.
+   */
+  feePayerSignature?: Signature.Signature | undefined
   feeToken?: TempoAddress.Address | undefined
   transaction: SponsoredTransaction
 }
 
 /**
- * Runs execution-only sender and final-envelope simulations around sponsorship.
+ * Signs the fee-payer payload of a sponsored envelope with a local fee-payer
+ * account, the same payload `Transaction.serialize` signs before broadcast.
+ * Returns `undefined` when the envelope's fee payer cannot sign locally.
+ */
+export async function signFeePayerSimulation(
+  transaction: SponsoredTransaction,
+): Promise<Signature.Signature | undefined> {
+  const {
+    account: _account,
+    feePayer,
+    ...rest
+  } = transaction as SponsoredTransaction & {
+    account?: unknown
+    feePayer?: unknown
+  }
+  if (typeof feePayer !== 'object' || feePayer === null) return undefined
+  const sign = (feePayer as Partial<Pick<LocalAccount, 'sign'>>).sign
+  if (typeof sign !== 'function' || !rest.from) return undefined
+  const payload = TxEnvelopeTempo.getFeePayerSignPayload(
+    TxEnvelopeTempo.from({
+      ...rest,
+      chainId: Number(rest.chainId),
+      feePayerSignature: undefined,
+      signature: undefined,
+      type: 'tempo',
+    } as never),
+    { sender: rest.from as never },
+  )
+  return Signature.from(await sign({ hash: payload }))
+}
+
+/**
+ * Runs the sender and final-envelope simulations around sponsorship.
  *
- * First, it simulates the calls with the sender as `from`, omitting fee fields
- * and signatures so the sender's fee balance is irrelevant. Next, `complete`
- * resolves the sponsor and produces the co-signed transaction. Finally, it
- * simulates that transaction with its concrete fee payer and fee token.
+ * First, it simulates the sender's calls at the transaction's exact gas limit
+ * with zero fee fields (see {@link simulationTransaction}). This is the
+ * gas-bounded check at the broadcast limit, and needs no fee-token balance.
+ * Next, `complete` resolves the sponsor and produces the co-signed transaction.
+ * Finally, it simulates that transaction with its concrete fee payer, fee token
+ * and fee payer signature, so the node bills the sponsor rather than the sender
+ * and checks the sponsor's fee balance.
+ *
+ * A sponsored `eth_call` charges more gas than the mined transaction uses. A
+ * local fee payer therefore signs a simulation-only copy whose gas is raised by
+ * up to {@link sponsoredSimulationGasBuffer}, clamped so the copy stays within
+ * the same fee payer `policy` (`maxGas`, `maxTotalFee`) as the real
+ * transaction. The copy is never returned or broadcast. When the final
+ * simulation runs without the full buffer (hosted signatures cover the client's
+ * gas and cannot be padded, or the padding was clamped), a failure that is only
+ * out of gas is tolerated, since the sender simulation already bounded gas at
+ * the broadcast limit. Every other failure, such as an insufficient fee balance
+ * or a revert, is rethrown.
  *
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
  */
 export async function preflightSponsorship<sponsorship extends PreflightSponsorship>(parameters: {
   complete: () => Promise<sponsorship>
+  /** The fee payer policy the completed transaction was checked against. */
+  policy?: Partial<Policy> | undefined
   simulate: (request: Record<string, unknown>) => Promise<unknown>
   transaction: SponsoredTransaction
 }): Promise<sponsorship> {
-  const { complete, simulate, transaction } = parameters
+  const { complete, policy, simulate, transaction } = parameters
   await simulate(simulationTransaction(transaction, { feePayer: true }))
   const completed = await complete()
-  await simulate(
-    sponsoredSimulationTransaction(completed.transaction, {
-      feePayer: completed.feePayer,
-      feeToken: completed.feeToken,
-    }),
-  )
+  const { gas } = completed.transaction as { gas?: bigint | undefined }
+  const simulated = await (async () => {
+    if (completed.feePayerSignature)
+      return { feePayerSignature: completed.feePayerSignature, transaction: completed.transaction }
+    // The signature binds the gas limit, so a local fee payer signs a simulation-only copy
+    // with headroom for the node's sponsored `eth_call` overhead. The broadcast keeps its gas.
+    const padded =
+      gas === undefined
+        ? completed.transaction
+        : {
+            ...completed.transaction,
+            gas: sponsoredSimulationGas(completed.transaction, policy),
+          }
+    const feePayerSignature = await signFeePayerSimulation(padded)
+    return feePayerSignature
+      ? { feePayerSignature, transaction: padded }
+      : { feePayerSignature: undefined, transaction: completed.transaction }
+  })()
+  const simulatedGas = (simulated.transaction as { gas?: bigint | undefined }).gas
+  try {
+    await simulate(
+      sponsoredSimulationTransaction(simulated.transaction, {
+        feePayer: completed.feePayer,
+        feePayerSignature: simulated.feePayerSignature,
+        feeToken: completed.feeToken,
+      }),
+    )
+  } catch (error) {
+    const unpadded =
+      gas !== undefined &&
+      simulatedGas !== undefined &&
+      simulatedGas < gas + sponsoredSimulationGasBuffer
+    if (!unpadded || !isOutOfGasError(error)) throw error
+  }
   return completed
 }
+
+/**
+ * Returns the gas limit of a local fee payer's simulation-only copy: the
+ * transaction's gas plus {@link sponsoredSimulationGasBuffer}, clamped to the
+ * fee payer policy's `maxGas` and to `maxTotalFee / maxFeePerGas`, so the
+ * signed copy never exceeds a cap the real transaction is held to.
+ */
+export function sponsoredSimulationGas(
+  transaction: Pick<SponsoredTransaction, 'chainId' | 'gas' | 'maxFeePerGas'>,
+  policyOverrides?: Partial<Policy> | undefined,
+): bigint {
+  const { chainId, gas, maxFeePerGas } = transaction
+  if (gas === undefined)
+    throw new FeePayerValidationError('fee-sponsored transaction must declare gas', {})
+  const policy = getPolicy(Number(chainId), policyOverrides)
+  let cap = policy.maxGas
+  if (maxFeePerGas !== undefined && maxFeePerGas > 0n) {
+    const feeCap = policy.maxTotalFee / maxFeePerGas
+    if (feeCap < cap) cap = feeCap
+  }
+  if (gas > cap)
+    throw new FeePayerValidationError('fee-sponsored transaction gas exceeds sponsor policy', {
+      gas: gas.toString(),
+    })
+  const padded = gas + sponsoredSimulationGasBuffer
+  return padded < cap ? padded : cap
+}
+
+/**
+ * Returns true when a simulation failed only because it ran out of gas.
+ *
+ * Tempo nodes report out of gas as `out of gas: …` (code -32003, shared with
+ * `insufficient fee token balance`) or `intrinsic gas too low` (code -32000),
+ * so this reads the node's own message rather than the code. Only the terminal
+ * RPC failure counts: the deepest `details` in the cause chain (viem's
+ * `RpcRequestError` carries the node's message there), or the deepest message
+ * when no error has details. Wrapper messages are ignored, the match is anchored
+ * to the start of the node's message, and an error carrying revert data is never
+ * treated as gas exhaustion, so a revert reason or wrapper text that merely
+ * mentions gas cannot hide another failure.
+ */
+export function isOutOfGasError(error: unknown): boolean {
+  let terminal: string | undefined
+  let fallback: string | undefined
+  for (let current = error, depth = 0; current && depth < 10; depth++) {
+    const { cause, data, details, message } = current as {
+      cause?: unknown
+      data?: unknown
+      details?: unknown
+      message?: unknown
+    }
+    if (typeof data === 'string' && data !== '0x') return false
+    if (typeof details === 'string') terminal = details
+    if (typeof message === 'string') fallback = message
+    current = cause
+  }
+  const nodeMessage = (terminal ?? fallback)?.trim()
+  if (!nodeMessage) return false
+  return /^(?:out of gas(?::|$)|intrinsic gas too low(?::|$))/i.test(nodeMessage)
+}
+
+/**
+ * Extra gas a local fee payer signs into its simulation-only envelope. Tempo's sponsored
+ * `eth_call` charges more gas than the same transaction uses when mined (about 6,000 for a
+ * session top-up on v1.18.1), so simulating at the signed limit would reject transactions
+ * that succeed onchain. The padding is clamped to the fee payer policy; hosted signatures
+ * cover the client's gas and are simulated as signed. In both cases the gas bound at the
+ * broadcast limit comes from the sender simulation.
+ */
+export const sponsoredSimulationGasBuffer = 10_000n
 
 /**
  * maxTotalFee must be high enough to cover `transferWithMemo` and
