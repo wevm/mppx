@@ -1,7 +1,7 @@
-import { Address, Secp256k1 } from 'ox'
+import { Address, Secp256k1, Signature } from 'ox'
 import { TempoAddress, TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
-import type { Account } from 'viem'
+import type { Account, LocalAccount } from 'viem'
 import { decodeFunctionData, encodeFunctionData, maxUint256, toFunctionSelector, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
@@ -210,7 +210,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
   assertAllowedFeeToken({ feeToken: filled.feeToken }, allowedFeeTokens)
 
   const feePayerSignature = {
-    ...(filled.feePayerSignature as Record<string, unknown>),
+    ...(filled.feePayerSignature as { r: Hex; s: Hex }),
     yParity: Number((filled.feePayerSignature as { yParity?: unknown }).yParity),
   }
   const feeToken = filled.feeToken as TempoAddress.Address
@@ -241,6 +241,12 @@ export async function fillHostedFeePayerTransaction(parameters: {
 
   return {
     feePayer,
+    // `Signature.fromRpc` rejects a yParity of 0 that arrives without `v`.
+    feePayerSignature: Signature.from({
+      r: BigInt(feePayerSignature.r),
+      s: BigInt(feePayerSignature.s),
+      yParity: feePayerSignature.yParity,
+    }),
     feeToken,
     serializedTransaction: await Transaction.serialize({
       ...transaction,
@@ -278,19 +284,29 @@ export function simulationTransaction(
 
 /**
  * Returns the final fee-sponsored transaction shape for pre-broadcast
- * simulation. RPC `eth_call` does not carry either transaction signature.
+ * simulation.
+ *
+ * Tempo nodes recover the fee payer of an `eth_call` only from
+ * `feePayerSignature`; a bare `feePayer` address is ignored and the sender is
+ * billed instead. Pass the sponsor's signature so the node charges the fee
+ * token to the sponsor, not to a sender that may not hold it. The sender's own
+ * signature is never sent.
  */
 export function sponsoredSimulationTransaction(
   transaction: SponsoredTransaction,
-  options: { feePayer: TempoAddress.Address; feeToken?: TempoAddress.Address | undefined },
+  options: {
+    feePayer: TempoAddress.Address
+    feePayerSignature?: Signature.Signature | undefined
+    feeToken?: TempoAddress.Address | undefined
+  },
 ) {
-  const { feePayer, feeToken } = options
+  const { feePayer, feePayerSignature, feeToken } = options
   return {
     ...transaction,
     account: transaction.from,
     calls: transaction.calls,
     feePayer,
-    feePayerSignature: undefined,
+    feePayerSignature: feePayerSignature ? Signature.toRpc(feePayerSignature) : undefined,
     ...(feeToken !== undefined ? { feeToken } : {}),
     signature: undefined,
   }
@@ -299,8 +315,45 @@ export function sponsoredSimulationTransaction(
 /** A completed sponsorship envelope that can be simulated before signing or broadcast. */
 export type PreflightSponsorship = {
   feePayer: TempoAddress.Address
+  /**
+   * The sponsor's signature over the final envelope. Hosted sponsors return it
+   * from `eth_fillTransaction`; local accounts are signed in `preflightSponsorship`.
+   */
+  feePayerSignature?: Signature.Signature | undefined
   feeToken?: TempoAddress.Address | undefined
   transaction: SponsoredTransaction
+}
+
+/**
+ * Signs the fee-payer payload of a sponsored envelope with a local fee-payer
+ * account, the same payload `Transaction.serialize` signs before broadcast.
+ * Returns `undefined` when the envelope's fee payer cannot sign locally.
+ */
+export async function signFeePayerSimulation(
+  transaction: SponsoredTransaction,
+): Promise<Signature.Signature | undefined> {
+  const {
+    account: _account,
+    feePayer,
+    ...rest
+  } = transaction as SponsoredTransaction & {
+    account?: unknown
+    feePayer?: unknown
+  }
+  if (typeof feePayer !== 'object' || feePayer === null) return undefined
+  const sign = (feePayer as Partial<Pick<LocalAccount, 'sign'>>).sign
+  if (typeof sign !== 'function' || !rest.from) return undefined
+  const payload = TxEnvelopeTempo.getFeePayerSignPayload(
+    TxEnvelopeTempo.from({
+      ...rest,
+      chainId: Number(rest.chainId),
+      feePayerSignature: undefined,
+      signature: undefined,
+      type: 'tempo',
+    } as never),
+    { sender: rest.from as never },
+  )
+  return Signature.from(await sign({ hash: payload }))
 }
 
 /**
@@ -309,7 +362,8 @@ export type PreflightSponsorship = {
  * First, it simulates the calls with the sender as `from`, omitting fee fields
  * and signatures so the sender's fee balance is irrelevant. Next, `complete`
  * resolves the sponsor and produces the co-signed transaction. Finally, it
- * simulates that transaction with its concrete fee payer and fee token.
+ * simulates that transaction with its concrete fee payer, fee token and fee
+ * payer signature, so the node bills the sponsor rather than the sender.
  *
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
@@ -322,9 +376,12 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
   const { complete, simulate, transaction } = parameters
   await simulate(simulationTransaction(transaction, { feePayer: true }))
   const completed = await complete()
+  const feePayerSignature =
+    completed.feePayerSignature ?? (await signFeePayerSimulation(completed.transaction))
   await simulate(
     sponsoredSimulationTransaction(completed.transaction, {
       feePayer: completed.feePayer,
+      feePayerSignature,
       feeToken: completed.feeToken,
     }),
   )
