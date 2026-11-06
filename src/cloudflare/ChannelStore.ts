@@ -72,13 +72,13 @@ export class ChannelStore extends Store.DurableObjectStore {
     await storage.put(settlementKey, updated)
     // A job is in flight: it settles the latest voucher, and its watchdog alarm stays.
     if (sending) return
-    if (due === 'threshold') return this.send(updated, next, settlement, storage)
-    const at = updated.updatedAt + settlement.staleAfterMs
+    // Sent from an alarm that fires at once: a queue send here would let another write in before this one commits.
+    const at = due === 'threshold' ? Date.now() : updated.updatedAt + settlement.staleAfterMs
     const alarm = await storage.getAlarm!()
     if (alarm === null || at < alarm) await storage.setAlarm!(at)
   }
 
-  /** Sends a stale channel to the queue, or sends it again from the watchdog while unsettled. */
+  /** Sends a channel over the threshold or gone stale to the queue, or sends it again from the watchdog while unsettled. */
   override async alarm(): Promise<void> {
     await super.alarm()
     const pending = (await this.storage.get(settlementKey)) as Pending | undefined

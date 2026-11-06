@@ -53,6 +53,8 @@ type Command =
       closeRequested?: boolean
       payer: string
       transport?: 'fetch'
+      /** Writes the channel without its lookup entries, as when an entry write failed. */
+      unindexed?: boolean
     }
   | { op: 'mode'; id: string; mode: 'settle' | 'drop' | 'reject' }
   | { op: 'calls'; id: string }
@@ -93,7 +95,11 @@ export default {
           token,
           units: 1,
         }
-        const target = command.transport === 'fetch' ? channels(env.CHANNELS).store : store(env)
+        const target = command.unindexed
+          ? Store.durableObject(env.CHANNELS, { encoding: 'native', transport: 'rpc' })
+          : command.transport === 'fetch'
+            ? channels(env.CHANNELS).store
+            : store(env)
         await target.update(command.id, () => ({ op: 'set', value: state, result: null }))
         return Response.json(null)
       }

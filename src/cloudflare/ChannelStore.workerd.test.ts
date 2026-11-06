@@ -119,6 +119,14 @@ describe('cloudflare.ChannelStore in workerd', () => {
     expect(await run({ op: 'status', id })).toEqual({ alarm: true, sends: 0 })
   })
 
+  test("repairs a missing lookup entry on the channel's next write", async () => {
+    const { id, payer } = channel()
+    await run({ op: 'write', id, payer, deposit: '1000000', voucher: '1', unindexed: true })
+    expect(await run({ op: 'resolve', payer, chainId: 42431 })).toBeNull()
+    await run({ op: 'write', id, payer, deposit: '1000000', voucher: '2' })
+    expect(await run({ op: 'resolve', payer, chainId: 42431 })).toBe(id)
+  })
+
   test('indexes an open channel for its payer and drops it once closing or finalized', async () => {
     const { id, payer } = channel()
     expect(await run({ op: 'resolve', payer, chainId: 42431 })).toBeNull()

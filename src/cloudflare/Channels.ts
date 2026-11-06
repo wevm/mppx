@@ -49,18 +49,20 @@ export function channels(
       return current === channelId ? { op: 'delete', result: undefined } : noop
     })
 
-  /** Moves the lookup entries of a channel from its previous state to its next one. */
+  /**
+   * Moves the lookup entries of a channel from its previous state to its next one. Entries
+   * for the next state are written on every write, not only when they change: the channel
+   * commits before its entries, so a failed entry write is repaired by the channel's next
+   * write instead of staying missing. Writing an entry that is already there changes nothing.
+   */
   async function sync(previous: unknown, next: unknown) {
     const before = lookupKeys(previous)
     const after = lookupKeys(next)
-    const moved = (previous as State | null)?.channelId !== (next as State | null)?.channelId
     await Promise.all([
       ...before
         .filter((key) => !after.includes(key))
         .map((key) => index(key, (previous as State).channelId, false)),
-      ...after
-        .filter((key) => moved || !before.includes(key))
-        .map((key) => index(key, (next as State).channelId, true)),
+      ...after.map((key) => index(key, (next as State).channelId, true)),
     ])
   }
 
