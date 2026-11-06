@@ -587,7 +587,9 @@ export declare namespace durableObject {
      * How values are stored. `json` stores JSON text (bigints as ox encodes them);
      * `native` stores structured-clone values, so bigints and nested objects stay
      * intact and values written directly with `storage.put` read back. `native`
-     * requires `transport: 'rpc'`. @default 'json'
+     * requires `transport: 'rpc'`. Stored values don't record their encoding, so keep
+     * one encoding per namespace (or `keyPrefix`): a `native` store reads `json` values
+     * as their JSON text, and `json` clients cannot read what it writes. @default 'json'
      */
     encoding?: Encoding | undefined
     /** Prefix prepended to every backing store key. */
