@@ -535,7 +535,16 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
       ),
     ).then(
       () => {},
-      (error) => {
+      async (error) => {
+        // Concurrent `CREATE TABLE IF NOT EXISTS` from other processes can fail on
+        // Postgres (duplicate catalog row) although the table now exists: probe it.
+        const exists = await Promise.resolve(
+          driver.query(`SELECT 1 FROM ${table} WHERE 1 = 0`, []),
+        ).then(
+          () => true,
+          () => false,
+        )
+        if (exists) return
         ready = undefined
         throw error
       },

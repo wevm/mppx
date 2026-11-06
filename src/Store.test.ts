@@ -739,15 +739,29 @@ describe('sql', () => {
     setTimeout.mockRestore()
   })
 
+  test('treats a failed CREATE TABLE as ready when the table exists', async () => {
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text) {
+        if (text.startsWith('CREATE'))
+          throw new Error('duplicate key value violates unique constraint')
+        return []
+      },
+    })
+    expect(await store.get('k')).toBeNull()
+  })
+
   test('retries table creation after a failure', async () => {
     let fail = true
     const store = Store.sql({
       dialect: 'sqlite',
       async query(text) {
-        if (text.startsWith('CREATE') && fail) {
+        // Offline: the CREATE and the probe that follows it both fail.
+        if (fail && text.startsWith('SELECT 1')) {
           fail = false
           throw new Error('offline')
         }
+        if (fail) throw new Error('offline')
         return []
       },
     })

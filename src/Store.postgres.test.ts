@@ -56,6 +56,15 @@ describe.skipIf(!docker)('Store.postgres against a Postgres server', () => {
     expect(results.filter(Boolean)).toHaveLength(1)
   })
 
+  test('concurrent stores create the same table without failing', async () => {
+    // Separate store instances share no in-process guard, like separate servers.
+    const stores = Array.from({ length: 20 }, () =>
+      Store.postgres(pool, { table: 'mppx_concurrent_create' }),
+    )
+    await Promise.all(stores.map((store, i) => store.put(`k${i}`, i)))
+    expect(await stores[0]!.get('k19')).toBe(19)
+  })
+
   test('works in a schema-qualified table', async () => {
     await pool.query('CREATE SCHEMA IF NOT EXISTS billing')
     const store = Store.postgres(pool, { table: 'billing.mppx_store' })
