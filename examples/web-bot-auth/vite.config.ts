@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [cloudflare()],
   server: {
     port: 8787,
-    // Keep the bot's private key from being served: Vite's defaults plus .bot-key.json.
-    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '.bot-key.json'] },
+    // Keep secrets off the dev server: Vite's defaults plus .dev.vars and the bot's key.
+    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '.dev.vars*', '.bot-key.json'] },
   },
 })
