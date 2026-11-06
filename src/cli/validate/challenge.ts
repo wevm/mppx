@@ -540,7 +540,7 @@ export async function validateErrorHandling(
         fail(
           'Malformed credential returns 402',
           `Got ${response.status} (server error)`,
-          'When the Authorization header contains an invalid credential, respond with 402 (not 500). Catch credential validation errors and return a fresh challenge.',
+          `When the ${credentialHeader} header contains an invalid credential, respond with 402 (not 500). Catch credential validation errors and return a fresh challenge.`,
         ),
       )
     } else {
@@ -548,7 +548,7 @@ export async function validateErrorHandling(
         warn(
           'Malformed credential returns 402',
           `Got ${response.status}`,
-          `When the Authorization header contains an invalid Payment credential, respond with 402 and a fresh WWW-Authenticate challenge. Returning ${response.status} prevents the client from retrying with a valid payment.`,
+          `When the ${credentialHeader} header contains an invalid Payment credential, respond with 402 and a fresh WWW-Authenticate challenge. Returning ${response.status} prevents the client from retrying with a valid payment.`,
         ),
       )
     }
