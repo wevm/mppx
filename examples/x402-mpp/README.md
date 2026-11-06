@@ -1,10 +1,20 @@
 # x402 + mpp
 
-A Hono server that serves mpp, x402, and composed mpp-or-x402 payment routes from one process.
+A Hono app on Cloudflare Workers that serves mpp, x402, and composed mpp-or-x402 payment routes from one Worker. Tempo replay protection lives in Durable Objects through `Store.durableObject()`.
+
+## Setup
 
 ```bash
 npx gitpick wevm/mppx/examples/x402-mpp
 pnpm i
+pnpm keygen   # writes .dev.vars and funds the server account on testnet
+```
+
+## Usage
+
+Start the Worker locally:
+
+```bash
 pnpm dev
 ```
 
@@ -18,7 +28,7 @@ pnpm dev
 | `/api/health` | free healthcheck                 | none                                   |
 
 The x402 route defaults to the free no-key `https://facilitator.x402.rs` testnet facilitator.
-Set `X402_FACILITATOR_URL` to use another facilitator.
+Set `X402_FACILITATOR_URL` in `.dev.vars` (or as a Worker variable) to use another facilitator.
 
 No-key facilitators that currently advertise Base Sepolia v2 exact support:
 
@@ -31,7 +41,7 @@ No-key facilitators that currently advertise Base Sepolia v2 exact support:
 
 ## Test both clients
 
-With the server running:
+With the Worker running, in a separate terminal:
 
 ```bash
 MPP_PRIVATE_KEY=0x... X402_PRIVATE_KEY=0x... pnpm client
@@ -56,8 +66,8 @@ FLOW=x402 X402_PRIVATE_KEY=0x... pnpm client
 Inspect x402 requirements without paying:
 
 ```bash
-curl -i http://localhost:5173/api/x402
-curl -i http://localhost:5173/api/paid
+curl -i http://localhost:8787/api/x402
+curl -i http://localhost:8787/api/paid
 ```
 
 These example endpoints are GET routes. EVM-backed handlers emit both `WWW-Authenticate` and
@@ -79,17 +89,28 @@ purl wallet add
 `purl v0.2.7` recognizes MPP and x402 challenges:
 
 ```bash
-purl inspect http://localhost:5173/api/mpp
-purl inspect http://localhost:5173/api/x402
-purl inspect http://localhost:5173/api/paid
+purl inspect http://localhost:8787/api/mpp
+purl inspect http://localhost:8787/api/x402
+purl inspect http://localhost:8787/api/paid
 ```
 
 The composed route can be exercised with an EVM key:
 
 ```bash
-purl --private-key 0x... http://localhost:5173/api/paid
+purl --private-key 0x... http://localhost:8787/api/paid
 ```
 
 purl releases before [stripe/purl#102](https://github.com/stripe/purl/pull/102) may select the
 Payment-auth EVM challenge before the x402 challenge on `/api/x402` or `/api/paid`, then exit
 with `EVM provider expects x402 PaymentRequirements`.
+
+## Deploy
+
+```bash
+wrangler secret put MPP_PRIVATE_KEY        # from .dev.vars
+wrangler secret put MPP_SECRET_KEY         # from .dev.vars
+wrangler secret put TEMPO_RPC_URL          # optional: a dedicated Tempo RPC
+wrangler secret put X402_FACILITATOR_URL   # optional: another x402 facilitator
+pnpm deploy
+BASE_URL=https://mppx-x402-mpp.<account>.workers.dev pnpm client
+```

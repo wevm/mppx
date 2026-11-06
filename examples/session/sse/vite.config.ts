@@ -1,34 +1,9 @@
-import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
+import { cloudflare } from '@cloudflare/vite-plugin'
 import { defineConfig } from 'vite'
 
-import { handler } from './src/server.ts'
-
+// Runs the Worker in workerd, the Cloudflare Workers runtime, with its
+// Durable Objects and .dev.vars, exactly as deployed.
 export default defineConfig({
-  plugins: [
-    {
-      name: 'api',
-      configureServer(server) {
-        // oxlint-disable-next-line no-async-endpoint-handlers
-        server.middlewares.use(async (req, res, next) => {
-          const request = createRequest(req, res)
-          const response = await handler(request)
-          if (response) {
-            await sendResponse(res, response)
-            return
-          }
-          next()
-        })
-        server.httpServer?.once('listening', () => {
-          const addr = server.httpServer!.address()
-          const host =
-            typeof addr === 'object' && addr ? `localhost:${addr.port}` : 'localhost:5173'
-          const pm = process.env.npm_config_user_agent?.split('/')[0] ?? 'npx'
-          setTimeout(
-            () => console.log(`\n  ${pm === 'npm' ? 'npx' : pm} mppx http://${host}/api/chat\n`),
-            100,
-          )
-        })
-      },
-    },
-  ],
+  plugins: [cloudflare()],
+  server: { port: 8787 },
 })

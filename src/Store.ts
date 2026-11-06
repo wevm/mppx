@@ -278,8 +278,9 @@ export declare namespace cloudflare {
  * reads and writes of one key are linearizable across every Worker isolate and
  * location, while different keys (such as different payment channels) scale
  * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
- * commits with a compare-and-swap in the object, retrying when another writer
- * changed the key in between; {@link AtomicStore.tryClaim} runs in a single
+ * commits with a compare-and-swap in the object. When another writer changed
+ * the key in between, the swap returns the stored value and the update retries
+ * from it after a jittered backoff; {@link AtomicStore.tryClaim} runs in a single
  * object call.
  *
  * Bind {@link DurableObjectStore} as a SQLite-backed Durable Object and pass
@@ -333,17 +334,22 @@ export function durableObject(
         await call(key, { op: 'delete', key })
       },
       async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        let raw = await call<string | null>(key, { op: 'get', key })
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const raw = await call<string | null>(key, { op: 'get', key })
           const change = fn(raw == null ? null : (Json.parse(raw) as never))
           if (change.op === 'noop') return change.result
-          const swapped = await call<boolean>(key, {
+          const swapped = await call<DurableObjectStore.SwapResult>(key, {
             op: 'swap',
             key,
             expected: raw,
             value: change.op === 'set' ? Json.stringify(change.value) : null,
           })
-          if (swapped) return change.result
+          if (swapped.applied) return change.result
+          // Lost a race: retry from the value the object returned, after a jittered backoff.
+          raw = swapped.current
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
+          )
         }
         throw new Error(`Durable Object store update of "${key}" conflicted ${maxAttempts} times.`)
       },
@@ -416,9 +422,11 @@ export class DurableObjectStore {
         await write(null)
         return Response.json(true)
       case 'swap': {
-        if ((await read()) !== body.expected) return Response.json(false)
+        const current = await read()
+        if (current !== body.expected)
+          return Response.json({ applied: false, current } satisfies DurableObjectStore.SwapResult)
         await write(body.value)
-        return Response.json(true)
+        return Response.json({ applied: true } satisfies DurableObjectStore.SwapResult)
       }
       case 'claim': {
         const { expires } = body
@@ -443,6 +451,9 @@ export declare namespace DurableObjectStore {
     put: (key: string, value: string) => Promise<void>
     delete: (key: string) => Promise<unknown>
   }
+
+  /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
+  export type SwapResult = { applied: true } | { applied: false; current: string | null }
 
   /** An operation sent from {@link durableObject} to the object. */
   export type Request =

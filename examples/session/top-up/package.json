@@ -5,17 +5,19 @@
   "scripts": {
     "check:types": "tsgo -b",
     "client": "tsx src/client.ts",
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
+    "deploy": "vite build && wrangler deploy",
+    "dev": "vite dev",
     "keygen": "tsx src/keygen.ts"
   },
   "dependencies": {
+    "@cloudflare/vite-plugin": "^1.66.0",
     "@types/node": "latest",
     "@typescript/native-preview": "latest",
     "mppx": "latest",
     "tsx": "latest",
     "typescript": "catalog:",
     "viem": "catalog:",
+    "vite": "^8.3.0",
     "wrangler": "^4.157.0"
   }
 }

@@ -356,9 +356,9 @@ importers:
 
   examples/charge:
     dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: ^0.14.0
-        version: 0.14.0
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -380,12 +380,15 @@ importers:
       vite:
         specifier: 8.3.3
         version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/charge-relay:
     dependencies:
-      '@hono/node-server':
-        specifier: 2.1.5
-        version: 2.1.5(hono@4.13.11)
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -407,15 +410,21 @@ importers:
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/charge-wagmi:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@metamask/sdk':
         specifier: ~0.34.0
         version: 0.34.0(bufferutil@4.1.0)(supports-color@10.2.2)(utf-8-validate@5.0.10)
-      '@remix-run/node-fetch-server':
-        specifier: ^0.14.0
-        version: 0.14.0
       '@tanstack/react-query':
         specifier: ^5.103.2
         version: 5.103.2(react@19.3.0)
@@ -434,9 +443,15 @@ importers:
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
       wagmi:
         specifier: ^3.7.7
         version: 3.7.7(@tanstack/query-core@5.103.2)(@tanstack/react-query@5.103.2(react@19.3.0))(@types/react@19.3.0)(accounts@0.18.4)(react@19.3.0)(typescript@7.0.2)(viem@2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7))
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@types/react':
         specifier: ^19.3.0
@@ -453,12 +468,12 @@ importers:
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
-      vite:
-        specifier: 8.3.3
-        version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
 
-  examples/session/cloudflare:
+  examples/session/multi-fetch:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: latest
         version: 26.6.6
@@ -477,42 +492,18 @@ importers:
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
       wrangler:
         specifier: ^4.157.0
         version: 4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
-  examples/session/multi-fetch:
-    dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: latest
-        version: 1.0.0
-      '@types/node':
-        specifier: latest
-        version: 26.6.6
-      '@typescript/native-preview':
-        specifier: latest
-        version: 7.0.0-dev.20260707.2
-      mppx:
-        specifier: workspace:*
-        version: link:../../..
-      tsx:
-        specifier: latest
-        version: 4.23.15
-      typescript:
-        specifier: ~7.0.2
-        version: 7.0.2
-      viem:
-        specifier: 2.57.1
-        version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
-      vite:
-        specifier: 8.3.3
-        version: 8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
-
   examples/session/sse:
     dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: latest
-        version: 1.0.0
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: latest
         version: 26.6.6
@@ -534,9 +525,15 @@ importers:
       vite:
         specifier: 8.3.3
         version: 8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/session/top-up:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: latest
         version: 26.6.6
@@ -555,21 +552,21 @@ importers:
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
       wrangler:
         specifier: ^4.157.0
         version: 4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/session/ws:
     dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: ^0.14.0
-        version: 0.14.0
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260707.2
         version: 7.0.0-dev.20260707.2
@@ -591,15 +588,18 @@ importers:
       vite:
         specifier: 8.3.3
         version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       ws:
         specifier: ^8.21.3
         version: 8.21.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/stripe:
     dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: ^0.14.0
-        version: 0.14.0
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@stripe/stripe-js':
         specifier: ^9.17.0
         version: 9.17.0
@@ -621,12 +621,15 @@ importers:
       vite:
         specifier: 8.3.3
         version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/subscription:
     dependencies:
-      '@remix-run/node-fetch-server':
-        specifier: ^0.14.0
-        version: 0.14.0
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -648,9 +651,15 @@ importers:
       vite:
         specifier: 8.3.3
         version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/web-bot-auth:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -660,12 +669,21 @@ importers:
       mppx:
         specifier: workspace:*
         version: link:../..
+      tsx:
+        specifier: latest
+        version: 4.23.15
       typescript:
         specifier: ~7.0.2
         version: 7.0.2
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   examples/x402-express:
     dependencies:
@@ -705,6 +723,9 @@ importers:
 
   examples/x402-mpp:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.66.0
+        version: 1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@types/node':
         specifier: 26.2.0
         version: 26.2.0
@@ -726,6 +747,12 @@ importers:
       viem:
         specifier: 2.57.1
         version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+      vite:
+        specifier: 8.3.3
+        version: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.157.0
+        version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
   src/stripe/server/internal/html:
     dependencies:
@@ -876,10 +903,28 @@ packages:
       workerd:
         optional: true
 
+  '@cloudflare/vite-plugin@1.67.0':
+    resolution: {integrity: sha512-DvRCm5zFBOzq7W2wsdCs2CebccC+BBIsQBnSW/S3TAshHF5hqbTrYTcCNTA4J9Fbarbtxd3OT0eMvLnR5ndR3A==}
+    peerDependencies:
+      vite: 8.3.3
+      wrangler: ^4.156.1
+
+  '@cloudflare/workerd-darwin-64@1.20261101.1':
+    resolution: {integrity: sha512-9ByDS2X/lN1csRkU2qTsnogwVA/ghYGHybznujH/EStiv9qU+01XPKagm3Zrk8AN3yQrFTmjMy6BrZWzoa+B5Q==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [darwin]
+
   '@cloudflare/workerd-darwin-64@1.20261104.1':
     resolution: {integrity: sha512-5Bl+P1HT1/Ezk7Yrhyd+QkJ4VC/3naO0L3so/AkpgdaAHG3bmUmcCJBAtwH7O4JdVt8SMfm6EV89seiPpdjHJQ==}
     engines: {node: '>=16'}
     cpu: [x64]
+    os: [darwin]
+
+  '@cloudflare/workerd-darwin-arm64@1.20261101.1':
+    resolution: {integrity: sha512-XNgl773dDMFecMG0mOtDgw15AIeRVn3yqbbUAqMVH6vgEf64F/J6Ej3FugQyogt+1NSjOx3pgEofbX7Cd9m0ug==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
     os: [darwin]
 
   '@cloudflare/workerd-darwin-arm64@1.20261104.1':
@@ -888,10 +933,22 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@cloudflare/workerd-linux-64@1.20261101.1':
+    resolution: {integrity: sha512-8C9vM51UVrmpavIC7z6anMsKPu8tjvJcwA2tCvzlwfL7odoX61ngBpN7pkYrmrwv5iS9aJ4xEzQc8QkZJKIulw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
   '@cloudflare/workerd-linux-64@1.20261104.1':
     resolution: {integrity: sha512-VgpZIOooZHjSxjEZIJ1hkyt/jTfL3KeavkWCc0x7xxVu9zgkplaJF78Iv6CzoCTamQXyZeBaRQHS2bbAc70Vgg==}
     engines: {node: '>=16'}
     cpu: [x64]
+    os: [linux]
+
+  '@cloudflare/workerd-linux-arm64@1.20261101.1':
+    resolution: {integrity: sha512-7NdTrbzPubhEBNiC8ftD0U3J3M8fNR/ATD3Deon6C9Z5SFTmOhQbT3jJPMGPoUzvicdTaaD/YNCwRh+JEoWaeQ==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
     os: [linux]
 
   '@cloudflare/workerd-linux-arm64@1.20261104.1':
@@ -899,6 +956,12 @@ packages:
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
+
+  '@cloudflare/workerd-windows-64@1.20261101.1':
+    resolution: {integrity: sha512-nDRpV9VRhzdrNpJOJNfe6rjOTq5LXFGC6WFCeGR/LA+cNnou1fwF0AQm//zmSDOELPNoQFi6SqjUcloZvy1sKw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [win32]
 
   '@cloudflare/workerd-windows-64@1.20261104.1':
     resolution: {integrity: sha512-b/fnEU1leVm8UrI2EHQ4MSrK2vmnWdR1jefRyEUDZe3ucpKY0PWi4bVxWh5niZdlL0MIc4C5tXNXTlAMZpKDdA==}
@@ -2275,12 +2338,6 @@ packages:
 
   '@remix-run/fetch-router@0.17.0':
     resolution: {integrity: sha512-3FeJGrTqrKKCvZdQWijbCXTEHKcdttkLFbI2ogfpZ+iDYSNZ9036wgDXuuoZqg6d+D0E8Unhk5ZwrLKDCd/hOw==}
-
-  '@remix-run/node-fetch-server@0.14.0':
-    resolution: {integrity: sha512-s46HS2YuZwCJxwXIrcWdKTfIXWf2G2S20bXeYR2BqBoUkmc4RSiC+VRely6pqNvSUIio8piaI+uLN40IvoFN/A==}
-
-  '@remix-run/node-fetch-server@1.0.0':
-    resolution: {integrity: sha512-M/zI70dmLQdIae+mG95XecvoI3uw0o/ZwflsMAFtaQA/MceznyKaT8aSPvvGVK6yRufzQrY++Ohwei7EhyY3qw==}
 
   '@remix-run/route-pattern@0.19.0':
     resolution: {integrity: sha512-RXKaIJ2Lx01uyZc0iw+yLzowFCa1/NuB8jN7QTo4QUe2CaUGtvPGdhgrTUp75lyNNCSJIrM9SaAJ6c1pjZdmoA==}
@@ -4296,6 +4353,10 @@ packages:
     resolution: {integrity: sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A==}
     engines: {node: '>=18'}
 
+  miniflare@5.20261101.0-beta:
+    resolution: {integrity: sha512-31uZmP8PGue7S3fYMIRXNXxFGh5/SEmd4OGna/80RXcE1nngVub21h9GbcWajQ7625mEYBnexpI2ogGo9NUa6Q==}
+    engines: {node: '>=22.0.0'}
+
   miniflare@5.20261104.0-beta:
     resolution: {integrity: sha512-pYZ2n85+FYUb7s0oIVcQxO63/+wgaknm+A/kQjctJqshvHPJs3UtnzaIZ7xrrHMOk8atD7yAfauf6G9VAv7Upg==}
     engines: {node: '>=22.0.0'}
@@ -5242,6 +5303,11 @@ packages:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
 
+  workerd@1.20261101.1:
+    resolution: {integrity: sha512-qHUIS4cmvhpAE7k2TW0ZktXj9KGDeoUvvLuqi5cSalCM6el5Q6IPuaup9XAC6zQq/xJUPHMG29ML93HuSDY2RQ==}
+    engines: {node: '>=16'}
+    hasBin: true
+
   workerd@1.20261104.1:
     resolution: {integrity: sha512-JuiKY9k/4V4UE2xsupaTvZ1SF6o2a8sg+/zfq/DaSDwvH+o7t2ZEFuIWNEnryfeFdP47/tz/p828Kvl4ptPlrA==}
     engines: {node: '>=16'}
@@ -5569,16 +5635,59 @@ snapshots:
     optionalDependencies:
       workerd: 1.20261104.1
 
+  '@cloudflare/vite-plugin@1.67.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261104.1)
+      miniflare: 5.20261101.0-beta(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      unenv: 2.0.0-rc.24
+      vite: 8.3.3(@types/node@26.2.0)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      ws: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+      - workerd
+
+  '@cloudflare/vite-plugin@1.67.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vite@8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0))(workerd@1.20261104.1)(wrangler@4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261104.1)
+      miniflare: 5.20261101.0-beta(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      unenv: 2.0.0-rc.24
+      vite: 8.3.3(@types/node@26.6.6)(esbuild@0.28.1)(tsx@4.23.15)(yaml@2.9.0)
+      wrangler: 4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      ws: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+      - workerd
+
+  '@cloudflare/workerd-darwin-64@1.20261101.1':
+    optional: true
+
   '@cloudflare/workerd-darwin-64@1.20261104.1':
+    optional: true
+
+  '@cloudflare/workerd-darwin-arm64@1.20261101.1':
     optional: true
 
   '@cloudflare/workerd-darwin-arm64@1.20261104.1':
     optional: true
 
+  '@cloudflare/workerd-linux-64@1.20261101.1':
+    optional: true
+
   '@cloudflare/workerd-linux-64@1.20261104.1':
     optional: true
 
+  '@cloudflare/workerd-linux-arm64@1.20261101.1':
+    optional: true
+
   '@cloudflare/workerd-linux-arm64@1.20261104.1':
+    optional: true
+
+  '@cloudflare/workerd-windows-64@1.20261101.1':
     optional: true
 
   '@cloudflare/workerd-windows-64@1.20261104.1':
@@ -6579,10 +6688,6 @@ snapshots:
     dependencies:
       '@remix-run/route-pattern': 0.19.0
       '@remix-run/session': 0.4.1
-
-  '@remix-run/node-fetch-server@0.14.0': {}
-
-  '@remix-run/node-fetch-server@1.0.0': {}
 
   '@remix-run/route-pattern@0.19.0': {}
 
@@ -8427,6 +8532,45 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
+  miniflare@5.20261101.0-beta(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    dependencies:
+      '@cspotcode/source-map-support': 0.8.1
+      sharp: 0.35.5(@types/node@26.2.0)
+      undici: 7.30.1
+      workerd: 1.20261101.1
+      ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      youch: 4.1.0-beta.10
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+
+  miniflare@5.20261101.0-beta(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    dependencies:
+      '@cspotcode/source-map-support': 0.8.1
+      sharp: 0.35.5(@types/node@26.6.6)
+      undici: 7.30.1
+      workerd: 1.20261101.1
+      ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      youch: 4.1.0-beta.10
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+
+  miniflare@5.20261104.0-beta(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    dependencies:
+      '@cspotcode/source-map-support': 0.8.1
+      sharp: 0.35.5(@types/node@26.2.0)
+      undici: 7.30.1
+      workerd: 1.20261104.1
+      ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      youch: 4.1.0-beta.10
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+
   miniflare@5.20261104.0-beta(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
@@ -9005,7 +9149,6 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.5
       '@img/sharp-win32-x64': 0.35.5
       '@types/node': 26.2.0
-    optional: true
 
   sharp@0.35.5(@types/node@26.6.6):
     dependencies:
@@ -9650,6 +9793,14 @@ snapshots:
 
   word-wrap@1.2.5: {}
 
+  workerd@1.20261101.1:
+    optionalDependencies:
+      '@cloudflare/workerd-darwin-64': 1.20261101.1
+      '@cloudflare/workerd-darwin-arm64': 1.20261101.1
+      '@cloudflare/workerd-linux-64': 1.20261101.1
+      '@cloudflare/workerd-linux-arm64': 1.20261101.1
+      '@cloudflare/workerd-windows-64': 1.20261101.1
+
   workerd@1.20261104.1:
     optionalDependencies:
       '@cloudflare/workerd-darwin-64': 1.20261104.1
@@ -9657,6 +9808,24 @@ snapshots:
       '@cloudflare/workerd-linux-64': 1.20261104.1
       '@cloudflare/workerd-linux-arm64': 1.20261104.1
       '@cloudflare/workerd-windows-64': 1.20261104.1
+
+  wrangler@4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    dependencies:
+      '@cloudflare/kv-asset-handler': 0.5.0
+      '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261104.1)
+      '@cspotcode/source-map-support': 0.8.1
+      blake3-wasm: 2.1.5
+      esbuild: 0.28.2
+      miniflare: 5.20261104.0-beta(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      path-to-regexp: 8.4.0
+      unenv: 2.0.0-rc.24
+      workerd: 1.20261104.1
+    optionalDependencies:
+      fsevents: 2.3.3
+    transitivePeerDependencies:
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
 
   wrangler@4.158.0(@types/node@26.6.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10):
     dependencies:

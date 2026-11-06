@@ -12,7 +12,7 @@ pnpm keygen   # writes .dev.vars and funds the server account on testnet
 
 ## Usage
 
-Start the Worker locally:
+Start the Worker locally (in workerd, through `@cloudflare/vite-plugin`):
 
 ```bash
 pnpm dev

@@ -2,13 +2,14 @@
 
 Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 
+Each server is a Cloudflare Worker: `pnpm dev` runs it locally in workerd, the Workers runtime, through `@cloudflare/vite-plugin`, with Durable Objects for shared state (channels, replay protection, subscriptions), and `pnpm deploy` ships it. [x402-express](./x402-express/) stays on Node because it demonstrates the Express middleware. Run `pnpm keygen` first in examples that have it.
+
 ## Examples
 
 | Example                                       | Description                                                                 |
 | --------------------------------------------- | --------------------------------------------------------------------------- |
 | [charge](./charge/)                           | Payment-gated image generation API                                          |
 | [charge-relay](./charge-relay/)               | Hono API settled by the Tempo API relay                                     |
-| [session/cloudflare](./session/cloudflare/)   | Pay-per-token SSE streaming on Cloudflare Workers with Durable Objects      |
 | [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel                        |
 | [session/top-up](./session/top-up/)           | Prepaid API on Cloudflare Workers with automatic and manual channel top-ups |
 | [session/sse](./session/sse/)                 | Pay-per-token LLM streaming with SSE                                        |

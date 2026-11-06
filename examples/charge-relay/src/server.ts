@@ -1,73 +1,96 @@
-import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { Errors, Receipt } from 'mppx'
 import { Mppx } from 'mppx/hono'
 import { tempo } from 'mppx/server'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { createClient, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Chain } from 'viem/tempo'
 
-const apiKey = process.env.TEMPO_API_KEY
-if (!apiKey) throw new Error('Set TEMPO_API_KEY to a Tempo API key with the mpp:write scope.')
-const tempoApiKey = apiKey
+type Env = {
+  /** Payee account key: receives payments. */
+  MPP_PRIVATE_KEY: string
+  /** Secret that binds challenge IDs, so they verify statelessly. */
+  MPP_SECRET_KEY: string
+  /** Tempo API key with the `mpp:write` scope. */
+  TEMPO_API_KEY: string
+  /** Optional Tempo API URL, such as a self-hosted or preview Tempo API. */
+  TEMPO_API_URL?: string | undefined
+  /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
+  TEMPO_RPC_URL?: string | undefined
+}
 
-const apiUrl = process.env.TEMPO_API_URL ?? 'https://api.tempo.xyz'
-const account = privateKeyToAccount(generatePrivateKey())
-const methods = tempo.charge({
-  account,
-  recipient: account.address,
-  // To replace the local `relay` implementation below with the built-in adapter:
-  // relay: { apiBaseUrl: apiUrl, apiKey },
-  supportedModes: ['pull'],
-  testnet: true,
-})
-const payments = Mppx.create({
-  methods: [
-    methods.map((method) => ({
-      ...method,
-      async validate(parameters: Parameters<NonNullable<typeof method.validate>>[0]) {
-        const { credential, request } = parameters
-        await relay('/v1/mpp/validate', credential)
-        return {
-          challenge: credential.challenge,
-          credential,
-          details: {},
-          intent: method.intent,
-          method: method.name,
-          request,
-          ...(credential.source ? { source: credential.source } : {}),
-        }
-      },
-      async broadcast(parameters: Parameters<NonNullable<typeof method.broadcast>>[0]) {
-        const { credential } = parameters
-        const receipt = await relay('/v1/mpp/broadcast', credential, {
-          'idempotency-key': `mpp_${credential.challenge.id}`,
-        })
-        return Receipt.from({ ...receipt, status: 'success' })
-      },
-    })),
-  ],
-  secretKey: process.env.MPP_SECRET_KEY ?? 'mppx-demo-tempo-api-relay-secret-key',
-})
+let payments: ReturnType<typeof createPayments> | undefined
+function createPayments(env: Env) {
+  if (!env.TEMPO_API_KEY)
+    throw new Error('Set TEMPO_API_KEY to a Tempo API key with the mpp:write scope.')
+  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
+  const client = createClient({ chain: Chain.testnet, transport: http(env.TEMPO_RPC_URL) })
+  const methods = tempo.charge({
+    account,
+    chainId: Chain.testnet.id,
+    getClient: () => client,
+    recipient: account.address,
+    // To replace the local `relay` implementation below with the built-in adapter:
+    // relay: { apiBaseUrl: env.TEMPO_API_URL, apiKey: env.TEMPO_API_KEY },
+    supportedModes: ['pull'],
+  })
+  return Mppx.create({
+    methods: [
+      methods.map((method) => ({
+        ...method,
+        async validate(parameters: Parameters<NonNullable<typeof method.validate>>[0]) {
+          const { credential, request } = parameters
+          await relay(env, '/v1/mpp/validate', credential)
+          return {
+            challenge: credential.challenge,
+            credential,
+            details: {},
+            intent: method.intent,
+            method: method.name,
+            request,
+            ...(credential.source ? { source: credential.source } : {}),
+          }
+        },
+        async broadcast(parameters: Parameters<NonNullable<typeof method.broadcast>>[0]) {
+          const { credential } = parameters
+          const receipt = await relay(env, '/v1/mpp/broadcast', credential, {
+            'idempotency-key': `mpp_${credential.challenge.id}`,
+          })
+          return Receipt.from({ ...receipt, status: 'success' })
+        },
+      })),
+    ],
+    secretKey: env.MPP_SECRET_KEY,
+  })
+}
 
-const app = new Hono()
+const app = new Hono<{ Bindings: Env }>()
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
-app.get('/api/photo', payments.charge({ amount: '0.01', description: 'Random stock photo' }), (c) =>
-  c.json({ url: 'https://picsum.photos/1024/1024' }),
+app.get(
+  '/api/photo',
+  (c, next) => {
+    payments ??= createPayments(c.env)
+    return payments.charge({ amount: '0.01', description: 'Random stock photo' })(c, next)
+  },
+  (c) => c.json({ url: 'https://picsum.photos/1024/1024' }),
 )
 
-serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 5173) })
+// A Hono app is a Worker: its `fetch(request, env)` serves every request.
+export default app
 
 async function relay(
+  env: Env,
   path: '/v1/mpp/broadcast' | '/v1/mpp/validate',
   credential: { challenge: Record<string, unknown>; payload: unknown },
   headers: Record<string, string> = {},
 ) {
   let response: Response
   try {
-    response = await fetch(new URL(path, apiUrl), {
+    response = await fetch(new URL(path, env.TEMPO_API_URL ?? 'https://api.tempo.xyz'), {
       body: JSON.stringify({ challenge: credential.challenge, payload: credential.payload }),
       headers: {
         'content-type': 'application/json',
-        'tempo-api-key': tempoApiKey,
+        'tempo-api-key': env.TEMPO_API_KEY,
         ...headers,
       },
       method: 'POST',
