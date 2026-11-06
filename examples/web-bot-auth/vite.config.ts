@@ -5,5 +5,9 @@ import { defineConfig } from 'vite'
 // Durable Objects and .dev.vars, exactly as deployed.
 export default defineConfig({
   plugins: [cloudflare()],
-  server: { port: 8787 },
+  server: {
+    port: 8787,
+    // Keep the bot's private key from being served: Vite's defaults plus .bot-key.json.
+    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '.bot-key.json'] },
+  },
 })
