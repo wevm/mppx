@@ -70,9 +70,52 @@ function fakeTryClaim(seen?: string[]) {
   }
 }
 
+function fakeDurableObjectNamespace() {
+  const objects = new Map<string, Store.DurableObjectStore>()
+  const queues = new Map<string, Promise<unknown>>()
+  return {
+    idFromName: (name: string) => name,
+    get(id: string) {
+      let object = objects.get(id)
+      if (!object) {
+        const map = new Map<string, string>()
+        object = new Store.DurableObjectStore({
+          storage: {
+            async get(key: string) {
+              return map.get(key)
+            },
+            async put(key: string, value: string) {
+              map.set(key, value)
+            },
+            async delete(key: string) {
+              return map.delete(key)
+            },
+          },
+        })
+        objects.set(id, object)
+      }
+      const target = object
+      // Serialize calls per object, as a Durable Object's input gate does.
+      return {
+        fetch(input: string, init: RequestInit) {
+          const response = (queues.get(id) ?? Promise.resolve()).then(() =>
+            target.fetch(new Request(input, init)),
+          )
+          queues.set(
+            id,
+            response.catch(() => {}),
+          )
+          return response
+        },
+      }
+    },
+  }
+}
+
 describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
+  { label: 'durableObject', create: () => Store.durableObject(fakeDurableObjectNamespace()) },
   {
     label: 'redis',
     create: () => {
@@ -466,5 +509,53 @@ describe('json roundtrip behavior', () => {
 
     expect(result).toBe(2)
     expect(await kv.get('k')).toEqual({ count: 2 })
+  })
+})
+
+describe('durableObject', () => {
+  test('round-trips values with bigints', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace())
+    expect(await store.get('k')).toBeNull()
+    await store.put('k', { amount: 10n, nested })
+    expect(await store.get('k')).toEqual({ amount: 10n, nested })
+    await store.delete('k')
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('update stays atomic under concurrent writers', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace())
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        store.update('counter', (current) => {
+          const value = ((current as number | null) ?? 0) + 1
+          return { op: 'set', value, result: value }
+        }),
+      ),
+    )
+    expect(await store.get('counter')).toBe(20)
+  })
+
+  test('update supports noop and delete', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace())
+    await store.put('k', 1)
+    expect(await store.update('k', () => ({ op: 'noop', result: 'kept' }))).toBe('kept')
+    expect(await store.get('k')).toBe(1)
+    expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('tryClaim records a key once until it expires', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace())
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => Store.tryClaim(store, 'nonce', Date.now() + 60_000)),
+    )
+    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(await Store.tryClaim(store, 'expired', Date.now() - 1)).toBe(false)
+  })
+
+  test('applies keyPrefix', async () => {
+    const namespace = fakeDurableObjectNamespace()
+    await Store.durableObject(namespace, { keyPrefix: 'a:' }).put('k', 1)
+    expect(await Store.durableObject(namespace).get('a:k')).toBe(1)
   })
 })
