@@ -21,8 +21,10 @@ beforeAll(async () => {
     compatibilityDate: '2026-07-01',
     d1Databases: ['DB'],
     durableObjects: {
+      FAILING: 'FailingStore',
       NATIVE_STORE: 'NativeStore',
       RECORDING: 'RecordingStore',
+      RECORDING_RPC: 'RecordingRpcStore',
       RPC_STORE: 'RpcStore',
       STORE: 'MppxStore',
     },
@@ -45,11 +47,11 @@ async function request<result>(command: Record<string, unknown>): Promise<result
 }
 
 describe.each([
-  { backend: 'durableObject' },
-  { backend: 'rpc' },
-  { backend: 'native' },
-  { backend: 'd1' },
-])('Store.$backend in workerd', ({ backend }) => {
+  { backend: 'durableObject', label: 'durableObject' },
+  { backend: 'rpc', label: 'durableObject (rpc)' },
+  { backend: 'native', label: 'durableObject (rpc, native)' },
+  { backend: 'd1', label: 'd1' },
+])('Store.$label in workerd', ({ backend }) => {
   const run = <result>(command: Record<string, unknown>) => request<result>({ ...command, backend })
 
   test('round-trips, overwrites and deletes values', async () => {
@@ -106,6 +108,10 @@ describe('Store.durableObject native encoding in workerd', () => {
     })
   })
 
+  test('updates values holding typed arrays, buffers, maps, sets, dates, regexps and holes', async () => {
+    expect(await run({ op: 'rich', key: 'rich' })).toEqual({ n: 2, bytes: [1, 2], hole: false })
+  })
+
   test('compares nested values with bigints structurally across concurrent updates', async () => {
     const results = await Promise.all(
       Array.from({ length: 30 }, () =>
@@ -156,5 +162,55 @@ describe('Store.DurableObjectStore hooks in workerd', () => {
     await expect
       .poll(async () => (await run<Log>({ op: 'log', key })).alarms, { timeout: 5_000 })
       .toBeGreaterThan(0)
+  })
+})
+
+describe('Store.DurableObjectStore.rpc on a subclass in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'recording-rpc' })
+  type Log = { alarms: number; writes: { key: string; previous: unknown; next: unknown }[] }
+
+  test("keeps the subclass's onWrite and alarm", async () => {
+    const key = 'rpc-hooked'
+    await run({ op: 'put', key, value: { a: 1 } })
+    await run({ op: 'delete', key })
+    const expires = Date.now() + 60_000
+    expect(await run({ op: 'claim', key, expires })).toBe(true)
+    expect((await run<Log>({ op: 'log', key })).writes).toEqual([
+      { key, previous: null, next: { a: 1 } },
+      { key, previous: { a: 1 }, next: null },
+      { key, previous: null, next: { expires, type: 'mppx:replay' } },
+    ])
+    await expect
+      .poll(async () => (await run<Log>({ op: 'log', key })).alarms, { timeout: 5_000 })
+      .toBeGreaterThan(0)
+  })
+})
+
+describe('Store.DurableObjectStore write hook failures in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'failing' })
+
+  test('rolls back a write and the hook writes when onWrite throws', async () => {
+    const key = 'atomic'
+    await run({ op: 'put', key, value: { v: 1 } })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'put', key, value: { v: 2 } })).rejects.toThrow()
+    expect(await run({ op: 'get', key })).toEqual({ v: 1 })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'delete', key })).rejects.toThrow()
+    expect(await run({ op: 'get', key })).toEqual({ v: 1 })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+  })
+
+  test('leaves a key claimable after a claim whose onWrite throws', async () => {
+    const key = 'atomic-claim'
+    const expires = Date.now() + 60_000
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'claim', key, expires })).rejects.toThrow()
+    expect(await run({ op: 'claim', key, expires })).toBe(true)
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
   })
 })
