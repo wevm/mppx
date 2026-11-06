@@ -5,9 +5,14 @@ on:
 
 permissions: {}
 
+# A merged version PR publishes to npm, so release runs share a group of
+# their own that never cancels: a later push can't cancel a release, and
+# releases run one at a time in main's order. A release that waits behind
+# another can be replaced by a newer one, which publishes the later version.
+# Other pushes still cancel each other, and only release runs publish.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && '-release' || '' }}"
+  cancel-in-progress: "${{ !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
 
 jobs:
   verify:
@@ -57,10 +62,11 @@ jobs:
           version-script: pnpm run changeset:version
 
   # Publishes once the version PR is merged (no pending changesets). Gated on
-  # verify; skips itself while changesets are pending.
+  # verify; skips itself while changesets are pending. Only release runs
+  # publish, so an ordinary push in the other concurrency group can't race one.
   changesets:
     name: Changesets
-    if: github.repository == 'wevm/mppx'
+    if: "${{ github.repository == 'wevm/mppx' && startsWith(github.event.head_commit.message, 'chore: version packages') }}"
     needs: verify
     permissions:
       contents: write
