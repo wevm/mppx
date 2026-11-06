@@ -492,17 +492,26 @@ function validateAmount(
 export async function validateErrorHandling(
   baseUrl: string,
   endpoint: EndpointSpec,
-  options?: { body?: string | undefined; query?: string[] | undefined },
+  options?: {
+    body?: string | undefined
+    /** The Challenge whose Credential header the probe targets. Defaults to `Authorization`. */
+    challenge?: Challenge.Challenge | undefined
+    /** Extra `Name: value` headers (`-H`), such as an API key the endpoint requires. */
+    extraHeaders?: string[] | undefined
+    query?: string[] | undefined
+  },
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = []
   const url = buildUrl(baseUrl, endpoint, options?.query)
-  const fetchHeaders: Record<string, string> = {
-    [Constants.Headers.authorization]: `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`,
-  }
+  const fetchHeaders: Record<string, string> = parseHeaders(options?.extraHeaders)
+  const credentialHeader = options?.challenge
+    ? Challenge.credentialHeader(options.challenge)
+    : Constants.Headers.authorization
+  fetchHeaders[credentialHeader.toLowerCase()] = `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`
   let fetchBody: string | undefined
   if (options?.body) {
     fetchBody = options.body
-    fetchHeaders['content-type'] = 'application/json'
+    if (!fetchHeaders['content-type']) fetchHeaders['content-type'] = 'application/json'
   }
 
   try {

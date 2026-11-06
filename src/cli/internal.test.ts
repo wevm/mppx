@@ -75,6 +75,36 @@ describe('retry approval', () => {
       }),
     ).not.toThrow()
   })
+  test('allows fresh issuance nonces in opaque for the same payment', () => {
+    const withMeta = (meta: Record<string, string>) => Challenge.from({ ...challenge, meta })
+    expect(() =>
+      assertSamePaymentRequest(
+        withMeta({ checkout: 'a', _mppx_nonce: '1', _mppx_identity: '1' }),
+        withMeta({ checkout: 'a', _mppx_nonce: '2', _mppx_identity: '2' }),
+      ),
+    ).not.toThrow()
+    // Retries are parsed from the header, so they carry only the serialized opaque.
+    const parsed = Challenge.deserialize(
+      Challenge.serialize(withMeta({ checkout: 'a', _mppx_nonce: '3' })),
+    )
+    expect(() => assertSamePaymentRequest(withMeta({ checkout: 'a' }), parsed)).not.toThrow()
+    expect(() =>
+      assertSamePaymentRequest(
+        withMeta({ checkout: 'a', _mppx_nonce: '1' }),
+        withMeta({ checkout: 'b', _mppx_nonce: '1' }),
+      ),
+    ).toThrow('Payment request changed on retry')
+    expect(() =>
+      assertSamePaymentRequest(
+        { ...challenge, opaque: 'not-json' },
+        { ...challenge, opaque: 'other' },
+      ),
+    ).toThrow('Payment request changed on retry')
+    // Scalar JSON (1 and 2) is correlation data, not metadata, so it must still match.
+    expect(() =>
+      assertSamePaymentRequest({ ...challenge, opaque: 'MQ' }, { ...challenge, opaque: 'Mg' }),
+    ).toThrow('Payment request changed on retry')
+  })
   test.each([
     { realm: 'another.example' },
     { request: { ...challenge.request, amount: '9000000' } },
