@@ -287,6 +287,16 @@ function deepEqual(a: unknown, b: unknown): boolean {
   )
 }
 
+/** 32-bit FNV-1a hash of a string's UTF-16 code units: cheap and stable, to pick a replay shard. */
+function fnv1a(value: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
+}
+
 /** Options shared by store constructors. */
 export type Options = {
   /** Prefix prepended to every backing store key. */
@@ -467,6 +477,15 @@ export function durableObject(
       'Store.durableObject: `encoding: "native"` requires `transport: "rpc"`, since `fetch` carries values as JSON.',
     )
   const native = encoding === 'native'
+  const { replayShards, replayShardVersion = 1 } = options ?? {}
+  if (replayShards !== undefined && !(Number.isSafeInteger(replayShards) && replayShards > 0))
+    throw new Error(
+      `Store.durableObject: \`replayShards\` must be a positive integer, got ${replayShards}.`,
+    )
+  if (!(Number.isSafeInteger(replayShardVersion) && replayShardVersion > 0))
+    throw new Error(
+      `Store.durableObject: \`replayShardVersion\` must be a positive integer, got ${replayShardVersion}.`,
+    )
 
   const object = (key: string) => namespace.get(namespace.idFromName(key))
 
@@ -510,6 +529,27 @@ export function durableObject(
     return object(key) as unknown as DurableObjectStore.Stub
   }
 
+  // Replay claims in `replayShards` SQLite-backed shard objects instead of one object per key.
+  const replay =
+    replayShards === undefined
+      ? undefined
+      : (() => {
+          const shardOf = (key: string) =>
+            `mppx:replay:v${replayShardVersion}:${fnv1a(key) % replayShards}`
+          const shard = (key: string) =>
+            object(shardOf(key)) as unknown as DurableObjectStore.ReplayShard
+          return transport === 'rpc'
+            ? {
+                claim: (key: string, expires: number) => shard(key).claimReplay(key, expires),
+                release: (key: string) => shard(key).releaseReplay(key),
+              }
+            : {
+                claim: (key: string, expires: number) =>
+                  call<boolean>(shardOf(key), { op: 'claimReplay', key, expires }),
+                release: (key: string) => call(shardOf(key), { op: 'releaseReplay', key }),
+              }
+        })()
+
   return from(
     {
       async get(key: string) {
@@ -522,7 +562,10 @@ export function durableObject(
         await remote.put(key, native ? value : Json.stringify(value))
       },
       async delete(key: string) {
-        await remote.delete(key)
+        // Callers release a claim by deleting its key (tempo charge does when a payment
+        // fails), and claims take any caller-chosen key and prefix, so every delete also
+        // releases the key's shard claim: one idempotent `DELETE`.
+        await Promise.all([remote.delete(key), replay?.release(key)])
       },
       update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
         return compareAndSwap<result, unknown>({
@@ -544,7 +587,7 @@ export function durableObject(
       },
       async tryClaim(key: string, expires: number) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
-        return remote.claim(key, expires)
+        return replay ? replay.claim(key, expires) : remote.claim(key, expires)
       },
     },
     options,
@@ -564,6 +607,19 @@ export declare namespace durableObject {
     keyPrefix?: string | undefined
     /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
     maxAttempts?: number | undefined
+    /**
+     * Spreads replay claims ({@link AtomicStore.tryClaim}) over this many shard
+     * objects, named `mppx:replay:v<version>:<shard>` by an FNV-1a hash of the
+     * key, instead of one object per key: each shard holds its claims in a SQLite
+     * table and clears expired ones with an alarm, so short-lived claims leave no
+     * objects behind. The class must be SQLite-backed. Claims then live only in
+     * the shards: `get` and `update` of a claimed key don't see them, and
+     * `delete` releases them. Changing the count moves keys between shards, so
+     * bump `replayShardVersion` with it to start from empty shards.
+     */
+    replayShards?: number | undefined
+    /** Version in the shard objects' names, to start a fresh set of shards. @default 1 */
+    replayShardVersion?: number | undefined
     /**
      * How the store calls the object: `fetch` requests, or Workers RPC method
      * calls, which need the class from {@link DurableObjectStore.rpc}. @default 'fetch'
@@ -667,8 +723,57 @@ export class DurableObjectStore {
     _storage: DurableObjectStore.Storage,
   ): void | Promise<void> {}
 
-  /** Handles the object's alarm, which a subclass sets through {@link DurableObjectStore.storage}. Does nothing by default. */
-  async alarm(): Promise<void> {}
+  /**
+   * Handles the object's alarm, which a subclass sets through
+   * {@link DurableObjectStore.storage}. In a replay shard it clears expired claims;
+   * a subclass that overrides it calls `super.alarm()`.
+   */
+  async alarm(): Promise<void> {
+    const { sql } = this.state.storage
+    if (!sql) return
+    const shard = sql
+      .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'replay_claims'")
+      .toArray()
+    if (shard.length === 0) return
+    const now = Date.now()
+    sql.exec('DELETE FROM replay_claims WHERE expires <= ?', now)
+    const [{ expires } = {}] = sql
+      .exec('SELECT MIN(expires) AS expires FROM replay_claims')
+      .toArray()
+    if (typeof expires === 'number') await this.state.storage.setAlarm?.(Math.max(expires, now + 1))
+  }
+
+  /**
+   * Claims `key` until `expires` in this replay shard, unless it holds an
+   * unexpired claim: one `INSERT … ON CONFLICT DO UPDATE … WHERE` statement, so
+   * concurrent claims have exactly one winner. Schedules the alarm that clears it.
+   */
+  async claimReplay(key: string, expires: number): Promise<boolean> {
+    const sql = this.replayClaims()
+    const now = Date.now()
+    if (!Number.isFinite(expires) || expires <= now) return false
+    const claimed =
+      sql
+        .exec(
+          'INSERT INTO replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE replay_claims.expires <= ? RETURNING key',
+          key,
+          expires,
+          now,
+        )
+        .toArray().length === 1
+    if (claimed) {
+      const { storage } = this.state
+      const alarm = (await storage.getAlarm?.()) ?? null
+      if (alarm === null || expires < alarm)
+        await storage.setAlarm?.(Math.max(expires, Date.now() + 1))
+    }
+    return claimed
+  }
+
+  /** Releases `key`'s claim in this replay shard, if it has one. */
+  async releaseReplay(key: string): Promise<void> {
+    this.replayClaims().exec('DELETE FROM replay_claims WHERE key = ?', key)
+  }
 
   /** Reads a key: its JSON text, or its stored value with `native` encoding. */
   async get(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
@@ -736,9 +841,28 @@ export class DurableObjectStore {
         return Response.json(await this.swap(body.key, body.expected, body.value))
       case 'claim':
         return Response.json(await this.claim(body.key, body.expires))
+      case 'claimReplay':
+        return Response.json(await this.claimReplay(body.key, body.expires))
+      case 'releaseReplay':
+        await this.releaseReplay(body.key)
+        return Response.json(true)
       default:
         return new Response('Unknown operation', { status: 400 })
     }
+  }
+
+  /** The replay shard's claims table, created on first use. */
+  private replayClaims(): DurableObjectStore.Sql {
+    const { sql } = this.state.storage
+    if (!sql)
+      throw new Error(
+        'Store.durableObject: `replayShards` needs a SQLite-backed Durable Object (a `new_sqlite_classes` migration).',
+      )
+    sql.exec(
+      'CREATE TABLE IF NOT EXISTS replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
+    )
+    sql.exec('CREATE INDEX IF NOT EXISTS replay_claims_by_expiry ON replay_claims (expires)')
+    return sql
   }
 
   /** Writes or deletes (`null`) a key and runs {@link DurableObjectStore.onWrite}. `previous` is the value the caller already read, if any. */
@@ -789,6 +913,19 @@ export declare namespace DurableObjectStore {
     deleteAlarm?: (() => Promise<void>) | undefined
     /** Runs `closure` in a transaction that rolls back when it throws. */
     transaction?<result>(closure: (txn: Storage) => Promise<result>): Promise<result>
+    /** The object's SQLite database, on SQLite-backed objects: replay shards need it. */
+    sql?: Sql | undefined
+  }
+
+  /** The subset of `SqlStorage` replay shards use. */
+  export type Sql = {
+    exec: (query: string, ...bindings: unknown[]) => { toArray: () => Record<string, unknown>[] }
+  }
+
+  /** A replay shard's methods that {@link durableObject} calls over Workers RPC. */
+  export type ReplayShard = {
+    claimReplay: (key: string, expires: number) => Promise<boolean>
+    releaseReplay: (key: string) => Promise<unknown>
   }
 
   /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
@@ -817,6 +954,8 @@ export declare namespace DurableObjectStore {
     | { op: 'delete'; key: string }
     | { op: 'swap'; key: string; expected: string | null; value: string | null }
     | { op: 'claim'; key: string; expires: number }
+    | { op: 'claimReplay'; key: string; expires: number }
+    | { op: 'releaseReplay'; key: string }
 }
 
 /**
