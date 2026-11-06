@@ -1,5 +1,11 @@
 # mppx
 
+## 0.17.3
+
+### Patch Changes
+
+- f8852c3: Removed the `eventsource-parser` dependency. The MCP client protocol now reads the first event of a `text/event-stream` response with a small internal SSE parser.
+
 ## 0.17.2
 
 ### Patch Changes
