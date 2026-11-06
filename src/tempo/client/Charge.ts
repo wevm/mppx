@@ -1,6 +1,12 @@
 import type * as Hex from 'ox/Hex'
 import { TxEnvelopeTempo } from 'ox/tempo'
-import { type Address, keccak256, parseUnits } from 'viem'
+import {
+  type Address,
+  type Client as viem_Client,
+  keccak256,
+  parseEventLogs,
+  parseUnits,
+} from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
@@ -8,7 +14,7 @@ import {
   signTypedData,
   signTransaction,
 } from 'viem/actions'
-import { Actions } from 'viem/tempo'
+import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
@@ -24,6 +30,7 @@ import * as defaults from '../internal/defaults.js'
 import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as Zone from '../internal/zone.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
 
@@ -119,6 +126,20 @@ export function charge(parameters: charge.Parameters = {}) {
       const supportedModes = (methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
+      const zoneId = parameters.zone
+        ? (parameters.zone.zoneId ?? Zone.idFromChainId(parameters.zone.client.chain?.id ?? 0))
+        : undefined
+      const offeredZones = methodDetails?.zones as readonly number[] | undefined
+      // Pay from a Zone balance when the challenge accepts the configured Zone.
+      if (
+        BigInt(amount) > 0n &&
+        parameters.zone &&
+        zoneId !== undefined &&
+        offeredZones?.includes(zoneId) &&
+        !methodDetails?.splits
+      )
+        return createZoneCredential({ challenge, clientId, client, zone: parameters.zone, zoneId })
+
       const defaultAccount = getAccount(client, context)
       const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
         (await parameters.resolveAccount?.({
@@ -373,6 +394,7 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   if (!parsed.success) return undefined
   const payload = parsed.data
   if (payload.type === 'hash') return payload.hash as Hex.Hex
+  if (payload.type === 'zone') return payload.hash as Hex.Hex | undefined
   const serialized = payload.signature as TxEnvelopeTempo.Serialized
   if (payload.type !== 'transaction' || !serialized.startsWith(TxEnvelopeTempo.serializedType))
     return undefined
@@ -381,6 +403,78 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   // Reject trailing or non-canonical bytes, which never identify an on-chain transaction.
   if (TxEnvelopeTempo.serialize(transaction) !== serialized) return undefined
   return keccak256(serialized)
+}
+
+/**
+ * Pays a challenge from a Zone balance: requests a withdrawal to the recipient
+ * with the challenge-bound memo, and returns a `zone` credential that names it
+ * by sender tag (and, once settled, by the Tempo transaction hash).
+ */
+async function createZoneCredential(options: {
+  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+  client: viem_Client
+  clientId: string | undefined
+  zone: charge.Zone
+  zoneId: number
+}) {
+  const { challenge, client, clientId, zone, zoneId } = options
+  const request = challenge.request as ChargeRequest
+  const account = zone.client.account
+  if (!account) throw new Error('`zone.client` requires an account.')
+  const amount = BigInt(request.amount)
+  const currency = request.currency as Address
+  const recipient = request.recipient as Address
+  const memo = Attribution.encode({
+    challengeId: challenge.id,
+    clientId,
+    serverId: challenge.realm,
+  })
+
+  // The outbox pulls the amount plus its withdrawal fee.
+  const fee = await Actions.zone.getWithdrawalFee(zone.client)
+  const [, withdrawal] = Actions.zone.requestWithdrawal.calls({
+    amount,
+    memo,
+    to: recipient,
+    token: currency,
+  })
+  const receipt = await sendTransactionSync(zone.client, {
+    account,
+    calls: [
+      Actions.token.approve.call({
+        amount: amount + fee,
+        spender: Addresses.zoneOutbox,
+        token: currency,
+      }),
+      withdrawal,
+    ],
+  } as never)
+  const [requested] = parseEventLogs({
+    abi: Abis.zoneOutbox,
+    eventName: 'WithdrawalRequested',
+    logs: receipt.logs,
+  })
+  if (!requested) throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.')
+  const senderTag = Zone.senderTag({
+    fallbackNonce: requested.args.fallbackNonce,
+    sender: requested.args.sender,
+    transactionHash: receipt.transactionHash,
+  })
+
+  const hash =
+    zone.wait === 'settled'
+      ? await Zone.waitForSettlement(client, {
+          portal: Zone.portalAddress(zoneId),
+          senderTag,
+          timeoutMs: zone.settlementTimeoutMs,
+          to: recipient,
+        })
+      : undefined
+
+  return Credential.serialize({
+    challenge,
+    payload: { ...(hash && { hash }), senderTag, type: 'zone', zoneId },
+  })
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
@@ -452,6 +546,25 @@ export declare namespace charge {
   type Context = ChargeContext
   type ResolveAccount = AccountResolution.ResolveAccount
   type ResolveAccountInfo = AccountResolution.ResolveAccountInfo
+
+  /** Pays from a Zone balance when a challenge accepts that Zone. */
+  type Zone = {
+    /** Client for the Zone chain, with the paying account and Zone RPC authorization. */
+    client: viem_Client
+    /** Zone ID. Derived from `client.chain.id` when omitted. */
+    zoneId?: number | undefined
+    /**
+     * When to send the credential.
+     *
+     * - `'accepted'`: once the Zone accepts the withdrawal. The server waits for it to settle on Tempo.
+     * - `'settled'`: once the withdrawal settles on Tempo, with the settlement transaction hash.
+     *
+     * @default 'accepted'
+     */
+    wait?: 'accepted' | 'settled' | undefined
+    /** Milliseconds to wait for settlement when `wait` is `'settled'`. @default 60_000 */
+    settlementTimeoutMs?: number | undefined
+  }
 
   type Parameters = {
     /**
@@ -527,6 +640,12 @@ export declare namespace charge {
     mode?: Methods.ChargeMode | undefined
     /** Selects the account that signs this charge after the challenge and chain are known. */
     resolveAccount?: ResolveAccount | undefined
+    /**
+     * Pays from a Zone balance instead of the account's Tempo balance when the
+     * challenge accepts this Zone (`methodDetails.zones`). Other challenges,
+     * and split payments, are paid on Tempo as usual.
+     */
+    zone?: Zone | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }

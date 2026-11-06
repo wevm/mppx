@@ -120,6 +120,12 @@ export const charge = Method.from({
         z.object({ hash: z.hash(), type: z.literal('hash') }),
         z.object({ signature: z.signature(), type: z.literal('transaction') }),
         z.object({ signature: z.signature(), type: z.literal('proof') }),
+        z.object({
+          hash: z.optional(z.hash()),
+          senderTag: z.hash(),
+          type: z.literal('zone'),
+          zoneId: z.number(),
+        }),
       ]),
     },
     request: z.pipe(
@@ -142,6 +148,7 @@ export const charge = Method.from({
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
           supportedModes: z.optional(z.array(z.enum(chargeModes)).check(z.minLength(1))),
+          zones: z.optional(z.array(z.number()).check(z.minLength(1))),
         })
         .check(
           z.refine(({ amount, decimals, splits }) => {
@@ -169,6 +176,7 @@ export const charge = Method.from({
           memo: _memo,
           splits,
           supportedModes,
+          zones,
           ...rest
         }) => ({
           ...rest,
@@ -177,7 +185,8 @@ export const charge = Method.from({
           chainId !== undefined ||
           feePayer !== undefined ||
           splits !== undefined ||
-          supportedModes !== undefined
+          supportedModes !== undefined ||
+          zones !== undefined
             ? {
                 methodDetails: {
                   ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
@@ -190,6 +199,7 @@ export const charge = Method.from({
                     })),
                   }),
                   ...(supportedModes !== undefined && { supportedModes }),
+                  ...(zones !== undefined && { zones }),
                 },
               }
             : {}),
