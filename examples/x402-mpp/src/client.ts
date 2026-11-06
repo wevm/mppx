@@ -3,7 +3,7 @@ import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Actions, Chain } from 'viem/tempo'
 
-const baseUrl = process.env.BASE_URL ?? 'http://localhost:5173'
+const baseUrl = process.env.BASE_URL ?? 'http://localhost:8787'
 const flow = process.env.FLOW ?? 'all'
 const mppPrivateKey = (process.env.MPP_PRIVATE_KEY ?? generatePrivateKey()) as `0x${string}`
 const configuredX402PrivateKey = (process.env.X402_PRIVATE_KEY ?? process.env.MPP_PRIVATE_KEY) as

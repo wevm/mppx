@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-charge",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The page (index.html) is served as static assets; /api/* always reaches the
+  // Worker, so browsers opening /api/photo get its payment page.
+  "assets": { "run_worker_first": ["/api/*"] },
+  // Used credentials are recorded in Durable Objects, so a payment can't be
+  // replayed against another isolate.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+}

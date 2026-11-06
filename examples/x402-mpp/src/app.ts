@@ -1,8 +1,7 @@
 import { Hono } from 'hono'
-import { Mppx, evm, tempo } from 'mppx/server'
+import { Mppx, Store, evm, tempo } from 'mppx/server'
 import type { Facilitator } from 'mppx/x402'
 import type { Account, Client } from 'viem'
-import { createClient, http } from 'viem'
 import { Chain } from 'viem/tempo'
 
 const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD
@@ -10,27 +9,28 @@ const currency = '0x20c0000000000000000000000000000000000000' as const // pathUS
 export type AppOptions = {
   account: Account
   facilitator?: string | Facilitator | undefined
-  getTempoClient?: (() => Client) | undefined
+  getTempoClient: () => Client
   recipient?: `0x${string}` | undefined
-  secretKey?: string | undefined
+  secretKey: string
+  /** Shared store for Tempo replay protection. */
+  store: Store.AtomicStore
 }
 
 /** Creates the example server with mpp, x402, and composed payment routes. */
 export function createApp(options: AppOptions) {
   const recipient = options.recipient ?? options.account.address
-  const facilitator =
-    options.facilitator ?? process.env.X402_FACILITATOR_URL ?? 'https://facilitator.x402.rs'
-  const getTempoClient = options.getTempoClient ?? (() => createTempoClient())
+  const facilitator = options.facilitator ?? 'https://facilitator.x402.rs'
 
   const payments = Mppx.create({
     methods: [
       tempo.charge({
         account: options.account,
+        chainId: Chain.testnet.id,
         currency,
         feePayer: true,
-        getClient: getTempoClient,
+        getClient: options.getTempoClient,
         recipient,
-        testnet: true,
+        store: options.store,
       }),
       evm.charge({
         currency: evm.assets.baseSepolia.USDC,
@@ -38,7 +38,7 @@ export function createApp(options: AppOptions) {
         x402: { facilitator },
       }),
     ],
-    secretKey: options.secretKey ?? 'x402-mpp-example-secret-key-min-32',
+    secretKey: options.secretKey,
   })
 
   const paid = payments.compose(
@@ -89,13 +89,4 @@ export function createApp(options: AppOptions) {
   })
 
   return app
-}
-
-/** Creates the Tempo testnet client used by the example server. */
-export function createTempoClient(): Client {
-  return createClient({
-    chain: Chain.testnet,
-    pollingInterval: 1_000,
-    transport: http(process.env.MPPX_RPC_URL),
-  })
 }

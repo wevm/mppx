@@ -20,7 +20,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Actions, Chain } from 'viem/tempo'
 
 // The server URL. The websocket URL is derived from this base.
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8787'
 
 // pathUSD on Tempo testnet.
 const currency = '0x20c0000000000000000000000000000000000000' as const
@@ -82,13 +82,14 @@ const session = tempo.session.manager({
 
 //
 // The example derives the socket URL from `BASE_URL` so the same code works
-// against localhost or a remote deployment. The prompt is sent as a query
-// parameter because the websocket content request itself has no HTTP body.
+// against localhost or a remote deployment. The prompt is sent as a path
+// segment because the websocket content request itself has no HTTP body, and
+// payment frames are verified as POSTs to this URL, where a query string
+// would be billed as content.
 const prompt = process.argv[2] ?? 'Tell me something interesting'
 const url = new URL(BASE_URL)
 url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-url.pathname = '/ws/chat'
-url.searchParams.set('prompt', prompt)
+url.pathname = `/ws/chat/${encodeURIComponent(prompt)}`
 
 console.log(`\n--- Channel ---`)
 console.log(`Max deposit: 1 pathUSD`)

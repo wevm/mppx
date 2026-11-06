@@ -1,32 +1,47 @@
-import { createServer } from 'node:http'
+// x402 + mpp on Cloudflare Workers — Example
+//
+// One Hono app serves mpp, x402 and composed mpp-or-x402 payment routes
+// (see `app.ts`). Tempo replay protection lives in Durable Objects through
+// `Store.durableObject()`, so a credential can't be replayed on another isolate.
+import { Store } from 'mppx/server'
+import { createClient, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Chain } from 'viem/tempo'
 
-import { NodeListener, Request as ServerRequest } from 'mppx/server'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { Actions } from 'viem/tempo'
+import { createApp } from './app.js'
 
-import { createApp, createTempoClient } from './app.js'
+// The Durable Object class that stores spent credentials, bound as `MPPX_STORE`.
+export class MppxStore extends Store.DurableObjectStore {}
 
-const port = Number(process.env.PORT ?? 5173)
-const privateKey = process.env.MPPX_PRIVATE_KEY as `0x${string}` | undefined
-const account = privateKeyToAccount(privateKey ?? generatePrivateKey())
-const tempoClient = createTempoClient()
+type Env = {
+  /** Durable Object namespace of {@link MppxStore}. */
+  MPPX_STORE: Store.durableObject.Namespace
+  /** Payee account key: receives payments and sponsors Tempo fees. */
+  MPP_PRIVATE_KEY: string
+  /** Secret that binds challenge IDs. */
+  MPP_SECRET_KEY: string
+  /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
+  TEMPO_RPC_URL?: string | undefined
+  /** Optional x402 facilitator URL. Defaults to https://facilitator.x402.rs. */
+  X402_FACILITATOR_URL?: string | undefined
+}
 
-if (process.env.MPPX_SKIP_FAUCET !== 'true') await Actions.faucet.fundSync(tempoClient, { account })
+let app: ReturnType<typeof createApp> | undefined
+function createAppFromEnv(env: Env) {
+  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
+  const tempoClient = createClient({ chain: Chain.testnet, transport: http(env.TEMPO_RPC_URL) })
+  return createApp({
+    account,
+    facilitator: env.X402_FACILITATOR_URL,
+    getTempoClient: () => tempoClient,
+    secretKey: env.MPP_SECRET_KEY,
+    store: Store.durableObject(env.MPPX_STORE),
+  })
+}
 
-const app = createApp({
-  account,
-  getTempoClient: () => tempoClient,
-})
-
-const server = createServer(async (req, res) => {
-  const request = ServerRequest.fromNodeListener(req, res)
-  const response = await app.fetch(request)
-  return NodeListener.sendResponse(res, response)
-})
-
-server.listen(port)
-
-console.log(`x402 + mpp example listening on http://localhost:${port}`)
-console.log(`mpp route: pnpm mppx http://localhost:${port}/api/mpp`)
-console.log(`x402 route: curl -i http://localhost:${port}/api/x402`)
-console.log(`composed route: http://localhost:${port}/api/paid`)
+export default {
+  fetch(request: Request, env: Env): Response | Promise<Response> {
+    app ??= createAppFromEnv(env)
+    return app.fetch(request)
+  },
+}
