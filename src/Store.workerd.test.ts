@@ -19,7 +19,7 @@ beforeAll(async () => {
   miniflare = new Miniflare({
     compatibilityDate: '2026-07-01',
     d1Databases: ['DB'],
-    durableObjects: { RECORDING: 'RecordingStore', STORE: 'MppxStore' },
+    durableObjects: { FAILING: 'FailingStore', RECORDING: 'RecordingStore', STORE: 'MppxStore' },
     modules: [{ type: 'ESModule', path: 'worker.js', contents: output[0].code }],
   })
   await miniflare.ready
@@ -124,5 +124,33 @@ describe('Store.DurableObjectStore hooks in workerd', () => {
     await expect
       .poll(async () => (await run<Log>({ op: 'log', key })).alarms, { timeout: 5_000 })
       .toBeGreaterThan(0)
+  })
+})
+
+describe('Store.DurableObjectStore write hook failures in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'failing' })
+
+  test('rolls back a write and the hook writes when onWrite throws', async () => {
+    const key = 'atomic'
+    await run({ op: 'put', key, value: { v: 1 } })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'put', key, value: { v: 2 } })).rejects.toThrow()
+    expect(await run({ op: 'get', key })).toEqual({ v: 1 })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'delete', key })).rejects.toThrow()
+    expect(await run({ op: 'get', key })).toEqual({ v: 1 })
+    expect(await run({ op: 'hooked', key })).toBe(1)
+  })
+
+  test('leaves a key claimable after a claim whose onWrite throws', async () => {
+    const key = 'atomic-claim'
+    const expires = Date.now() + 60_000
+    await run({ op: 'arm', key })
+    await expect(run({ op: 'claim', key, expires })).rejects.toThrow()
+    expect(await run({ op: 'claim', key, expires })).toBe(true)
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
   })
 })

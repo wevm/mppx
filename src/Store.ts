@@ -436,13 +436,16 @@ export class DurableObjectStore {
   /**
    * Called for every applied put, delete, swap and claim, after the storage
    * write and before the response, with the decoded values (`null` when the key
-   * is absent). The object's input and output gates hold while it runs, so
-   * storage writes it makes commit with the store's write. Does nothing by default.
+   * is absent). When the storage has `transaction()`, the write and this hook run
+   * in one transaction, passed as `storage`: make the hook's writes and alarms
+   * through it so they commit with the store's write, and throw to roll the
+   * write back. Does nothing by default.
    */
   protected onWrite(
     _key: string,
     _previous: unknown | null,
     _next: unknown | null,
+    _storage: DurableObjectStore.Storage,
   ): void | Promise<void> {}
 
   /** Handles the object's alarm, which a subclass sets through {@link DurableObjectStore.storage}. Does nothing by default. */
@@ -458,10 +461,23 @@ export class DurableObjectStore {
     const decode = (raw: string | null) => (raw == null ? null : Json.parse(raw))
     // `previous` is the value the operation already read, if it read one.
     const write = async (value: string | null, previous?: string | null) => {
-      const before = hooked && previous === undefined ? await read() : (previous ?? null)
-      if (value === null) await storage.delete(body.key)
-      else await storage.put(body.key, value)
-      if (hooked) await this.onWrite(body.key, decode(before), decode(value))
+      if (!hooked) {
+        if (value === null) await storage.delete(body.key)
+        else await storage.put(body.key, value)
+        return
+      }
+      // One transaction: the hook's writes commit with this one, and its failure rolls it back.
+      const commit = async (target: DurableObjectStore.Storage) => {
+        const before =
+          previous === undefined
+            ? (((await target.get(body.key)) as string | undefined) ?? null)
+            : previous
+        if (value === null) await target.delete(body.key)
+        else await target.put(body.key, value)
+        await this.onWrite(body.key, decode(before), decode(value), target)
+      }
+      if (storage.transaction) await storage.transaction(commit)
+      else await commit(storage)
     }
 
     switch (body.op) {
@@ -511,6 +527,8 @@ export declare namespace DurableObjectStore {
     setAlarm?: ((scheduledTime: number | Date) => Promise<void>) | undefined
     /** Cancels the object's alarm. */
     deleteAlarm?: (() => Promise<void>) | undefined
+    /** Runs `closure` in a transaction that rolls back when it throws. */
+    transaction?<result>(closure: (txn: Storage) => Promise<result>): Promise<result>
   }
 
   /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
