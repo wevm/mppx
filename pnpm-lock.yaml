@@ -217,9 +217,6 @@ importers:
 
   .:
     dependencies:
-      eventsource-parser:
-        specifier: 4.1.1
-        version: 4.1.1
       ox:
         specifier: 0.14.45
         version: 0.14.45(typescript@7.0.2)(zod@4.6.7)
@@ -293,6 +290,9 @@ importers:
       eslint-plugin-compat:
         specifier: ^7.0.2
         version: 7.0.2(eslint@10.1.0(supports-color@10.2.2))
+      eventsource-parser:
+        specifier: 4.1.1
+        version: 4.1.1
       express:
         specifier: ^5.2.1
         version: 5.2.1(supports-color@10.2.2)
