@@ -175,9 +175,11 @@ export default {
     // The client's session will automatically parse this, open a channel, and retry.
     if (result.status === 402) return result.challenge
 
-    // The close POST (and any top-up) is a management request: it carries a
-    // credential but asks for no content, so it gets the receipt alone.
-    if (request.method === 'POST') return result.withReceipt()
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
 
     // If we get here, the credential was valid — the client paid for this request.
     // Generate the content they paid for.
@@ -206,4 +208,14 @@ export default {
 // is verified — the server never does expensive work for free.
 function scrapePage(url: string): string {
   return `<h1>${url}</h1><p>Scraped content from ${url}</p>`
+}
+
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
+  }
 }
