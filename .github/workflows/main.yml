@@ -5,8 +5,11 @@ on:
 
 permissions: {}
 
+# A merged version PR publishes to npm, so its run gets a group of its own:
+# a later push must not cancel it (or replace it while it is queued), or the
+# release never goes out. Other pushes still cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && format('-release-{0}', github.sha) || '' }}"
   cancel-in-progress: true
 
 jobs:
