@@ -565,6 +565,25 @@ describe('durableObject', () => {
   })
 })
 
+/** node:sqlite behind better-sqlite3's API: all() throws on statements that return no rows. */
+function betterSqlite3Like() {
+  const db = new DatabaseSync(':memory:')
+  return {
+    prepare(text: string) {
+      const statement = db.prepare(text)
+      const reader = statement.columns().length > 0
+      return {
+        reader,
+        all(...params: never[]) {
+          if (!reader) throw new TypeError('This statement does not return data. Use run() instead')
+          return statement.all(...params)
+        },
+        run: (...params: never[]) => statement.run(...params),
+      }
+    },
+  }
+}
+
 let pglite: PGlite | undefined
 let tables = 0
 
@@ -579,6 +598,10 @@ describe.each([
   {
     label: 'sqlite (node:sqlite)',
     create: (options?: Store.sql.Options) => Store.sqlite(new DatabaseSync(':memory:'), options),
+  },
+  {
+    label: 'sqlite (better-sqlite3 API)',
+    create: (options?: Store.sql.Options) => Store.sqlite(betterSqlite3Like(), options),
   },
 ])('sql: $label', ({ create }) => {
   test('round-trips values with bigints', async () => {

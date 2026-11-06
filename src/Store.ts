@@ -662,7 +662,13 @@ export function sqlite(database: sqlite.Database, options?: sql.Options): Atomic
     {
       dialect: 'sqlite',
       async query(text, params) {
-        return (await database.prepare(text).all(...params)) as sql.Row[]
+        const statement = database.prepare(text)
+        // better-sqlite3 allows all() only on statements that return rows.
+        if (statement.reader === false && statement.run) {
+          await statement.run(...params)
+          return []
+        }
+        return (await statement.all(...params)) as sql.Row[]
       },
     },
     options,
@@ -670,9 +676,14 @@ export function sqlite(database: sqlite.Database, options?: sql.Options): Atomic
 }
 
 export declare namespace sqlite {
-  /** A database whose prepared statements run with `all(...params)`. */
+  /** A database whose prepared statements run with `all(...params)`, or `run(...params)` when better-sqlite3 marks them as returning no rows. */
   export type Database = {
-    prepare: (sql: string) => { all: (...params: any[]) => unknown }
+    prepare: (sql: string) => {
+      all: (...params: any[]) => unknown
+      run?: ((...params: any[]) => unknown) | undefined
+      /** better-sqlite3: whether the statement returns rows. */
+      reader?: boolean | undefined
+    }
   }
 }
 
