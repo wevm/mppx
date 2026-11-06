@@ -95,7 +95,7 @@ export function charge(parameters: charge.Parameters = {}) {
   })
   const getAccount = Account.getResolver({ account: parameters.account })
   // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
-  const pendingZoneWithdrawals = new Map<string, Zone.PendingWithdrawal>()
+  const pendingZoneWithdrawals = new Map<string, Promise<Zone.PendingWithdrawal>>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -437,7 +437,7 @@ async function createZoneCredential(options: {
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
-  pending: Map<string, Zone.PendingWithdrawal>
+  pending: Map<string, Promise<Zone.PendingWithdrawal>>
   zone: charge.Zone
   zoneId: number
 }) {
@@ -446,14 +446,21 @@ async function createZoneCredential(options: {
   const recipient = request.recipient as Address
 
   // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
-  const withdrawal = pending.get(challenge.id) ?? (await requestZoneWithdrawal(options))
+  // Concurrent calls for one challenge share the request, which is stored before it is sent.
+  let withdrawalRequest = pending.get(challenge.id)
+  if (!withdrawalRequest) {
+    withdrawalRequest = requestZoneWithdrawal(options)
+    pending.set(challenge.id, withdrawalRequest)
+    // The request has no receipt to resume from, so a later call requests again.
+    withdrawalRequest.catch(() => pending.delete(challenge.id))
+  }
+  const withdrawal = await withdrawalRequest
   if (withdrawal.zoneId !== zoneId)
     throw new Error(
       `Challenge "${challenge.id}" is already paid by a Zone ${withdrawal.zoneId} withdrawal.`,
     )
   const { senderTag } = withdrawal
 
-  pending.set(challenge.id, withdrawal)
   let hash: Hex.Hex
   try {
     hash = await Zone.waitForSettlement(client, {

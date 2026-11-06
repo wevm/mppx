@@ -23,15 +23,20 @@ const l1 = createClient({
 })
 
 /** A Zone client whose every RPC call fails loudly, to show whether the client used it. */
-function zoneClient(chainId: number) {
+function zoneClient(chainId: number, calls: string[] = []) {
   return createClient({
     account: payer,
     chain: defineChain({ ...tempoModerato, id: chainId, name: 'Zone' }),
-    transport: custom({
-      async request() {
-        throw new Error('zone used')
+    transport: custom(
+      {
+        async request({ method }) {
+          calls.push(method)
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          throw new Error('zone used')
+        },
       },
-    }),
+      { retryCount: 0 },
+    ),
   })
 }
 
@@ -92,6 +97,29 @@ describe('tempo.charge client zone selection', () => {
       .createCredential({ challenge: (await challenge({ expires })) as never, context: {} })
       .catch((error: Error) => error)
     expect(String(error)).not.toContain('zone used')
+  })
+
+  test('shares one withdrawal request between concurrent calls for a challenge', async () => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: zoneClient(1_424_310_003, calls) },
+    })
+    const c = await challenge()
+    const results = await Promise.allSettled([
+      // Different accounts make different signing operations, but both withdraw from the Zone account.
+      method.createCredential({ challenge: c as never, context: { account: payer } as never }),
+      method.createCredential({
+        challenge: c as never,
+        context: {
+          account: privateKeyToAccount(
+            '0x0000000000000000000000000000000000000000000000000000000000000002',
+          ),
+        } as never,
+      }),
+    ])
+    expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected'])
+    expect(calls).toHaveLength(1)
   })
 
   test.each([
