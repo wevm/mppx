@@ -1,5 +1,27 @@
 # mppx
 
+## 0.17.2
+
+### Patch Changes
+
+- 247dc02: Rendered nested problem-details fields (such as `details`) as JSON in the CLI's Payment Rejected output instead of `[object Object]`.
+- d87c8bb: Removed `@stripe/stripe-js` from `dependencies`. The Stripe HTML payment page bundles Stripe.js at build time, and the Stripe Elements option types in `stripe.charge`'s `html.elements` are now inlined, so the published types no longer import `@stripe/stripe-js`.
+- a384733: Added `Store.durableObject()` and `Store.DurableObjectStore`, an atomic store backed by Cloudflare Durable Objects (one object per key, compare-and-swap with jittered retries), for running `tempo.session()` and replay protection on Cloudflare Workers.
+- adaeef7: Fixed Tempo and Stripe server bundles always including their HTML payment page: the page now loads with a dynamic `import()` the first time it is rendered, and `html.content` also accepts an async loader.
+- 2060c5f: Bound automatic session signatures and stored channel reuse to the authorized HTTP origin. Applied `trustedTempoProofRealms` to session challenges and forwarded manager pins. Added `session({ origin })` for direct credentials that will be reused over HTTP; originless stored channels must be explicitly migrated or closed rather than silently rebound. Use separate channel stores per HTTP origin because each payment scope retains a single channel.
+
+  Preserved request swap policies for automatic session top-ups and payment suppression through identity wrappers. Kept MCP adapter approval and payer selection authoritative when global payment fetch is installed. Limited proxy request bodies, including free routes, to 10 MiB by default with a configurable `maxRequestBodySize`.
+
+  Required explicit origin trust for remote snapshot recovery and rejected opaque origins. Preserved explicit CLI closing of legacy channels through validated origin migration. Returned payment challenges before buffering unpaid uploads and rejected oversized tee branches without waiting for sibling cancellation.
+
+- 55a7b62: Credited prepaid SSE items that failed before delivery when their spend remained unsettled. Added an idempotent merchant reconciliation hook for declined or uncertain credits, preserving settled funds and delivered-item charges.
+
+  Automatic prepaid credits are opt-in with `sse: { autoCreditPrepaid: true, onRefundRequired }`; existing merchant refund handlers remain unchanged. Delivery obligations persist in channel state before a managed stream starts, with bounded records and idempotent credit retries. Refund jobs distinguish uncertain writes from definite failures and expose only finalized captured funds as externally refundable. HTTP close receipts accept spend reduced by credits while retaining authorization and scope validation.
+
+- 7a18dac: Fixed sponsored preflight simulation billing the sender's fee token. Tempo nodes recover the fee payer of an `eth_call` only from `feePayerSignature` and ignore a bare `feePayer` address, so the final simulation charged the sender, and payments failed with "insufficient fee token balance" when the sponsor picked a fee token the sender did not hold. The simulation now carries the sponsor's signature: hosted sponsors return it from `eth_fillTransaction` (`fillHostedFeePayerTransaction` now returns `feePayerSignature`), and local fee-payer accounts sign a simulation-only copy with the new `signFeePayerSimulation`, only after the sender simulation passes. The sender simulation now runs at the transaction's exact gas limit with zero fee fields and the fields that set its intrinsic gas, so a transaction whose gas is too low is rejected before broadcast without needing a sender fee balance. The local simulation-only copy adds up to `sponsoredSimulationGasBuffer` (10,000) gas, because a sponsored `eth_call` charges more gas than the mined transaction uses, clamped to the fee payer policy's `maxGas` and `maxTotalFee` (`sponsoredSimulationGas`). When the sponsored simulation runs without the full buffer (hosted signatures, or clamped padding), a failure that is only out of gas no longer rejects the payment; fee balance errors and reverts still do.
+- a4d7a8e: Added `Store.sql()`, an atomic store on SQL databases (single-statement compare-and-swap, no transactions needed, and replay claims in one statement), with `Store.postgres()` for `pg`, Neon, Vercel Postgres, Supabase and PGlite, `Store.sqlite()` for `node:sqlite`, `better-sqlite3` and `bun:sqlite`, and `Store.d1()` for Cloudflare D1.
+- 8be5d55: Fixed esbuild bundles including all of `zod/mini` by importing it as a namespace in `mppx`'s zod helpers, so unused validators tree-shake.
+
 ## 0.17.1
 
 ### Patch Changes
