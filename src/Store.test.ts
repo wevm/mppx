@@ -675,7 +675,107 @@ describe.each([
   })
 })
 
+/** A value with every type native compare-and-swap compares, nested. */
+function richValue() {
+  const holes: number[] = new Array(3)
+  holes[0] = 1
+  holes[2] = 3
+  return {
+    n: 0,
+    bytes: new Uint8Array([1, 2]),
+    floats: new Float64Array([1.5]),
+    view: new DataView(new Uint8Array([7]).buffer),
+    buffer: new Uint8Array([3]).buffer,
+    map: new Map<unknown, unknown>([
+      ['a', { b: 1n }],
+      [1, [2]],
+    ]),
+    set: new Set<unknown>([1, 'x', 2n]),
+    date: new Date(0),
+    re: /a/gi,
+    error: new Error('x'),
+    holes,
+    nested: [{ m: new Map([['k', new Uint8Array([9])]]) }],
+  }
+}
+
+/** A DurableObjectStore on an in-memory storage that copies values as Durable Object storage does. */
+function objectStore() {
+  const map = new Map<string, unknown>()
+  return new Store.DurableObjectStore({
+    storage: {
+      async get(key: string) {
+        return structuredClone(map.get(key))
+      },
+      async put(key: string, value: unknown) {
+        map.set(key, structuredClone(value))
+      },
+      async delete(key: string) {
+        return map.delete(key)
+      },
+    },
+  })
+}
+
 describe('durableObject', () => {
+  test('native update compares typed arrays, buffers, maps, sets, dates, regexps and holes', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    await store.put('rich', richValue())
+    const increment = () =>
+      store.update('rich', (current) => {
+        const value = current as ReturnType<typeof richValue>
+        return { op: 'set', value: { ...value, n: value.n + 1 }, result: value.n + 1 }
+      })
+    expect(await increment()).toBe(1)
+    expect(await increment()).toBe(2)
+  })
+
+  test('native compare-and-swap tells holes, types and contents apart', async () => {
+    const holes: number[] = new Array(3)
+    holes[0] = 1
+    holes[2] = 3
+    const pairs: [unknown, unknown][] = [
+      [holes, [1, undefined, 3]],
+      [new Uint8Array([1]), new Int8Array([1])],
+      [new Uint8Array([1]), new Uint8Array([2])],
+      [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer],
+      [new Map([[1, 'a']]), new Map([[1, 'b']])],
+      [new Set([1]), new Set([2])],
+      [/a/g, /a/i],
+      [new Date(0), new Date(1)],
+      [{ a: 1n }, { a: 1 }],
+    ]
+    for (const [stored, other] of pairs) {
+      const object = objectStore()
+      await object.put('k', stored, 'native')
+      expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
+      expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
+    }
+  })
+
+  test('native encoding rejects values it cannot compare instead of conflicting', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { m: new Map([[{}, 1]]) })).rejects.toThrow(
+      'cannot compare a Map with object keys',
+    )
+    await expect(
+      store.update('k', () => ({ op: 'set', value: new Set([{}]), result: undefined })),
+    ).rejects.toThrow('cannot compare a Set with object keys')
+    // A value written directly to storage fails the swap instead of conflicting.
+    const object = objectStore()
+    await object.put('k', new Map([[{}, 1]]), 'native')
+    await expect(object.swap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
+      'cannot compare',
+    )
+  })
+
   test('rejects replayShards and replayShardVersion that are not positive integers', () => {
     for (const replayShards of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
       expect(() => Store.durableObject(fakeDurableObjectNamespace(), { replayShards })).toThrow(

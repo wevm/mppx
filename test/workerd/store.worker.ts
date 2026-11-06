@@ -7,11 +7,16 @@ export class MppxStore extends Store.DurableObjectStore {}
 
 /** Records every write and the alarms it schedules, bound as `RECORDING`. */
 export class RecordingStore extends Store.DurableObjectStore {
-  protected override async onWrite(key: string, previous: unknown, next: unknown) {
-    const writes = JSON.parse(((await this.storage.get('__writes')) as string | undefined) ?? '[]')
+  protected override async onWrite(
+    key: string,
+    previous: unknown,
+    next: unknown,
+    storage: Store.DurableObjectStore.Storage,
+  ) {
+    const writes = JSON.parse(((await storage.get('__writes')) as string | undefined) ?? '[]')
     writes.push({ key, previous, next })
-    await this.storage.put('__writes', JSON.stringify(writes))
-    await this.storage.setAlarm!(Date.now() + 10)
+    await storage.put('__writes', JSON.stringify(writes))
+    await storage.setAlarm!(Date.now() + 10)
   }
 
   override async alarm() {
@@ -64,16 +69,49 @@ type Channel = {
   vouchers: { nonce: bigint }[]
 }
 
+/** {@link RecordingStore} over Workers RPC, bound as `RECORDING_RPC`: its hooks still run. */
+export class RecordingRpcStore extends RecordingStore.rpc(DurableObject) {}
+
+/** Counts its writes, and fails the next one once armed, bound as `FAILING`. */
+export class FailingStore extends Store.DurableObjectStore {
+  private armed = false
+
+  protected override async onWrite(
+    _key: string,
+    _previous: unknown,
+    _next: unknown,
+    storage: Store.DurableObjectStore.Storage,
+  ) {
+    await storage.put('__hooked', String(Number((await storage.get('__hooked')) ?? 0) + 1))
+    if (!this.armed) return
+    this.armed = false
+    throw new Error('onWrite failed')
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    const { pathname } = new URL(request.url)
+    if (pathname === '/arm') {
+      this.armed = true
+      return Response.json(true)
+    }
+    if (pathname === '/hooked')
+      return Response.json(Number((await this.storage.get('__hooked')) ?? 0))
+    return super.fetch(request)
+  }
+}
+
 type Env = {
+  FAILING: Store.durableObject.Namespace
   NATIVE_STORE: Store.durableObject.Namespace
   RPC_STORE: Store.durableObject.Namespace
   DB: Store.d1.Database
   RECORDING: Store.durableObject.Namespace
+  RECORDING_RPC: Store.durableObject.Namespace
   STORE: Store.durableObject.Namespace
 }
 
 type Command = {
-  backend?: 'd1' | 'durableObject' | 'native' | 'recording' | 'rpc'
+  backend?: 'd1' | 'durableObject' | 'failing' | 'native' | 'recording' | 'recording-rpc' | 'rpc'
   options?: Store.durableObject.Options
 } & (
   | { op: 'get' | 'delete'; key: string; prefix?: string }
@@ -83,8 +121,10 @@ type Command = {
   | { op: 'claim'; key: string; expires: number }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
   | { op: 'log'; key: string }
+  | { op: 'arm' | 'hooked'; key: string }
   | { op: 'legacy'; key: string; amount: string }
   | { op: 'increment-bigint'; key: string }
+  | { op: 'rich'; key: string }
   | { op: 'shards'; shards: number; version: number }
 )
 
@@ -94,19 +134,25 @@ export default {
     const command = (await request.json()) as Command
     const options = { keyPrefix: 'prefix' in command ? command.prefix : undefined }
     const namespace =
-      command.backend === 'recording'
-        ? env.RECORDING
-        : command.backend === 'rpc'
-          ? env.RPC_STORE
-          : command.backend === 'native'
-            ? env.NATIVE_STORE
-            : env.STORE
+      command.backend === 'failing'
+        ? env.FAILING
+        : command.backend === 'recording'
+          ? env.RECORDING
+          : command.backend === 'recording-rpc'
+            ? env.RECORDING_RPC
+            : command.backend === 'rpc'
+              ? env.RPC_STORE
+              : command.backend === 'native'
+                ? env.NATIVE_STORE
+                : env.STORE
     const store =
       command.backend === 'd1'
         ? Store.d1(env.DB, options)
         : Store.durableObject(namespace, {
             ...options,
-            ...(command.backend === 'rpc' ? { transport: 'rpc' } : {}),
+            ...(command.backend === 'rpc' || command.backend === 'recording-rpc'
+              ? { transport: 'rpc' }
+              : {}),
             ...(command.backend === 'native' ? { encoding: 'native', transport: 'rpc' } : {}),
             ...command.options,
           })
@@ -162,6 +208,36 @@ export default {
           spent: String(spent),
         })
       }
+      // Updates a value of every type native encoding compares, with no retry to hide a false conflict.
+      case 'rich': {
+        const native = Store.durableObject(env.NATIVE_STORE, {
+          encoding: 'native',
+          maxAttempts: 1,
+          transport: 'rpc',
+        })
+        const holes: number[] = new Array(3)
+        holes[0] = 1
+        holes[2] = 3
+        await native.put(command.key, {
+          n: 0,
+          bytes: new Uint8Array([1, 2]),
+          view: new DataView(new Uint8Array([7]).buffer),
+          buffer: new Uint8Array([3]).buffer,
+          map: new Map<unknown, unknown>([['a', { b: 1n }]]),
+          set: new Set<unknown>([1, 'x', 2n]),
+          date: new Date(0),
+          re: /a/gi,
+          holes,
+        })
+        let n = 0
+        for (let i = 0; i < 2; i++)
+          n = await native.update(command.key, (current) => {
+            const value = current as { n: number }
+            return { op: 'set', value: { ...value, n: value.n + 1 }, result: value.n + 1 }
+          })
+        const stored = (await native.get(command.key)) as { bytes: Uint8Array; holes: number[] }
+        return Response.json({ n, bytes: [...stored.bytes], hole: 1 in stored.holes })
+      }
       case 'increment-bigint':
         return Response.json(
           String(
@@ -186,9 +262,11 @@ export default {
           ),
         )
       case 'log':
-        return namespace.get(namespace.idFromName(command.key)).fetch('https://mppx-store/log', {
-          method: 'POST',
-        })
+      case 'arm':
+      case 'hooked':
+        return namespace
+          .get(namespace.idFromName(command.key))
+          .fetch(`https://mppx-store/${command.op}`, { method: 'POST' })
     }
   },
 }

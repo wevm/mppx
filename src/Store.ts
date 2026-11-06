@@ -182,25 +182,107 @@ async function compareAndSwap<result, raw = string>(parameters: {
   throw new Error(`${label} update of "${key}" conflicted ${maxAttempts} times.`)
 }
 
+/** Object types native compare-and-swap compares by value, besides arrays, plain objects, maps, sets and typed arrays. */
+const comparableTags = new Set([
+  '[object ArrayBuffer]',
+  '[object BigInt]',
+  '[object Boolean]',
+  '[object Date]',
+  '[object Error]',
+  '[object Number]',
+  '[object RegExp]',
+  '[object String]',
+])
+
+/** The error for a value native compare-and-swap cannot compare, which would otherwise conflict until `maxAttempts`. */
+function incomparable(what: string): Error {
+  return new Error(`Store.durableObject: native encoding cannot compare ${what}.`)
+}
+
+/** Throws unless map keys and set members are primitives, compared like `Map#has` (SameValueZero). */
+function assertPrimitiveKey(key: unknown, tag: string): void {
+  if ((typeof key === 'object' && key !== null) || typeof key === 'function')
+    throw incomparable(`a ${tag.slice(8, -1)} with object keys`)
+}
+
 /**
- * Structural equality of stored values: primitives (bigints by value), arrays,
- * plain objects and dates. A native compare-and-swap needs it, since a value
- * read back from storage is a copy.
+ * Throws for a value that native compare-and-swap cannot compare, so a write
+ * fails at once instead of making later updates conflict until `maxAttempts`.
+ */
+function assertComparable(value: unknown): void {
+  if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value)) return
+  const tag = Object.prototype.toString.call(value)
+  if (Array.isArray(value) || tag === '[object Object]')
+    for (const key of Object.keys(value)) assertComparable((value as Record<string, unknown>)[key])
+  else if (value instanceof Map)
+    for (const [key, item] of value) {
+      assertPrimitiveKey(key, tag)
+      assertComparable(item)
+    }
+  else if (value instanceof Set) for (const item of value) assertPrimitiveKey(item, tag)
+  else if (!comparableTags.has(tag)) throw incomparable(`${tag.slice(8, -1)} values`)
+}
+
+/** A view's bytes. */
+function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
+  return ArrayBuffer.isView(view)
+    ? new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+    : new Uint8Array(view)
+}
+
+/**
+ * Structural equality of stored values, as structured clone copies them:
+ * primitives (bigints by value), arrays (holes included), plain objects, maps,
+ * sets, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
+ * regular expressions, errors and boxed primitives. A native compare-and-swap
+ * needs it, since a value read back from storage is a copy. Throws for values it
+ * cannot compare, rather than reporting a conflict that never resolves.
  */
 function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
+  if (a === b || (a !== a && b !== b)) return true
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  if (Array.isArray(a))
-    return Array.isArray(b) && a.length === b.length && a.every((item, i) => deepEqual(item, b[i]))
-  if (a instanceof Date) return b instanceof Date && a.getTime() === b.getTime()
-  const prototype = Object.getPrototypeOf(a)
-  if (prototype !== Object.prototype && prototype !== null) return false
-  if (Object.getPrototypeOf(b) !== prototype) return false
+  const tag = Object.prototype.toString.call(a)
+  if (tag !== Object.prototype.toString.call(b)) return false
+  if (Array.isArray(a)) {
+    const other = b as unknown[]
+    if (a.length !== other.length) return false
+    for (let i = 0; i < a.length; i++)
+      if (i in a !== i in other || !deepEqual(a[i], other[i])) return false
+    return true
+  }
+  if (ArrayBuffer.isView(a) || tag === '[object ArrayBuffer]') {
+    const x = bytesOf(a as ArrayBuffer)
+    const y = bytesOf(b as ArrayBuffer)
+    return x.length === y.length && x.every((byte, i) => byte === y[i])
+  }
+  if (a instanceof Map) {
+    const other = b as Map<unknown, unknown>
+    if (a.size !== other.size) return false
+    for (const [key, item] of a) {
+      assertPrimitiveKey(key, tag)
+      if (!other.has(key) || !deepEqual(item, other.get(key))) return false
+    }
+    return true
+  }
+  if (a instanceof Set) {
+    const other = b as Set<unknown>
+    if (a.size !== other.size) return false
+    for (const item of a) {
+      assertPrimitiveKey(item, tag)
+      if (!other.has(item)) return false
+    }
+    return true
+  }
+  if (a instanceof RegExp)
+    return a.source === (b as RegExp).source && a.flags === (b as RegExp).flags
+  if (a instanceof Error) return a.name === (b as Error).name && a.message === (b as Error).message
+  if (comparableTags.has(tag)) return Object.is(a.valueOf(), (b as object).valueOf())
+  if (tag !== '[object Object]') throw incomparable(`${tag.slice(8, -1)} values`)
   const keys = Object.keys(a)
   if (keys.length !== Object.keys(b).length) return false
   return keys.every(
     (key) =>
-      Object.hasOwn(b, key) &&
+      Object.prototype.hasOwnProperty.call(b, key) &&
       deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
   )
 }
@@ -476,6 +558,7 @@ export function durableObject(
         return native ? raw : Json.parse(raw as string)
       },
       async put(key: string, value: unknown) {
+        if (native) assertComparable(value)
         await remote.put(key, native ? value : Json.stringify(value))
       },
       async delete(key: string) {
@@ -488,7 +571,12 @@ export function durableObject(
         return compareAndSwap<result, unknown>({
           // A native value is the compare-and-swap's expected value, so `fn` gets a copy.
           decode: native ? (raw) => structuredClone(raw) : (raw) => Json.parse(raw as string),
-          encode: native ? (value) => value : (value) => Json.stringify(value),
+          encode: native
+            ? (value) => {
+                assertComparable(value)
+                return value
+              }
+            : (value) => Json.stringify(value),
           fn,
           key,
           label: 'Durable Object store',
@@ -581,7 +669,10 @@ export class DurableObjectStore {
   /**
    * Returns this class rebuilt on `base`, the `DurableObject` class from
    * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
-   * and taking it as an argument keeps this module free of that import.
+   * and taking it as an argument keeps this module free of that import. Called
+   * on a subclass, it keeps the subclass's methods (such as `onWrite` and
+   * `alarm`), but not its constructor or field initializers: subclass the
+   * returned class, or set state up lazily.
    *
    * @example
    * ```ts
@@ -590,17 +681,26 @@ export class DurableObjectStore {
    * export class MppxStore extends Store.DurableObjectStore.rpc(DurableObject) {}
    * ```
    */
-  static rpc(base: abstract new (state: any, env: any) => object): typeof DurableObjectStore {
+  static rpc<store extends typeof DurableObjectStore>(
+    this: store,
+    base: abstract new (state: any, env: any) => object,
+  ): store {
     class RpcStore extends (base as new (state: unknown, env: unknown) => object) {
       constructor(state: DurableObjectStore.State, env?: unknown) {
         super(state, env)
         Object.assign(this, { env, state })
       }
     }
-    const descriptors = Object.getOwnPropertyDescriptors(DurableObjectStore.prototype)
-    for (const [name, descriptor] of Object.entries(descriptors))
-      if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
-    return RpcStore as unknown as typeof DurableObjectStore
+    // Copy the receiver's prototype chain down to DurableObjectStore, most-derived last so it wins.
+    const chain: object[] = []
+    for (let proto: object = this.prototype; ; proto = Object.getPrototypeOf(proto)) {
+      chain.unshift(proto)
+      if (proto === DurableObjectStore.prototype) break
+    }
+    for (const proto of chain)
+      for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
+        if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
+    return RpcStore as unknown as store
   }
 
   /** The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}. */
@@ -611,13 +711,16 @@ export class DurableObjectStore {
   /**
    * Called for every applied put, delete, swap and claim, after the storage
    * write and before the response, with the decoded values (`null` when the key
-   * is absent). The object's input and output gates hold while it runs, so
-   * storage writes it makes commit with the store's write. Does nothing by default.
+   * is absent). When the storage has `transaction()`, the write and this hook run
+   * in one transaction, passed as `storage`: make the hook's writes and alarms
+   * through it so they commit with the store's write, and throw to roll the
+   * write back. Does nothing by default.
    */
   protected onWrite(
     _key: string,
     _previous: unknown | null,
     _next: unknown | null,
+    _storage: DurableObjectStore.Storage,
   ): void | Promise<void> {}
 
   /**
@@ -770,11 +873,20 @@ export class DurableObjectStore {
     previous?: unknown,
   ): Promise<void> {
     const storage = this.state.storage
-    const hooked = this.onWrite !== DurableObjectStore.prototype.onWrite
-    const before = hooked && previous === undefined ? await this.get(key) : (previous ?? null)
-    if (value === null) await storage.delete(key)
-    else await storage.put(key, value)
-    if (hooked) await this.onWrite(key, decode(before, encoding), decode(value, encoding))
+    if (this.onWrite === DurableObjectStore.prototype.onWrite) {
+      if (value === null) await storage.delete(key)
+      else await storage.put(key, value)
+      return
+    }
+    // One transaction: the hook's writes commit with this one, and its failure rolls it back.
+    const write = async (target: DurableObjectStore.Storage) => {
+      const before = previous === undefined ? ((await target.get(key)) ?? null) : previous
+      if (value === null) await target.delete(key)
+      else await target.put(key, value)
+      await this.onWrite(key, decode(before, encoding), decode(value, encoding), target)
+    }
+    if (storage.transaction) await storage.transaction(write)
+    else await write(storage)
   }
 }
 
@@ -799,6 +911,8 @@ export declare namespace DurableObjectStore {
     setAlarm?: ((scheduledTime: number | Date) => Promise<void>) | undefined
     /** Cancels the object's alarm. */
     deleteAlarm?: (() => Promise<void>) | undefined
+    /** Runs `closure` in a transaction that rolls back when it throws. */
+    transaction?<result>(closure: (txn: Storage) => Promise<result>): Promise<result>
     /** The object's SQLite database, on SQLite-backed objects: replay shards need it. */
     sql?: Sql | undefined
   }
