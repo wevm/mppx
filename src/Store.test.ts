@@ -676,6 +676,21 @@ describe.each([
 })
 
 describe('durableObject', () => {
+  test('rejects replayShards and replayShardVersion that are not positive integers', () => {
+    for (const replayShards of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => Store.durableObject(fakeDurableObjectNamespace(), { replayShards })).toThrow(
+        '`replayShards` must be a positive integer',
+      )
+    expect(() =>
+      Store.durableObject(fakeDurableObjectNamespace(), { replayShards: 2, replayShardVersion: 0 }),
+    ).toThrow('`replayShardVersion` must be a positive integer')
+  })
+
+  test('replay shards need a SQLite-backed object', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), { replayShards: 2 })
+    await expect(store.tryClaim!('nonce', Date.now() + 60_000)).rejects.toThrow('SQLite-backed')
+  })
+
   test('rejects native encoding over fetch', () => {
     expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
       'requires `transport: "rpc"`',

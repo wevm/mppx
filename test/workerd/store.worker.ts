@@ -39,6 +39,17 @@ export class RpcStore extends Store.DurableObjectStore.rpc(DurableObject) {
   async legacyGet(key: string) {
     return this.state.storage.get(key)
   }
+
+  /** The keys this object holds replay claims for, as a replay shard. */
+  async replayClaimKeys() {
+    const sql = this.state.storage.sql!
+    if (sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'replay_claims'").toArray().length === 0)
+      return []
+    return sql
+      .exec('SELECT key FROM replay_claims ORDER BY key')
+      .toArray()
+      .map((row) => row.key)
+  }
 }
 
 /** The store over Workers RPC with native encoding, bound as `NATIVE_STORE`. */
@@ -61,7 +72,10 @@ type Env = {
   STORE: Store.durableObject.Namespace
 }
 
-type Command = { backend?: 'd1' | 'durableObject' | 'native' | 'recording' | 'rpc' } & (
+type Command = {
+  backend?: 'd1' | 'durableObject' | 'native' | 'recording' | 'rpc'
+  options?: Store.durableObject.Options
+} & (
   | { op: 'get' | 'delete'; key: string; prefix?: string }
   | { op: 'put'; key: string; value: unknown; prefix?: string }
   | { op: 'increment'; key: string }
@@ -71,6 +85,7 @@ type Command = { backend?: 'd1' | 'durableObject' | 'native' | 'recording' | 'rp
   | { op: 'log'; key: string }
   | { op: 'legacy'; key: string; amount: string }
   | { op: 'increment-bigint'; key: string }
+  | { op: 'shards'; shards: number; version: number }
 )
 
 /** Runs one store operation inside workerd, against a real Durable Object or D1 database. */
@@ -93,6 +108,7 @@ export default {
             ...options,
             ...(command.backend === 'rpc' ? { transport: 'rpc' } : {}),
             ...(command.backend === 'native' ? { encoding: 'native', transport: 'rpc' } : {}),
+            ...command.options,
           })
     switch (command.op) {
       case 'get':
@@ -156,6 +172,16 @@ export default {
               }
               const value = { meta: { n: [...channel.meta.n, 1n] }, spent: channel.spent + 1n }
               return { op: 'set', value, result: value.spent }
+            }),
+          ),
+        )
+      // The keys each replay shard of the RPC store holds claims for.
+      case 'shards':
+        return Response.json(
+          await Promise.all(
+            Array.from({ length: command.shards }, (_, shard) => {
+              const id = env.RPC_STORE.idFromName(`mppx:replay:v${command.version}:${shard}`)
+              return (env.RPC_STORE.get(id) as unknown as RpcStore).replayClaimKeys()
             }),
           ),
         )
