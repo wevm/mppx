@@ -93,6 +93,8 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // 0.01, you can make up to 100 requests before the channel runs out.
 const DEPOSIT = '1'
 const s = tempo.session.manager({
+  // Ask the server for this account's open channel before opening a new one.
+  bootstrap: true,
   client,
   maxDeposit: DEPOSIT,
 })

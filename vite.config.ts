@@ -17,6 +17,7 @@ const alias = {
   'mppx/extensions/identity': path.resolve(import.meta.dirname, 'src/extensions/identity'),
   'mppx/identity': path.resolve(import.meta.dirname, 'src/identity'),
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
+  'mppx/cloudflare': path.resolve(import.meta.dirname, 'src/cloudflare'),
   'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
   'mppx/mcp/client': path.resolve(import.meta.dirname, 'src/mcp/client'),
   'mppx/mcp/server': path.resolve(import.meta.dirname, 'src/mcp/server'),
