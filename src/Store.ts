@@ -347,9 +347,10 @@ export function durableObject(
           if (swapped.applied) return change.result
           // Lost a race: retry from the value the object returned, after a jittered backoff.
           raw = swapped.current
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
-          )
+          if (attempt + 1 < maxAttempts)
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
+            )
         }
         throw new Error(`Durable Object store update of "${key}" conflicted ${maxAttempts} times.`)
       },

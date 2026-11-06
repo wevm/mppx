@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Store from './Store.js'
 
@@ -551,6 +551,27 @@ describe('durableObject', () => {
     )
     expect(results.filter(Boolean)).toHaveLength(1)
     expect(await Store.tryClaim(store, 'expired', Date.now() - 1)).toBe(false)
+  })
+
+  test('update throws after maxAttempts conflicts without a final backoff', async () => {
+    // Every swap reports a conflict.
+    const namespace = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async (_input: string, init: RequestInit) =>
+          Response.json(
+            JSON.parse(init.body as string).op === 'swap' ? { applied: false, current: '1' } : '1',
+          ),
+      }),
+    }
+    const store = Store.durableObject(namespace, { maxAttempts: 3 })
+    const setTimeout = vi.spyOn(globalThis, 'setTimeout')
+    await expect(
+      store.update('k', () => ({ op: 'set', value: 2, result: undefined })),
+    ).rejects.toThrow('conflicted 3 times')
+    // Backoffs only between attempts.
+    expect(setTimeout).toHaveBeenCalledTimes(2)
+    setTimeout.mockRestore()
   })
 
   test('applies keyPrefix', async () => {
