@@ -880,6 +880,7 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
     ...(allowedFeeTokens?.[0] ? { feeToken: transaction.feeToken ?? allowedFeeTokens[0] } : {}),
   }
   const completed = await FeePayer.preflightSponsorship({
+    policy: feePayerPolicy,
     transaction: sponsorshipTransaction,
     simulate: (request) => simulateTempoTransaction(client, request),
     async complete() {

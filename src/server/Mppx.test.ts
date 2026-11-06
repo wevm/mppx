@@ -4104,7 +4104,7 @@ describe('compose', () => {
 
     const htmlOptionsB = {
       config: { providerB: true },
-      content: '<script src="/beta-bundle.js"></script>',
+      content: async () => '<script src="/beta-bundle.js"></script>',
       formatAmount: (request: Record<string, unknown>) => `$${request.amount}`,
       text: undefined,
       theme: undefined,

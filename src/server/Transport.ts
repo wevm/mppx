@@ -218,7 +218,7 @@ export function http(options: http.Options = {}): Http {
           } satisfies Record<string, Html.Data>
 
           return Html.render({
-            entries: [{ challenge, content: options.html.content }],
+            entries: [{ challenge, content: await Html.resolveContent(options.html.content) }],
             dataMap,
             formattedAmount: amount,
             text,
