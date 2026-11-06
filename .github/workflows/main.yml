@@ -9,7 +9,8 @@ permissions: {}
 # their own that never cancels: a later push can't cancel a release, and
 # releases run one at a time in main's order. A release that waits behind
 # another can be replaced by a newer one, which publishes the later version.
-# Other pushes still cancel each other, and only release runs publish.
+# Other pushes still cancel each other, and only release runs publish a stable
+# version (snapshots publish 0.0.0-main-* under the main tag, without git tags).
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && '-release' || '' }}"
   cancel-in-progress: "${{ !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
