@@ -52,6 +52,7 @@
     "browserslist": "^4.28.8",
     "elysia": "^1.4.29",
     "eslint-plugin-compat": "^7.0.2",
+    "eventsource-parser": "4.1.1",
     "express": "^5.2.1",
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
@@ -319,7 +320,6 @@
     }
   },
   "dependencies": {
-    "eventsource-parser": "4.1.1",
     "ox": "catalog:",
     "structured-headers": "2.1.0",
     "zod": "^4.6.7"

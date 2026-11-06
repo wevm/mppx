@@ -6,7 +6,7 @@ import { build } from 'rolldown'
 
 const root = path.resolve(import.meta.dirname, '..')
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(root, 'package.json'), 'utf8'))
-const externalPackages = ['eventsource-parser', 'ox', 'structured-headers', 'viem', 'zod']
+const externalPackages = ['ox', 'structured-headers', 'viem', 'zod']
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)])
 const bundledModuleIds = new Set<string>()
 
