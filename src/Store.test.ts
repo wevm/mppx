@@ -1,3 +1,6 @@
+import { DatabaseSync } from 'node:sqlite'
+
+import { PGlite } from '@electric-sql/pglite'
 import { describe, expect, test } from 'vp/test'
 
 import * as Store from './Store.js'
@@ -116,6 +119,8 @@ describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
   { label: 'durableObject', create: () => Store.durableObject(fakeDurableObjectNamespace()) },
+  { label: 'postgres', create: () => pgliteStore() },
+  { label: 'sqlite', create: () => Store.sqlite(new DatabaseSync(':memory:')) },
   {
     label: 'redis',
     create: () => {
@@ -557,5 +562,186 @@ describe('durableObject', () => {
     const namespace = fakeDurableObjectNamespace()
     await Store.durableObject(namespace, { keyPrefix: 'a:' }).put('k', 1)
     expect(await Store.durableObject(namespace).get('a:k')).toBe(1)
+  })
+})
+
+let pglite: PGlite | undefined
+let tables = 0
+
+/** A Postgres store on a fresh table of one shared in-process PGlite database. */
+function pgliteStore(options?: Store.sql.Options) {
+  pglite ??= new PGlite()
+  return Store.postgres(pglite, { table: `mppx_store_${++tables}`, ...options })
+}
+
+describe.each([
+  { label: 'postgres (PGlite)', create: pgliteStore },
+  {
+    label: 'sqlite (node:sqlite)',
+    create: (options?: Store.sql.Options) => Store.sqlite(new DatabaseSync(':memory:'), options),
+  },
+])('sql: $label', ({ create }) => {
+  test('round-trips values with bigints', async () => {
+    const store = create()
+    await store.put('k', { amount: 123456789012345678901234567890n, nested })
+    expect(await store.get('k')).toEqual({ amount: 123456789012345678901234567890n, nested })
+  })
+
+  test('update stays atomic under concurrent writers', async () => {
+    const store = create()
+    const results = await Promise.all(
+      Array.from({ length: 50 }, () =>
+        store.update('counter', (current) => {
+          const value = ((current as number | null) ?? 0) + 1
+          return { op: 'set', value, result: value }
+        }),
+      ),
+    )
+    expect(results.toSorted((a, b) => a - b)).toEqual(Array.from({ length: 50 }, (_, i) => i + 1))
+    expect(await store.get('counter')).toBe(50)
+  })
+
+  test('update supports noop and delete', async () => {
+    const store = create()
+    expect(await store.update('k', () => ({ op: 'noop', result: 'none' }))).toBe('none')
+    expect(await store.get('k')).toBeNull()
+    await store.put('k', 1)
+    expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
+    expect(await store.get('k')).toBeNull()
+    expect(await store.update('k', () => ({ op: 'delete', result: 'absent' }))).toBe('absent')
+  })
+
+  test('tryClaim records a key once across concurrent claims until it expires', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => Store.tryClaim(store, 'nonce', expires)),
+    )
+    expect(results.filter(Boolean)).toHaveLength(1)
+    await store.put('old', { expires: Date.now() - 1, type: 'mppx:replay' })
+    expect(await Store.tryClaim(store, 'old', expires)).toBe(true)
+  })
+
+  test('applies keyPrefix', async () => {
+    const store = create({ keyPrefix: 'tenant:' })
+    await store.put('k', 'value')
+    expect(await store.get('k')).toBe('value')
+  })
+
+  test('leaves the table to migrations with createTable: false', async () => {
+    const store = create({ createTable: false })
+    await expect(store.get('k')).rejects.toThrow()
+  })
+})
+
+describe('sql', () => {
+  test('rejects table names that are not identifiers', () => {
+    expect(() =>
+      Store.sql({ dialect: 'sqlite', query: async () => [] }, { table: 'store; DROP TABLE x' }),
+    ).toThrow('Invalid SQL store table name')
+  })
+
+  test('numbers placeholders for Postgres and keeps them for SQLite', async () => {
+    const seen: Record<string, string[]> = { postgres: [], sqlite: [] }
+    for (const dialect of ['postgres', 'sqlite'] as const)
+      await Store.sql(
+        {
+          dialect,
+          async query(text) {
+            seen[dialect]!.push(text)
+            return []
+          },
+        },
+        { createTable: false },
+      ).put('k', 1)
+    expect(seen.postgres![0]).toContain('VALUES ($1, $2)')
+    expect(seen.sqlite![0]).toContain('VALUES (?, ?)')
+  })
+
+  test('accepts Postgres clients that resolve to rows', async () => {
+    const rows = [{ value: '"v"' }]
+    const store = Store.postgres({ query: async () => rows }, { createTable: false })
+    expect(await store.get('k')).toBe('v')
+  })
+
+  test('gives up after maxAttempts conflicts', async () => {
+    const store = Store.sql(
+      {
+        dialect: 'sqlite',
+        // Every read sees a value and every swap misses it.
+        query: async (text) => (text.startsWith('SELECT') ? [{ value: '1' }] : []),
+      },
+      { createTable: false, maxAttempts: 2 },
+    )
+    await expect(
+      store.update('k', () => ({ op: 'set', value: 2, result: undefined })),
+    ).rejects.toThrow('conflicted 2 times')
+  })
+
+  test('retries table creation after a failure', async () => {
+    let fail = true
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text) {
+        if (text.startsWith('CREATE') && fail) {
+          fail = false
+          throw new Error('offline')
+        }
+        return []
+      },
+    })
+    await expect(store.get('k')).rejects.toThrow('offline')
+    expect(await store.get('k')).toBeNull()
+  })
+})
+
+describe('sql compare-and-swap', () => {
+  // Another writer changes the value between update's read and its write: the
+  // write must miss, and update must retry from the new value.
+  async function raceOnce(
+    dialect: 'postgres' | 'sqlite',
+    run: (text: string, params: unknown[]) => Promise<Store.sql.Row[]>,
+  ) {
+    let raced = false
+    const store = Store.sql({
+      dialect,
+      async query(text, params) {
+        const rows = await run(text, params)
+        if (text.startsWith('SELECT') && rows.length > 0 && !raced) {
+          raced = true
+          await run(
+            dialect === 'postgres'
+              ? `UPDATE mppx_store SET value = '10' WHERE key = $1`
+              : `UPDATE mppx_store SET value = '10' WHERE key = ?`,
+            [params[0]],
+          )
+        }
+        return rows
+      },
+    })
+    await store.put('k', 1)
+    const result = await store.update('k', (current) => {
+      const value = (current as number) + 1
+      return { op: 'set', value, result: value }
+    })
+    expect(raced).toBe(true)
+    expect(result).toBe(11)
+    expect(await store.get('k')).toBe(11)
+  }
+
+  test('postgres (PGlite) retries a write that lost a race', async () => {
+    const db = new PGlite()
+    await raceOnce(
+      'postgres',
+      async (text, params) => (await db.query(text, params)).rows as Store.sql.Row[],
+    )
+  })
+
+  test('sqlite (node:sqlite) retries a write that lost a race', async () => {
+    const db = new DatabaseSync(':memory:')
+    await raceOnce(
+      'sqlite',
+      async (text, params) => db.prepare(text).all(...(params as never[])) as Store.sql.Row[],
+    )
   })
 })
