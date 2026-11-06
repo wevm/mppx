@@ -168,6 +168,7 @@ async function compareAndSwap<result>(parameters: {
     if (change.op === 'noop') return change.result
     const swapped = await swap(raw, change.op === 'set' ? Json.stringify(change.value) : null)
     if (swapped.applied) return change.result
+    if (attempt + 1 === maxAttempts) break
     await new Promise((resolve) =>
       setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
     )
