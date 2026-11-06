@@ -100,6 +100,10 @@ describe('retry approval', () => {
         { ...challenge, opaque: 'other' },
       ),
     ).toThrow('Payment request changed on retry')
+    // Scalar JSON (1 and 2) is correlation data, not metadata, so it must still match.
+    expect(() =>
+      assertSamePaymentRequest({ ...challenge, opaque: 'MQ' }, { ...challenge, opaque: 'Mg' }),
+    ).toThrow('Payment request changed on retry')
   })
   test.each([
     { realm: 'another.example' },

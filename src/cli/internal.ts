@@ -180,12 +180,14 @@ function stableOpaque(challenge: Challenge.Challenge): string | undefined {
   const opaque =
     challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : undefined)
   if (opaque === undefined) return undefined
-  let meta: Record<string, string>
+  let meta: unknown
   try {
-    meta = PaymentRequest.deserialize(opaque) as Record<string, string>
+    meta = PaymentRequest.deserialize(opaque)
   } catch {
     return opaque
   }
-  const stable = ChallengeMeta.routeMeta(meta)
+  // Only metadata objects carry the reserved nonces; keep any other opaque value as is.
+  if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) return opaque
+  const stable = ChallengeMeta.routeMeta(meta as Record<string, string>)
   return stable ? PaymentRequest.serialize(stable) : undefined
 }
