@@ -145,6 +145,37 @@ function isReplayMarker(value: unknown): value is ReplayMarker {
   )
 }
 
+/**
+ * Runs `fn` on the stored value and commits its change with `swap`, a
+ * compare-and-swap. When another writer won, retries from the value `swap`
+ * returned (or a fresh read) after a jittered backoff.
+ */
+async function compareAndSwap<result>(parameters: {
+  fn: (current: unknown | null) => Change<unknown, result>
+  key: string
+  label: string
+  maxAttempts: number
+  read: () => Promise<string | null>
+  swap: (
+    expected: string | null,
+    value: string | null,
+  ) => Promise<{ applied: boolean; current?: string | null | undefined }>
+}): Promise<result> {
+  const { fn, key, label, maxAttempts, read, swap } = parameters
+  let raw = await read()
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const change = fn(raw == null ? null : (Json.parse(raw) as never))
+    if (change.op === 'noop') return change.result
+    const swapped = await swap(raw, change.op === 'set' ? Json.stringify(change.value) : null)
+    if (swapped.applied) return change.result
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
+    )
+    raw = swapped.current !== undefined ? swapped.current : await read()
+  }
+  throw new Error(`${label} update of "${key}" conflicted ${maxAttempts} times.`)
+}
+
 /** Options shared by store constructors. */
 export type Options = {
   /** Prefix prepended to every backing store key. */
@@ -333,25 +364,16 @@ export function durableObject(
       async delete(key: string) {
         await call(key, { op: 'delete', key })
       },
-      async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
-        let raw = await call<string | null>(key, { op: 'get', key })
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const change = fn(raw == null ? null : (Json.parse(raw) as never))
-          if (change.op === 'noop') return change.result
-          const swapped = await call<DurableObjectStore.SwapResult>(key, {
-            op: 'swap',
-            key,
-            expected: raw,
-            value: change.op === 'set' ? Json.stringify(change.value) : null,
-          })
-          if (swapped.applied) return change.result
-          // Lost a race: retry from the value the object returned, after a jittered backoff.
-          raw = swapped.current
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
-          )
-        }
-        throw new Error(`Durable Object store update of "${key}" conflicted ${maxAttempts} times.`)
+      update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        return compareAndSwap({
+          fn,
+          key,
+          label: 'Durable Object store',
+          maxAttempts,
+          read: () => call<string | null>(key, { op: 'get', key }),
+          swap: (expected, value) =>
+            call<DurableObjectStore.SwapResult>(key, { op: 'swap', key, expected, value }),
+        })
       },
       async tryClaim(key: string, expires: number) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
@@ -506,7 +528,8 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
     if (options?.createTable === false) return
     ready ??= Promise.resolve(
       driver.query(
-        `CREATE TABLE IF NOT EXISTS ${table} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+        // `expires` mirrors a replay marker's expiry, so a claim needs no JSON in SQL.
+        `CREATE TABLE IF NOT EXISTS ${table} (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires DOUBLE PRECISION)`,
         [],
       ),
     ).then(
@@ -529,28 +552,32 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
     return row ? (row.value as string) : null
   }
 
+  /** The `expires` column for a serialized value: the expiry of a replay marker, else null. */
+  const expiresOf = (raw: string) => {
+    const value = Json.parse(raw)
+    return isReplayMarker(value) ? value.expires : null
+  }
+
   /** Writes `value` (or deletes, for `null`) only if the key still holds `expected`. */
   async function swap(key: string, expected: string | null, value: string | null) {
+    let rows: sql.Row[]
     if (expected === null) {
-      if (value === null) return true
-      const rows = await query(
-        `INSERT INTO ${table} (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING RETURNING key`,
-        [key, value],
+      if (value === null) return { applied: true }
+      rows = await query(
+        `INSERT INTO ${table} (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO NOTHING RETURNING key`,
+        [key, value, expiresOf(value)],
       )
-      return rows.length > 0
-    }
-    const rows =
-      value === null
-        ? await query(`DELETE FROM ${table} WHERE key = ? AND value = ? RETURNING key`, [
-            key,
-            expected,
-          ])
-        : await query(`UPDATE ${table} SET value = ? WHERE key = ? AND value = ? RETURNING key`, [
-            value,
-            key,
-            expected,
-          ])
-    return rows.length > 0
+    } else if (value === null)
+      rows = await query(`DELETE FROM ${table} WHERE key = ? AND value = ? RETURNING key`, [
+        key,
+        expected,
+      ])
+    else
+      rows = await query(
+        `UPDATE ${table} SET value = ?, expires = ? WHERE key = ? AND value = ? RETURNING key`,
+        [value, expiresOf(value), key, expected],
+      )
+    return { applied: rows.length > 0 }
   }
 
   return from(
@@ -561,27 +588,38 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
         return Json.parse(raw)
       },
       async put(key: string, value: unknown) {
+        const raw = Json.stringify(value)
         await query(
-          `INSERT INTO ${table} (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-          [key, Json.stringify(value)],
+          `INSERT INTO ${table} (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires = excluded.expires`,
+          [key, raw, expiresOf(raw)],
         )
       },
       async delete(key: string) {
         await query(`DELETE FROM ${table} WHERE key = ?`, [key])
       },
-      async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const raw = await read(key)
-          const change = fn(raw == null ? null : (Json.parse(raw) as never))
-          if (change.op === 'noop') return change.result
-          const value = change.op === 'set' ? Json.stringify(change.value) : null
-          if (await swap(key, raw, value)) return change.result
-          // Lost a race: retry from the new value after a jittered backoff.
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
-          )
-        }
-        throw new Error(`SQL store update of "${key}" conflicted ${maxAttempts} times.`)
+      update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        return compareAndSwap({
+          fn,
+          key,
+          label: 'SQL store',
+          maxAttempts,
+          read: () => read(key),
+          swap: (expected, value) => swap(key, expected, value),
+        })
+      },
+      // One statement: insert the marker, or replace one whose expiry has passed.
+      async tryClaim(key: string, expires: number) {
+        if (!Number.isFinite(expires) || expires <= Date.now()) return false
+        const rows = await query(
+          `INSERT INTO ${table} AS existing (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires = excluded.expires WHERE existing.expires IS NOT NULL AND existing.expires <= ? RETURNING key`,
+          [
+            key,
+            Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker),
+            expires,
+            Date.now(),
+          ],
+        )
+        return rows.length > 0
       },
     },
     options,

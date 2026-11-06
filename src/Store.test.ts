@@ -517,54 +517,6 @@ describe('json roundtrip behavior', () => {
   })
 })
 
-describe('durableObject', () => {
-  test('round-trips values with bigints', async () => {
-    const store = Store.durableObject(fakeDurableObjectNamespace())
-    expect(await store.get('k')).toBeNull()
-    await store.put('k', { amount: 10n, nested })
-    expect(await store.get('k')).toEqual({ amount: 10n, nested })
-    await store.delete('k')
-    expect(await store.get('k')).toBeNull()
-  })
-
-  test('update stays atomic under concurrent writers', async () => {
-    const store = Store.durableObject(fakeDurableObjectNamespace())
-    await Promise.all(
-      Array.from({ length: 20 }, () =>
-        store.update('counter', (current) => {
-          const value = ((current as number | null) ?? 0) + 1
-          return { op: 'set', value, result: value }
-        }),
-      ),
-    )
-    expect(await store.get('counter')).toBe(20)
-  })
-
-  test('update supports noop and delete', async () => {
-    const store = Store.durableObject(fakeDurableObjectNamespace())
-    await store.put('k', 1)
-    expect(await store.update('k', () => ({ op: 'noop', result: 'kept' }))).toBe('kept')
-    expect(await store.get('k')).toBe(1)
-    expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
-    expect(await store.get('k')).toBeNull()
-  })
-
-  test('tryClaim records a key once until it expires', async () => {
-    const store = Store.durableObject(fakeDurableObjectNamespace())
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () => Store.tryClaim(store, 'nonce', Date.now() + 60_000)),
-    )
-    expect(results.filter(Boolean)).toHaveLength(1)
-    expect(await Store.tryClaim(store, 'expired', Date.now() - 1)).toBe(false)
-  })
-
-  test('applies keyPrefix', async () => {
-    const namespace = fakeDurableObjectNamespace()
-    await Store.durableObject(namespace, { keyPrefix: 'a:' }).put('k', 1)
-    expect(await Store.durableObject(namespace).get('a:k')).toBe(1)
-  })
-})
-
 /** node:sqlite behind better-sqlite3's API: all() throws on statements that return no rows. */
 function betterSqlite3Like() {
   const db = new DatabaseSync(':memory:')
@@ -594,16 +546,21 @@ function pgliteStore(options?: Store.sql.Options) {
 }
 
 describe.each([
-  { label: 'postgres (PGlite)', create: pgliteStore },
+  { label: 'memory', create: (options?: Store.Options) => Store.memory(options) },
+  {
+    label: 'durableObject',
+    create: (options?: Store.Options) => Store.durableObject(fakeDurableObjectNamespace(), options),
+  },
+  { label: 'postgres (PGlite)', create: (options?: Store.Options) => pgliteStore(options) },
   {
     label: 'sqlite (node:sqlite)',
-    create: (options?: Store.sql.Options) => Store.sqlite(new DatabaseSync(':memory:'), options),
+    create: (options?: Store.Options) => Store.sqlite(new DatabaseSync(':memory:'), options),
   },
   {
     label: 'sqlite (better-sqlite3 API)',
-    create: (options?: Store.sql.Options) => Store.sqlite(betterSqlite3Like(), options),
+    create: (options?: Store.Options) => Store.sqlite(betterSqlite3Like(), options),
   },
-])('sql: $label', ({ create }) => {
+])('atomic: $label', ({ create }) => {
   test('round-trips values with bigints', async () => {
     const store = create()
     await store.put('k', { amount: 123456789012345678901234567890n, nested })
@@ -629,35 +586,70 @@ describe.each([
     expect(await store.update('k', () => ({ op: 'noop', result: 'none' }))).toBe('none')
     expect(await store.get('k')).toBeNull()
     await store.put('k', 1)
+    expect(await store.update('k', () => ({ op: 'noop', result: 'kept' }))).toBe('kept')
+    expect(await store.get('k')).toBe(1)
     expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
     expect(await store.get('k')).toBeNull()
     expect(await store.update('k', () => ({ op: 'delete', result: 'absent' }))).toBe('absent')
   })
 
-  test('tryClaim records a key once across concurrent claims until it expires', async () => {
+  test('tryClaim records a key once across concurrent claims', async () => {
     const store = create()
     const expires = Date.now() + 60_000
     const results = await Promise.all(
       Array.from({ length: 20 }, () => Store.tryClaim(store, 'nonce', expires)),
     )
     expect(results.filter(Boolean)).toHaveLength(1)
-    await store.put('old', { expires: Date.now() - 1, type: 'mppx:replay' })
-    expect(await Store.tryClaim(store, 'old', expires)).toBe(true)
+    expect(await store.get('nonce')).toEqual({ expires, type: 'mppx:replay' })
+    expect(await Store.tryClaim(store, 'past', Date.now() - 1)).toBe(false)
+  })
+
+  test('tryClaim replaces expired markers, from put or from update', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    await store.put('put', { expires: Date.now() - 1, type: 'mppx:replay' })
+    await store.update('updated', () => ({
+      op: 'set',
+      value: { expires: Date.now() - 1, type: 'mppx:replay' },
+      result: undefined,
+    }))
+    expect(await Store.tryClaim(store, 'put', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'updated', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'put', expires)).toBe(false)
+  })
+
+  test('tryClaim keeps live markers and other values', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    await store.put('live', { expires: Date.now() + 30_000, type: 'mppx:replay' })
+    await store.put('legacy', Date.now() - 60_000)
+    await store.put('other', { expires: Date.now() - 1, type: 'something-else' })
+    expect(await Store.tryClaim(store, 'live', expires)).toBe(false)
+    expect(await Store.tryClaim(store, 'legacy', expires)).toBe(false)
+    expect(await Store.tryClaim(store, 'other', expires)).toBe(false)
+    expect(await store.get('other')).toEqual({
+      expires: expect.any(Number),
+      type: 'something-else',
+    })
   })
 
   test('applies keyPrefix', async () => {
     const store = create({ keyPrefix: 'tenant:' })
     await store.put('k', 'value')
     expect(await store.get('k')).toBe('value')
-  })
-
-  test('leaves the table to migrations with createTable: false', async () => {
-    const store = create({ createTable: false })
-    await expect(store.get('k')).rejects.toThrow()
+    expect(await Store.tryClaim(store, 'n', Date.now() + 60_000)).toBe(true)
+    expect(await Store.tryClaim(store, 'n', Date.now() + 60_000)).toBe(false)
   })
 })
 
 describe('sql', () => {
+  test('leaves the table to migrations with createTable: false', async () => {
+    await expect(pgliteStore({ createTable: false }).get('k')).rejects.toThrow()
+    await expect(
+      Store.sqlite(new DatabaseSync(':memory:'), { createTable: false }).get('k'),
+    ).rejects.toThrow()
+  })
+
   test('rejects table names that are not identifiers', () => {
     expect(() =>
       Store.sql({ dialect: 'sqlite', query: async () => [] }, { table: 'store; DROP TABLE x' }),
@@ -677,8 +669,8 @@ describe('sql', () => {
         },
         { createTable: false },
       ).put('k', 1)
-    expect(seen.postgres![0]).toContain('VALUES ($1, $2)')
-    expect(seen.sqlite![0]).toContain('VALUES (?, ?)')
+    expect(seen.postgres![0]).toContain('VALUES ($1, $2, $3)')
+    expect(seen.sqlite![0]).toContain('VALUES (?, ?, ?)')
   })
 
   test('accepts Postgres clients that resolve to rows', async () => {
