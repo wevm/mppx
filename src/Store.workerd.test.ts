@@ -19,7 +19,7 @@ beforeAll(async () => {
   miniflare = new Miniflare({
     compatibilityDate: '2026-07-01',
     d1Databases: ['DB'],
-    durableObjects: { STORE: 'MppxStore' },
+    durableObjects: { RECORDING: 'RecordingStore', STORE: 'MppxStore' },
     modules: [{ type: 'ESModule', path: 'worker.js', contents: output[0].code }],
   })
   await miniflare.ready
@@ -85,3 +85,44 @@ describe.each([{ backend: 'durableObject' }, { backend: 'd1' }])(
     })
   },
 )
+
+describe('Store.DurableObjectStore hooks in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'recording' })
+  type Log = { alarms: number; writes: { key: string; previous: unknown; next: unknown }[] }
+
+  test('onWrite sees every applied write, and alarm fires', async () => {
+    const key = 'hooked'
+    await run({ op: 'put', key, value: { a: 1 } })
+    await run({ op: 'put', key, value: { a: 2 } })
+    expect(await run({ op: 'increment', key: 'hooked-counter' })).toBe(1)
+    // A swap that conflicts writes nothing.
+    expect(
+      await run({ op: 'raw', key, body: { op: 'swap', key, expected: '"stale"', value: '1' } }),
+    ).toEqual({ applied: false, current: '{"a":2}' })
+    expect(
+      await run({ op: 'raw', key, body: { op: 'swap', key, expected: '{"a":2}', value: '3' } }),
+    ).toEqual({ applied: true })
+    await run({ op: 'delete', key })
+    const expires = Date.now() + 60_000
+    expect(await run({ op: 'claim', key, expires })).toBe(true)
+    // A claim that loses writes nothing.
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
+
+    const log = await run<Log>({ op: 'log', key })
+    expect(log.writes).toEqual([
+      { key, previous: null, next: { a: 1 } },
+      { key, previous: { a: 1 }, next: { a: 2 } },
+      { key, previous: { a: 2 }, next: 3 },
+      { key, previous: 3, next: null },
+      { key, previous: null, next: { expires, type: 'mppx:replay' } },
+    ])
+    expect((await run<Log>({ op: 'log', key: 'hooked-counter' })).writes).toEqual([
+      { key: 'hooked-counter', previous: null, next: 1 },
+    ])
+
+    await expect
+      .poll(async () => (await run<Log>({ op: 'log', key })).alarms, { timeout: 5_000 })
+      .toBeGreaterThan(0)
+  })
+})
