@@ -26,10 +26,12 @@ jobs:
 
   # With pending changesets, the changesets action only opens or updates the
   # version PR and never publishes, so this starts right away instead of
-  # waiting on verify. It has no publish script, so it cannot publish.
+  # waiting on verify. It has no publish script, so it cannot publish. Release
+  # runs skip it: they don't cancel, so a queued one could overwrite the
+  # version PR with an older commit's changesets after a newer push updated it.
   version-pr:
     name: Version PR
-    if: github.repository == 'wevm/mppx'
+    if: "${{ github.repository == 'wevm/mppx' && !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
     permissions:
       contents: write
       pull-requests: write
