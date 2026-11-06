@@ -85,8 +85,10 @@ export function recordCryptoPayment(
  *
  * The transaction hash (`reference`) is the Stripe idempotency key, as it is for mppx's own
  * recording, so a repeat call for the same reference does not create a second PaymentIntent while
- * Stripe keeps the key (at least 24 hours): it returns `replayed`, or `already_recorded` when the
- * earlier call sent different parameters (such as mppx's own metadata). mppx's own recording uses
+ * Stripe keeps the key (at least 24 hours): it returns `replayed`, or `key_conflict` when an
+ * earlier call sent different parameters (such as mppx's own metadata). Stripe also caches failed
+ * responses under the key, so `key_conflict` does not mean a PaymentIntent exists: confirm it in
+ * Stripe before treating the payment as recorded. mppx's own recording uses
  * `<reference>_fallback` instead only when Stripe rejected the server's `paymentIntentOptions`.
  *
  * Unlike mppx's own recording, it throws when Stripe fails, so the caller can retry.
@@ -106,7 +108,7 @@ export async function recordPayment(
     )
     return { paymentIntentId: result.id, status: result.replayed ? 'replayed' : 'created' }
   } catch (error) {
-    if (isIdempotencyError(error)) return { status: 'already_recorded' }
+    if (isIdempotencyError(error)) return { status: 'key_conflict' }
     throw error
   }
 }
@@ -132,8 +134,11 @@ export declare namespace recordPayment {
         paymentIntentId: string
       }
     | {
-        /** An earlier call with different parameters already recorded this reference. */
-        status: 'already_recorded'
+        /**
+         * An earlier call used this reference with different parameters. Stripe caches failed
+         * responses too, so whether that call created a PaymentIntent is unknown.
+         */
+        status: 'key_conflict'
       }
     | {
         /** The amount is below Stripe's 1 cent minimum, so nothing was recorded. */

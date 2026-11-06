@@ -160,14 +160,14 @@ describe('recordPayment', () => {
     })
   })
 
-  test('treats a reused key with different parameters as already recorded', async () => {
+  test('reports a reused key with different parameters as a conflict', async () => {
     const create = vi
       .fn()
       .mockRejectedValue(
         Object.assign(new Error('Keys reused'), { type: 'StripeIdempotencyError' }),
       )
     await expect(recordPayment(createClient(create), parameters)).resolves.toEqual({
-      status: 'already_recorded',
+      status: 'key_conflict',
     })
   })
 
