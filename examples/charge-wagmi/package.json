@@ -11,14 +11,14 @@
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
     "@metamask/sdk": "~0.34.0",
-    "@tanstack/react-query": "^5.103.2",
-    "@types/node": "^26.2.0",
+    "@tanstack/react-query": "^5.105.0",
+    "@types/node": "^26.6.6",
     "mppx": "latest",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "viem": "2.57.1",
-    "vite": "^8.3.0",
-    "wagmi": "^3.7.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "viem": "2.57.13",
+    "vite": "^8.3.5",
+    "wagmi": "^3.7.9",
     "wrangler": "^4.157.0"
   },
   "devDependencies": {
@@ -28,6 +28,6 @@
     "@vitejs/plugin-react": "^6.0.5",
     "tsx": "^4.23.15",
     "typescript": "catalog:",
-    "vite": "^8.3.0"
+    "vite": "^8.3.5"
   }
 }
