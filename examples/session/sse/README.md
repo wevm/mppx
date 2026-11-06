@@ -30,5 +30,5 @@ With the server running, use the `mppx` CLI to make a paid request:
 
 ```bash
 pnpm mppx localhost:5173/api/chat
-pnpm mppx localhost:5173/api/chat?prompt=What+is+the+meaning+of+life?
+pnpm mppx localhost:5173/api/chat/What%20is%20the%20meaning%20of%20life%3F
 ```

@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-session-top-up",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // One Durable Object per payment channel holds its state, so every request,
+  // top-up and close sees the same channel from any isolate.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+}

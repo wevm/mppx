@@ -138,6 +138,7 @@ const mppx = Mppx.create({
       // transport and wires up Tempo metering (per-token charging, voucher
       // handling) automatically using the shared storage.
       sse: true,
+      chainId: Chain.testnet.id,
     }),
   ],
 })
@@ -185,9 +186,11 @@ export async function handler(request: Request): Promise<Response | null> {
   // Simple health check endpoint (no payment required).
   if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
-  if (url.pathname === '/api/chat') {
-    const prompt = url.searchParams.get('prompt') ?? 'Hello!'
-
+  // The prompt is an optional path segment (`/api/chat/<prompt>`), not a query
+  // parameter: the client posts vouchers back to this URL, and mppx bills a
+  // POST with a query string as content.
+  const [, route, prompt = 'Hello!'] = url.pathname.match(/^\/api\/(chat)(?:\/(.+))?$/) ?? []
+  if (route) {
     console.log(`[server] ${request.method} /api/chat`)
 
     // `mppx.session()` creates a streaming payment handler configured with
@@ -212,7 +215,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // `result.challenge` is a Response object with the WWW-Authenticate header
     // containing the base64url-encoded challenge parameters.
     if (result.status === 402) return result.challenge
-    if (request.method !== 'GET') return result.withReceipt(new Response(null, { status: 204 }))
+    if (request.method === 'POST') return result.withReceipt()
 
     // Phases 2–4: `withReceipt` handles everything.
     //
@@ -243,7 +246,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // final `event: payment-receipt` SSE event with the settlement details.
     //
     return result.withReceipt(async function* (stream) {
-      for await (const token of generateTokens(prompt)) {
+      for await (const token of generateTokens(decodeURIComponent(prompt))) {
         await stream.charge()
         yield token
       }

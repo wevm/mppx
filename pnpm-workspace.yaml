@@ -75,6 +75,7 @@ allowBuilds:
   protobufjs: true
   ssh2: true
   utf-8-validate: true
+  workerd: true
 
 minimumReleaseAgeExclude:
   - bun@1.4.4

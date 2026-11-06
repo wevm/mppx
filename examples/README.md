@@ -4,17 +4,19 @@ Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 
 ## Examples
 
-| Example                                       | Description                                          |
-| --------------------------------------------- | ---------------------------------------------------- |
-| [charge](./charge/)                           | Payment-gated image generation API                   |
-| [charge-relay](./charge-relay/)               | Hono API settled by the Tempo API relay              |
-| [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel |
-| [session/sse](./session/sse/)                 | Pay-per-token LLM streaming with SSE                 |
-| [session/ws](./session/ws/)                   | Pay-per-token LLM streaming with WebSocket           |
-| [stripe](./stripe/)                           | Stripe SPT charge with automatic client              |
-| [subscription](./subscription/)               | Daily news subscription using Tempo access keys      |
-| [web-bot-auth](./web-bot-auth/)               | Web Bot Auth with automatic MPP payment retry        |
-| [x402-mpp](./x402-mpp/)                       | Server route supporting x402 and mpp payments        |
+| Example                                       | Description                                                                 |
+| --------------------------------------------- | --------------------------------------------------------------------------- |
+| [charge](./charge/)                           | Payment-gated image generation API                                          |
+| [charge-relay](./charge-relay/)               | Hono API settled by the Tempo API relay                                     |
+| [session/cloudflare](./session/cloudflare/)   | Pay-per-token SSE streaming on Cloudflare Workers with Durable Objects      |
+| [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel                        |
+| [session/top-up](./session/top-up/)           | Prepaid API on Cloudflare Workers with automatic and manual channel top-ups |
+| [session/sse](./session/sse/)                 | Pay-per-token LLM streaming with SSE                                        |
+| [session/ws](./session/ws/)                   | Pay-per-token LLM streaming with WebSocket                                  |
+| [stripe](./stripe/)                           | Stripe SPT charge with automatic client                                     |
+| [subscription](./subscription/)               | Daily news subscription using Tempo access keys                             |
+| [web-bot-auth](./web-bot-auth/)               | Web Bot Auth with automatic MPP payment retry                               |
+| [x402-mpp](./x402-mpp/)                       | Server route supporting x402 and mpp payments                               |
 
 ## Running Examples
 

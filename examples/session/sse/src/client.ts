@@ -163,7 +163,7 @@ let tokenCount = 0
 // `s.sse()` returns a Promise<AsyncIterable<string>>. The promise resolves
 // once the channel is open and the SSE stream has started (phases 1-3 above).
 // The async iterable then yields tokens as they arrive.
-const tokens = await s.sse(`${BASE_URL}/api/chat?prompt=${encodeURIComponent(prompt)}`)
+const tokens = await s.sse(`${BASE_URL}/api/chat/${encodeURIComponent(prompt)}`)
 
 // Consume the SSE stream. Each iteration yields one content token.
 // Behind the scenes, between tokens, the client may be handling
