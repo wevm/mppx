@@ -331,6 +331,50 @@ export declare namespace BroadcastOutcomeUnknownError {
 }
 
 /**
+ * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
+ * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
+ *
+ * Retry the same challenge with the same `tempo.charge` client to resume waiting without
+ * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ */
+export class ZoneSettlementPendingError extends Error {
+  override readonly name = 'ZoneSettlementPendingError'
+
+  /** ID of the challenge the withdrawal pays. */
+  readonly challengeId: string
+  /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
+  readonly senderTag: `0x${string}`
+  /** ID of the Zone the withdrawal left. */
+  readonly zoneId: number
+
+  constructor(options: ZoneSettlementPendingError.Options) {
+    const { cause, challengeId, senderTag, zoneId } = options
+    super(
+      `Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+    )
+    this.challengeId = challengeId
+    this.senderTag = senderTag
+    this.zoneId = zoneId
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace ZoneSettlementPendingError {
+  type Options = {
+    /** The error that ended the wait. */
+    cause?: unknown
+    /** ID of the challenge the withdrawal pays. */
+    challengeId: string
+    /** Sender tag of the withdrawal. */
+    senderTag: `0x${string}`
+    /** ID of the Zone the withdrawal left. */
+    zoneId: number
+  }
+}
+
+/**
  * No credential was provided but payment is required.
  */
 export class PaymentRequiredError extends PaymentError {

@@ -48,11 +48,13 @@ function setup(
     withdrawals?: () => WithdrawalFixture[]
     status?: 'success' | 'reverted'
     logsAvailable?: () => boolean
-    zones?: number[]
+    zones?: number[] | '*'
     zoneSettlementTimeoutMs?: number
   } = {},
 ) {
   const rpcMethods: string[] = []
+  const logRanges: { fromBlock: string; toBlock: string }[] = []
+  let blockNumber = 0x20
   const withdrawals = () => options.withdrawals?.() ?? []
 
   const processedLog = (w: WithdrawalFixture, index: number) => ({
@@ -81,12 +83,15 @@ function setup(
   const client = createClient({
     chain: tempoModerato,
     transport: custom({
-      async request({ method }) {
+      async request({ method, params }) {
         rpcMethods.push(method)
         if (method === 'eth_chainId') return `0x${tempoModerato.id.toString(16)}`
-        if (method === 'eth_blockNumber') return '0x20'
-        if (method === 'eth_getLogs')
+        if (method === 'eth_blockNumber') return `0x${(blockNumber++).toString(16)}`
+        if (method === 'eth_getLogs') {
+          const [filter] = params as [{ fromBlock: string; toBlock: string }]
+          logRanges.push({ fromBlock: filter.fromBlock, toBlock: filter.toBlock })
           return options.logsAvailable?.() === false ? [] : withdrawals().map(processedLog)
+        }
         if (method === 'eth_getTransactionByHash')
           return {
             hash: settlementHash,
@@ -184,7 +189,7 @@ function setup(
     )
   }
 
-  return { challenge, credential, rpcMethods, server }
+  return { challenge, credential, logRanges, rpcMethods, server }
 }
 
 const tagA = `0x${'a1'.repeat(32)}` as const
@@ -208,18 +213,52 @@ describe('tempo.charge zone credentials', () => {
     expect(receipt).toMatchObject({ method: 'tempo', reference: settlementHash, status: 'success' })
   })
 
-  test('finds the settlement on Tempo when the credential has no hash', async () => {
+  test('rejects a credential without a settlement hash by default', async () => {
+    const { challenge, credential, rpcMethods, server } = setup()
+    const { challenge: c } = await challenge()
+    await expect(server.verifyCredential(credential(c, { senderTag: tagA }))).rejects.toThrow(
+      'Zone credential must include the Tempo settlement hash',
+    )
+    expect(rpcMethods).not.toContain('eth_getLogs')
+  })
+
+  test('finds the settlement on Tempo when polling is enabled', async () => {
     let fixture: WithdrawalFixture[] = []
     let polls = 0
-    const { challenge, credential, rpcMethods, server } = setup({
+    const { challenge, credential, logRanges, server } = setup({
       withdrawals: () => fixture,
-      logsAvailable: () => ++polls > 1,
+      logsAvailable: () => ++polls > 2,
+      zoneSettlementTimeoutMs: 5_000,
     })
     const { challenge: c, memo } = await challenge()
     fixture = [{ senderTag: tagA, memo }]
     const receipt = await server.verifyCredential(credential(c, { senderTag: tagA }))
     expect(receipt.reference).toBe(settlementHash)
-    expect(rpcMethods.filter((m) => m === 'eth_getLogs').length).toBeGreaterThanOrEqual(2)
+    // The lookback window is scanned once; later polls only cover new blocks.
+    expect(logRanges.length).toBe(3)
+    for (const [index, range] of logRanges.entries()) {
+      if (index === 0) continue
+      expect(BigInt(range.fromBlock)).toBe(BigInt(logRanges[index - 1]!.toBlock) + 1n)
+    }
+  })
+
+  test('shares one settlement poll between concurrent credentials', async () => {
+    let fixture: WithdrawalFixture[] = []
+    let polls = 0
+    const { challenge, credential, logRanges, server } = setup({
+      withdrawals: () => fixture,
+      logsAvailable: () => ++polls > 2,
+      zoneSettlementTimeoutMs: 5_000,
+    })
+    const { challenge: c, memo } = await challenge()
+    fixture = [{ senderTag: tagA, memo }]
+    const serialized = credential(c, { senderTag: tagA })
+    const results = await Promise.allSettled([
+      server.verifyCredential(serialized),
+      server.verifyCredential(serialized),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect(logRanges.length).toBe(3)
   })
 
   test('fails when the withdrawal does not settle in time', async () => {
@@ -325,6 +364,38 @@ describe('tempo.charge zone credentials', () => {
     await expect(
       server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash, zoneId: 4 })),
     ).rejects.toThrow('Zone is not accepted for this challenge')
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
+  test('accepts a withdrawal from any Zone when zones is *', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: '*' })
+    const { challenge: c, memo } = await challenge()
+    fixture = [{ senderTag: tagA, memo }]
+    expect(c.request.methodDetails).toMatchObject({ zones: '*' })
+    const receipt = await server.verifyCredential(
+      credential(c, { senderTag: tagA, hash: settlementHash }),
+    )
+    expect(receipt).toMatchObject({ method: 'tempo', status: 'success' })
+  })
+
+  test('checks the portal of the Zone the credential names when zones is *', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: '*' })
+    const { challenge: c, memo } = await challenge()
+    fixture = [{ senderTag: tagA, memo }]
+    // The settlement came from Zone 3's portal, not Zone 4's.
+    await expect(
+      server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash, zoneId: 4 })),
+    ).rejects.toThrow('Zone withdrawal not settled')
+  })
+
+  test.each([0, -1, 1.5, 2 ** 32])('rejects Zone ID %s', async (zoneId) => {
+    const { challenge, credential, rpcMethods, server } = setup({ zones: '*' })
+    const { challenge: c } = await challenge()
+    await expect(
+      server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash, zoneId })),
+    ).rejects.toThrow()
     expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
   })
 

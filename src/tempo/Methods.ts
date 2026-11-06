@@ -4,6 +4,7 @@ import { parseUnits } from 'viem'
 import * as Constants from '../Constants.js'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import * as Zone from './internal/zone.js'
 import type { SessionSnapshot } from './session/client/Runtime.js'
 import type * as PrecompileChannel from './session/precompile/Channel.js'
 import type { SubscriptionPeriodUnit } from './subscription/Types.js'
@@ -124,7 +125,7 @@ export const charge = Method.from({
           hash: z.optional(z.hash()),
           senderTag: z.hash(),
           type: z.literal('zone'),
-          zoneId: z.number(),
+          zoneId: z.number().check(z.refine(Zone.isId, 'Invalid Zone ID')),
         }),
       ]),
     },
@@ -148,7 +149,15 @@ export const charge = Method.from({
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
           supportedModes: z.optional(z.array(z.enum(chargeModes)).check(z.minLength(1))),
-          zones: z.optional(z.array(z.number()).check(z.minLength(1))),
+          // Zone IDs the payee accepts withdrawals from, or '*' for any Zone on the challenge's chain.
+          zones: z.optional(
+            z.union([
+              z.literal('*'),
+              z
+                .array(z.number().check(z.refine(Zone.isId, 'Invalid Zone ID')))
+                .check(z.minLength(1)),
+            ]),
+          ),
         })
         .check(
           z.refine(({ amount, decimals, splits }) => {

@@ -35,12 +35,12 @@ function zoneClient(chainId: number) {
   })
 }
 
-async function challenge(request: Record<string, unknown> = {}) {
+async function challenge(request: Record<string, unknown> = {}, zones: number[] | '*' = [3]) {
   const server = Mppx.create({
     realm: 'api.example.com',
     secretKey: 'test-secret-key-test-secret-key-32',
     methods: [
-      tempo.charge({ account: merchant, currency, getClient: () => l1, testnet: true, zones: [3] }),
+      tempo.charge({ account: merchant, currency, getClient: () => l1, testnet: true, zones }),
     ],
   })
   const result = await server.charge({ amount: '1', decimals: 6, ...request })(
@@ -59,6 +59,27 @@ describe('tempo.charge client zone selection', () => {
     await expect(
       method.createCredential({ challenge: (await challenge()) as never, context: {} }),
     ).rejects.toThrow('zone used')
+  })
+
+  test('pays from a Zone when the challenge accepts any Zone', async () => {
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: zoneClient(1_424_310_003) },
+    })
+    await expect(
+      method.createCredential({ challenge: (await challenge({}, '*')) as never, context: {} }),
+    ).rejects.toThrow('zone used')
+  })
+
+  test('pays on Tempo when the challenge does not accept the Zone', async () => {
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: zoneClient(1_424_310_004) },
+    })
+    const error = await method
+      .createCredential({ challenge: (await challenge()) as never, context: {} })
+      .catch((error: Error) => error)
+    expect(String(error)).not.toContain('zone used')
   })
 
   test.each([

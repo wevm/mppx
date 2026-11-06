@@ -1,4 +1,4 @@
-import { Challenge, Credential, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, defineChain, type Hex, http, parseUnits } from 'viem'
@@ -86,7 +86,11 @@ async function fundedZoneAccount(amount: bigint) {
   return { account, zone }
 }
 
-function service(parameters: { recipient: Address; zones?: number[] }) {
+function service(parameters: {
+  recipient: Address
+  zones?: number[] | '*'
+  zoneSettlementTimeoutMs?: number
+}) {
   const server = Mppx_server.create({
     realm,
     secretKey,
@@ -97,6 +101,7 @@ function service(parameters: { recipient: Address; zones?: number[] }) {
         getClient: () => l1,
         recipient: parameters.recipient,
         zones: parameters.zones ?? [context.zoneId],
+        zoneSettlementTimeoutMs: parameters.zoneSettlementTimeoutMs,
       }),
     ],
   })
@@ -123,7 +128,11 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     'pays an MPP service on Tempo (wait: %s)',
     async (wait) => {
       const recipient = privateKeyToAccount(generatePrivateKey()).address
-      const { handler } = service({ recipient })
+      // Hashless (accepted) credentials need the server to wait for settlement.
+      const { handler } = service({
+        recipient,
+        ...(wait === 'accepted' && { zoneSettlementTimeoutMs: 30_000 }),
+      })
       const zoneBefore = await balanceOf(payer.zone, payer.account.address)
 
       const client = Mppx_client.create({
@@ -187,7 +196,8 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
 
   test('rejects a withdrawal bound to another challenge', async () => {
     const recipient = privateKeyToAccount(generatePrivateKey()).address
-    const { handler } = service({ recipient })
+    // The credential below has no settlement hash, so the server waits for it.
+    const { handler } = service({ recipient, zoneSettlementTimeoutMs: 60_000 })
     const first = Challenge.fromResponse(await handler(new Request('https://zones.example.com')))
     const second = Challenge.fromResponse(await handler(new Request('https://zones.example.com')))
 
@@ -206,6 +216,61 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     )
     expect(response.status).not.toBe(200)
     expect(await response.text()).toContain('memo is not bound to this challenge')
+  }, 120_000)
+
+  test('pays a service that accepts any Zone', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient, zones: '*' })
+    const challenge = Challenge.fromResponse(
+      await handler(new Request('https://zones.example.com')),
+    )
+    expect(challenge.request.methodDetails).toMatchObject({ zones: '*' })
+
+    const client = Mppx_client.create({
+      fetch: (input, init) => handler(new Request(input, init)),
+      methods: [tempo_client.charge({ getClient: () => l1, zone: { client: payer.zone } })],
+      polyfill: false,
+    })
+    const response = await client.fetch('https://zones.example.com/resource')
+    expect(response.status).toBe(200)
+    expect(await balanceOf(l1, recipient)).toBe(parseUnits(price, 6))
+  }, 120_000)
+
+  test('resumes a settlement wait without withdrawing again', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient })
+    const challenge = Challenge.fromResponse(
+      await handler(new Request('https://zones.example.com')),
+    )
+    const zoneBefore = await balanceOf(payer.zone, payer.account.address)
+    // Give up on settlement at once, as a timeout would.
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: payer.zone, settlementTimeoutMs: 0 },
+    })
+
+    const error = await method
+      .createCredential({ challenge: challenge as never, context: {} })
+      .catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
+    const { senderTag, zoneId } = error as Errors.ZoneSettlementPendingError
+    expect(zoneId).toBe(context.zoneId)
+    await Zone.waitForSettlement(l1, { portal: Zone.portalAddress(zoneId), senderTag })
+
+    // The retry finds the same withdrawal settled instead of paying again.
+    const credential = await method.createCredential({
+      challenge: challenge as never,
+      context: {},
+    })
+    expect(Credential.deserialize(credential).payload).toMatchObject({ senderTag, type: 'zone' })
+    const response = await handler(
+      new Request('https://zones.example.com', { headers: { Authorization: credential } }),
+    )
+    expect(response.status).toBe(200)
+    const fee = await Actions.zone.getWithdrawalFee(payer.zone)
+    expect(await balanceOf(payer.zone, payer.account.address)).toBe(
+      zoneBefore - parseUnits(price, 6) - fee,
+    )
   }, 120_000)
 
   test('rejects a Zone the service does not accept', async () => {

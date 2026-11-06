@@ -19,6 +19,7 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
+import * as Errors from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
@@ -93,6 +94,8 @@ export function charge(parameters: charge.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
+  // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
+  const pendingZoneWithdrawals = new Map<string, Zone.PendingWithdrawal>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -134,7 +137,6 @@ export function charge(parameters: charge.Parameters = {}) {
       const zoneParentChainId =
         (zoneChain as { sourceId?: number } | undefined)?.sourceId ??
         (zoneChain ? Zone.parentChainIdFromChainId(zoneChain.id) : undefined)
-      const offeredZones = methodDetails?.zones as readonly number[] | undefined
       const explicitMode = context?.mode ?? parameters.mode
       // Pay from a Zone balance when the challenge accepts the configured Zone.
       // Zone payments are push payments, so they follow the challenge's and client's modes.
@@ -145,10 +147,17 @@ export function charge(parameters: charge.Parameters = {}) {
         zoneParentChainId === chainId &&
         supportedModes.includes('push') &&
         (explicitMode === undefined || explicitMode === 'push') &&
-        offeredZones?.includes(zoneId) &&
+        Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, zoneId) &&
         !methodDetails?.splits
       )
-        return createZoneCredential({ challenge, clientId, client, zone: parameters.zone, zoneId })
+        return createZoneCredential({
+          challenge,
+          clientId,
+          client,
+          pending: pendingZoneWithdrawals,
+          zone: parameters.zone,
+          zoneId,
+        })
 
       const defaultAccount = getAccount(client, context)
       const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
@@ -424,10 +433,57 @@ async function createZoneCredential(options: {
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
+  pending: Map<string, Zone.PendingWithdrawal>
   zone: charge.Zone
   zoneId: number
 }) {
-  const { challenge, client, clientId, zone, zoneId } = options
+  const { challenge, client, pending, zone, zoneId } = options
+  const request = challenge.request as ChargeRequest
+  const recipient = request.recipient as Address
+
+  // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
+  const withdrawal = pending.get(challenge.id) ?? (await requestZoneWithdrawal(options))
+  if (withdrawal.zoneId !== zoneId)
+    throw new Error(
+      `Challenge "${challenge.id}" is already paid by a Zone ${withdrawal.zoneId} withdrawal.`,
+    )
+  const { senderTag } = withdrawal
+
+  let hash: Hex.Hex | undefined
+  if (zone.wait !== 'accepted') {
+    pending.set(challenge.id, withdrawal)
+    try {
+      hash = await Zone.waitForSettlement(client, {
+        portal: Zone.portalAddress(zoneId),
+        senderTag,
+        timeoutMs: zone.settlementTimeoutMs,
+        to: recipient,
+      })
+    } catch (cause) {
+      throw new Errors.ZoneSettlementPendingError({
+        cause,
+        challengeId: challenge.id,
+        senderTag,
+        zoneId,
+      })
+    }
+    pending.delete(challenge.id)
+  }
+
+  return Credential.serialize({
+    challenge,
+    payload: { ...(hash && { hash }), senderTag, type: 'zone', zoneId },
+  })
+}
+
+/** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
+async function requestZoneWithdrawal(options: {
+  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+  clientId: string | undefined
+  zone: charge.Zone
+  zoneId: number
+}): Promise<Zone.PendingWithdrawal> {
+  const { challenge, clientId, zone, zoneId } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
   if (!account) throw new Error('`zone.client` requires an account.')
@@ -465,26 +521,14 @@ async function createZoneCredential(options: {
     logs: receipt.logs,
   })
   if (!requested) throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.')
-  const senderTag = Zone.senderTag({
-    fallbackNonce: requested.args.fallbackNonce,
-    sender: requested.args.sender,
-    transactionHash: receipt.transactionHash,
-  })
-
-  const hash =
-    zone.wait === 'settled'
-      ? await Zone.waitForSettlement(client, {
-          portal: Zone.portalAddress(zoneId),
-          senderTag,
-          timeoutMs: zone.settlementTimeoutMs,
-          to: recipient,
-        })
-      : undefined
-
-  return Credential.serialize({
-    challenge,
-    payload: { ...(hash && { hash }), senderTag, type: 'zone', zoneId },
-  })
+  return {
+    senderTag: Zone.senderTag({
+      fallbackNonce: requested.args.fallbackNonce,
+      sender: requested.args.sender,
+      transactionHash: receipt.transactionHash,
+    }),
+    zoneId,
+  }
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
@@ -566,10 +610,11 @@ export declare namespace charge {
     /**
      * When to send the credential.
      *
-     * - `'accepted'`: once the Zone accepts the withdrawal. The server waits for it to settle on Tempo.
      * - `'settled'`: once the withdrawal settles on Tempo, with the settlement transaction hash.
+     * - `'accepted'`: once the Zone accepts the withdrawal, without the hash. Only servers that
+     *   set `zoneSettlementTimeoutMs` accept this and wait for settlement themselves.
      *
-     * @default 'accepted'
+     * @default 'settled'
      */
     wait?: 'accepted' | 'settled' | undefined
     /** Milliseconds to wait for settlement when `wait` is `'settled'`. @default 60_000 */

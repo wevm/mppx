@@ -85,7 +85,7 @@ export function charge<const parameters extends charge.Parameters>(
     validateSender,
     waitForConfirmation = true,
     zones,
-    zoneSettlementTimeoutMs = Zone.defaultSettlementTimeoutMs,
+    zoneSettlementTimeoutMs = 0,
   } = parameters
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
@@ -306,6 +306,34 @@ export function charge<const parameters extends charge.Parameters>(
     return { payer, receipt, sender, transfers }
   }
 
+  // Concurrent credentials for one withdrawal share a single settlement poll.
+  const pendingZoneSettlements = new Map<string, Promise<`0x${string}`>>()
+  function waitForZoneSettlement(
+    parameters: Parameters<typeof Zone.waitForSettlement>[1] & {
+      client: CredentialContext['client']
+    },
+  ) {
+    const { client, ...rest } = parameters
+    const key = `${rest.portal.toLowerCase()}:${rest.senderTag.toLowerCase()}`
+    let pending = pendingZoneSettlements.get(key)
+    if (!pending) {
+      // Keep a found settlement briefly, so validation and settlement of one
+      // credential (and its retries) don't poll again; drop failures at once.
+      pending = Zone.waitForSettlement(client, rest).then(
+        (hash) => {
+          setTimeout(() => pendingZoneSettlements.delete(key), 60_000).unref?.()
+          return hash
+        },
+        (error) => {
+          pendingZoneSettlements.delete(key)
+          throw error
+        },
+      )
+      pendingZoneSettlements.set(key, pending)
+    }
+    return pending
+  }
+
   /**
    * Validates a payment that a Zone withdrawal settled on Tempo: the portal's
    * `WithdrawalProcessed` event pays the recipient, and the withdrawal's memo in
@@ -316,8 +344,7 @@ export function charge<const parameters extends charge.Parameters>(
       context
     if (supportedModes && !supportedModes.includes('push'))
       throw new MismatchError('Zone credentials are not supported for this challenge.', {})
-    const offered = methodDetails?.zones as readonly number[] | undefined
-    if (!offered?.includes(payload.zoneId))
+    if (!Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, payload.zoneId))
       throw new MismatchError('Zone is not accepted for this challenge.', {
         zoneId: String(payload.zoneId),
       })
@@ -326,9 +353,14 @@ export function charge<const parameters extends charge.Parameters>(
 
     const portal = Zone.portalAddress(payload.zoneId)
     const senderTag = payload.senderTag as `0x${string}`
+    if (!payload.hash && zoneSettlementTimeoutMs <= 0)
+      throw new MismatchError('Zone credential must include the Tempo settlement hash.', {
+        senderTag,
+      })
     const hash =
       (payload.hash as `0x${string}` | undefined) ??
-      (await Zone.waitForSettlement(client, {
+      (await waitForZoneSettlement({
+        client,
         portal,
         senderTag,
         timeoutMs: zoneSettlementTimeoutMs,
@@ -1185,9 +1217,10 @@ export declare namespace charge {
     waitForConfirmation?: boolean | undefined
     /**
      * Milliseconds to wait for a Zone withdrawal to settle on Tempo when a
-     * `zone` credential omits the settlement transaction hash. Applies only
-     * when `zones` accepts Zone payments.
-     * @default 60_000
+     * `zone` credential omits the settlement transaction hash. Each wait polls
+     * the RPC for an unauthenticated sender tag, so it is off by default and such
+     * credentials are rejected. Enable it only behind rate limits.
+     * @default 0
      */
     zoneSettlementTimeoutMs?: number | undefined
   } & Client.getResolver.Parameters &
