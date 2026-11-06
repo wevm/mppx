@@ -5,12 +5,14 @@ on:
 
 permissions: {}
 
-# A merged version PR publishes to npm, so its run gets a group of its own:
-# a later push must not cancel it (or replace it while it is queued), or the
-# release never goes out. Other pushes still cancel each other.
+# A merged version PR publishes to npm, so release runs share a group of
+# their own that never cancels: a later push can't cancel a release, and
+# releases run one at a time in main's order. A release that waits behind
+# another can be replaced by a newer one, which publishes the later version.
+# Other pushes still cancel each other.
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && format('-release-{0}', github.sha) || '' }}"
-  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && '-release' || '' }}"
+  cancel-in-progress: "${{ !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
 
 jobs:
   verify:
