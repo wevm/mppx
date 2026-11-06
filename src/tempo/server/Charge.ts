@@ -908,8 +908,17 @@ export function charge<const parameters extends charge.Parameters>(
             // Optimistic path: broadcast without waiting for confirmation
             // (simulation above already ran). The returned receipt assumes
             // success — callers opt in via waitForConfirmation: false.
+            const transactionHash = finalHash
             const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
+            }).catch((broadcastError: unknown) => {
+              // Without a receipt wait, an ambiguous failure leaves the outcome to the caller.
+              if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
+              throw new BroadcastOutcomeUnknownError({
+                cause: broadcastError,
+                transactionHash,
+                validBefore: transaction.validBefore,
+              })
             })
             if (reference.toLowerCase() !== finalHash.toLowerCase())
               throw new VerificationFailedError({
@@ -1077,7 +1086,9 @@ export declare namespace charge {
      * report `status: 'success'` based on simulation alone — if the
      * transaction reverts on-chain after broadcast (e.g. due to a state
      * change between simulation and inclusion), the receipt will not reflect
-     * the failure.
+     * the failure. An ambiguous broadcast failure (a timeout, a lost
+     * connection, a 5xx) throws `Errors.BroadcastOutcomeUnknownError` without
+     * polling for a receipt.
      */
     waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters &

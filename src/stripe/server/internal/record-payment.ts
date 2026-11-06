@@ -106,7 +106,11 @@ export async function recordPayment(
       paymentIntentParams({ amountCents, metadata, network, reference }),
       { idempotencyKey: reference, ...(connect && { connect }) },
     )
-    return { paymentIntentId: result.id, status: result.replayed ? 'replayed' : 'created' }
+    return {
+      paymentIntentId: result.id,
+      paymentIntentStatus: result.status,
+      status: result.replayed ? 'replayed' : 'created',
+    }
   } catch (error) {
     if (isIdempotencyError(error)) return { status: 'key_conflict' }
     throw error
@@ -132,6 +136,11 @@ export declare namespace recordPayment {
         /** A PaymentIntent was created, or Stripe replayed the earlier one for this reference. */
         status: 'created' | 'replayed'
         paymentIntentId: string
+        /**
+         * The PaymentIntent's Stripe status. Only `succeeded` means Stripe verified the
+         * transaction; others, such as `processing` or `requires_action`, need a later lookup.
+         */
+        paymentIntentStatus: string
       }
     | {
         /**
