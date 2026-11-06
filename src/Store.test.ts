@@ -81,14 +81,14 @@ function fakeDurableObjectNamespace() {
     get(id: string) {
       let object = objects.get(id)
       if (!object) {
-        const map = new Map<string, string>()
+        const map = new Map<string, unknown>()
         object = new Store.DurableObjectStore({
           storage: {
             async get(key: string) {
-              return map.get(key)
+              return structuredClone(map.get(key))
             },
-            async put(key: string, value: string) {
-              map.set(key, value)
+            async put(key: string, value: unknown) {
+              map.set(key, structuredClone(value))
             },
             async delete(key: string) {
               return map.delete(key)
@@ -99,17 +99,32 @@ function fakeDurableObjectNamespace() {
       }
       const target = object
       // Serialize calls per object, as a Durable Object's input gate does.
+      const queue = <result>(run: () => Promise<result>) => {
+        const response = (queues.get(id) ?? Promise.resolve()).then(run)
+        queues.set(
+          id,
+          response.catch(() => {}),
+        )
+        return response
+      }
+      // RPC arguments and results are structured clones.
+      const rpc =
+        (method: 'get' | 'put' | 'delete' | 'swap' | 'claim') =>
+        (...args: unknown[]) =>
+          queue(async () =>
+            structuredClone(
+              await (target[method] as Function).apply(target, structuredClone(args)),
+            ),
+          )
       return {
         fetch(input: string, init: RequestInit) {
-          const response = (queues.get(id) ?? Promise.resolve()).then(() =>
-            target.fetch(new Request(input, init)),
-          )
-          queues.set(
-            id,
-            response.catch(() => {}),
-          )
-          return response
+          return queue(() => target.fetch(new Request(input, init)))
         },
+        get: rpc('get'),
+        put: rpc('put'),
+        delete: rpc('delete'),
+        swap: rpc('swap'),
+        claim: rpc('claim'),
       }
     },
   }
@@ -119,6 +134,15 @@ describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
   { label: 'durableObject', create: () => Store.durableObject(fakeDurableObjectNamespace()) },
+  {
+    label: 'durableObject (rpc)',
+    create: () => Store.durableObject(fakeDurableObjectNamespace(), { transport: 'rpc' }),
+  },
+  {
+    label: 'durableObject (rpc, native)',
+    create: () =>
+      Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native', transport: 'rpc' }),
+  },
   { label: 'postgres', create: () => pgliteStore() },
   { label: 'sqlite', create: () => Store.sqlite(new DatabaseSync(':memory:')) },
   {
@@ -551,6 +575,15 @@ describe.each([
     label: 'durableObject',
     create: (options?: Store.Options) => Store.durableObject(fakeDurableObjectNamespace(), options),
   },
+  {
+    label: 'durableObject (rpc, native)',
+    create: (options?: Store.Options) =>
+      Store.durableObject(fakeDurableObjectNamespace(), {
+        ...options,
+        encoding: 'native',
+        transport: 'rpc',
+      }),
+  },
   { label: 'postgres (PGlite)', create: (options?: Store.Options) => pgliteStore(options) },
   {
     label: 'sqlite (node:sqlite)',
@@ -643,6 +676,12 @@ describe.each([
 })
 
 describe('durableObject', () => {
+  test('rejects native encoding over fetch', () => {
+    expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
+      'requires `transport: "rpc"`',
+    )
+  })
+
   test('update throws after maxAttempts conflicts without a final backoff', async () => {
     // Every swap reports a conflict.
     const namespace = {
