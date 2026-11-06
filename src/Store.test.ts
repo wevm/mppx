@@ -666,6 +666,25 @@ describe('durableObject', () => {
 })
 
 describe('sql', () => {
+  test('direct tryClaim rejects a claim whose expiry passed while the statement ran', async () => {
+    const db = new DatabaseSync(':memory:')
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text, params) {
+        // The clock passes the claim's expiry while the statement is in flight.
+        if (text.startsWith('INSERT')) now = 2_000
+        return db.prepare(text).all(...(params as never[])) as Store.sql.Row[]
+      },
+    })
+    try {
+      expect(await store.tryClaim!('nonce', 1_500)).toBe(false)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
   test('leaves the table to migrations with createTable: false', async () => {
     await expect(pgliteStore({ createTable: false }).get('k')).rejects.toThrow()
     await expect(

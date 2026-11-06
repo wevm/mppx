@@ -620,7 +620,8 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
             Date.now(),
           ],
         )
-        return rows.length > 0
+        // The claim's own expiry may have passed while the statement ran.
+        return rows.length > 0 && expires > Date.now()
       },
     },
     options,
