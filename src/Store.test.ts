@@ -81,14 +81,14 @@ function fakeDurableObjectNamespace() {
     get(id: string) {
       let object = objects.get(id)
       if (!object) {
-        const map = new Map<string, string>()
+        const map = new Map<string, unknown>()
         object = new Store.DurableObjectStore({
           storage: {
             async get(key: string) {
-              return map.get(key)
+              return structuredClone(map.get(key))
             },
-            async put(key: string, value: string) {
-              map.set(key, value)
+            async put(key: string, value: unknown) {
+              map.set(key, structuredClone(value))
             },
             async delete(key: string) {
               return map.delete(key)
@@ -99,17 +99,32 @@ function fakeDurableObjectNamespace() {
       }
       const target = object
       // Serialize calls per object, as a Durable Object's input gate does.
+      const queue = <result>(run: () => Promise<result>) => {
+        const response = (queues.get(id) ?? Promise.resolve()).then(run)
+        queues.set(
+          id,
+          response.catch(() => {}),
+        )
+        return response
+      }
+      // RPC arguments and results are structured clones.
+      const rpc =
+        (method: 'get' | 'put' | 'delete' | 'swap' | 'claim') =>
+        (...args: unknown[]) =>
+          queue(async () =>
+            structuredClone(
+              await (target[method] as Function).apply(target, structuredClone(args)),
+            ),
+          )
       return {
         fetch(input: string, init: RequestInit) {
-          const response = (queues.get(id) ?? Promise.resolve()).then(() =>
-            target.fetch(new Request(input, init)),
-          )
-          queues.set(
-            id,
-            response.catch(() => {}),
-          )
-          return response
+          return queue(() => target.fetch(new Request(input, init)))
         },
+        get: rpc('get'),
+        put: rpc('put'),
+        delete: rpc('delete'),
+        swap: rpc('swap'),
+        claim: rpc('claim'),
       }
     },
   }
@@ -119,6 +134,15 @@ describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
   { label: 'durableObject', create: () => Store.durableObject(fakeDurableObjectNamespace()) },
+  {
+    label: 'durableObject (rpc)',
+    create: () => Store.durableObject(fakeDurableObjectNamespace(), { transport: 'rpc' }),
+  },
+  {
+    label: 'durableObject (rpc, native)',
+    create: () =>
+      Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native', transport: 'rpc' }),
+  },
   { label: 'postgres', create: () => pgliteStore() },
   { label: 'sqlite', create: () => Store.sqlite(new DatabaseSync(':memory:')) },
   {
@@ -551,6 +575,15 @@ describe.each([
     label: 'durableObject',
     create: (options?: Store.Options) => Store.durableObject(fakeDurableObjectNamespace(), options),
   },
+  {
+    label: 'durableObject (rpc, native)',
+    create: (options?: Store.Options) =>
+      Store.durableObject(fakeDurableObjectNamespace(), {
+        ...options,
+        encoding: 'native',
+        transport: 'rpc',
+      }),
+  },
   { label: 'postgres (PGlite)', create: (options?: Store.Options) => pgliteStore(options) },
   {
     label: 'sqlite (node:sqlite)',
@@ -642,7 +675,152 @@ describe.each([
   })
 })
 
+/** A value with every type native compare-and-swap compares, nested. */
+function richValue() {
+  const holes: number[] = new Array(3)
+  holes[0] = 1
+  holes[2] = 3
+  return {
+    n: 0,
+    bytes: new Uint8Array([1, 2]),
+    floats: new Float64Array([1.5]),
+    view: new DataView(new Uint8Array([7]).buffer),
+    buffer: new Uint8Array([3]).buffer,
+    map: new Map<unknown, unknown>([
+      ['a', { b: 1n }],
+      [1, [2]],
+    ]),
+    set: new Set<unknown>([1, 'x', 2n]),
+    date: new Date(0),
+    re: /a/gi,
+    holes,
+    nested: [{ m: new Map([['k', new Uint8Array([9])]]) }],
+  }
+}
+
+/** A DurableObjectStore on an in-memory storage that copies values as Durable Object storage does. */
+function objectStore() {
+  const map = new Map<string, unknown>()
+  return new Store.DurableObjectStore({
+    storage: {
+      async get(key: string) {
+        return structuredClone(map.get(key))
+      },
+      async put(key: string, value: unknown) {
+        map.set(key, structuredClone(value))
+      },
+      async delete(key: string) {
+        return map.delete(key)
+      },
+    },
+  })
+}
+
 describe('durableObject', () => {
+  test('native update compares typed arrays, buffers, maps, sets, dates, regexps and holes', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    await store.put('rich', richValue())
+    const increment = () =>
+      store.update('rich', (current) => {
+        const value = current as ReturnType<typeof richValue>
+        return { op: 'set', value: { ...value, n: value.n + 1 }, result: value.n + 1 }
+      })
+    expect(await increment()).toBe(1)
+    expect(await increment()).toBe(2)
+  })
+
+  test('native compare-and-swap tells holes, types and contents apart', async () => {
+    const holes: number[] = new Array(3)
+    holes[0] = 1
+    holes[2] = 3
+    const shared = { x: 1 }
+    const pairs: [unknown, unknown][] = [
+      [holes, [1, undefined, 3]],
+      [Object.assign([1], { tag: 'a' }), Object.assign([1], { tag: 'b' })],
+      [Object.assign([1], { tag: 'a' }), [1]],
+      [
+        { a: shared, b: shared },
+        { a: { x: 1 }, b: { x: 1 } },
+      ],
+      [new Uint8Array([1]), new Int8Array([1])],
+      [new Uint8Array([1]), new Uint8Array([2])],
+      [new Uint8Array([1, 2, 3]).subarray(0, 1), new Uint8Array([1, 2, 99]).subarray(0, 1)],
+      [new Uint8Array([1, 1]).subarray(0, 1), new Uint8Array([1, 1]).subarray(1, 2)],
+      [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer],
+      [new Map([[1, 'a']]), new Map([[1, 'b']])],
+      [new Set([1]), new Set([2])],
+      [/a/g, /a/i],
+      [new Date(0), new Date(1)],
+      [{ a: 1n }, { a: 1 }],
+    ]
+    for (const [stored, other] of pairs) {
+      const object = objectStore()
+      await object.put('k', stored, 'native')
+      expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
+      expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
+    }
+  })
+
+  test('native update handles cyclic values', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    const value: { n: number; self?: unknown; list: unknown[] } = { n: 0, list: [] }
+    value.self = value
+    value.list.push(value, value.list)
+    await store.put('cycle', value)
+    const result = await store.update('cycle', (current) => {
+      const next = current as typeof value
+      next.n += 1
+      return { op: 'set', value: next, result: next.n }
+    })
+    expect(result).toBe(1)
+    const stored = (await store.get('cycle')) as typeof value
+    expect(stored.n).toBe(1)
+    expect(stored.self).toBe(stored)
+  })
+
+  test('native encoding rejects errors, whose cause and stack it cannot compare', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(
+      store.put('k', { error: new Error('x', { cause: { count: 0 } }) }),
+    ).rejects.toThrow('cannot compare Error values')
+  })
+
+  test('native encoding rejects values it cannot compare instead of conflicting', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { m: new Map([[{}, 1]]) })).rejects.toThrow(
+      'cannot compare a Map with object keys',
+    )
+    await expect(
+      store.update('k', () => ({ op: 'set', value: new Set([{}]), result: undefined })),
+    ).rejects.toThrow('cannot compare a Set with object keys')
+    // A value written directly to storage fails the swap instead of conflicting.
+    const object = objectStore()
+    await object.put('k', new Map([[{}, 1]]), 'native')
+    await expect(object.swap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
+      'cannot compare',
+    )
+  })
+
+  test('rejects native encoding over fetch', () => {
+    expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
+      'requires `transport: "rpc"`',
+    )
+  })
+
   test('update throws after maxAttempts conflicts without a final backoff', async () => {
     // Every swap reports a conflict.
     const namespace = {
