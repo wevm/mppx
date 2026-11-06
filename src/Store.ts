@@ -695,8 +695,9 @@ export declare namespace postgres {
 
 /**
  * Atomic SQL store on a SQLite database: `node:sqlite` (`DatabaseSync`),
- * `better-sqlite3` or `bun:sqlite`. See {@link sql}. For libSQL or Turso, pass
- * `client.execute` to {@link sql} with dialect `sqlite`.
+ * `better-sqlite3` or `bun:sqlite`. See {@link sql}. For libSQL or Turso, use
+ * {@link sql} with dialect `sqlite` and return the result set's rows:
+ * `Store.sql({ dialect: 'sqlite', query: async (sql, args) => (await client.execute({ sql, args: args as InArgs })).rows })`.
  *
  * @example
  * ```ts
