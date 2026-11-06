@@ -271,6 +271,200 @@ export declare namespace cloudflare {
   }
 }
 
+/**
+ * Atomic store backed by Cloudflare Durable Objects.
+ *
+ * Each key lives in its own Durable Object instance (`idFromName(key)`), so
+ * reads and writes of one key are linearizable across every Worker isolate and
+ * location, while different keys (such as different payment channels) scale
+ * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
+ * commits with a compare-and-swap in the object. When another writer changed
+ * the key in between, the swap returns the stored value and the update retries
+ * from it after a jittered backoff; {@link AtomicStore.tryClaim} runs in a single
+ * object call.
+ *
+ * Bind {@link DurableObjectStore} as a SQLite-backed Durable Object and pass
+ * its namespace.
+ *
+ * @example
+ * ```ts
+ * import { Store } from 'mppx/server'
+ *
+ * export class MppxStore extends Store.DurableObjectStore {}
+ *
+ * export default {
+ *   fetch(request: Request, env: Env) {
+ *     const store = Store.durableObject(env.MPPX_STORE)
+ *     // ...
+ *   },
+ * }
+ * ```
+ */
+export function durableObject(
+  namespace: durableObject.Namespace,
+  options?: durableObject.Options,
+): AtomicStore {
+  const maxAttempts = options?.maxAttempts ?? 32
+
+  async function call<result>(key: string, body: DurableObjectStore.Request): Promise<result> {
+    const stub = namespace.get(namespace.idFromName(key))
+    const response = await stub.fetch('https://mppx-store/', {
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    if (!response.ok)
+      throw new Error(
+        `Durable Object store request failed (${response.status}): ${await response.text()}`,
+      )
+    return (await response.json()) as result
+  }
+
+  return from(
+    {
+      async get(key: string) {
+        const raw = await call<string | null>(key, { op: 'get', key })
+        if (raw == null) return null as any
+        return Json.parse(raw)
+      },
+      async put(key: string, value: unknown) {
+        await call(key, { op: 'put', key, value: Json.stringify(value) })
+      },
+      async delete(key: string) {
+        await call(key, { op: 'delete', key })
+      },
+      async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        let raw = await call<string | null>(key, { op: 'get', key })
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const change = fn(raw == null ? null : (Json.parse(raw) as never))
+          if (change.op === 'noop') return change.result
+          const swapped = await call<DurableObjectStore.SwapResult>(key, {
+            op: 'swap',
+            key,
+            expected: raw,
+            value: change.op === 'set' ? Json.stringify(change.value) : null,
+          })
+          if (swapped.applied) return change.result
+          // Lost a race: retry from the value the object returned, after a jittered backoff.
+          raw = swapped.current
+          if (attempt + 1 < maxAttempts)
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
+            )
+        }
+        throw new Error(`Durable Object store update of "${key}" conflicted ${maxAttempts} times.`)
+      },
+      async tryClaim(key: string, expires: number) {
+        if (!Number.isFinite(expires) || expires <= Date.now()) return false
+        return call<boolean>(key, { op: 'claim', key, expires })
+      },
+    },
+    options,
+  )
+}
+
+export declare namespace durableObject {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+    /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
+    maxAttempts?: number | undefined
+  }
+
+  /** The Durable Object namespace binding of a {@link DurableObjectStore} class. */
+  export type Namespace = {
+    idFromName: (name: string) => unknown
+    get: (id: any) => {
+      fetch: (input: string, init: RequestInit) => Promise<Response>
+    }
+  }
+}
+
+/**
+ * Durable Object class that holds the values of {@link durableObject}.
+ *
+ * Export a subclass of it from your Worker and bind it in
+ * `wrangler.jsonc` with a `new_sqlite_classes` migration. It needs no
+ * `cloudflare:workers` import, so it bundles anywhere.
+ *
+ * @example
+ * ```jsonc
+ * {
+ *   "durable_objects": { "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }] },
+ *   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }]
+ * }
+ * ```
+ */
+export class DurableObjectStore {
+  readonly #storage: DurableObjectStore.Storage
+
+  constructor(state: { storage: DurableObjectStore.Storage }, _env?: unknown) {
+    this.#storage = state.storage
+  }
+
+  /** Handles one store operation. Each runs without awaiting other I/O between its read and write, so the object's input gate makes it atomic. */
+  async fetch(request: Request): Promise<Response> {
+    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+    const body = (await request.json()) as DurableObjectStore.Request
+    const storage = this.#storage
+    const read = async () => ((await storage.get(body.key)) as string | undefined) ?? null
+    const write = async (value: string | null) => {
+      if (value === null) await storage.delete(body.key)
+      else await storage.put(body.key, value)
+    }
+
+    switch (body.op) {
+      case 'get':
+        return Response.json(await read())
+      case 'put':
+        await write(body.value)
+        return Response.json(true)
+      case 'delete':
+        await write(null)
+        return Response.json(true)
+      case 'swap': {
+        const current = await read()
+        if (current !== body.expected)
+          return Response.json({ applied: false, current } satisfies DurableObjectStore.SwapResult)
+        await write(body.value)
+        return Response.json({ applied: true } satisfies DurableObjectStore.SwapResult)
+      }
+      case 'claim': {
+        const { expires } = body
+        if (!Number.isFinite(expires) || expires <= Date.now()) return Response.json(false)
+        const raw = await read()
+        const current = raw == null ? null : Json.parse(raw)
+        if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
+          return Response.json(false)
+        await write(Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker))
+        return Response.json(true)
+      }
+      default:
+        return new Response('Unknown operation', { status: 400 })
+    }
+  }
+}
+
+export declare namespace DurableObjectStore {
+  /** The subset of `DurableObjectStorage` the store uses. */
+  export type Storage = {
+    get: (key: string) => Promise<unknown>
+    put: (key: string, value: string) => Promise<void>
+    delete: (key: string) => Promise<unknown>
+  }
+
+  /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
+  export type SwapResult = { applied: true } | { applied: false; current: string | null }
+
+  /** An operation sent from {@link durableObject} to the object. */
+  export type Request =
+    | { op: 'get'; key: string }
+    | { op: 'put'; key: string; value: string }
+    | { op: 'delete'; key: string }
+    | { op: 'swap'; key: string; expected: string | null; value: string | null }
+    | { op: 'claim'; key: string; expires: number }
+}
+
 /** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */
 export function memory(options?: memory.Options): AtomicStore {
   const store = new Map<string, string>()

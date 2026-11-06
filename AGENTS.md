@@ -32,6 +32,7 @@ Run one test file by project and path, for example `pnpm exec vp test --project 
 - `src/middlewares/`: Hono, Express, Next.js and Elysia integrations.
 - `src/mcp/`: MCP client and server transport. `src/discovery/`: OpenAPI discovery. `src/proxy/`: the payment proxy and its services. `src/identity/`, `src/extensions/`: identity extensions.
 - `src/cli/`, `src/bin.ts`: the `mppx` CLI.
+- `test/workerd/`: Worker fixtures that `src/*.workerd.test.ts` bundle with rolldown and run in workerd through Miniflare (node project, no network).
 - `test/`: shared test helpers, setup, HTML Playwright tests (`test/html/`) and shard config (`test/runtime/`).
 - `examples/`: runnable example apps, a pnpm workspace each.
 - `scripts/`: build, publish and maintenance scripts.
