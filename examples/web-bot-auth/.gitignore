@@ -1,0 +1,4 @@
+.bot-key.json
+.dev.vars
+.wrangler
+node_modules

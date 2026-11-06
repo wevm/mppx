@@ -1,0 +1,5 @@
+.dev.vars
+.env
+.wrangler
+dist
+node_modules
