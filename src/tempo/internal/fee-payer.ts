@@ -5,6 +5,7 @@ import type { Account, LocalAccount } from 'viem'
 import { decodeFunctionData, encodeFunctionData, maxUint256, toFunctionSelector, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
+import { PaymentSimulationError } from '../../Errors.js'
 import { escrowAbi as legacyEscrowAbi } from '../legacy/session/escrow.abi.js'
 import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as TempoAddress_internal from './address.js'
@@ -334,6 +335,10 @@ export function sponsoredSimulationTransaction(
     feePayer,
     feePayerSignature: feePayerSignature ? Signature.toRpc(feePayerSignature) : undefined,
     ...(feeToken !== undefined ? { feeToken } : {}),
+    // A deserialized envelope omits a zero priority fee, which the signed envelope encodes as 0.
+    // The node rebuilds the fee payer payload from the request, so an absent fee fails signature
+    // recovery (or takes the node's own value) for a hosted sponsor's signature.
+    maxPriorityFeePerGas: transaction.maxPriorityFeePerGas ?? 0n,
     signature: undefined,
   }
 }
@@ -402,7 +407,8 @@ export async function signFeePayerSimulation(
  * gas and cannot be padded, or the padding was clamped), a failure that is only
  * out of gas is tolerated, since the sender simulation already bounded gas at
  * the broadcast limit. Every other failure, such as an insufficient fee balance
- * or a revert, is rethrown.
+ * or a revert, is thrown as a `PaymentSimulationError` that names the failing
+ * phase, sender, fee payer and payment token, with the node's error as `cause`.
  *
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
@@ -415,7 +421,22 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
   transaction: SponsoredTransaction
 }): Promise<sponsorship> {
   const { complete, policy, simulate, transaction } = parameters
-  await simulate(simulationTransaction(transaction, { feePayer: true }))
+  const paymentCall = transaction.calls.length === 1 ? transaction.calls[0] : undefined
+  const paymentToken =
+    paymentCall?.data?.startsWith(Selectors.transfer) ||
+    paymentCall?.data?.startsWith(Selectors.transferWithMemo)
+      ? paymentCall.to
+      : undefined
+  try {
+    await simulate(simulationTransaction(transaction, { feePayer: true }))
+  } catch (cause) {
+    throw new PaymentSimulationError({
+      cause,
+      paymentToken,
+      phase: 'sender',
+      sender: transaction.from,
+    })
+  }
   const completed = await complete()
   const { gas } = completed.transaction as { gas?: bigint | undefined }
   const simulated = await (async () => {
@@ -449,7 +470,14 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
       gas !== undefined &&
       simulatedGas !== undefined &&
       simulatedGas < gas + sponsoredSimulationGasBuffer
-    if (!unpadded || !isOutOfGasError(error)) throw error
+    if (!unpadded || !isOutOfGasError(error))
+      throw new PaymentSimulationError({
+        cause: error,
+        feePayer: TempoAddress.resolve(completed.feePayer),
+        paymentToken,
+        phase: 'sponsored',
+        sender: transaction.from,
+      })
   }
   return completed
 }
