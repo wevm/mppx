@@ -419,18 +419,19 @@ export declare namespace durableObject {
  */
 export class DurableObjectStore {
   /** The object's state (`ctx`), for subclasses that use its storage or alarms. */
-  protected readonly state: DurableObjectStore.State
+  protected state: DurableObjectStore.State
   /** The Worker's bindings, for subclasses. */
-  protected readonly env: unknown
+  protected env: unknown
+  /**
+   * The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}.
+   * A plain field, like `state` and `env`, so subclasses that assign `this.storage = state.storage` keep working.
+   */
+  protected storage: DurableObjectStore.Storage
 
   constructor(state: DurableObjectStore.State, env?: unknown) {
     this.state = state
     this.env = env
-  }
-
-  /** The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}. */
-  protected get storage(): DurableObjectStore.Storage {
-    return this.state.storage
+    this.storage = state.storage
   }
 
   /**
