@@ -148,25 +148,30 @@ function isReplayMarker(value: unknown): value is ReplayMarker {
 /**
  * Runs `fn` on the stored value and commits its change with `swap`, a
  * compare-and-swap. When another writer won, retries from the value `swap`
- * returned (or a fresh read) after a jittered backoff.
+ * returned (or a fresh read) after a jittered backoff. Values cross `read` and
+ * `swap` as JSON text unless `decode` and `encode` say otherwise.
  */
-async function compareAndSwap<result>(parameters: {
+async function compareAndSwap<result, raw = string>(parameters: {
+  decode?: ((raw: raw) => unknown) | undefined
+  encode?: ((value: unknown) => raw) | undefined
   fn: (current: unknown | null) => Change<unknown, result>
   key: string
   label: string
   maxAttempts: number
-  read: () => Promise<string | null>
+  read: () => Promise<raw | null>
   swap: (
-    expected: string | null,
-    value: string | null,
-  ) => Promise<{ applied: boolean; current?: string | null | undefined }>
+    expected: raw | null,
+    value: raw | null,
+  ) => Promise<{ applied: boolean; current?: raw | null | undefined }>
 }): Promise<result> {
   const { fn, key, label, maxAttempts, read, swap } = parameters
-  let raw = await read()
+  const decode = parameters.decode ?? ((raw: raw) => Json.parse(raw as string))
+  const encode = parameters.encode ?? ((value: unknown) => Json.stringify(value) as raw)
+  let raw: raw | null = await read()
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const change = fn(raw == null ? null : (Json.parse(raw) as never))
+    const change = fn(raw == null ? null : (decode(raw) as never))
     if (change.op === 'noop') return change.result
-    const swapped = await swap(raw, change.op === 'set' ? Json.stringify(change.value) : null)
+    const swapped = await swap(raw, change.op === 'set' ? encode(change.value) : null)
     if (swapped.applied) return change.result
     if (attempt + 1 === maxAttempts) break
     await new Promise((resolve) =>
@@ -175,6 +180,132 @@ async function compareAndSwap<result>(parameters: {
     raw = swapped.current !== undefined ? swapped.current : await read()
   }
   throw new Error(`${label} update of "${key}" conflicted ${maxAttempts} times.`)
+}
+
+/** Object types native compare-and-swap compares by value, besides arrays, plain objects, maps, sets and typed arrays. */
+const comparableTags = new Set([
+  '[object ArrayBuffer]',
+  '[object BigInt]',
+  '[object Boolean]',
+  '[object Date]',
+  '[object Number]',
+  '[object RegExp]',
+  '[object String]',
+])
+
+/** The error for a value native compare-and-swap cannot compare, which would otherwise conflict until `maxAttempts`. */
+function incomparable(what: string): Error {
+  return new Error(`Store.durableObject: native encoding cannot compare ${what}.`)
+}
+
+/** Throws unless map keys and set members are primitives, compared like `Map#has` (SameValueZero). */
+function assertPrimitiveKey(key: unknown, tag: string): void {
+  if ((typeof key === 'object' && key !== null) || typeof key === 'function')
+    throw incomparable(`a ${tag.slice(8, -1)} with object keys`)
+}
+
+/**
+ * Throws for a value that native compare-and-swap cannot compare, so a write
+ * fails at once instead of making later updates conflict until `maxAttempts`.
+ */
+function assertComparable(value: unknown, seen = new Set<object>()): void {
+  if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value)) return
+  // Structured clone keeps cycles: check each object once.
+  if (seen.has(value)) return
+  seen.add(value)
+  const tag = Object.prototype.toString.call(value)
+  if (Array.isArray(value) || tag === '[object Object]')
+    for (const key of Object.keys(value))
+      assertComparable((value as Record<string, unknown>)[key], seen)
+  else if (value instanceof Map)
+    for (const [key, item] of value) {
+      assertPrimitiveKey(key, tag)
+      assertComparable(item, seen)
+    }
+  else if (value instanceof Set) for (const item of value) assertPrimitiveKey(item, tag)
+  else if (!comparableTags.has(tag)) throw incomparable(`${tag.slice(8, -1)} values`)
+}
+
+/** A view's bytes. */
+function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
+  return ArrayBuffer.isView(view)
+    ? new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+    : new Uint8Array(view)
+}
+
+/**
+ * Structural equality of stored values, as structured clone copies them:
+ * primitives (bigints by value), arrays (holes included), plain objects, maps,
+ * sets, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
+ * regular expressions and boxed primitives. A native compare-and-swap
+ * needs it, since a value read back from storage is a copy. Throws for values it
+ * cannot compare, rather than reporting a conflict that never resolves.
+ */
+function deepEqual(
+  a: unknown,
+  b: unknown,
+  pairs: [Map<object, object>, Map<object, object>] = [new Map(), new Map()],
+): boolean {
+  if (a === b || (a !== a && b !== b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  // Pair objects one-to-one, both ways: a pair already being compared is assumed equal, so
+  // cyclic values terminate, and an object paired with another fails, so aliasing and cycle
+  // shapes, which structured clone keeps, must match.
+  const [left, right] = pairs
+  if (left.has(a) || right.has(b)) return left.get(a) === b && right.get(b) === a
+  left.set(a, b)
+  right.set(b, a)
+  const tag = Object.prototype.toString.call(a)
+  if (tag !== Object.prototype.toString.call(b)) return false
+  if (Array.isArray(a)) {
+    const other = b as unknown[]
+    if (a.length !== other.length) return false
+    for (let i = 0; i < a.length; i++)
+      if (i in a !== i in other || !deepEqual(a[i], other[i], pairs)) return false
+    // Structured clone keeps named properties on arrays too: compare them like an object's.
+    const keys = Object.keys(a)
+    if (keys.length !== Object.keys(other).length) return false
+    return keys.every(
+      (key) =>
+        (/^(?:0|[1-9]\d*)$/.test(key) && Number(key) < a.length) ||
+        (Object.prototype.hasOwnProperty.call(other, key) &&
+          deepEqual((a as never)[key], (other as never)[key], pairs)),
+    )
+  }
+  if (ArrayBuffer.isView(a) || tag === '[object ArrayBuffer]') {
+    const x = bytesOf(a as ArrayBuffer)
+    const y = bytesOf(b as ArrayBuffer)
+    return x.length === y.length && x.every((byte, i) => byte === y[i])
+  }
+  if (a instanceof Map) {
+    const other = b as Map<unknown, unknown>
+    if (a.size !== other.size) return false
+    for (const [key, item] of a) {
+      assertPrimitiveKey(key, tag)
+      if (!other.has(key) || !deepEqual(item, other.get(key), pairs)) return false
+    }
+    return true
+  }
+  if (a instanceof Set) {
+    const other = b as Set<unknown>
+    if (a.size !== other.size) return false
+    for (const item of a) {
+      assertPrimitiveKey(item, tag)
+      if (!other.has(item)) return false
+    }
+    return true
+  }
+  if (a instanceof RegExp)
+    return a.source === (b as RegExp).source && a.flags === (b as RegExp).flags
+  if (comparableTags.has(tag)) return Object.is(a.valueOf(), (b as object).valueOf())
+  if (tag !== '[object Object]') throw incomparable(`${tag.slice(8, -1)} values`)
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  return keys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(b, key) &&
+      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], pairs),
+  )
 }
 
 /** Options shared by store constructors. */
@@ -316,7 +447,9 @@ export declare namespace cloudflare {
  * object call.
  *
  * Bind {@link DurableObjectStore} as a SQLite-backed Durable Object and pass
- * its namespace.
+ * its namespace. With `transport: 'rpc'`, the store calls the object's methods
+ * over Workers RPC instead of `fetch`, and `encoding: 'native'` then stores
+ * values as structured-clone values instead of JSON text.
  *
  * @example
  * ```ts
@@ -331,16 +464,35 @@ export declare namespace cloudflare {
  *   },
  * }
  * ```
+ *
+ * @example
+ * ```ts
+ * import { DurableObject } from 'cloudflare:workers'
+ * import { Store } from 'mppx/server'
+ *
+ * // Workers RPC needs a class that extends `DurableObject`.
+ * export class MppxStore extends Store.DurableObjectStore.rpc(DurableObject) {}
+ *
+ * const store = Store.durableObject(env.MPPX_STORE, { transport: 'rpc', encoding: 'native' })
+ * ```
  */
 export function durableObject(
   namespace: durableObject.Namespace,
   options?: durableObject.Options,
 ): AtomicStore {
   const maxAttempts = options?.maxAttempts ?? 32
+  const transport = options?.transport ?? 'fetch'
+  const encoding = options?.encoding ?? 'json'
+  if (encoding === 'native' && transport !== 'rpc')
+    throw new Error(
+      'Store.durableObject: `encoding: "native"` requires `transport: "rpc"`, since `fetch` carries values as JSON.',
+    )
+  const native = encoding === 'native'
+
+  const object = (key: string) => namespace.get(namespace.idFromName(key))
 
   async function call<result>(key: string, body: DurableObjectStore.Request): Promise<result> {
-    const stub = namespace.get(namespace.idFromName(key))
-    const response = await stub.fetch('https://mppx-store/', {
+    const response = await object(key).fetch('https://mppx-store/', {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -352,33 +504,68 @@ export function durableObject(
     return (await response.json()) as result
   }
 
+  // The object's operations on stored values: JSON text, or native values over RPC.
+  const remote: DurableObjectStore.Stub =
+    transport === 'rpc'
+      ? {
+          get: (key) => stub(key).get(key, encoding),
+          put: (key, value) => stub(key).put(key, value, encoding),
+          delete: (key) => stub(key).delete(key, encoding),
+          swap: (key, expected, value) => stub(key).swap(key, expected, value, encoding),
+          claim: (key, expires) => stub(key).claim(key, expires, encoding),
+        }
+      : {
+          get: (key) => call(key, { op: 'get', key }),
+          put: (key, value) => call(key, { op: 'put', key, value: value as string }),
+          delete: (key) => call(key, { op: 'delete', key }),
+          swap: (key, expected, value) =>
+            call(key, {
+              op: 'swap',
+              key,
+              expected: expected as string | null,
+              value: value as string | null,
+            }),
+          claim: (key, expires) => call(key, { op: 'claim', key, expires }),
+        }
+  function stub(key: string) {
+    return object(key) as unknown as DurableObjectStore.Stub
+  }
+
   return from(
     {
       async get(key: string) {
-        const raw = await call<string | null>(key, { op: 'get', key })
+        const raw = await remote.get(key)
         if (raw == null) return null as any
-        return Json.parse(raw)
+        return native ? raw : Json.parse(raw as string)
       },
       async put(key: string, value: unknown) {
-        await call(key, { op: 'put', key, value: Json.stringify(value) })
+        if (native) assertComparable(value)
+        await remote.put(key, native ? value : Json.stringify(value))
       },
       async delete(key: string) {
-        await call(key, { op: 'delete', key })
+        await remote.delete(key)
       },
       update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
-        return compareAndSwap({
+        return compareAndSwap<result, unknown>({
+          // A native value is the compare-and-swap's expected value, so `fn` gets a copy.
+          decode: native ? (raw) => structuredClone(raw) : (raw) => Json.parse(raw as string),
+          encode: native
+            ? (value) => {
+                assertComparable(value)
+                return value
+              }
+            : (value) => Json.stringify(value),
           fn,
           key,
           label: 'Durable Object store',
           maxAttempts,
-          read: () => call<string | null>(key, { op: 'get', key }),
-          swap: (expected, value) =>
-            call<DurableObjectStore.SwapResult>(key, { op: 'swap', key, expected, value }),
+          read: async () => (await remote.get(key)) ?? null,
+          swap: (expected, value) => remote.swap(key, expected, value),
         })
       },
       async tryClaim(key: string, expires: number) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
-        return call<boolean>(key, { op: 'claim', key, expires })
+        return remote.claim(key, expires)
       },
     },
     options,
@@ -387,11 +574,26 @@ export function durableObject(
 
 export declare namespace durableObject {
   export type Options = {
+    /**
+     * How values are stored. `json` stores JSON text (bigints as ox encodes them);
+     * `native` stores structured-clone values, so bigints and nested objects stay
+     * intact and values written directly with `storage.put` read back. `native`
+     * requires `transport: 'rpc'`. @default 'json'
+     */
+    encoding?: Encoding | undefined
     /** Prefix prepended to every backing store key. */
     keyPrefix?: string | undefined
     /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
     maxAttempts?: number | undefined
+    /**
+     * How the store calls the object: `fetch` requests, or Workers RPC method
+     * calls, which need the class from {@link DurableObjectStore.rpc}. @default 'fetch'
+     */
+    transport?: 'fetch' | 'rpc' | undefined
   }
+
+  /** How {@link durableObject} stores values: JSON text or structured-clone values. */
+  export type Encoding = 'json' | 'native'
 
   /** The Durable Object namespace binding of a {@link DurableObjectStore} class. */
   export type Namespace = {
@@ -407,7 +609,8 @@ export declare namespace durableObject {
  *
  * Export a subclass of it from your Worker and bind it in
  * `wrangler.jsonc` with a `new_sqlite_classes` migration. It needs no
- * `cloudflare:workers` import, so it bundles anywhere.
+ * `cloudflare:workers` import, so it bundles anywhere; for Workers RPC, extend
+ * {@link DurableObjectStore.rpc} instead.
  *
  * @example
  * ```jsonc
@@ -435,6 +638,43 @@ export class DurableObjectStore {
   }
 
   /**
+   * Returns this class rebuilt on `base`, the `DurableObject` class from
+   * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
+   * and taking it as an argument keeps this module free of that import. Called
+   * on a subclass, it keeps the subclass's methods (such as `onWrite` and
+   * `alarm`), but not its constructor or field initializers: subclass the
+   * returned class, or set state up lazily.
+   *
+   * @example
+   * ```ts
+   * import { DurableObject } from 'cloudflare:workers'
+   *
+   * export class MppxStore extends Store.DurableObjectStore.rpc(DurableObject) {}
+   * ```
+   */
+  static rpc<store extends typeof DurableObjectStore>(
+    this: store,
+    base: abstract new (state: any, env: any) => object,
+  ): store {
+    class RpcStore extends (base as new (state: unknown, env: unknown) => object) {
+      constructor(state: DurableObjectStore.State, env?: unknown) {
+        super(state, env)
+        Object.assign(this, { env, state, storage: state.storage })
+      }
+    }
+    // Copy the receiver's prototype chain down to DurableObjectStore, most-derived last so it wins.
+    const chain: object[] = []
+    for (let proto: object = this.prototype; ; proto = Object.getPrototypeOf(proto)) {
+      chain.unshift(proto)
+      if (proto === DurableObjectStore.prototype) break
+    }
+    for (const proto of chain)
+      for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
+        if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
+    return RpcStore as unknown as store
+  }
+
+  /**
    * Called for every applied put, delete, swap and claim, after the storage
    * write and before the response, with the decoded values (`null` when the key
    * is absent). When the storage has `transaction()`, the write and this hook run
@@ -455,65 +695,106 @@ export class DurableObjectStore {
   /** Handles the object's alarm, which a subclass sets through {@link DurableObjectStore.storage}. Does nothing by default. */
   async alarm(): Promise<void> {}
 
-  /** Handles one store operation. Each runs without awaiting other I/O between its read and write, so the object's input gate makes it atomic. */
+  /** Reads a key: its JSON text, or its stored value with `native` encoding. */
+  async get(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
+    return (await this.state.storage.get(key)) ?? null
+  }
+
+  /** Writes a key: JSON text, or any structured-clone value with `native` encoding. */
+  async put(key: string, value: unknown, encoding: durableObject.Encoding = 'json'): Promise<void> {
+    await this.commit(key, value, encoding)
+  }
+
+  /** Deletes a key. */
+  async delete(key: string, encoding: durableObject.Encoding = 'json'): Promise<void> {
+    await this.commit(key, null, encoding)
+  }
+
+  /**
+   * Writes `value` (or deletes, for `null`) only if the key holds `expected`:
+   * the same JSON text, or with `native` encoding a structurally equal value.
+   * It reads and writes without awaiting other I/O in between, so the object's
+   * input gate makes it atomic.
+   */
+  async swap(
+    key: string,
+    expected: unknown,
+    value: unknown,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<DurableObjectStore.SwapResult<unknown>> {
+    const current = await this.get(key)
+    if (encoding === 'native' ? !deepEqual(current, expected ?? null) : current !== expected)
+      return { applied: false, current }
+    await this.commit(key, value, encoding, current)
+    return { applied: true }
+  }
+
+  /** Records a replay marker until `expires` unless the key holds a value or an unexpired marker. */
+  async claim(
+    key: string,
+    expires: number,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<boolean> {
+    if (!Number.isFinite(expires) || expires <= Date.now()) return false
+    const raw = await this.get(key)
+    const current = decode(raw, encoding)
+    if (current !== null && (!isReplayMarker(current) || current.expires > Date.now())) return false
+    const marker = { expires, type: 'mppx:replay' } satisfies ReplayMarker
+    await this.commit(key, encoding === 'native' ? marker : Json.stringify(marker), encoding, raw)
+    return true
+  }
+
+  /** Handles one store operation sent by `fetch`, as JSON text. */
   async fetch(request: Request): Promise<Response> {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 })
     const body = (await request.json()) as DurableObjectStore.Request
-    const storage = this.state.storage
-    const hooked = this.onWrite !== DurableObjectStore.prototype.onWrite
-    const read = async () => ((await storage.get(body.key)) as string | undefined) ?? null
-    const decode = (raw: string | null) => (raw == null ? null : Json.parse(raw))
-    // `previous` is the value the operation already read, if it read one.
-    const write = async (value: string | null, previous?: string | null) => {
-      if (!hooked) {
-        if (value === null) await storage.delete(body.key)
-        else await storage.put(body.key, value)
-        return
-      }
-      // One transaction: the hook's writes commit with this one, and its failure rolls it back.
-      const commit = async (target: DurableObjectStore.Storage) => {
-        const before =
-          previous === undefined
-            ? (((await target.get(body.key)) as string | undefined) ?? null)
-            : previous
-        if (value === null) await target.delete(body.key)
-        else await target.put(body.key, value)
-        await this.onWrite(body.key, decode(before), decode(value), target)
-      }
-      if (storage.transaction) await storage.transaction(commit)
-      else await commit(storage)
-    }
-
     switch (body.op) {
       case 'get':
-        return Response.json(await read())
+        return Response.json(await this.get(body.key))
       case 'put':
-        await write(body.value)
+        await this.put(body.key, body.value)
         return Response.json(true)
       case 'delete':
-        await write(null)
+        await this.delete(body.key)
         return Response.json(true)
-      case 'swap': {
-        const current = await read()
-        if (current !== body.expected)
-          return Response.json({ applied: false, current } satisfies DurableObjectStore.SwapResult)
-        await write(body.value, current)
-        return Response.json({ applied: true } satisfies DurableObjectStore.SwapResult)
-      }
-      case 'claim': {
-        const { expires } = body
-        if (!Number.isFinite(expires) || expires <= Date.now()) return Response.json(false)
-        const raw = await read()
-        const current = decode(raw)
-        if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
-          return Response.json(false)
-        await write(Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker), raw)
-        return Response.json(true)
-      }
+      case 'swap':
+        return Response.json(await this.swap(body.key, body.expected, body.value))
+      case 'claim':
+        return Response.json(await this.claim(body.key, body.expires))
       default:
         return new Response('Unknown operation', { status: 400 })
     }
   }
+
+  /** Writes or deletes (`null`) a key and runs {@link DurableObjectStore.onWrite}. `previous` is the value the caller already read, if any. */
+  private async commit(
+    key: string,
+    value: unknown,
+    encoding: durableObject.Encoding,
+    previous?: unknown,
+  ): Promise<void> {
+    const storage = this.state.storage
+    if (this.onWrite === DurableObjectStore.prototype.onWrite) {
+      if (value === null) await storage.delete(key)
+      else await storage.put(key, value)
+      return
+    }
+    // One transaction: the hook's writes commit with this one, and its failure rolls it back.
+    const write = async (target: DurableObjectStore.Storage) => {
+      const before = previous === undefined ? ((await target.get(key)) ?? null) : previous
+      if (value === null) await target.delete(key)
+      else await target.put(key, value)
+      await this.onWrite(key, decode(before, encoding), decode(value, encoding), target)
+    }
+    if (storage.transaction) await storage.transaction(write)
+    else await write(storage)
+  }
+}
+
+/** A stored value as the store sees it: JSON text parsed, a native value as is. */
+function decode(raw: unknown, encoding: durableObject.Encoding): unknown {
+  if (raw == null) return null
+  return encoding === 'native' ? raw : Json.parse(raw as string)
 }
 
 export declare namespace DurableObjectStore {
@@ -523,7 +804,7 @@ export declare namespace DurableObjectStore {
   /** The subset of `DurableObjectStorage` the store uses. */
   export type Storage = {
     get: (key: string) => Promise<unknown>
-    put: (key: string, value: string) => Promise<void>
+    put(key: string, value: unknown): Promise<void>
     delete: (key: string) => Promise<unknown>
     /** The scheduled alarm time in milliseconds, or `null`. */
     getAlarm?: (() => Promise<number | null>) | undefined
@@ -536,7 +817,23 @@ export declare namespace DurableObjectStore {
   }
 
   /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
-  export type SwapResult = { applied: true } | { applied: false; current: string | null }
+  export type SwapResult<value = string | null> =
+    | { applied: true }
+    | { applied: false; current: value }
+
+  /** The object's methods that {@link durableObject} calls, positionally, over Workers RPC. */
+  export type Stub = {
+    get: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    put: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>
+    delete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    swap: (
+      key: string,
+      expected: unknown,
+      value: unknown,
+      encoding?: durableObject.Encoding,
+    ) => Promise<SwapResult<unknown>>
+    claim: (key: string, expires: number, encoding?: durableObject.Encoding) => Promise<boolean>
+  }
 
   /** An operation sent from {@link durableObject} to the object. */
   export type Request =
