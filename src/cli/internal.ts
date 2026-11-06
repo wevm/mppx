@@ -4,6 +4,8 @@ import * as path from 'node:path'
 import * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
+import * as PaymentRequest from '../PaymentRequest.js'
+import * as ChallengeMeta from '../server/internal/challengeMeta.js'
 import type { Config } from './config.js'
 import type * as Extension from './Extension.js'
 import {
@@ -158,15 +160,32 @@ export function assertSamePaymentRequest(
       if (Object.keys(methodDetails).length) request.methodDetails = methodDetails
       else delete request.methodDetails
     }
-    return Challenge.serialize({
-      ...challenge,
-      request,
-      id: approved.id,
-      expires: approved.expires,
-    })
+    const { meta: _, opaque: __, ...rest } = challenge
+    return JSON.stringify([
+      Challenge.serialize({ ...rest, request, id: approved.id, expires: approved.expires }),
+      stableOpaque(challenge),
+    ])
   }
   if (paymentTerms(retry) !== paymentTerms(approved))
     throw new Error(
       'Payment request changed on retry. Run the command again to approve the new payment.',
     )
+}
+
+/**
+ * Returns a Challenge's opaque value without the per-issuance nonces mppx servers add
+ * (`_mppx_nonce`, `_mppx_identity`), which differ on every Challenge for the same payment.
+ */
+function stableOpaque(challenge: Challenge.Challenge): string | undefined {
+  const opaque =
+    challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : undefined)
+  if (opaque === undefined) return undefined
+  let meta: Record<string, string>
+  try {
+    meta = PaymentRequest.deserialize(opaque) as Record<string, string>
+  } catch {
+    return opaque
+  }
+  const stable = ChallengeMeta.routeMeta(meta)
+  return stable ? PaymentRequest.serialize(stable) : undefined
 }

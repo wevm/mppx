@@ -696,6 +696,35 @@ describe('validate: error handling', () => {
     expect(output).toContain('Malformed credential returns 402 (Got 422)')
     expect(output).toContain('Returning 422 prevents the client from retrying with a valid payment')
   })
+  test(
+    'sends -H headers and the Challenge credential header with the malformed Credential',
+    { timeout: 15_000 },
+    async () => {
+      const challenge = makeChallenge({ header: 'Payment-Credential' })
+      const garbage = `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`
+      const probes: http.IncomingHttpHeaders[] = []
+      const server = await testServer((req, res) => {
+        const url = new URL(req.url!, 'http://localhost')
+        if (url.pathname === '/openapi.json') {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(makeDiscoveryDoc({ '/api/test': {} }))
+          return
+        }
+        if (req.headers['x-api-key'] !== 'secret') {
+          res.writeHead(401)
+          res.end()
+          return
+        }
+        if (req.headers['payment-credential'] === garbage) probes.push(req.headers)
+        res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
+        res.end()
+      })
+      const { output } = await serve(['validate', server.url, '-H', 'X-Api-Key: secret'])
+      expect(output).toContain('Malformed credential returns 402 (not 500)')
+      expect(probes).toHaveLength(1)
+      expect(probes[0]!.authorization).toBeUndefined()
+    },
+  )
 })
 
 describe('validate: --endpoint flag', () => {

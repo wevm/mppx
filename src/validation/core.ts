@@ -155,6 +155,8 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
     if (isMpp) {
       const errorResults = await validateErrorHandling(baseUrl, endpoint, {
         body: effectiveBody,
+        challenge: parsedChallenges?.[0],
+        extraHeaders: options.headers,
         query: options.query,
       })
       yield { phase: 'errorHandling', endpoint, results: errorResults }
