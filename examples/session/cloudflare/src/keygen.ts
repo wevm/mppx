@@ -27,7 +27,11 @@ if (!vars.has('MPP_SECRET_KEY'))
     Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64'),
   )
 
-fs.writeFileSync(file, [...vars].map(([key, value]) => `${key}=${value}`).join('\n') + '\n')
+// Owner-only: the file holds the payee key and the challenge secret.
+fs.writeFileSync(file, [...vars].map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {
+  mode: 0o600,
+})
+fs.chmodSync(file, 0o600)
 
 const account = privateKeyToAccount(vars.get('MPP_PRIVATE_KEY') as Hex)
 const client = createClient({ account, chain: Chain.testnet, transport: http() })
