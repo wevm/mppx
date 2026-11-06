@@ -459,3 +459,24 @@ test.each([
     consoleError.mockRestore()
   },
 )
+
+test.each([
+  { name: 'ambiguous', error: gateway, unknown: true },
+  { name: 'definitive', error: insufficientFunds, unknown: false },
+])('optimistic charge broadcast failure: $name', async ({ error, unknown }) => {
+  const { broadcast, finalHash, lookupHashes, onPaymentSuccess, state } = await setup({
+    error,
+    sponsored: false,
+    waitForConfirmation: false,
+  })
+  state.outcome = 'rejected'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  if (unknown) {
+    expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+    expect(thrown).toMatchObject({ transactionHash: finalHash(), validBefore: expect.any(Number) })
+  } else expect(thrown).not.toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  expect(causedBy(thrown, error)).toBe(true)
+  // The optimistic path never polls for a receipt.
+  expect(lookupHashes).toHaveLength(0)
+  expect(onPaymentSuccess).not.toHaveBeenCalled()
+})

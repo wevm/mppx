@@ -132,7 +132,11 @@ describe('recordPayment', () => {
 
     await expect(
       recordPayment(createClient(create), { ...parameters, metadata: { order: 'o_1' } }),
-    ).resolves.toEqual({ paymentIntentId: 'pi_123', status: 'created' })
+    ).resolves.toEqual({
+      paymentIntentId: 'pi_123',
+      paymentIntentStatus: 'succeeded',
+      status: 'created',
+    })
     expect(create).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         amount: 50,
@@ -156,6 +160,7 @@ describe('recordPayment', () => {
     })
     await expect(recordPayment(createClient(create), parameters)).resolves.toEqual({
       paymentIntentId: 'pi_123',
+      paymentIntentStatus: 'succeeded',
       status: 'replayed',
     })
   })
@@ -185,4 +190,11 @@ describe('recordPayment', () => {
       'Connection reset',
     )
   })
+})
+
+test('recordPayment reports a PaymentIntent that is still processing', async () => {
+  const create = vi.fn().mockResolvedValue({ id: 'pi_123', status: 'processing' })
+  await expect(
+    recordPayment(createClient(create), { amount: '500000', network: 'tempo', reference: '0xtx' }),
+  ).resolves.toMatchObject({ paymentIntentStatus: 'processing', status: 'created' })
 })
