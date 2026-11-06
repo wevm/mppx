@@ -657,13 +657,19 @@ export declare namespace durableObject {
  */
 export class DurableObjectStore {
   /** The object's state (`ctx`), for subclasses that use its storage or alarms. */
-  protected readonly state: DurableObjectStore.State
+  protected state: DurableObjectStore.State
   /** The Worker's bindings, for subclasses. */
-  protected readonly env: unknown
+  protected env: unknown
+  /**
+   * The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}.
+   * A plain field, like `state` and `env`, so subclasses that assign `this.storage = state.storage` keep working.
+   */
+  protected storage: DurableObjectStore.Storage
 
   constructor(state: DurableObjectStore.State, env?: unknown) {
     this.state = state
     this.env = env
+    this.storage = state.storage
   }
 
   /**
@@ -688,7 +694,7 @@ export class DurableObjectStore {
     class RpcStore extends (base as new (state: unknown, env: unknown) => object) {
       constructor(state: DurableObjectStore.State, env?: unknown) {
         super(state, env)
-        Object.assign(this, { env, state })
+        Object.assign(this, { env, state, storage: state.storage })
       }
     }
     // Copy the receiver's prototype chain down to DurableObjectStore, most-derived last so it wins.
@@ -701,11 +707,6 @@ export class DurableObjectStore {
       for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
         if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
     return RpcStore as unknown as store
-  }
-
-  /** The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}. */
-  protected get storage(): DurableObjectStore.Storage {
-    return this.state.storage
   }
 
   /**
