@@ -145,6 +145,38 @@ function isReplayMarker(value: unknown): value is ReplayMarker {
   )
 }
 
+/**
+ * Runs `fn` on the stored value and commits its change with `swap`, a
+ * compare-and-swap. When another writer won, retries from the value `swap`
+ * returned (or a fresh read) after a jittered backoff.
+ */
+async function compareAndSwap<result>(parameters: {
+  fn: (current: unknown | null) => Change<unknown, result>
+  key: string
+  label: string
+  maxAttempts: number
+  read: () => Promise<string | null>
+  swap: (
+    expected: string | null,
+    value: string | null,
+  ) => Promise<{ applied: boolean; current?: string | null | undefined }>
+}): Promise<result> {
+  const { fn, key, label, maxAttempts, read, swap } = parameters
+  let raw = await read()
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const change = fn(raw == null ? null : (Json.parse(raw) as never))
+    if (change.op === 'noop') return change.result
+    const swapped = await swap(raw, change.op === 'set' ? Json.stringify(change.value) : null)
+    if (swapped.applied) return change.result
+    if (attempt + 1 === maxAttempts) break
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
+    )
+    raw = swapped.current !== undefined ? swapped.current : await read()
+  }
+  throw new Error(`${label} update of "${key}" conflicted ${maxAttempts} times.`)
+}
+
 /** Options shared by store constructors. */
 export type Options = {
   /** Prefix prepended to every backing store key. */
@@ -333,26 +365,16 @@ export function durableObject(
       async delete(key: string) {
         await call(key, { op: 'delete', key })
       },
-      async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
-        let raw = await call<string | null>(key, { op: 'get', key })
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const change = fn(raw == null ? null : (Json.parse(raw) as never))
-          if (change.op === 'noop') return change.result
-          const swapped = await call<DurableObjectStore.SwapResult>(key, {
-            op: 'swap',
-            key,
-            expected: raw,
-            value: change.op === 'set' ? Json.stringify(change.value) : null,
-          })
-          if (swapped.applied) return change.result
-          // Lost a race: retry from the value the object returned, after a jittered backoff.
-          raw = swapped.current
-          if (attempt + 1 < maxAttempts)
-            await new Promise((resolve) =>
-              setTimeout(resolve, Math.random() * Math.min(2 ** (attempt + 1), 200)),
-            )
-        }
-        throw new Error(`Durable Object store update of "${key}" conflicted ${maxAttempts} times.`)
+      update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        return compareAndSwap({
+          fn,
+          key,
+          label: 'Durable Object store',
+          maxAttempts,
+          read: () => call<string | null>(key, { op: 'get', key }),
+          swap: (expected, value) =>
+            call<DurableObjectStore.SwapResult>(key, { op: 'swap', key, expected, value }),
+        })
       },
       async tryClaim(key: string, expires: number) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
@@ -463,6 +485,286 @@ export declare namespace DurableObjectStore {
     | { op: 'delete'; key: string }
     | { op: 'swap'; key: string; expected: string | null; value: string | null }
     | { op: 'claim'; key: string; expires: number }
+}
+
+/**
+ * Atomic store backed by a SQL database: Postgres, SQLite or Cloudflare D1.
+ *
+ * Values live as JSON text in one table (`mppx_store` by default, created on
+ * first use). Every write is a single statement, and {@link AtomicStore.update}
+ * commits with a compare-and-swap on the stored value
+ * (`UPDATE … WHERE key = ? AND value = ? RETURNING`, or
+ * `INSERT … ON CONFLICT DO NOTHING RETURNING` for a new key), retrying from the
+ * current value after a jittered backoff when another writer won. It needs no
+ * interactive transactions, so it works over HTTP drivers and D1, and only
+ * `ON CONFLICT` and `RETURNING` (Postgres, SQLite 3.35+, D1, libSQL).
+ *
+ * Use {@link postgres}, {@link sqlite} or {@link d1} for common drivers, or pass
+ * any driver as a `query` function.
+ *
+ * @example
+ * ```ts
+ * import postgres from 'postgres'
+ * import { Store } from 'mppx/server'
+ *
+ * const db = postgres(process.env.DATABASE_URL!)
+ * const store = Store.sql({ dialect: 'postgres', query: (text, params) => db.unsafe(text, params) })
+ * ```
+ */
+export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
+  const table = options?.table ?? 'mppx_store'
+  if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(table))
+    throw new Error(`Invalid SQL store table name: "${table}".`)
+  const maxAttempts = options?.maxAttempts ?? 32
+
+  // Statements are written with `?`; Postgres numbers its placeholders.
+  const prepare = (text: string) => {
+    if (driver.dialect !== 'postgres') return text
+    let index = 0
+    return text.replace(/\?/g, () => `$${++index}`)
+  }
+
+  let ready: Promise<void> | undefined
+  const ensureTable = () => {
+    if (options?.createTable === false) return
+    ready ??= Promise.resolve(
+      driver.query(
+        // `expires` mirrors a replay marker's expiry, so a claim needs no JSON in SQL.
+        `CREATE TABLE IF NOT EXISTS ${table} (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires DOUBLE PRECISION)`,
+        [],
+      ),
+    ).then(
+      () => {},
+      (error) => {
+        ready = undefined
+        throw error
+      },
+    )
+    return ready
+  }
+
+  async function query(text: string, params: unknown[]): Promise<sql.Row[]> {
+    await ensureTable()
+    return driver.query(prepare(text), params)
+  }
+
+  async function read(key: string): Promise<string | null> {
+    const [row] = await query(`SELECT value FROM ${table} WHERE key = ?`, [key])
+    return row ? (row.value as string) : null
+  }
+
+  /** The `expires` column for a serialized value: the expiry of a replay marker, else null. */
+  const expiresOf = (raw: string) => {
+    const value = Json.parse(raw)
+    return isReplayMarker(value) ? value.expires : null
+  }
+
+  /** Writes `value` (or deletes, for `null`) only if the key still holds `expected`. */
+  async function swap(key: string, expected: string | null, value: string | null) {
+    let rows: sql.Row[]
+    if (expected === null) {
+      if (value === null) return { applied: true }
+      rows = await query(
+        `INSERT INTO ${table} (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO NOTHING RETURNING key`,
+        [key, value, expiresOf(value)],
+      )
+    } else if (value === null)
+      rows = await query(`DELETE FROM ${table} WHERE key = ? AND value = ? RETURNING key`, [
+        key,
+        expected,
+      ])
+    else
+      rows = await query(
+        `UPDATE ${table} SET value = ?, expires = ? WHERE key = ? AND value = ? RETURNING key`,
+        [value, expiresOf(value), key, expected],
+      )
+    return { applied: rows.length > 0 }
+  }
+
+  return from(
+    {
+      async get(key: string) {
+        const raw = await read(key)
+        if (raw == null) return null as any
+        return Json.parse(raw)
+      },
+      async put(key: string, value: unknown) {
+        const raw = Json.stringify(value)
+        await query(
+          `INSERT INTO ${table} (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires = excluded.expires`,
+          [key, raw, expiresOf(raw)],
+        )
+      },
+      async delete(key: string) {
+        await query(`DELETE FROM ${table} WHERE key = ?`, [key])
+      },
+      update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        return compareAndSwap({
+          fn,
+          key,
+          label: 'SQL store',
+          maxAttempts,
+          read: () => read(key),
+          swap: (expected, value) => swap(key, expected, value),
+        })
+      },
+      // One statement: insert the marker, or replace one whose expiry has passed.
+      async tryClaim(key: string, expires: number) {
+        if (!Number.isFinite(expires) || expires <= Date.now()) return false
+        const rows = await query(
+          `INSERT INTO ${table} AS existing (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires = excluded.expires WHERE existing.expires IS NOT NULL AND existing.expires <= ? RETURNING key`,
+          [
+            key,
+            Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker),
+            expires,
+            Date.now(),
+          ],
+        )
+        // The claim's own expiry may have passed while the statement ran.
+        return rows.length > 0 && expires > Date.now()
+      },
+    },
+    options,
+  )
+}
+
+export declare namespace sql {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+    /** Compare-and-swap attempts before {@link AtomicStore.update} gives up. @default 32 */
+    maxAttempts?: number | undefined
+    /** Table holding the values, optionally schema-qualified. @default 'mppx_store' */
+    table?: string | undefined
+    /** Create the table on first use (`CREATE TABLE IF NOT EXISTS`). Set `false` when migrations create it. @default true */
+    createTable?: boolean | undefined
+  }
+
+  /** A result row. */
+  export type Row = Record<string, unknown>
+
+  /** Runs one statement with positional parameters and returns its rows. */
+  export type Driver = {
+    /** Placeholder style: Postgres numbers them (`$1`), SQLite and D1 use `?`. */
+    dialect: 'postgres' | 'sqlite'
+    query: (sql: string, params: unknown[]) => Promise<Row[]>
+  }
+}
+
+/**
+ * Atomic SQL store on a Postgres client: `pg` (`Pool` or `Client`),
+ * `@neondatabase/serverless` (`Pool` or `neon()`), `@vercel/postgres`,
+ * Supabase's Postgres connection or PGlite. See {@link sql}.
+ *
+ * @example
+ * ```ts
+ * import { Pool } from 'pg'
+ * import { Store } from 'mppx/server'
+ *
+ * const store = Store.postgres(new Pool({ connectionString: process.env.DATABASE_URL }))
+ * ```
+ */
+export function postgres(client: postgres.Client, options?: sql.Options): AtomicStore {
+  return sql(
+    {
+      dialect: 'postgres',
+      async query(text, params) {
+        const result = await client.query(text, params)
+        return Array.isArray(result) ? result : result.rows
+      },
+    },
+    options,
+  )
+}
+
+export declare namespace postgres {
+  /** Any client with `query(text, values)` that resolves to `{ rows }` or to the rows. */
+  export type Client = {
+    query: (text: string, values: unknown[]) => Promise<{ rows: sql.Row[] } | sql.Row[]>
+  }
+}
+
+/**
+ * Atomic SQL store on a SQLite database: `node:sqlite` (`DatabaseSync`),
+ * `better-sqlite3` or `bun:sqlite`. See {@link sql}. For libSQL or Turso, pass
+ * `client.execute` to {@link sql} with dialect `sqlite`.
+ *
+ * @example
+ * ```ts
+ * import { DatabaseSync } from 'node:sqlite'
+ * import { Store } from 'mppx/server'
+ *
+ * const store = Store.sqlite(new DatabaseSync('mppx.db'))
+ * ```
+ */
+export function sqlite(database: sqlite.Database, options?: sql.Options): AtomicStore {
+  return sql(
+    {
+      dialect: 'sqlite',
+      async query(text, params) {
+        const statement = database.prepare(text)
+        // better-sqlite3 allows all() only on statements that return rows.
+        if (statement.reader === false && statement.run) {
+          await statement.run(...params)
+          return []
+        }
+        return (await statement.all(...params)) as sql.Row[]
+      },
+    },
+    options,
+  )
+}
+
+export declare namespace sqlite {
+  /** A database whose prepared statements run with `all(...params)`, or `run(...params)` when better-sqlite3 marks them as returning no rows. */
+  export type Database = {
+    prepare: (sql: string) => {
+      all: (...params: any[]) => unknown
+      run?: ((...params: any[]) => unknown) | undefined
+      /** better-sqlite3: whether the statement returns rows. */
+      reader?: boolean | undefined
+    }
+  }
+}
+
+/**
+ * Atomic SQL store on a Cloudflare D1 database binding. See {@link sql}.
+ *
+ * @example
+ * ```ts
+ * import { Store } from 'mppx/server'
+ *
+ * export default {
+ *   fetch(request: Request, env: { DB: D1Database }) {
+ *     const store = Store.d1(env.DB)
+ *     // ...
+ *   },
+ * }
+ * ```
+ */
+export function d1(database: d1.Database, options?: sql.Options): AtomicStore {
+  return sql(
+    {
+      dialect: 'sqlite',
+      async query(text, params) {
+        const { results } = await database
+          .prepare(text)
+          .bind(...params)
+          .all()
+        return results as sql.Row[]
+      },
+    },
+    options,
+  )
+}
+
+export declare namespace d1 {
+  /** The subset of `D1Database` the store uses. */
+  export type Database = {
+    prepare: (sql: string) => {
+      bind: (...values: any[]) => { all: () => Promise<{ results: unknown[] }> }
+    }
+  }
 }
 
 /** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */

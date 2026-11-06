@@ -3,22 +3,23 @@ import * as Store from '../../src/Store.js'
 /** The store's Durable Object class, bound as `STORE`. */
 export class MppxStore extends Store.DurableObjectStore {}
 
-type Env = { STORE: Store.durableObject.Namespace }
+type Env = { DB: Store.d1.Database; STORE: Store.durableObject.Namespace }
 
-type Command =
+type Command = { backend?: 'd1' | 'durableObject' } & (
   | { op: 'get' | 'delete'; key: string; prefix?: string }
   | { op: 'put'; key: string; value: unknown; prefix?: string }
   | { op: 'increment'; key: string }
   | { op: 'bigint'; key: string; amount: string }
   | { op: 'claim'; key: string; expires: number }
+)
 
-/** Runs one store operation inside workerd, against a real Durable Object. */
+/** Runs one store operation inside workerd, against a real Durable Object or D1 database. */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const command = (await request.json()) as Command
-    const store = Store.durableObject(env.STORE, {
-      keyPrefix: 'prefix' in command ? command.prefix : undefined,
-    })
+    const options = { keyPrefix: 'prefix' in command ? command.prefix : undefined }
+    const store =
+      command.backend === 'd1' ? Store.d1(env.DB, options) : Store.durableObject(env.STORE, options)
     switch (command.op) {
       case 'get':
         return Response.json(await store.get(command.key))
