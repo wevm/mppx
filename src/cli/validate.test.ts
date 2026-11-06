@@ -1464,3 +1464,49 @@ test('captureEventStream drops the tail of an oversized event', async () => {
     reference: receipt.reference,
   })
 })
+
+describe('validate: live mppx server', () => {
+  // An unmodified mppx server issues a fresh `_mppx_nonce` per Challenge and sits behind an API key,
+  // so this catches validate drifting from what real servers send.
+  test('validates an unmodified mppx server behind an API key', { timeout: 30_000 }, async () => {
+    const { Mppx, tempo } = await import('../server/index.js')
+    const mppx = Mppx.create({
+      realm: 'localhost',
+      secretKey: 'test-secret-key-test-secret-key-32',
+      methods: [
+        tempo.charge({
+          account: '0x2222222222222222222222222222222222222222',
+          store: (await import('../Store.js')).memory(),
+          testnet: true,
+        }),
+      ],
+    })
+    const paid = Mppx.toNodeListener(mppx.charge({ amount: '0.01', decimals: 6 }))
+    const server = await testServer(async (req, res) => {
+      if (req.headers['x-api-key'] !== 'secret') {
+        res.writeHead(401)
+        res.end()
+        return
+      }
+      const result = await paid(req, res)
+      if (result.status === 402) return
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ ok: true }))
+    })
+
+    const { output } = await serve([
+      'validate',
+      server.url,
+      '--endpoint',
+      'GET:/paid',
+      '-H',
+      'X-Api-Key: secret',
+    ])
+    expect(output).toContain('Challenge parseable')
+    expect(output).toContain('Malformed credential returns 402 (not 500)')
+    expect(output).toContain('Error response includes fresh challenge')
+    // The CLI fetches a fresh Challenge before paying; its new nonce is not a changed payment.
+    expect(output).toContain('Payment: submitted')
+    expect(output).not.toContain('Payment request changed on retry')
+  })
+})
