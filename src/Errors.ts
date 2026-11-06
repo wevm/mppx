@@ -331,6 +331,58 @@ export declare namespace BroadcastOutcomeUnknownError {
 }
 
 /**
+ * A pre-broadcast simulation of a fee-sponsored payment failed, so the payment was not broadcast.
+ *
+ * `phase` says which simulation failed: `sender` runs the sender's calls before sponsorship, and
+ * `sponsored` runs the final envelope billed to `feePayer`. Callers use it, with `sender`,
+ * `feePayer` and `paymentToken`, to tell a payer's insufficient balance from a sponsor's without
+ * matching node messages. The node's error is the `cause`. This is not a `PaymentError`: HTTP
+ * handlers still answer with a generic 500 `InternalPaymentError`, whose `cause` is this error.
+ */
+export class PaymentSimulationError extends Error {
+  override readonly name = 'PaymentSimulationError'
+
+  /** Fee payer the sponsored simulation billed. Set only in the `sponsored` phase. */
+  readonly feePayer: `0x${string}` | undefined
+  /** TIP-20 token of a single `transfer` or `transferWithMemo` call, when the transaction is one. */
+  readonly paymentToken: `0x${string}` | undefined
+  /** Simulation that failed. */
+  readonly phase: PaymentSimulationError.Phase
+  /** Sender of the simulated transaction. */
+  readonly sender: `0x${string}` | undefined
+
+  constructor(options: PaymentSimulationError.Options) {
+    const { cause, feePayer, paymentToken, phase, sender } = options
+    super('Payment simulation failed')
+    this.feePayer = feePayer
+    this.paymentToken = paymentToken
+    this.phase = phase
+    this.sender = sender
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace PaymentSimulationError {
+  /** `sender`: the sender's calls before sponsorship. `sponsored`: the final sponsored envelope. */
+  type Phase = 'sender' | 'sponsored'
+
+  type Options = {
+    /** The simulation error. */
+    cause?: unknown
+    /** Fee payer of the sponsored simulation. */
+    feePayer?: `0x${string}` | undefined
+    /** TIP-20 token of a single transfer call. */
+    paymentToken?: `0x${string}` | undefined
+    /** Simulation that failed. */
+    phase: Phase
+    /** Sender of the simulated transaction. */
+    sender?: `0x${string}` | undefined
+  }
+}
+
+/**
  * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *

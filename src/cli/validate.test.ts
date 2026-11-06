@@ -696,6 +696,14 @@ describe('validate: error handling', () => {
     expect(output).toContain('Malformed credential returns 402 (Got 422)')
     expect(output).toContain('Returning 422 prevents the client from retrying with a valid payment')
   })
+  test('names the probed credential header in the hint', { timeout: 15_000 }, async () => {
+    const server = await mppServer(makeChallenge({ header: 'Payment-Credential' }), {
+      errorStatus: 500,
+    })
+    const { output } = await serve(['validate', server.url])
+    expect(output).toContain('When the Payment-Credential header contains an invalid credential')
+  })
+
   test(
     'sends -H headers and the Challenge credential header with the malformed Credential',
     { timeout: 15_000 },

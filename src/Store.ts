@@ -418,21 +418,70 @@ export declare namespace durableObject {
  * ```
  */
 export class DurableObjectStore {
-  readonly #storage: DurableObjectStore.Storage
+  /** The object's state (`ctx`), for subclasses that use its storage or alarms. */
+  protected state: DurableObjectStore.State
+  /** The Worker's bindings, for subclasses. */
+  protected env: unknown
+  /**
+   * The object's storage: a subclass schedules alarms with it from {@link DurableObjectStore.onWrite}.
+   * A plain field, like `state` and `env`, so subclasses that assign `this.storage = state.storage` keep working.
+   */
+  protected storage: DurableObjectStore.Storage
 
-  constructor(state: { storage: DurableObjectStore.Storage }, _env?: unknown) {
-    this.#storage = state.storage
+  constructor(state: DurableObjectStore.State, env?: unknown) {
+    this.state = state
+    this.env = env
+    this.storage = state.storage
   }
+
+  /**
+   * Called for every applied put, delete, swap and claim, after the storage
+   * write and before the response, with the decoded values (`null` when the key
+   * is absent). When the storage has `transaction()`, the write and this hook run
+   * in one transaction, passed as `storage`: make the hook's writes and alarms
+   * through it so they commit with the store's write, and throw to roll the
+   * write back. Make only storage calls and alarms here: awaiting other I/O
+   * (`fetch`, a queue send) opens the object's input gate before the write
+   * commits, so a concurrent swap or claim could act on the old value. Do that
+   * work from {@link DurableObjectStore.alarm} instead. Does nothing by default.
+   */
+  protected onWrite(
+    _key: string,
+    _previous: unknown | null,
+    _next: unknown | null,
+    _storage: DurableObjectStore.Storage,
+  ): void | Promise<void> {}
+
+  /** Handles the object's alarm, which a subclass sets through {@link DurableObjectStore.storage}. Does nothing by default. */
+  async alarm(): Promise<void> {}
 
   /** Handles one store operation. Each runs without awaiting other I/O between its read and write, so the object's input gate makes it atomic. */
   async fetch(request: Request): Promise<Response> {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 })
     const body = (await request.json()) as DurableObjectStore.Request
-    const storage = this.#storage
+    const storage = this.state.storage
+    const hooked = this.onWrite !== DurableObjectStore.prototype.onWrite
     const read = async () => ((await storage.get(body.key)) as string | undefined) ?? null
-    const write = async (value: string | null) => {
-      if (value === null) await storage.delete(body.key)
-      else await storage.put(body.key, value)
+    const decode = (raw: string | null) => (raw == null ? null : Json.parse(raw))
+    // `previous` is the value the operation already read, if it read one.
+    const write = async (value: string | null, previous?: string | null) => {
+      if (!hooked) {
+        if (value === null) await storage.delete(body.key)
+        else await storage.put(body.key, value)
+        return
+      }
+      // One transaction: the hook's writes commit with this one, and its failure rolls it back.
+      const commit = async (target: DurableObjectStore.Storage) => {
+        const before =
+          previous === undefined
+            ? (((await target.get(body.key)) as string | undefined) ?? null)
+            : previous
+        if (value === null) await target.delete(body.key)
+        else await target.put(body.key, value)
+        await this.onWrite(body.key, decode(before), decode(value), target)
+      }
+      if (storage.transaction) await storage.transaction(commit)
+      else await commit(storage)
     }
 
     switch (body.op) {
@@ -448,17 +497,17 @@ export class DurableObjectStore {
         const current = await read()
         if (current !== body.expected)
           return Response.json({ applied: false, current } satisfies DurableObjectStore.SwapResult)
-        await write(body.value)
+        await write(body.value, current)
         return Response.json({ applied: true } satisfies DurableObjectStore.SwapResult)
       }
       case 'claim': {
         const { expires } = body
         if (!Number.isFinite(expires) || expires <= Date.now()) return Response.json(false)
         const raw = await read()
-        const current = raw == null ? null : Json.parse(raw)
+        const current = decode(raw)
         if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
           return Response.json(false)
-        await write(Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker))
+        await write(Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker), raw)
         return Response.json(true)
       }
       default:
@@ -468,11 +517,22 @@ export class DurableObjectStore {
 }
 
 export declare namespace DurableObjectStore {
+  /** The subset of `DurableObjectState` the store uses. */
+  export type State = { storage: Storage }
+
   /** The subset of `DurableObjectStorage` the store uses. */
   export type Storage = {
     get: (key: string) => Promise<unknown>
     put: (key: string, value: string) => Promise<void>
     delete: (key: string) => Promise<unknown>
+    /** The scheduled alarm time in milliseconds, or `null`. */
+    getAlarm?: (() => Promise<number | null>) | undefined
+    /** Schedules the object's alarm, replacing any earlier one. */
+    setAlarm?: ((scheduledTime: number | Date) => Promise<void>) | undefined
+    /** Cancels the object's alarm. */
+    deleteAlarm?: (() => Promise<void>) | undefined
+    /** Runs `closure` in a transaction that rolls back when it throws. */
+    transaction?<result>(closure: (txn: Storage) => Promise<result>): Promise<result>
   }
 
   /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
