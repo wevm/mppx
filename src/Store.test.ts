@@ -693,7 +693,6 @@ function richValue() {
     set: new Set<unknown>([1, 'x', 2n]),
     date: new Date(0),
     re: /a/gi,
-    error: new Error('x'),
     holes,
     nested: [{ m: new Map([['k', new Uint8Array([9])]]) }],
   }
@@ -755,6 +754,37 @@ describe('durableObject', () => {
       expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
       expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
     }
+  })
+
+  test('native update handles cyclic values', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    const value: { n: number; self?: unknown; list: unknown[] } = { n: 0, list: [] }
+    value.self = value
+    value.list.push(value, value.list)
+    await store.put('cycle', value)
+    const result = await store.update('cycle', (current) => {
+      const next = current as typeof value
+      next.n += 1
+      return { op: 'set', value: next, result: next.n }
+    })
+    expect(result).toBe(1)
+    const stored = (await store.get('cycle')) as typeof value
+    expect(stored.n).toBe(1)
+    expect(stored.self).toBe(stored)
+  })
+
+  test('native encoding rejects errors, whose cause and stack it cannot compare', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(
+      store.put('k', { error: new Error('x', { cause: { count: 0 } }) }),
+    ).rejects.toThrow('cannot compare Error values')
   })
 
   test('native encoding rejects values it cannot compare instead of conflicting', async () => {

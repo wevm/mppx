@@ -188,7 +188,6 @@ const comparableTags = new Set([
   '[object BigInt]',
   '[object Boolean]',
   '[object Date]',
-  '[object Error]',
   '[object Number]',
   '[object RegExp]',
   '[object String]',
@@ -209,15 +208,19 @@ function assertPrimitiveKey(key: unknown, tag: string): void {
  * Throws for a value that native compare-and-swap cannot compare, so a write
  * fails at once instead of making later updates conflict until `maxAttempts`.
  */
-function assertComparable(value: unknown): void {
+function assertComparable(value: unknown, seen = new Set<object>()): void {
   if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value)) return
+  // Structured clone keeps cycles: check each object once.
+  if (seen.has(value)) return
+  seen.add(value)
   const tag = Object.prototype.toString.call(value)
   if (Array.isArray(value) || tag === '[object Object]')
-    for (const key of Object.keys(value)) assertComparable((value as Record<string, unknown>)[key])
+    for (const key of Object.keys(value))
+      assertComparable((value as Record<string, unknown>)[key], seen)
   else if (value instanceof Map)
     for (const [key, item] of value) {
       assertPrimitiveKey(key, tag)
-      assertComparable(item)
+      assertComparable(item, seen)
     }
   else if (value instanceof Set) for (const item of value) assertPrimitiveKey(item, tag)
   else if (!comparableTags.has(tag)) throw incomparable(`${tag.slice(8, -1)} values`)
@@ -234,20 +237,25 @@ function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
  * Structural equality of stored values, as structured clone copies them:
  * primitives (bigints by value), arrays (holes included), plain objects, maps,
  * sets, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
- * regular expressions, errors and boxed primitives. A native compare-and-swap
+ * regular expressions and boxed primitives. A native compare-and-swap
  * needs it, since a value read back from storage is a copy. Throws for values it
  * cannot compare, rather than reporting a conflict that never resolves.
  */
-function deepEqual(a: unknown, b: unknown): boolean {
+function deepEqual(a: unknown, b: unknown, pairs = new Map<object, Set<object>>()): boolean {
   if (a === b || (a !== a && b !== b)) return true
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  // A pair already being compared is assumed equal, so cyclic values terminate.
+  const compared = pairs.get(a)
+  if (compared?.has(b)) return true
+  if (compared) compared.add(b)
+  else pairs.set(a, new Set([b]))
   const tag = Object.prototype.toString.call(a)
   if (tag !== Object.prototype.toString.call(b)) return false
   if (Array.isArray(a)) {
     const other = b as unknown[]
     if (a.length !== other.length) return false
     for (let i = 0; i < a.length; i++)
-      if (i in a !== i in other || !deepEqual(a[i], other[i])) return false
+      if (i in a !== i in other || !deepEqual(a[i], other[i], pairs)) return false
     return true
   }
   if (ArrayBuffer.isView(a) || tag === '[object ArrayBuffer]') {
@@ -260,7 +268,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
     if (a.size !== other.size) return false
     for (const [key, item] of a) {
       assertPrimitiveKey(key, tag)
-      if (!other.has(key) || !deepEqual(item, other.get(key))) return false
+      if (!other.has(key) || !deepEqual(item, other.get(key), pairs)) return false
     }
     return true
   }
@@ -275,7 +283,6 @@ function deepEqual(a: unknown, b: unknown): boolean {
   }
   if (a instanceof RegExp)
     return a.source === (b as RegExp).source && a.flags === (b as RegExp).flags
-  if (a instanceof Error) return a.name === (b as Error).name && a.message === (b as Error).message
   if (comparableTags.has(tag)) return Object.is(a.valueOf(), (b as object).valueOf())
   if (tag !== '[object Object]') throw incomparable(`${tag.slice(8, -1)} values`)
   const keys = Object.keys(a)
@@ -283,7 +290,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return keys.every(
     (key) =>
       Object.prototype.hasOwnProperty.call(b, key) &&
-      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], pairs),
   )
 }
 
