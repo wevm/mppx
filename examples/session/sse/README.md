@@ -1,17 +1,18 @@
-# Stream: SSE
+# Session: SSE
 
-Pay-per-token LLM streaming using the SSE handler API. The server uses `tempo.Sse.from()` to create an SSE response that charges per token via `stream.charge()`. The client uses `session.sse()` to consume tokens as an async iterable, automatically handling voucher top-ups and receipts.
+Pay-per-token LLM streaming over SSE on Cloudflare Workers. `pnpm dev` runs the Worker locally in workerd, the Workers runtime, with its Durable Objects, through `@cloudflare/vite-plugin`. Channel state lives in Durable Objects through `Store.durableObject()`, so the stream, the mid-stream voucher `POST`s and the close can land on any isolate and still see one atomic channel.
 
 ## Setup
 
 ```bash
 npx gitpick wevm/mppx/examples/session/sse
 pnpm i
+pnpm keygen   # writes .dev.vars and funds the server account on testnet
 ```
 
 ## Usage
 
-Start the server:
+Start the Worker locally (in workerd):
 
 ```bash
 pnpm dev
@@ -24,11 +25,37 @@ pnpm client
 pnpm client "What is the meaning of life?"
 ```
 
-## Test with mppx CLI
-
-With the server running, use the `mppx` CLI to make a paid request:
+## Deploy
 
 ```bash
-pnpm mppx localhost:5173/api/chat
-pnpm mppx localhost:5173/api/chat?prompt=What+is+the+meaning+of+life?
+wrangler secret put MPP_PRIVATE_KEY   # from .dev.vars
+wrangler secret put MPP_SECRET_KEY    # from .dev.vars
+wrangler secret put TEMPO_RPC_URL     # optional: a dedicated Tempo RPC
+pnpm deploy
+BASE_URL=https://mppx-session-sse.<account>.workers.dev pnpm client
+```
+
+## How it works
+
+```ts
+import { Mppx, Store, tempo } from 'mppx/server'
+
+// Bound as MPPX_STORE with a new_sqlite_classes migration in wrangler.jsonc.
+export class MppxStore extends Store.DurableObjectStore {}
+
+tempo.session({
+  account,
+  currency,
+  getClient,
+  sse: true,
+  store: Store.durableObject(env.MPPX_STORE),
+})
+```
+
+Each channel gets its own Durable Object, so channels scale out across objects while every update to one channel is serialized.
+
+## Test with mppx CLI
+
+```bash
+pnpm mppx localhost:8787/api/chat
 ```

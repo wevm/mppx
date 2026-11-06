@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-web-bot-auth",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Durable Objects hold signature nonces and spent payment credentials, so
+  // neither can be replayed on another isolate.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+}
