@@ -20,7 +20,12 @@ import {
 import { Abis, Actions, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
-import { CredentialReplayedError, PaymentError, VerificationFailedError } from '../../Errors.js'
+import {
+  BroadcastOutcomeUnknownError,
+  CredentialReplayedError,
+  PaymentError,
+  VerificationFailedError,
+} from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -874,7 +879,12 @@ export function charge<const parameters extends charge.Parameters>(
                     Math.max(deadline, Date.now() + client.pollingInterval),
                     broadcastError,
                   ).catch(() => undefined)
-                if (!recovered) throw broadcastError
+                if (!recovered)
+                  throw new BroadcastOutcomeUnknownError({
+                    cause: broadcastError,
+                    transactionHash: finalHash,
+                    validBefore: transaction.validBefore,
+                  })
                 receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
@@ -983,8 +993,10 @@ export declare namespace charge {
      * two thirds of this budget. If it fails with an unknown outcome (e.g. a
      * timeout, a lost connection, or "already known"), mppx polls for the
      * receipt until the deadline, or until 2 seconds after the transaction's
-     * `validBefore` followed by one final lookup, before surfacing the broadcast
-     * error. Definitive rejections fail immediately.
+     * `validBefore` followed by one final lookup, before throwing
+     * `Errors.BroadcastOutcomeUnknownError` with the transaction hash and
+     * `validBefore`, and the broadcast error as `cause`. Definitive rejections
+     * fail immediately with the RPC error.
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined

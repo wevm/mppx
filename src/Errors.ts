@@ -289,6 +289,48 @@ export declare namespace PaymentOutcomeUnknownError {
 }
 
 /**
+ * A server broadcast a payment transaction, the broadcast failed in a way that does not say whether
+ * the node accepted it, and no receipt appeared before settlement stopped polling. The transaction
+ * may still be included until `validBefore`.
+ *
+ * Settle it by looking up the receipt for `transactionHash`: once `validBefore` has passed, the
+ * transaction can no longer be included, so one lookup after it is final. This is not a
+ * `PaymentError`: HTTP handlers still answer with a generic 500 `InternalPaymentError`, whose
+ * `cause` is this error.
+ */
+export class BroadcastOutcomeUnknownError extends Error {
+  override readonly name = 'BroadcastOutcomeUnknownError'
+
+  /** Hash of the broadcast transaction, as it will appear on chain if it is included. */
+  readonly transactionHash: `0x${string}`
+  /** Unix time in seconds after which the transaction can no longer be included, when it expires. */
+  readonly validBefore: number | undefined
+
+  constructor(options: BroadcastOutcomeUnknownError.Options) {
+    const { cause, transactionHash, validBefore } = options
+    super(
+      `Broadcast outcome is unknown for transaction ${transactionHash}. Look up its receipt before retrying.`,
+    )
+    this.transactionHash = transactionHash
+    this.validBefore = validBefore
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace BroadcastOutcomeUnknownError {
+  type Options = {
+    /** The broadcast error that left the outcome unknown. */
+    cause?: unknown
+    /** Hash of the broadcast transaction. */
+    transactionHash: `0x${string}`
+    /** Unix time in seconds after which the transaction can no longer be included. */
+    validBefore?: number | undefined
+  }
+}
+
+/**
  * No credential was provided but payment is required.
  */
 export class PaymentRequiredError extends PaymentError {

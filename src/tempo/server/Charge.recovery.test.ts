@@ -330,8 +330,18 @@ test.each([
   ) {
     const started = Date.now()
     const thrown = (await broadcast().catch((e) => e)) as BaseError
-    if (error === 'hang') expect(thrown).toBeInstanceOf(WaitForTransactionReceiptTimeoutError)
-    else expect(thrown.walk((cause) => cause === error)).toBe(error)
+    if (outcome === 'rejected') expect(thrown.walk((cause) => cause === error)).toBe(error)
+    else {
+      // The node may have accepted the transaction, so its hash is surfaced for reconciliation.
+      expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+      expect(thrown).toMatchObject({
+        transactionHash: finalHash(),
+        validBefore: expect.any(Number),
+      })
+      const cause = (thrown as { cause?: unknown }).cause
+      if (error === 'hang') expect(cause).toBeInstanceOf(WaitForTransactionReceiptTimeoutError)
+      else expect(causedBy(thrown, error)).toBe(true)
+    }
     if (expiry) expect(Date.now() - started).toBeLessThan(confirmationTimeoutMs / 2)
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   } else {
