@@ -272,7 +272,16 @@ function deepEqual(
           deepEqual((a as never)[key], (other as never)[key], pairs)),
     )
   }
-  if (ArrayBuffer.isView(a) || tag === '[object ArrayBuffer]') {
+  // Structured clone keeps a view's whole backing buffer and offset, not only its visible bytes.
+  if (ArrayBuffer.isView(a)) {
+    const other = b as ArrayBufferView
+    return (
+      a.byteOffset === other.byteOffset &&
+      a.byteLength === other.byteLength &&
+      deepEqual(a.buffer, other.buffer, pairs)
+    )
+  }
+  if (tag === '[object ArrayBuffer]') {
     const x = bytesOf(a as ArrayBuffer)
     const y = bytesOf(b as ArrayBuffer)
     return x.length === y.length && x.every((byte, i) => byte === y[i])

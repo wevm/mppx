@@ -748,6 +748,8 @@ describe('durableObject', () => {
       ],
       [new Uint8Array([1]), new Int8Array([1])],
       [new Uint8Array([1]), new Uint8Array([2])],
+      [new Uint8Array([1, 2, 3]).subarray(0, 1), new Uint8Array([1, 2, 99]).subarray(0, 1)],
+      [new Uint8Array([1, 1]).subarray(0, 1), new Uint8Array([1, 1]).subarray(1, 2)],
       [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer],
       [new Map([[1, 'a']]), new Map([[1, 'b']])],
       [new Set([1]), new Set([2])],
