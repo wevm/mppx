@@ -56,7 +56,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
-    if (url.pathname !== '/api/search') return new Response('Not found', { status: 404 })
+    // The query is a path segment, not a query parameter: open, top-up and close
+    // POSTs go to this URL, and mppx bills a POST with a query string as content.
+    const [, route, query = ''] = url.pathname.match(/^\/api\/(search)(?:\/(.+))?$/) ?? []
+    if (!route) return new Response('Not found', { status: 404 })
 
     mppx ??= createMppx(env)
     const result = await mppx.session({ amount: price, suggestedDeposit, unitType: 'request' })(
@@ -69,8 +72,8 @@ export default {
     // Open, top-up and close POSTs are management requests: no content.
     if (request.method === 'POST') return result.withReceipt()
 
-    const query = url.searchParams.get('q') ?? ''
-    return result.withReceipt(Response.json({ query, results: search(query) }))
+    const q = decodeURIComponent(query)
+    return result.withReceipt(Response.json({ query: q, results: search(q) }))
   },
 }
 

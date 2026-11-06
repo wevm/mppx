@@ -46,7 +46,7 @@ const session = tempo.session.manager({
 })
 
 async function search(query: string) {
-  const response = await session.fetch(`${BASE_URL}/api/search?q=${encodeURIComponent(query)}`)
+  const response = await session.fetch(`${BASE_URL}/api/search/${encodeURIComponent(query)}`)
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`)
   const body = (await response.json()) as { results: { title: string }[] }
   const deposit = depositOf(session)
