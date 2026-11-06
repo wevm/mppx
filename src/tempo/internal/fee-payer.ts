@@ -413,6 +413,23 @@ export async function signFeePayerSimulation(
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
  */
+/** viem's errors for an RPC request that never got a node's answer, matched by name so wrapped copies match. */
+const transportErrorNames = new Set([
+  'HttpRequestError',
+  'SocketClosedError',
+  'TimeoutError',
+  'WebSocketRequestError',
+])
+
+/** Whether an error or its cause chain is a transport failure, rather than the node rejecting the call. */
+function isTransportError(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 10; depth++) {
+    if (current instanceof Error && transportErrorNames.has(current.name)) return true
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
+}
+
 export async function preflightSponsorship<sponsorship extends PreflightSponsorship>(parameters: {
   complete: () => Promise<sponsorship>
   /** The fee payer policy the completed transaction was checked against. */
@@ -430,6 +447,7 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
   try {
     await simulate(simulationTransaction(transaction, { feePayer: true }))
   } catch (cause) {
+    if (isTransportError(cause)) throw cause
     throw new PaymentSimulationError({
       cause,
       paymentToken,
@@ -470,6 +488,7 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
       gas !== undefined &&
       simulatedGas !== undefined &&
       simulatedGas < gas + sponsoredSimulationGasBuffer
+    if (isTransportError(error)) throw error
     if (!unpadded || !isOutOfGasError(error))
       throw new PaymentSimulationError({
         cause: error,

@@ -1421,6 +1421,41 @@ describe('preflightSponsorship', () => {
     expect(complete).not.toHaveBeenCalled()
   })
 
+  test('rethrows a transport failure as it is, in either phase', async () => {
+    const timeout = Object.assign(new Error('The request took too long to respond.'), {
+      name: 'TimeoutError',
+    })
+    const wrapped = new Error('call failed', { cause: timeout })
+    const complete = vi.fn()
+
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate() {
+          throw wrapped
+        },
+        complete,
+      }),
+    ).rejects.toBe(wrapped)
+    expect(complete).not.toHaveBeenCalled()
+
+    const unavailable = Object.assign(new Error('HTTP request failed. Status: 503'), {
+      name: 'HttpRequestError',
+    })
+    let calls = 0
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate() {
+          if (calls++ === 1) throw unavailable
+        },
+        async complete() {
+          return { feePayer: transaction.from, transaction } as any
+        },
+      }),
+    ).rejects.toBe(unavailable)
+  })
+
   test('tags a sponsored simulation failure with the fee payer', async () => {
     const cause = new Error('insufficient fee token balance')
     const memoTransfer = {
