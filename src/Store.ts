@@ -665,7 +665,10 @@ export class DurableObjectStore {
    * is absent). When the storage has `transaction()`, the write and this hook run
    * in one transaction, passed as `storage`: make the hook's writes and alarms
    * through it so they commit with the store's write, and throw to roll the
-   * write back. Does nothing by default.
+   * write back. Make only storage calls and alarms here: awaiting other I/O
+   * (`fetch`, a queue send) opens the object's input gate before the write
+   * commits, so a concurrent swap or claim could act on the old value. Do that
+   * work from {@link DurableObjectStore.alarm} instead. Does nothing by default.
    */
   protected onWrite(
     _key: string,
