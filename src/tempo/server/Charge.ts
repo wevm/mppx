@@ -312,7 +312,10 @@ export function charge<const parameters extends charge.Parameters>(
    * the `processWithdrawals` calldata binds it to this challenge.
    */
   async function validateZoneCredential(payload: ZonePayload, context: CredentialContext) {
-    const { amount, challenge, client, currency, methodDetails, recipient } = context
+    const { amount, challenge, client, currency, methodDetails, recipient, supportedModes } =
+      context
+    if (supportedModes && !supportedModes.includes('push'))
+      throw new MismatchError('Zone credentials are not supported for this challenge.', {})
     const offered = methodDetails?.zones as readonly number[] | undefined
     if (!offered?.includes(payload.zoneId))
       throw new MismatchError('Zone is not accepted for this challenge.', {

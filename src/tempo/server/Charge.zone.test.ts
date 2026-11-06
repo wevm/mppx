@@ -328,6 +328,15 @@ describe('tempo.charge zone credentials', () => {
     expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
   })
 
+  test('rejects zone credentials when the challenge only accepts pull payments', async () => {
+    const { challenge, credential, rpcMethods, server } = setup()
+    const { challenge: c } = await challenge({ supportedModes: ['pull'] })
+    await expect(
+      server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash })),
+    ).rejects.toThrow('Zone credentials are not supported for this challenge')
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
   test('rejects zone credentials for split payments', async () => {
     const { challenge, credential, server } = setup()
     const { challenge: c } = await challenge({

@@ -62,6 +62,17 @@ export function idFromChainId(chainId: number): number {
 }
 
 /**
+ * Derives the parent Tempo chain ID of a Zone chain ID, or `undefined` when
+ * the chain ID doesn't follow a known Zone scheme.
+ */
+export function parentChainIdFromChainId(chainId: number): number | undefined {
+  if (chainId >= 2 ** 32) return Math.floor(chainId / 2 ** 32)
+  if (chainId > 1_424_310_000 && chainId < 1_424_320_000) return 42_431
+  if (chainId > 421_700_000 && chainId < 421_710_000) return 4_217
+  return undefined
+}
+
+/**
  * Derives a withdrawal's sender tag, which identifies it in the
  * `WithdrawalProcessed` event on Tempo.
  */

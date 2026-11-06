@@ -126,15 +126,25 @@ export function charge(parameters: charge.Parameters = {}) {
       const supportedModes = (methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
+      const zoneChain = parameters.zone?.client.chain
       const zoneId = parameters.zone
-        ? (parameters.zone.zoneId ?? Zone.idFromChainId(parameters.zone.client.chain?.id ?? 0))
+        ? (parameters.zone.zoneId ?? Zone.idFromChainId(zoneChain?.id ?? 0))
         : undefined
+      // A Zone ID is only unique per parent chain, so the Zone must settle on the challenge's chain.
+      const zoneParentChainId =
+        (zoneChain as { sourceId?: number } | undefined)?.sourceId ??
+        (zoneChain ? Zone.parentChainIdFromChainId(zoneChain.id) : undefined)
       const offeredZones = methodDetails?.zones as readonly number[] | undefined
+      const explicitMode = context?.mode ?? parameters.mode
       // Pay from a Zone balance when the challenge accepts the configured Zone.
+      // Zone payments are push payments, so they follow the challenge's and client's modes.
       if (
         BigInt(amount) > 0n &&
         parameters.zone &&
         zoneId !== undefined &&
+        zoneParentChainId === chainId &&
+        supportedModes.includes('push') &&
+        (explicitMode === undefined || explicitMode === 'push') &&
         offeredZones?.includes(zoneId) &&
         !methodDetails?.splits
       )
