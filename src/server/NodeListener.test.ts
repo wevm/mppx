@@ -160,6 +160,51 @@ describe('sendResponse', () => {
     expect(cancel).toHaveBeenCalledWith(error)
   })
 
+  test('handles an upstream abort that errors a pending read before downstream cancellation', async () => {
+    const [req, res] = createMockRequest({})
+    const request = Request.fromNodeListener(req, res)
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value
+      },
+    })
+    request.signal.addEventListener('abort', () => controller.error(new Error('upstream aborted')))
+    const sending = NodeListener.sendResponse(res, new Response(stream))
+    await new Promise((resolve) => setImmediate(resolve))
+    res.emit('close')
+    await expect(sending).resolves.toBeUndefined()
+  })
+
+  test('contains real stream failures at the listener boundary', async () => {
+    const error = new Error('upstream broke')
+    const onError = vi.fn(() => {
+      throw new Error('logging failed')
+    })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const [req, res] = createMockRequest({})
+    const destroy = vi.fn()
+    Object.assign(res, { destroy })
+    const listener = Request.toNodeListener(
+      () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(error)
+            },
+          }),
+        ),
+      { onError },
+    )
+    try {
+      await expect(listener(req, res)).resolves.toBeUndefined()
+      expect(onError).toHaveBeenCalledWith(error)
+      expect(destroy).toHaveBeenCalledOnce()
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   test('writes status and headers', async () => {
     server = await Http.createServer(async (_, res) => {
       const response = new Response(null, {

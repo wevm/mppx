@@ -179,6 +179,14 @@ export function create(config: create.Config): Proxy {
       replayBody = body
       paidRequest = Replay.withBody(request, body)
       replayKey = Replay.key({
+        authority: replay.authority,
+        scope: JSON.stringify([
+          config.basePath,
+          serviceId,
+          service.baseUrl,
+          matched.key,
+          getConfiguredScope(handler),
+        ]),
         body,
         credential,
         method: request.method,

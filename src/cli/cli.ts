@@ -305,6 +305,7 @@ function resolveFetchTarget(url: string): { host?: string | undefined; url: stri
 }
 
 type ChallengeRequest = {
+  insecureTransport: boolean
   init: RequestInit
   logicalUrl: string
   response: Response
@@ -318,6 +319,7 @@ async function fetchChallengeRequest(
   init: RequestInit,
   follow: boolean,
 ): Promise<ChallengeRequest> {
+  let insecureTransport = false
   let logicalUrl = url
   let target = resolveFetchTarget(logicalUrl)
   let requestInit: RequestInit = {
@@ -328,10 +330,14 @@ async function fetchChallengeRequest(
   if (target.host) setTargetHost(requestInit.headers as Record<string, string>, target.host)
 
   for (let redirects = 0; redirects <= 20; redirects++) {
+    const { protocol, hostname } = new URL(target.url)
+    const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
+    // A cleartext redirect can replace the destination even if the final hop uses TLS.
+    insecureTransport ||= protocol !== 'https:' && !(protocol === 'http:' && isLoopback)
     const response = await fetch(target.url, requestInit)
     const location = response.headers.get('location')
     if (!follow || !location || ![301, 302, 303, 307, 308].includes(response.status))
-      return { init: requestInit, logicalUrl, response, target }
+      return { insecureTransport, init: requestInit, logicalUrl, response, target }
     if (redirects === 20) throw new TypeError('Too many redirects')
     await response.body?.cancel().catch(() => {})
 
@@ -612,11 +618,11 @@ const cli = Cli.create('mppx', {
         c.options.location ?? false,
       )
       const challengeResponse = challengeRequest.response
-      if (insecure && challengeResponse.status === 402)
+      if ((insecure || challengeRequest.insecureTransport) && challengeResponse.status === 402)
         return c.error({
           code: 'INSECURE_PAYMENT',
           message:
-            'Payment requires verified TLS. Install a trusted certificate and omit --insecure.',
+            'Payment requires verified HTTPS (except loopback HTTP). Use HTTPS and omit --insecure.',
           exitCode: 2,
         })
       if (challengeResponse.status !== 402) {

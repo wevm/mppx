@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vp/test'
+import * as Http from '~test/Http.js'
 
 import * as Mppx from '../server/Mppx.js'
 import * as Store from '../Store.js'
@@ -355,6 +356,61 @@ describe('replay review fixes', () => {
 })
 
 describe('replay key scope', () => {
+  test.each([false, true])(
+    'isolates failed deliveries between Node authorities (explicit=%s)',
+    async (explicit) => {
+      const store = Store.memory()
+      const paidB = vi.fn()
+      const upstreamA = vi.fn(
+        async () => new Response('failed', { status: 502 }),
+      ) as typeof globalThis.fetch
+      const upstreamB = vi.fn(async () => new Response('paid B')) as typeof globalThis.fetch
+      const a = createProxy({
+        fetch: upstreamA,
+        onPayment: vi.fn(),
+        replay: { store, ...(explicit ? { authority: 'a' } : {}) },
+      })
+      const b = createProxy({
+        fetch: upstreamB,
+        onPayment: paidB,
+        replay: { store, ...(explicit ? { authority: 'b' } : {}) },
+      })
+      const serverA = await Http.createServer(a.listener)
+      const serverB = await Http.createServer(b.listener)
+      const init = {
+        method: 'POST',
+        headers: { Host: 'a.example', Authorization: 'Payment credential-1' },
+        body: '{}',
+      }
+      try {
+        expect((await fetch(serverA.url + '/api/generate', init)).status).toBe(502)
+        expect((await fetch(serverB.url + '/api/generate', init)).status).toBe(200)
+        expect(paidB).toHaveBeenCalledOnce()
+      } finally {
+        serverA.close()
+        serverB.close()
+      }
+    },
+  )
+
+  test('shares failed deliveries only between explicitly configured replicas', async () => {
+    const store = Store.memory()
+    const paid = vi.fn()
+    const a = createProxy({
+      fetch: vi.fn(async () => new Response('failed', { status: 502 })) as typeof globalThis.fetch,
+      onPayment: paid,
+      replay: { store, authority: 'replicas' },
+    })
+    const b = createProxy({
+      fetch: vi.fn(async () => new Response('retried')) as typeof globalThis.fetch,
+      onPayment: paid,
+      replay: { store, authority: 'replicas' },
+    })
+    expect((await a.fetch(paidRequest())).status).toBe(502)
+    expect(await (await b.fetch(paidRequest())).text()).toBe('retried')
+    expect(paid).toHaveBeenCalledOnce()
+  })
+
   test('does not replay a delivery on a proxy at another origin sharing the store', async () => {
     const store = Store.memory()
     const onPaymentA = vi.fn()

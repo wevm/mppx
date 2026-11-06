@@ -98,28 +98,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
-    const originalJson = res.json
-    res.json = (body: any) => {
-      const originalSend = res.send
-      // Let Express serialize with the application's replacer, spacing, and
-      // escaping settings, but defer sending until the payment transport wraps it.
-      res.send = (serialized: any) => {
-        const response = new Response(
-          [204, 205, 304].includes(res.statusCode) ? null : serialized,
-          { status: res.statusCode, headers: { 'Content-Type': res.get('Content-Type')! } },
-        )
-        void Promise.resolve()
-          .then(() => result.withReceipt(response))
-          .then((wrapped: Response) => ExpressAdapter.sendResponse(res, wrapped))
-          .catch(next)
-        return res
-      }
-      try {
-        return originalJson.call(res, body)
-      } finally {
-        res.send = originalSend
-      }
-    }
+    ExpressAdapter.wrapResponse(res, (response) => result.withReceipt(response), next)
 
     next()
   }

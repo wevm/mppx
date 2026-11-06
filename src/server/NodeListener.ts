@@ -59,6 +59,9 @@ export async function sendResponse(
           }
         }
       }
+    } catch (error) {
+      await reader.cancel(error).catch(() => {})
+      if (!connectionClosed && !isResponseClosed(res)) throw error
     } finally {
       res.removeListener('close', onClose)
       reader.releaseLock()
