@@ -12,7 +12,7 @@ import { charge as charge_ } from './Charge.js'
 import { buildAnalytics } from './internal/analytics.js'
 import { findOrCreateDepositAddress as _findOrCreateDepositAddress } from './internal/deposit-address.js'
 import * as HostedFeePayer from './internal/hosted-fee-payer.js'
-import { recordCryptoPayment } from './internal/record-payment.js'
+import { recordCryptoPayment, recordPayment as _recordPayment } from './internal/record-payment.js'
 import { type ConnectConfig } from './internal/request.js'
 
 // --- Public types ---
@@ -482,6 +482,8 @@ export namespace stripe {
   export const create = stripe
 
   export const findOrCreateDepositAddress = _findOrCreateDepositAddress
+
+  export const recordPayment = _recordPayment
 }
 
 function neededNetworks(excluded: Set<string>, additional?: AdditionalConfig): stripe.Network[] {
