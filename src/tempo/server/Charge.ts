@@ -44,6 +44,7 @@ import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
+import * as Zone from '../internal/zone.js'
 import * as Methods from '../Methods.js'
 import { fallbackStore } from './internal/fallback-store.js'
 import * as Relay from './Relay.js'
@@ -83,6 +84,8 @@ export function charge<const parameters extends charge.Parameters>(
     supportedModes,
     validateSender,
     waitForConfirmation = true,
+    zones,
+    zoneSettlementTimeoutMs = 0,
   } = parameters
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
@@ -197,6 +200,7 @@ export function charge<const parameters extends charge.Parameters>(
   type HashPayload = Extract<Credential['payload'], { type: 'hash' }>
   type ProofPayload = Extract<Credential['payload'], { type: 'proof' }>
   type TransactionPayload = Extract<Credential['payload'], { type: 'transaction' }>
+  type ZonePayload = Extract<Credential['payload'], { type: 'zone' }>
 
   /** Validates a recognized payment route and retains its funding metadata. */
   function validatePaymentRoute(
@@ -300,6 +304,111 @@ export function charge<const parameters extends charge.Parameters>(
     )
     const payer = payers.size === 1 ? [...payers][0] : undefined
     return { payer, receipt, sender, transfers }
+  }
+
+  // Concurrent credentials for one withdrawal share a single settlement poll.
+  const pendingZoneSettlements = new Map<string, Promise<`0x${string}`>>()
+  function waitForZoneSettlement(
+    parameters: Parameters<typeof Zone.waitForSettlement>[1] & {
+      client: CredentialContext['client']
+    },
+  ) {
+    const { client, ...rest } = parameters
+    // The poll filters on chain and recipient, so only callers that agree on them share it.
+    const key = `${client.chain?.id}:${rest.portal.toLowerCase()}:${rest.senderTag.toLowerCase()}:${rest.to?.toLowerCase()}`
+    let pending = pendingZoneSettlements.get(key)
+    if (!pending) {
+      // Keep a found settlement briefly, so validation and settlement of one
+      // credential (and its retries) don't poll again; drop failures at once.
+      pending = Zone.waitForSettlement(client, rest).then(
+        (hash) => {
+          setTimeout(() => pendingZoneSettlements.delete(key), 60_000).unref?.()
+          return hash
+        },
+        (error) => {
+          pendingZoneSettlements.delete(key)
+          throw error
+        },
+      )
+      pendingZoneSettlements.set(key, pending)
+    }
+    return pending
+  }
+
+  /**
+   * Validates a payment that a Zone withdrawal settled on Tempo: the portal's
+   * `WithdrawalProcessed` event pays the recipient, and the withdrawal's memo in
+   * the `processWithdrawals` calldata binds it to this challenge.
+   */
+  async function validateZoneCredential(payload: ZonePayload, context: CredentialContext) {
+    const { amount, challenge, client, currency, methodDetails, recipient, supportedModes } =
+      context
+    if (supportedModes && !supportedModes.includes('push'))
+      throw new MismatchError('Zone credentials are not supported for this challenge.', {})
+    if (!Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, payload.zoneId))
+      throw new MismatchError('Zone is not accepted for this challenge.', {
+        zoneId: String(payload.zoneId),
+      })
+    if (methodDetails?.splits)
+      throw new MismatchError('Zone credentials do not support split payments.', {})
+
+    const portal = Zone.portalAddress(payload.zoneId)
+    const senderTag = payload.senderTag as `0x${string}`
+    if (!payload.hash && zoneSettlementTimeoutMs <= 0)
+      throw new MismatchError('Zone credential must include the Tempo settlement hash.', {
+        senderTag,
+      })
+    const hash =
+      (payload.hash as `0x${string}` | undefined) ??
+      (await waitForZoneSettlement({
+        client,
+        portal,
+        senderTag,
+        timeoutMs: zoneSettlementTimeoutMs,
+        to: recipient,
+      }))
+    const receipt = await getTransactionReceipt(client, { hash })
+    if (receipt.status !== 'success') throw new Error(`Transaction reverted: ${hash}`)
+
+    const event = Zone.findProcessedEvent(receipt, { portal, senderTag })
+    if (!event)
+      throw new MismatchError('Payment verification failed: Zone withdrawal not settled.', {
+        senderTag,
+      })
+    if (!event.callbackSuccess)
+      throw new MismatchError('Payment verification failed: Zone withdrawal bounced.', {
+        senderTag,
+      })
+    if (
+      !TempoAddress.isEqual(event.to, recipient) ||
+      !TempoAddress.isEqual(event.token, currency) ||
+      event.amount.toString() !== amount
+    )
+      throw new MismatchError('Payment verification failed: no matching transfer found.', {
+        amount,
+        currency,
+        recipient,
+      })
+
+    const transaction = await getTransaction(client, { hash })
+    const calls =
+      (transaction as Transaction.Transaction).calls ??
+      (transaction.to ? [{ to: transaction.to, data: transaction.input }] : [])
+    const withdrawal = Zone.findWithdrawal(calls, { portal, senderTag })
+    if (
+      !withdrawal ||
+      withdrawal.gasLimit !== 0n ||
+      !TempoAddress.isEqual(withdrawal.to, recipient) ||
+      !TempoAddress.isEqual(withdrawal.token, currency) ||
+      withdrawal.amount.toString() !== amount
+    )
+      throw new MismatchError('Payment verification failed: Zone withdrawal not found.', {
+        senderTag,
+      })
+    if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
+      throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+
+    return { hash, portal, receipt, senderTag }
   }
 
   async function validateProofCredential(
@@ -446,6 +555,22 @@ export function charge<const parameters extends charge.Parameters>(
         }
       }
 
+      case 'zone': {
+        const { hash, portal, receipt, senderTag } = await validateZoneCredential(
+          context.payload,
+          context,
+        )
+        return {
+          details: { mode: 'push' as const },
+          hash,
+          payer: undefined,
+          portal,
+          receipt,
+          senderTag,
+          type: 'zone' as const,
+        }
+      }
+
       case 'transaction': {
         const {
           fundingCurrency,
@@ -489,6 +614,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
       splits,
       supportedModes,
+      zones,
     } as unknown as Defaults,
 
     stableBinding: chargeBinding,
@@ -647,6 +773,16 @@ export function charge<const parameters extends charge.Parameters>(
             }
           }
           return toReceipt(receipt.transactionHash, fundingCurrency)
+        }
+
+        case 'zone': {
+          const { portal, receipt, senderTag } = validated
+          if (!(await tryClaimZoneWithdrawal(store, portal, senderTag, replayExpires))) {
+            throw new CredentialReplayedError({
+              reason: 'Zone withdrawal has already been used',
+            })
+          }
+          return toReceipt(receipt.transactionHash)
         }
 
         case 'proof': {
@@ -1091,6 +1227,14 @@ export declare namespace charge {
      * polling for a receipt.
      */
     waitForConfirmation?: boolean | undefined
+    /**
+     * Milliseconds to wait for a Zone withdrawal to settle on Tempo when a
+     * `zone` credential omits the settlement transaction hash. Each wait polls
+     * the RPC for an unauthenticated sender tag, so it is off by default and such
+     * credentials are rejected. Enable it only behind rate limits.
+     * @default 0
+     */
+    zoneSettlementTimeoutMs?: number | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults &
@@ -1140,8 +1284,15 @@ function chargeBinding(request: ChargeRequest) {
     request
   requestRest satisfies Record<string, never>
 
-  const { chainId, feePayer, machineTokenEnabled, splits, supportedModes, ...methodDetailsRest } =
-    methodDetails ?? {}
+  const {
+    chainId,
+    feePayer,
+    machineTokenEnabled,
+    splits,
+    supportedModes,
+    zones,
+    ...methodDetailsRest
+  } = methodDetails ?? {}
   methodDetailsRest satisfies Record<string, never>
   void feePayer
 
@@ -1155,6 +1306,7 @@ function chargeBinding(request: ChargeRequest) {
     recipient,
     splits,
     supportedModes,
+    zones,
   }
 }
 
@@ -1479,6 +1631,23 @@ function getHashStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
 /** @internal */
 function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
+}
+
+/** @internal */
+function getZoneWithdrawalStoreKey(
+  portal: `0x${string}`,
+  senderTag: `0x${string}`,
+): `mppx:charge:${string}` {
+  return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`
+}
+
+async function tryClaimZoneWithdrawal(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  portal: `0x${string}`,
+  senderTag: `0x${string}`,
+  expires: number,
+): Promise<boolean> {
+  return Store.tryClaim(store, getZoneWithdrawalStoreKey(portal, senderTag), expires)
 }
 
 async function tryClaimHash(
