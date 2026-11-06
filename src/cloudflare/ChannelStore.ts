@@ -1,0 +1,230 @@
+import { Json } from 'ox'
+import type { Hex } from 'viem'
+
+import * as Store from '../Store.js'
+import { resolveSettleableVoucher, type State } from '../tempo/session/server/ChannelStore.js'
+
+/** Storage key of a channel object's settlement bookkeeping, beside the channel state. */
+const settlementKey = 'mppx:channel-store:settlement'
+
+/**
+ * Durable Object class that stores Tempo session channels, as {@link Store.durableObject}
+ * does, and settles them on-chain without a request in flight.
+ *
+ * Every channel lives in its own object. After each write of a channel state, the object
+ * checks how much a settlement could capture ({@link unsettledAmount}): from
+ * `max(10% of deposit, minUnsettledAmount)` it sends `{ channelId }` to the settlement
+ * queue at once; below that it sets an alarm that sends it once the channel has had no
+ * write for `staleAfterMs`. The Worker's `queue()` handler settles it with
+ * {@link settle}. After each send, a watchdog alarm sends it again while the channel
+ * stays unsettled (a dropped, dead-lettered or failed job), waiting twice as long each
+ * time, up to `maxAttempts` sends; settling more on-chain restarts the count.
+ *
+ * Export a subclass from your Worker, bind it with a `new_sqlite_classes` migration and
+ * bind the queue as `MPPX_SETTLEMENT_QUEUE`, or override
+ * {@link ChannelStore.settlement} to change the queue or thresholds.
+ *
+ * @example
+ * ```ts
+ * import { DurableObject } from 'cloudflare:workers'
+ * import { ChannelStore } from 'mppx/cloudflare'
+ *
+ * export class MppxChannels extends ChannelStore.rpc(DurableObject) {}
+ * ```
+ */
+export class ChannelStore extends Store.DurableObjectStore {
+  /**
+   * The settlement queue and thresholds. Reads the `MPPX_SETTLEMENT_QUEUE` binding by
+   * default; a subclass overrides it to use another binding or other thresholds.
+   */
+  protected settlement(): ChannelStore.Settlement {
+    const env = this.env as { MPPX_SETTLEMENT_QUEUE?: ChannelStore.Queue | undefined } | undefined
+    return { queue: env?.MPPX_SETTLEMENT_QUEUE }
+  }
+
+  /** Schedules settlement of a written channel state, and drops it for a closed or deleted one. */
+  protected override async onWrite(
+    key: string,
+    _previous: unknown,
+    next: unknown,
+    transaction?: Store.DurableObjectStore.Storage | undefined,
+  ): Promise<void> {
+    // Writing through the store's transaction, when it has one, commits or rolls back with the write.
+    const storage = transaction ?? this.storage
+    const pending = (await storage.get(settlementKey)) as Pending | undefined
+    const settlement = resolveSettlement(this.settlement())
+    const due = isChannelState(next) ? settlementDue(next, settlement) : undefined
+    if (!due || !isChannelState(next)) {
+      if (pending?.key === key) await storage.delete(settlementKey)
+      return
+    }
+    // A job settled more on-chain since it was sent: the job is done, so restart the count.
+    const progressed =
+      pending?.settledAtSend !== undefined && next.settledOnChain > pending.settledAtSend
+    const sending = progressed ? undefined : pending?.sends ? pending : undefined
+    const updated: Pending = {
+      channelId: next.channelId,
+      key,
+      sends: sending?.sends ?? 0,
+      updatedAt: Date.now(),
+      ...(sending ? { settledAtSend: sending.settledAtSend } : {}),
+    }
+    await storage.put(settlementKey, updated)
+    // A job is in flight: it settles the latest voucher, and its watchdog alarm stays.
+    if (sending) return
+    if (due === 'threshold') return this.send(updated, next, settlement, storage)
+    const at = updated.updatedAt + settlement.staleAfterMs
+    const alarm = await storage.getAlarm!()
+    if (alarm === null || at < alarm) await storage.setAlarm!(at)
+  }
+
+  /** Sends a stale channel to the queue, or sends it again from the watchdog while unsettled. */
+  override async alarm(): Promise<void> {
+    await super.alarm()
+    const pending = (await this.storage.get(settlementKey)) as Pending | undefined
+    if (!pending) return
+    const raw = await this.storage.get(pending.key)
+    // The store writes JSON text, or native values with `encoding: 'native'`.
+    const state = typeof raw === 'string' ? Json.parse(raw) : (raw ?? null)
+    const settlement = resolveSettlement(this.settlement())
+    const due = isChannelState(state) ? settlementDue(state, settlement) : undefined
+    if (!due) {
+      await this.storage.delete(settlementKey)
+      return
+    }
+    // The channel had a write since this alarm was set: wait until it has been idle long enough.
+    const staleAt = pending.updatedAt + settlement.staleAfterMs
+    if (!pending.sends && due === 'stale' && Date.now() < staleAt)
+      return this.storage.setAlarm!(staleAt)
+    await this.send(pending, state as State, settlement, this.storage)
+  }
+
+  /**
+   * Sends the channel to the settlement queue and sets the watchdog alarm, or gives up after
+   * `maxAttempts` sends. A send that fails leaves the count alone and tries again from an
+   * alarm, since the write that scheduled it has already committed.
+   */
+  private async send(
+    pending: Pending,
+    state: State,
+    settlement: ResolvedSettlement,
+    storage: Store.DurableObjectStore.Storage,
+  ): Promise<void> {
+    const sends = pending.sends + 1
+    if (sends > settlement.maxAttempts) {
+      await storage.delete(settlementKey)
+      return
+    }
+    try {
+      if (!settlement.queue)
+        throw new Error('ChannelStore: no settlement queue (bind MPPX_SETTLEMENT_QUEUE).')
+      await settlement.queue.send({ channelId: pending.channelId } satisfies ChannelStore.Message)
+    } catch {
+      await storage.setAlarm!(Date.now() + settlement.retryMs)
+      return
+    }
+    await storage.put(settlementKey, {
+      ...pending,
+      sends,
+      settledAtSend: state.settledOnChain,
+    } satisfies Pending)
+    await storage.setAlarm!(Date.now() + settlement.watchdogMs * 2 ** (sends - 1))
+  }
+}
+
+export declare namespace ChannelStore {
+  /** The settlement queue and when to settle. */
+  export type Settlement = {
+    /** Queue the object sends `{ channelId }` to; the Worker's `queue()` handler settles it. */
+    queue: Queue | undefined
+    /** Raw amount a settlement must capture before it is sent at once, if 10% of the deposit is less. @default 100_000n */
+    minUnsettledAmount?: bigint | undefined
+    /** Sends a channel below the threshold once it has had no write for this long. @default 300_000 */
+    staleAfterMs?: number | undefined
+    /** Sends a channel again this long after a send while it stays unsettled, doubling each time. @default 1_800_000 */
+    watchdogMs?: number | undefined
+    /** Sends a channel at most this many times without on-chain progress. @default 6 */
+    maxAttempts?: number | undefined
+    /** Tries a send that failed again this much later. @default 60_000 */
+    retryMs?: number | undefined
+  }
+
+  /** The subset of a Cloudflare `Queue` binding the object uses. */
+  export type Queue = { send: (body: Message) => Promise<unknown> }
+
+  /** The settlement job the object sends. */
+  export type Message = { channelId: Hex }
+}
+
+/** A channel object's settlement bookkeeping. */
+type Pending = {
+  /** The channel's ID, sent to the queue. */
+  channelId: Hex
+  /** The store key the channel state lives under. */
+  key: string
+  /** Sends since the channel last settled more on-chain. */
+  sends: number
+  /** `settledOnChain` at the last send, to tell when that job made progress. */
+  settledAtSend?: bigint | undefined
+  /** Unix milliseconds of the channel's last write. */
+  updatedAt: number
+}
+
+/** A {@link ChannelStore.Settlement} with its defaults filled in. */
+type ResolvedSettlement = {
+  [key in keyof ChannelStore.Settlement]-?: key extends 'queue'
+    ? ChannelStore.Settlement[key]
+    : NonNullable<ChannelStore.Settlement[key]>
+}
+
+/** Fills in the defaults of a {@link ChannelStore.Settlement}. */
+function resolveSettlement(settlement: ChannelStore.Settlement): ResolvedSettlement {
+  return {
+    maxAttempts: settlement.maxAttempts ?? 6,
+    minUnsettledAmount: settlement.minUnsettledAmount ?? 100_000n,
+    queue: settlement.queue,
+    retryMs: settlement.retryMs ?? 60_000,
+    staleAfterMs: settlement.staleAfterMs ?? 300_000,
+    watchdogMs: settlement.watchdogMs ?? 30 * 60_000,
+  }
+}
+
+/** Whether a stored value is a precompile-backed session channel state. */
+export function isChannelState(value: unknown): value is State {
+  if (typeof value !== 'object' || value === null) return false
+  const state = value as Record<string, unknown>
+  return (
+    state.backend === 'precompile' &&
+    typeof state.channelId === 'string' &&
+    typeof state.chainId === 'number' &&
+    typeof state.deposit === 'bigint' &&
+    typeof state.settledOnChain === 'bigint' &&
+    typeof state.spent === 'bigint'
+  )
+}
+
+/**
+ * The raw amount a settlement of the channel would capture now: the largest accepted voucher
+ * within `spent` (as mppx's `settle` picks it) above `settledOnChain`.
+ */
+export function unsettledAmount(state: State): bigint {
+  const voucher = resolveSettleableVoucher(state)
+  return voucher ? voucher.cumulativeAmount - state.settledOnChain : 0n
+}
+
+/**
+ * When the channel needs settling: `threshold` (now) once the unsettled amount reaches
+ * `max(10% of deposit, minUnsettledAmount)`, `stale` (once idle) below it, or
+ * `undefined` when it is finalized or has nothing to settle.
+ */
+export function settlementDue(
+  state: State,
+  settlement: Pick<ChannelStore.Settlement, 'minUnsettledAmount'> = {},
+): 'stale' | 'threshold' | undefined {
+  if (state.finalized) return undefined
+  const unsettled = unsettledAmount(state)
+  if (unsettled <= 0n) return undefined
+  const minimum = settlement.minUnsettledAmount ?? 100_000n
+  const tenth = state.deposit / 10n
+  return unsettled >= (tenth > minimum ? tenth : minimum) ? 'threshold' : 'stale'
+}
