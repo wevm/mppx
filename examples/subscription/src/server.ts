@@ -24,6 +24,11 @@ type Env = {
   MPP_PRIVATE_KEY: string
   /** Secret that binds challenge IDs. */
   MPP_SECRET_KEY: string
+  /**
+   * When the plan's subscriptions end (ISO 8601), the same for every isolate:
+   * a subscription is reused only when its terms match the challenge exactly.
+   */
+  SUBSCRIPTION_EXPIRES: string
   /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
   TEMPO_RPC_URL?: string | undefined
 }
@@ -34,28 +39,14 @@ const planId = 'monthly'
 const pricePerPeriod = '0.10'
 const periodCount = '1'
 const periodUnit = 'day'
-const subscriptionDurationMs = 30 * 24 * 60 * 60 * 1_000
 
 function subscriptionKey(source: { address: string; chainId: number }) {
   return `news:eip155:${source.chainId}:${source.address.toLowerCase()}:${planId}`
 }
 
-// Every isolate must offer the same subscription terms, or a payer who
-// activated on one isolate would not match a challenge from another and would
-// pay to activate again. The first request fixes the expiry in the shared store;
-// once it passes, the next request starts a new term.
-async function planExpires(store: Store.AtomicStore): Promise<string> {
-  const now = Date.now()
-  const proposed = new Date(Math.ceil((now + subscriptionDurationMs) / 1_000) * 1_000).toISOString()
-  return store.update('news:plan:expires', (current) =>
-    typeof current === 'string' && Date.parse(current) > now
-      ? { op: 'noop', result: current }
-      : { op: 'set', value: proposed, result: proposed },
-  )
-}
-
-let app: (ReturnType<typeof createApp> & { expires: string }) | undefined
-function createApp(env: Env, store: Store.AtomicStore, subscriptionExpires: string) {
+let app: ReturnType<typeof createApp> | undefined
+function createApp(env: Env) {
+  const store = Store.durableObject(env.MPPX_STORE)
   const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
   const client = createClient({ chain: Chain.testnet, transport: http(env.TEMPO_RPC_URL) })
 
@@ -79,7 +70,7 @@ function createApp(env: Env, store: Store.AtomicStore, subscriptionExpires: stri
           return { key: subscriptionKey(source) }
         },
         store,
-        subscriptionExpires,
+        subscriptionExpires: env.SUBSCRIPTION_EXPIRES,
         hooks: {
           activated: async ({ subscription }) => {
             console.log(`[subscription] activated ${subscription.subscriptionId}`)
@@ -101,9 +92,7 @@ export default {
     const url = new URL(request.url)
     if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
-    const store = Store.durableObject(env.MPPX_STORE)
-    const expires = await planExpires(store)
-    if (app?.expires !== expires) app = { ...createApp(env, store, expires), expires }
+    app ??= createApp(env)
     const { mppx, subscriptions } = app
 
     if (url.pathname === '/api/subscription') {

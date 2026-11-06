@@ -15,7 +15,7 @@ import { Actions, Chain } from 'viem/tempo'
 const file = new URL('./.dev.vars', import.meta.url)
 const vars = new Map<string, string>()
 if (fs.existsSync(file))
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^([A-Z_]+)=(.*)$/)
     if (match) vars.set(match[1]!, match[2]!)
   }

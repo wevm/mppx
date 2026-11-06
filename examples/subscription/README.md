@@ -45,6 +45,7 @@ pnpm mppx localhost:8787/api/article
 ```bash
 wrangler secret put MPP_PRIVATE_KEY   # from .dev.vars
 wrangler secret put MPP_SECRET_KEY    # from .dev.vars
+wrangler secret put SUBSCRIPTION_EXPIRES  # from .dev.vars: when the plan ends, the same for every isolate
 wrangler secret put TEMPO_RPC_URL     # optional: a dedicated Tempo RPC
 pnpm deploy
 BASE_URL=https://mppx-subscription.<account>.workers.dev pnpm client

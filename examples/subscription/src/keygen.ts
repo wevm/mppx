@@ -4,6 +4,8 @@
 //   - MPP_PRIVATE_KEY: the payee account. It receives subscription payments and
 //     pays their transaction fees, so it must hold a little balance.
 //   - MPP_SECRET_KEY:  binds challenge IDs (HMAC), so they verify statelessly.
+//   - SUBSCRIPTION_EXPIRES: when the plan's subscriptions end, a year from now.
+//     Every isolate must use the same value; choose a new one before it passes.
 //
 // Running it again keeps existing keys and only tops up the account.
 import * as fs from 'node:fs'
@@ -15,7 +17,7 @@ import { Actions, Chain } from 'viem/tempo'
 const file = new URL('../.dev.vars', import.meta.url)
 const vars = new Map<string, string>()
 if (fs.existsSync(file))
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^([A-Z_]+)=(.*)$/)
     if (match) vars.set(match[1]!, match[2]!)
   }
@@ -26,6 +28,13 @@ if (!vars.has('MPP_SECRET_KEY'))
     'MPP_SECRET_KEY',
     Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64'),
   )
+
+if (!vars.has('SUBSCRIPTION_EXPIRES')) {
+  const expires = new Date()
+  expires.setUTCFullYear(expires.getUTCFullYear() + 1)
+  expires.setUTCHours(0, 0, 0, 0)
+  vars.set('SUBSCRIPTION_EXPIRES', expires.toISOString())
+}
 
 // Owner-only: the file holds the payee key and the challenge secret.
 fs.writeFileSync(file, [...vars].map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {
