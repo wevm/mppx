@@ -82,8 +82,11 @@ export default {
 
     // No valid credential: ask for payment.
     if (result.status === 402) return result.challenge
-    // Open, voucher and close POSTs are management requests: no content.
-    if (request.method === 'POST') return result.withReceipt()
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
 
     // Stream tokens, charging one `pricePerToken` before each. When the
     // channel runs low, `stream.charge()` emits `payment-need-voucher` and
@@ -111,5 +114,15 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
   for (const word of text.split(/(?=\s)/)) {
     yield word
     await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60))
+  }
+}
+
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
   }
 }

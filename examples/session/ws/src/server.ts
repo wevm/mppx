@@ -161,7 +161,11 @@ export default {
     // after the socket ended is a management POST and gets the receipt alone.
     const result = await route(request)
     if (result.status === 402) return result.challenge
-    if (request.method === 'POST') return result.withReceipt()
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
 
     // Once a route has already been paid over HTTP, return a simple message so
     // it is obvious that WebSocket is the intended content path for this demo.
@@ -224,5 +228,15 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
   for (const word of words) {
     yield word
     await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60))
+  }
+}
+
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
   }
 }

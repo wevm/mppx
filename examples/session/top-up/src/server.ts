@@ -72,8 +72,11 @@ export default {
     // No valid credential, or the channel can't cover this request: the
     // challenge tells the client how much it needs.
     if (result.status === 402) return result.challenge
-    // Open, top-up and close POSTs are management requests: no content.
-    if (request.method === 'POST') return result.withReceipt()
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
 
     return result.withReceipt(Response.json({ query: q, results: search(q) }))
   },
@@ -90,4 +93,14 @@ function decodeSegment(segment: string) {
 // Mock search backend. The work only runs after payment is verified.
 function search(query: string) {
   return [1, 2, 3].map((rank) => ({ rank, title: `Result ${rank} for "${query}"` }))
+}
+
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
+  }
 }
