@@ -69,6 +69,9 @@ export default {
     // vouchers back to this URL, and mppx bills a POST with a query string as content.
     const [, route, prompt = 'Hello!'] = url.pathname.match(/^\/api\/(chat)(?:\/(.+))?$/) ?? []
     if (!route) return new Response('Not found', { status: 404 })
+    // Decode before charging, so a malformed prompt costs nothing.
+    const text = decodeSegment(prompt)
+    if (text === undefined) return new Response('Malformed prompt', { status: 400 })
 
     mppx ??= createMppx(env)
     const result = await mppx.session({
@@ -86,12 +89,20 @@ export default {
     // channel runs low, `stream.charge()` emits `payment-need-voucher` and
     // waits until the client's voucher POST lands in the Durable Object.
     return result.withReceipt(async function* (stream) {
-      for await (const token of generateTokens(decodeURIComponent(prompt))) {
+      for await (const token of generateTokens(text)) {
         await stream.charge()
         yield token
       }
     })
   },
+}
+
+function decodeSegment(segment: string) {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return undefined
+  }
 }
 
 // Mock LLM. Replace with a real model's token stream.

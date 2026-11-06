@@ -60,6 +60,9 @@ export default {
     // POSTs go to this URL, and mppx bills a POST with a query string as content.
     const [, route, query = ''] = url.pathname.match(/^\/api\/(search)(?:\/(.+))?$/) ?? []
     if (!route) return new Response('Not found', { status: 404 })
+    // Decode before charging, so a malformed query costs nothing.
+    const q = decodeSegment(query)
+    if (q === undefined) return new Response('Malformed query', { status: 400 })
 
     mppx ??= createMppx(env)
     const result = await mppx.session({ amount: price, suggestedDeposit, unitType: 'request' })(
@@ -72,9 +75,16 @@ export default {
     // Open, top-up and close POSTs are management requests: no content.
     if (request.method === 'POST') return result.withReceipt()
 
-    const q = decodeURIComponent(query)
     return result.withReceipt(Response.json({ query: q, results: search(q) }))
   },
+}
+
+function decodeSegment(segment: string) {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return undefined
+  }
 }
 
 // Mock search backend. The work only runs after payment is verified.
