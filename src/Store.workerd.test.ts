@@ -20,13 +20,14 @@ beforeAll(async () => {
   miniflare = new Miniflare({
     compatibilityDate: '2026-07-01',
     d1Databases: ['DB'],
+    // SQLite-backed, as production binds them: replay shards need SQL.
     durableObjects: {
-      FAILING: 'FailingStore',
-      NATIVE_STORE: 'NativeStore',
-      RECORDING: 'RecordingStore',
-      RECORDING_RPC: 'RecordingRpcStore',
-      RPC_STORE: 'RpcStore',
-      STORE: 'MppxStore',
+      FAILING: { className: 'FailingStore', useSQLite: true },
+      NATIVE_STORE: { className: 'NativeStore', useSQLite: true },
+      RECORDING: { className: 'RecordingStore', useSQLite: true },
+      RECORDING_RPC: { className: 'RecordingRpcStore', useSQLite: true },
+      RPC_STORE: { className: 'RpcStore', useSQLite: true },
+      STORE: { className: 'MppxStore', useSQLite: true },
     },
     modules: [{ type: 'ESModule', path: 'worker.js', contents: output[0].code }],
   })
@@ -121,6 +122,89 @@ describe('Store.durableObject native encoding in workerd', () => {
     expect(results.map(Number).toSorted((a, b) => a - b)).toEqual(
       Array.from({ length: 30 }, (_, i) => i + 1),
     )
+  })
+})
+
+describe.each([
+  { backend: 'durableObject', label: 'fetch' },
+  { backend: 'rpc', label: 'rpc' },
+])('Store.durableObject replay shards over $label in workerd', ({ backend }) => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend, options: { replayShards: 4 } })
+
+  test('records a claim exactly once across concurrent requests', async () => {
+    const expires = Date.now() + 60_000
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        run<boolean>({ op: 'claim', key: `${backend}:nonce`, expires }),
+      ),
+    )
+    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(await run({ op: 'claim', key: `${backend}:expired`, expires: Date.now() - 1 })).toBe(
+      false,
+    )
+  })
+
+  test('claims a key again once its claim expires', async () => {
+    const key = `${backend}:expiring`
+    expect(await run({ op: 'claim', key, expires: Date.now() + 300 })).toBe(true)
+    expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(true)
+  })
+
+  test('claims a key again once delete releases it', async () => {
+    const key = `${backend}:released`
+    expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(true)
+    await run({ op: 'delete', key })
+    expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(true)
+    expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(false)
+  })
+})
+
+describe('Store.durableObject replay shards in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'rpc', options: { replayShards: 4 } })
+
+  test('spreads claims across the shards, outside the per-key objects', async () => {
+    const keys = Array.from({ length: 40 }, (_, i) => `spread:${i}`)
+    const expires = Date.now() + 60_000
+    expect(await Promise.all(keys.map((key) => run({ op: 'claim', key, expires })))).toEqual(
+      keys.map(() => true),
+    )
+    const shards = await run<string[][]>({ op: 'shards', shards: 4, version: 1 })
+    const spread = shards.map((claims) => claims.filter((key) => key.startsWith('spread:')))
+    for (const claims of spread) expect(claims.length).toBeGreaterThan(0)
+    expect(spread.flat().toSorted()).toEqual(keys.toSorted())
+    expect(await run({ op: 'get', key: 'spread:0' })).toBeNull()
+  })
+
+  test('clears expired claims with an alarm', async () => {
+    const keys = Array.from({ length: 8 }, (_, i) => `alarm:${i}`)
+    for (const key of keys) await run({ op: 'claim', key, expires: Date.now() + 200 })
+    const remaining = async () =>
+      (await run<string[][]>({ op: 'shards', shards: 4, version: 1 }))
+        .flat()
+        .filter((key) => key.startsWith('alarm:')).length
+    expect(await remaining()).toBe(8)
+    await expect.poll(remaining, { timeout: 5_000, interval: 100 }).toBe(0)
+  })
+
+  test('starts from empty shards for a new replayShardVersion', async () => {
+    const expires = Date.now() + 60_000
+    expect(await run({ op: 'claim', key: 'versioned', expires })).toBe(true)
+    expect(
+      await request({
+        backend: 'rpc',
+        op: 'claim',
+        key: 'versioned',
+        expires,
+        options: { replayShards: 4, replayShardVersion: 2 },
+      }),
+    ).toBe(true)
+    expect((await run<string[][]>({ op: 'shards', shards: 4, version: 2 })).flat()).toEqual([
+      'versioned',
+    ])
   })
 })
 
