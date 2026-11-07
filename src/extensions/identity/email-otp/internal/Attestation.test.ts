@@ -56,6 +56,7 @@ test('rejects wrong claims, times, keys and tampering', async () => {
   expect(await reason(await sign({ iat: now + 61 }))).toMatch(/future/)
   expect(await reason(await sign({ iat: now - 3_600 }), { maxAge: 60 })).toMatch(/too old/)
   expect(await reason(await sign({ jti: 1 as never }))).toMatch(/ID is malformed/)
+  expect(await reason(await sign({ exp: 9_000_000_000_000 }))).toMatch(/times are malformed/)
   expect(await reason(await sign({}), { keyResolver: () => undefined })).toMatch(/No public key/)
 
   const other = await keyPair()

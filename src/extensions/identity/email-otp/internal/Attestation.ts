@@ -154,8 +154,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isTime(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+  // Bounded by the largest time a Date holds, so every accepted time converts to a valid Date.
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= maxTime
 }
+
+/** Latest time, in Unix seconds, that a JavaScript Date can represent. */
+const maxTime = 8_640_000_000_000
 
 /** Accepts https issuers, and http only on localhost for development. */
 export function isIssuer(value: string): boolean {
