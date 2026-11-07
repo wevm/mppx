@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
@@ -243,6 +243,10 @@ describe('settle', () => {
 })
 
 describe('ChannelStore', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   /** A channel object on in-memory storage whose alarm a test fires by hand. */
   function object(settlement: Partial<ChannelStore.Settlement> = {}) {
     const map = new Map<string, unknown>()
@@ -278,7 +282,9 @@ describe('ChannelStore', () => {
       sent,
       /** Milliseconds until the alarm, or null without one. */
       alarmIn: () => (alarm === null ? null : alarm - Date.now()),
+      /** Fires the alarm at its time, as Cloudflare does, moving the clock there if it is later. */
       async fire() {
+        if (alarm !== null && alarm > Date.now()) vi.setSystemTime(alarm)
         alarm = null
         await store.alarm()
       },
@@ -360,6 +366,79 @@ describe('ChannelStore', () => {
     // A write with no new vouchers, such as a settlement lease, keeps the count and the watchdog.
     await channels.write(channel({ deposit: 5n, voucher: 2n }))
     expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+  })
+
+  test('waits out a live close marker instead of giving up, and sends a close request merged into it', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    try {
+      const channels = object({ maxAttempts: 1 })
+      await channels.write(channel({ voucher: 2_000n }))
+      await channels.fire()
+      expect(channels.sent).toHaveLength(1)
+      // The server marks its close shortly before the last watchdog attempt is due.
+      vi.setSystemTime(Date.now() + channels.alarmIn()! - 10_000)
+      const marker = BigInt(Math.floor(Date.now() / 1000))
+      await channels.write(
+        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+      )
+      expect(channels.alarmIn()).toBeLessThanOrEqual(10_000)
+      // That attempt, inside the marker's window, neither sends nor gives up.
+      await channels.fire()
+      expect(channels.sent).toHaveLength(1)
+      expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)
+      // Once the marker can no longer land, the payer close request merged into it goes out.
+      vi.setSystemTime(Date.now() + channels.alarmIn()!)
+      await channels.fire()
+      expect(channels.sent).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('sends at once a threshold of vouchers written while a send is in flight', async () => {
+    let during: (() => Promise<unknown>) | undefined
+    const sent: unknown[] = []
+    const channels = object({
+      queue: {
+        async send(body) {
+          sent.push(body)
+          await during?.()
+        },
+      },
+    })
+    await channels.write(channel({ voucher: 2_000n }))
+    await channels.fire()
+    // A threshold's worth more (1_000) arrives while the watchdog's send awaits the queue.
+    during = () => channels.write(channel({ voucher: 3_500n }))
+    await channels.fire()
+    during = undefined
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(sent).toHaveLength(3)
+  })
+
+  test('does not spend a watchdog attempt on the alarm of a close marker that was cleared', async () => {
+    const channels = object()
+    await channels.write(channel({ voucher: 2_000n }))
+    await channels.fire()
+    expect(channels.sent).toHaveLength(1)
+    const marker = BigInt(Math.floor(Date.now() / 1000))
+    await channels.write(
+      channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+    )
+    expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)
+    // The close failed and the marker is cleared; its alarm stays.
+    await channels.write(channel({ voucher: 2_000n }))
+    await channels.fire()
+    expect(channels.sent).toHaveLength(1)
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+  })
+
+  test('rejects a non-finite staleAfterMs instead of scheduling no alarm', async () => {
+    const channels = object({ staleAfterMs: Number.POSITIVE_INFINITY })
+    await expect(channels.write(channel({ deposit: 1_000_000n, voucher: 500n }))).rejects.toThrow(
+      'staleAfterMs',
+    )
   })
 
   test("resends a closing channel within the escrow's close grace period", async () => {
