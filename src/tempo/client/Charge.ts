@@ -19,7 +19,6 @@ import {
 import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
-import * as Challenge from '../../Challenge.js'
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Errors from '../../Errors.js'
@@ -155,7 +154,7 @@ export function charge(parameters: charge.Parameters = {}) {
         !methodDetails?.splits &&
         // A withdrawal can't be undone, so start one only when it can settle before the
         // challenge expires; an expired challenge would invite another payment.
-        (pendingZoneWithdrawals.has(Challenge.serialize(challenge)) ||
+        (pendingZoneWithdrawals.has(zoneWithdrawalKey(challenge)) ||
           settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
       )
         return createZoneCredential({
@@ -449,7 +448,7 @@ async function createZoneCredential(options: {
   const request = challenge.request as ChargeRequest
   const recipient = request.recipient as Address
   // The whole challenge, so a challenge from another realm or request with the same ID never matches.
-  const key = Challenge.serialize(challenge)
+  const key = zoneWithdrawalKey(challenge)
 
   // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
   // Concurrent calls for one challenge share the request, which is stored before it is sent.
@@ -530,6 +529,11 @@ function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: n
   return Math.max(0, Math.min(timeoutMs, new Date(expires).getTime() - Date.now()))
 }
 
+/** Keys a Zone withdrawal by its whole Challenge. Unlike `Challenge.serialize`, it accepts any field value. */
+function zoneWithdrawalKey(challenge: unknown) {
+  return JSON.stringify(challenge)
+}
+
 /** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
 const zoneReceiptRecoveryTimeoutMs = 15_000
 
@@ -559,6 +563,8 @@ async function requestZoneWithdrawal(
   const fee = await Actions.zone.getWithdrawalFee(zone.client)
   const [, withdrawal] = Actions.zone.requestWithdrawal.calls({
     amount,
+    // A bounced payout refunds the payer, not the payee's Zone address.
+    fallbackRecipient: account.address,
     memo,
     to: recipient,
     token: currency,

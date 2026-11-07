@@ -66,6 +66,18 @@ describe('tempo.charge client zone selection', () => {
     ).rejects.toThrow('zone used')
   })
 
+  test('pays from a Zone for a challenge with line breaks in its description', async () => {
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: zoneClient(1_424_310_003) },
+    })
+    // MCP challenges are not HTTP headers, so their fields may hold line breaks.
+    const c = { ...(await challenge()), description: 'line one\nline two' }
+    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
+      'zone used',
+    )
+  })
+
   test('pays from a Zone when the challenge accepts any Zone', async () => {
     const method = tempo_client.charge({
       getClient: () => l1,
