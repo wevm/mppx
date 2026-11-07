@@ -1,18 +1,27 @@
 import type * as Hex from 'ox/Hex'
 import { TxEnvelopeTempo } from 'ox/tempo'
-import { type Address, keccak256, parseUnits } from 'viem'
+import {
+  type Address,
+  type Client as viem_Client,
+  keccak256,
+  parseEventLogs,
+  parseUnits,
+} from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
+  sendRawTransactionSync,
   sendTransactionSync,
   signTypedData,
   signTransaction,
+  waitForTransactionReceipt,
 } from 'viem/actions'
-import { Actions } from 'viem/tempo'
+import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
+import * as Errors from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
@@ -24,6 +33,7 @@ import * as defaults from '../internal/defaults.js'
 import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as Zone from '../internal/zone.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
 
@@ -86,6 +96,9 @@ export function charge(parameters: charge.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
+  assertZone(parameters.zone)
+  // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
+  const pendingZoneWithdrawals = new Map<string, Promise<Hex.Hex>>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -119,6 +132,40 @@ export function charge(parameters: charge.Parameters = {}) {
       const supportedModes = (methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
+      const zoneChain = parameters.zone?.client.chain
+      const zoneId = parameters.zone
+        ? (parameters.zone.zoneId ?? Zone.idFromChainId(zoneChain?.id ?? 0))
+        : undefined
+      // A Zone ID is only unique per parent chain, so the Zone must settle on the challenge's chain.
+      const zoneParentChainId =
+        (zoneChain as { sourceId?: number } | undefined)?.sourceId ??
+        (zoneChain ? Zone.parentChainIdFromChainId(zoneChain.id) : undefined)
+      const explicitMode = context?.mode ?? parameters.mode
+      // Pay from a Zone balance when the challenge accepts the configured Zone.
+      // Zone payments are push payments, so they follow the challenge's and client's modes.
+      if (
+        BigInt(amount) > 0n &&
+        parameters.zone &&
+        zoneId !== undefined &&
+        zoneParentChainId === chainId &&
+        supportedModes.includes('push') &&
+        (explicitMode === undefined || explicitMode === 'push') &&
+        Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, zoneId) &&
+        !methodDetails?.splits &&
+        // A withdrawal can't be undone, so start one only when it can settle before the
+        // challenge expires; an expired challenge would invite another payment.
+        (pendingZoneWithdrawals.has(zoneWithdrawalKey(challenge)) ||
+          settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
+      )
+        return createZoneCredential({
+          challenge,
+          clientId,
+          client,
+          pending: pendingZoneWithdrawals,
+          zone: parameters.zone,
+          zoneId,
+        })
+
       const defaultAccount = getAccount(client, context)
       const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
         (await parameters.resolveAccount?.({
@@ -373,6 +420,7 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   if (!parsed.success) return undefined
   const payload = parsed.data
   if (payload.type === 'hash') return payload.hash as Hex.Hex
+  if (payload.type === 'zone') return payload.hash as Hex.Hex
   const serialized = payload.signature as TxEnvelopeTempo.Serialized
   if (payload.type !== 'transaction' || !serialized.startsWith(TxEnvelopeTempo.serializedType))
     return undefined
@@ -381,6 +429,192 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   // Reject trailing or non-canonical bytes, which never identify an on-chain transaction.
   if (TxEnvelopeTempo.serialize(transaction) !== serialized) return undefined
   return keccak256(serialized)
+}
+
+/**
+ * Pays a challenge from a Zone balance: requests a withdrawal to the recipient
+ * with the challenge-bound memo, and returns a `zone` credential that names it
+ * by sender tag and the Tempo transaction hash that settled it.
+ */
+async function createZoneCredential(options: {
+  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+  client: viem_Client
+  clientId: string | undefined
+  pending: Map<string, Promise<Hex.Hex>>
+  zone: charge.Zone
+  zoneId: number
+}) {
+  const { challenge, client, pending, zone, zoneId } = options
+  const request = challenge.request as ChargeRequest
+  const recipient = request.recipient as Address
+  // The whole challenge, so a challenge from another realm or request with the same ID never matches.
+  const key = zoneWithdrawalKey(challenge)
+
+  // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
+  // Concurrent calls for one challenge share the request, which is stored before it is sent.
+  let withdrawalRequest = pending.get(key)
+  if (!withdrawalRequest) {
+    const state = { sent: false }
+    withdrawalRequest = requestZoneWithdrawal(options, state)
+    pending.set(key, withdrawalRequest)
+    // Only a failure before the transaction was sent is safe to retry. After that, the
+    // withdrawal may have gone through, so retries of this challenge keep failing.
+    withdrawalRequest.catch(() => {
+      if (!state.sent) pending.delete(key)
+    })
+  }
+  const senderTag = await withdrawalRequest
+
+  let hash: Hex.Hex
+  try {
+    hash = await Zone.waitForSettlement(client, {
+      portal: Zone.portalAddress(zoneId),
+      senderTag,
+      timeoutMs: settlementTimeoutMs(challenge.expires, zone.settlementTimeoutMs),
+      to: recipient,
+    })
+  } catch (cause) {
+    throw new Errors.ZoneSettlementPendingError({
+      cause,
+      challengeId: challenge.id,
+      senderTag,
+      zoneId,
+    })
+  }
+  pending.delete(key)
+
+  return Credential.serialize({
+    challenge,
+    payload: { hash, senderTag, type: 'zone', zoneId },
+  })
+}
+
+/**
+ * Throws on Zone options that would fail only after an irreversible withdrawal:
+ * a `settlementTimeoutMs` that is not a finite, non-negative number, or a
+ * `zoneId` that names a different Zone from the one `zone.client` serves.
+ */
+function assertZone(zone: charge.Zone | undefined) {
+  const timeoutMs = zone?.settlementTimeoutMs
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0))
+    throw new Error('`zone.settlementTimeoutMs` must be a finite, non-negative number.')
+  const chainId = zone?.client.chain?.id
+  if (zone?.zoneId === undefined || chainId === undefined) return
+  // Only chain IDs that follow a known Zone scheme name their Zone.
+  if (Zone.parentChainIdFromChainId(chainId) === undefined) return
+  const derived = Zone.idFromChainId(chainId)
+  if (derived !== zone.zoneId)
+    throw new Error(
+      `zone.zoneId ${zone.zoneId} does not match Zone ${derived} of the zone.client chain ${chainId}.`,
+    )
+}
+
+/** Time the client allows for sending a Zone withdrawal before it waits for settlement. */
+const zoneSubmissionMarginMs = 15_000
+
+/**
+ * Returns whether a Zone withdrawal can be sent and waited on for up to
+ * `settlementTimeoutMs` before `expires`.
+ */
+function settlesBeforeExpiry(expires: string | undefined, settlementTimeoutMs: number | undefined) {
+  if (!expires) return true
+  const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs
+  return new Date(expires).getTime() - Date.now() > timeoutMs + zoneSubmissionMarginMs
+}
+
+/** Returns how long to wait for settlement: `settlementTimeoutMs`, cut short at `expires`. */
+function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: number | undefined) {
+  const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs
+  if (!expires) return timeoutMs
+  return Math.max(0, Math.min(timeoutMs, new Date(expires).getTime() - Date.now()))
+}
+
+/** Keys a Zone withdrawal by its whole Challenge. Unlike `Challenge.serialize`, it accepts any field value. */
+function zoneWithdrawalKey(challenge: unknown) {
+  return JSON.stringify(challenge)
+}
+
+/** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
+const zoneReceiptRecoveryTimeoutMs = 15_000
+
+/** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
+async function requestZoneWithdrawal(
+  options: {
+    challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+    clientId: string | undefined
+    zone: charge.Zone
+  },
+  state: { sent: boolean },
+): Promise<Hex.Hex> {
+  const { challenge, clientId, zone } = options
+  const request = challenge.request as ChargeRequest
+  const account = zone.client.account
+  if (!account) throw new Error('`zone.client` requires an account.')
+  const amount = BigInt(request.amount)
+  const currency = request.currency as Address
+  const recipient = request.recipient as Address
+  const memo = Attribution.encode({
+    challengeId: challenge.id,
+    clientId,
+    serverId: challenge.realm,
+  })
+
+  // The outbox pulls the amount plus its withdrawal fee.
+  const fee = await Actions.zone.getWithdrawalFee(zone.client)
+  const [, withdrawal] = Actions.zone.requestWithdrawal.calls({
+    amount,
+    // A bounced payout refunds the payer, not the payee's Zone address.
+    fallbackRecipient: account.address,
+    memo,
+    to: recipient,
+    token: currency,
+  })
+  // Prepare and sign first: a failure there sent nothing, so the challenge may be retried.
+  const prepared = await prepareTransactionRequest(zone.client, {
+    account,
+    calls: [
+      Actions.token.approve.call({
+        amount: amount + fee,
+        spender: Addresses.zoneOutbox,
+        token: currency,
+      }),
+      withdrawal,
+    ],
+  } as never)
+  const serializedTransaction = await signTransaction(zone.client, prepared as never)
+  state.sent = true
+  // The signed transaction fixes its hash, so a lost send response can still be recovered from the Zone.
+  const hash = keccak256(serializedTransaction)
+  const receipt = await sendRawTransactionSync(zone.client, { serializedTransaction }).catch(
+    (cause) =>
+      waitForTransactionReceipt(zone.client, {
+        hash,
+        timeout: zoneReceiptRecoveryTimeoutMs,
+      }).catch(() => {
+        const error = new Error(
+          `Zone withdrawal outcome is unknown: transaction ${hash} may have been sent. Retrying this challenge does not withdraw again.`,
+        )
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+        throw error
+      }),
+  )
+  // A reverted withdrawal moved nothing, so the challenge may be retried.
+  if (receipt.status === 'reverted') {
+    state.sent = false
+    throw new Error(`Zone withdrawal transaction ${receipt.transactionHash} reverted.`)
+  }
+  const [requested] = parseEventLogs({
+    abi: Abis.zoneOutbox,
+    eventName: 'WithdrawalRequested',
+    logs: receipt.logs,
+  })
+  if (!requested) throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.')
+  return Zone.senderTag({
+    fallbackNonce: requested.args.fallbackNonce,
+    sender: requested.args.sender,
+    transactionHash: receipt.transactionHash,
+  })
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
@@ -452,6 +686,16 @@ export declare namespace charge {
   type Context = ChargeContext
   type ResolveAccount = AccountResolution.ResolveAccount
   type ResolveAccountInfo = AccountResolution.ResolveAccountInfo
+
+  /** Pays from a Zone balance when a challenge accepts that Zone. */
+  type Zone = {
+    /** Client for the Zone chain, with the paying account and Zone RPC authorization. */
+    client: viem_Client
+    /** Zone ID. Derived from `client.chain.id` when omitted. */
+    zoneId?: number | undefined
+    /** Milliseconds to wait for the withdrawal to settle on Tempo. @default 60_000 */
+    settlementTimeoutMs?: number | undefined
+  }
 
   type Parameters = {
     /**
@@ -527,6 +771,12 @@ export declare namespace charge {
     mode?: Methods.ChargeMode | undefined
     /** Selects the account that signs this charge after the challenge and chain are known. */
     resolveAccount?: ResolveAccount | undefined
+    /**
+     * Pays from a Zone balance instead of the account's Tempo balance when the
+     * challenge accepts this Zone (`methodDetails.zones`). Other challenges,
+     * and split payments, are paid on Tempo as usual.
+     */
+    zone?: Zone | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }

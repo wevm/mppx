@@ -19,6 +19,7 @@ pnpm exec vp test --run --project node     # Unit tests, no localnet
 pnpm exec vp test --run --project tempo    # Tests against a Tempo localnet on port 18545
 pnpm exec vp test --run --project cli      # CLI tests (need a keyring: libsecret / gnome-keyring)
 pnpm exec vp test --run --project browser  # Browser unit tests (Playwright Chromium)
+pnpm exec vp test --run --project zones    # Zone payments end to end: starts a Tempo dev node and a dev Zone in Docker
 pnpm test:html                   # Playwright tests of the HTML payment pages
 ```
 

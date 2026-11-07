@@ -74,6 +74,7 @@ export default defineConfig({
             'src/cli/**/*.test.ts',
             'src/x402/Exact.localnet.test.ts',
             'src/x402/CoinbaseClient.integration.test.ts',
+            'src/tempo/Charge.zones.integration.test.ts',
           ],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
@@ -112,6 +113,19 @@ export default defineConfig({
           retry: 0,
           testTimeout: 60_000,
           hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'zones',
+          alias,
+          include: ['src/tempo/Charge.zones.integration.test.ts'],
+          globalSetup: ['./test/zones/setup.global.ts'],
+          fileParallelism: false,
+          globals: true,
+          retry: 0,
+          testTimeout: 120_000,
+          hookTimeout: 240_000,
         },
       },
       {
