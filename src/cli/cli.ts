@@ -2088,11 +2088,21 @@ const stripe = Cli.create('stripe', {
       console.log(`${pc.dim('ID')}       ${result.id}`)
       for (const token of result.supportedTokens)
         console.log(`${pc.dim('Token')}    ${token.currency} ${token.contractAddress}`)
-      console.log(
-        pc.dim(
-          `\nSet ${result.network.toUpperCase()}_DEPOSIT_ADDRESS=${result.address} for stripe.create({ depositAddresses }).`,
-        ),
-      )
+      const { customer, stripeAccount } = c.options
+      // A customer-scoped address only accepts that customer's funds, so it can't be a
+      // server-wide recipient; a connected account's address also needs `connect` routing.
+      if (customer)
+        console.log(
+          pc.dim(
+            `\nThis address only accepts funds from ${customer}; don't use it in stripe.create({ depositAddresses }).`,
+          ),
+        )
+      else
+        console.log(
+          pc.dim(
+            `\nSet ${result.network.toUpperCase()}_DEPOSIT_ADDRESS=${result.address} for stripe.create({ ${stripeAccount ? `connect: { stripeAccount: '${stripeAccount}' }, ` : ''}depositAddresses }).`,
+          ),
+        )
     })
   },
 })

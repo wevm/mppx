@@ -753,6 +753,20 @@ describe('stripe deposit-address', () => {
     })
   })
 
+  test('hints connect routing for a connected account and no hint for a customer address', async () => {
+    await withStripe(async (url) => {
+      const env = { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' }
+      const connected = await serve(['stripe', 'deposit-address', '--stripe-account', 'acct_123'], {
+        env,
+      })
+      expect(connected.output).toContain("connect: { stripeAccount: 'acct_123' }, depositAddresses")
+
+      const scoped = await serve(['stripe', 'deposit-address', '--customer', 'cus_123'], { env })
+      expect(scoped.output).not.toContain('TEMPO_DEPOSIT_ADDRESS=')
+      expect(scoped.output).toContain('only accepts funds from cus_123')
+    })
+  })
+
   test('errors without STRIPE_SECRET_KEY', async () => {
     const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
       env: { STRIPE_SECRET_KEY: undefined },
