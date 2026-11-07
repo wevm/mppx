@@ -120,6 +120,48 @@ describe('tempo.charge client zone selection', () => {
     ).toThrow('does not match Zone 3')
   })
 
+  test('does not withdraw again after a withdrawal with an unknown outcome', async () => {
+    const calls: string[] = []
+    const zone = createClient({
+      account: payer,
+      chain: defineChain({ ...tempoModerato, id: 1_424_310_003, name: 'Zone' }),
+      transport: custom(
+        {
+          async request({ method }) {
+            calls.push(method)
+            // The withdrawal fee lookup succeeds; sending the withdrawal fails.
+            if (method === 'eth_call') return `0x${'00'.repeat(32)}`
+            throw new Error('connection lost')
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const method = tempo_client.charge({ getClient: () => l1, zone: { client: zone } })
+    const c = await challenge()
+    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
+      'Zone withdrawal outcome is unknown',
+    )
+    const sent = calls.length
+    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
+      'Zone withdrawal outcome is unknown',
+    )
+    expect(calls).toHaveLength(sent)
+  })
+
+  test('pays on Tempo when the challenge leaves no time to send the withdrawal', async () => {
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: zoneClient(1_424_310_003), settlementTimeoutMs: 60_000 },
+    })
+    // More than the settlement timeout, but not enough to also send the withdrawal.
+    const expires = new Date(Date.now() + 65_000).toISOString()
+    const error = await method
+      .createCredential({ challenge: (await challenge({ expires })) as never, context: {} })
+      .catch((error: Error) => error)
+    expect(String(error)).not.toContain('zone used')
+  })
+
   test('shares one withdrawal request between concurrent calls for a challenge', async () => {
     const calls: string[] = []
     const method = tempo_client.charge({

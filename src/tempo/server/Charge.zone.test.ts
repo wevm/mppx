@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Credential, Errors } from 'mppx'
 import { Mppx, tempo } from 'mppx/server'
 import {
   type Address,
@@ -296,9 +296,9 @@ describe('tempo.charge zone credentials', () => {
       zoneSettlementTimeoutMs: 100,
     })
     const { challenge: c } = await challenge()
-    await expect(server.verifyCredential(credential(c, { senderTag: tagA }))).rejects.toThrow(
-      'did not settle on Tempo',
-    )
+    const error = await server.verifyCredential(credential(c, { senderTag: tagA })).catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentError)
+    expect(String(error)).toContain('Zone withdrawal not settled')
   })
 
   test('rejects a replayed withdrawal', async () => {
@@ -382,9 +382,11 @@ describe('tempo.charge zone credentials', () => {
     })
     const { challenge: c, memo } = await challenge()
     fixture = [{ senderTag: tagA, memo }]
-    await expect(
-      server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash })),
-    ).rejects.toThrow('Transaction reverted')
+    const error = await server
+      .verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash }))
+      .catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentError)
+    expect(String(error)).toContain('settlement transaction reverted')
   })
 
   test('rejects a zone the challenge does not accept', async () => {

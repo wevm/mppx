@@ -369,9 +369,17 @@ export function charge<const parameters extends charge.Parameters>(
         senderTag,
         timeoutMs: zoneSettlementTimeoutMs,
         to: recipient,
+      }).catch(() => {
+        // The payer's withdrawal hasn't settled: a payment failure, not a server one.
+        throw new MismatchError('Payment verification failed: Zone withdrawal not settled.', {
+          senderTag,
+        })
       }))
     const receipt = await getTransactionReceipt(client, { hash })
-    if (receipt.status !== 'success') throw new Error(`Transaction reverted: ${hash}`)
+    if (receipt.status !== 'success')
+      throw new MismatchError('Payment verification failed: settlement transaction reverted.', {
+        hash,
+      })
 
     const event = Zone.findProcessedEvent(receipt, { portal, senderTag })
     if (!event)

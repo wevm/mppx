@@ -17,6 +17,7 @@ import {
 import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
+import * as Challenge from '../../Challenge.js'
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Errors from '../../Errors.js'
@@ -152,7 +153,7 @@ export function charge(parameters: charge.Parameters = {}) {
         !methodDetails?.splits &&
         // A withdrawal can't be undone, so start one only when it can settle before the
         // challenge expires; an expired challenge would invite another payment.
-        (pendingZoneWithdrawals.has(challenge.id) ||
+        (pendingZoneWithdrawals.has(Challenge.serialize(challenge)) ||
           settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
       )
         return createZoneCredential({
@@ -445,15 +446,21 @@ async function createZoneCredential(options: {
   const { challenge, client, pending, zone, zoneId } = options
   const request = challenge.request as ChargeRequest
   const recipient = request.recipient as Address
+  // The whole challenge, so a challenge from another realm or request with the same ID never matches.
+  const key = Challenge.serialize(challenge)
 
   // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
   // Concurrent calls for one challenge share the request, which is stored before it is sent.
-  let withdrawalRequest = pending.get(challenge.id)
+  let withdrawalRequest = pending.get(key)
   if (!withdrawalRequest) {
-    withdrawalRequest = requestZoneWithdrawal(options)
-    pending.set(challenge.id, withdrawalRequest)
-    // The request has no receipt to resume from, so a later call requests again.
-    withdrawalRequest.catch(() => pending.delete(challenge.id))
+    const state = { sent: false }
+    withdrawalRequest = requestZoneWithdrawal(options, state)
+    pending.set(key, withdrawalRequest)
+    // Only a failure before the transaction was sent is safe to retry. After that, the
+    // withdrawal may have gone through, so retries of this challenge keep failing.
+    withdrawalRequest.catch(() => {
+      if (!state.sent) pending.delete(key)
+    })
   }
   const withdrawal = await withdrawalRequest
   if (withdrawal.zoneId !== zoneId)
@@ -467,7 +474,7 @@ async function createZoneCredential(options: {
     hash = await Zone.waitForSettlement(client, {
       portal: Zone.portalAddress(zoneId),
       senderTag,
-      timeoutMs: zone.settlementTimeoutMs,
+      timeoutMs: settlementTimeoutMs(challenge.expires, zone.settlementTimeoutMs),
       to: recipient,
     })
   } catch (cause) {
@@ -478,7 +485,7 @@ async function createZoneCredential(options: {
       zoneId,
     })
   }
-  pending.delete(challenge.id)
+  pending.delete(key)
 
   return Credential.serialize({
     challenge,
@@ -506,20 +513,36 @@ function assertZone(zone: charge.Zone | undefined) {
     )
 }
 
-/** Returns whether a Zone withdrawal waited on for up to `settlementTimeoutMs` settles before `expires`. */
+/** Time the client allows for sending a Zone withdrawal before it waits for settlement. */
+const zoneSubmissionMarginMs = 15_000
+
+/**
+ * Returns whether a Zone withdrawal can be sent and waited on for up to
+ * `settlementTimeoutMs` before `expires`.
+ */
 function settlesBeforeExpiry(expires: string | undefined, settlementTimeoutMs: number | undefined) {
   if (!expires) return true
   const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs
-  return new Date(expires).getTime() - Date.now() > timeoutMs
+  return new Date(expires).getTime() - Date.now() > timeoutMs + zoneSubmissionMarginMs
+}
+
+/** Returns how long to wait for settlement: `settlementTimeoutMs`, cut short at `expires`. */
+function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: number | undefined) {
+  const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs
+  if (!expires) return timeoutMs
+  return Math.max(0, Math.min(timeoutMs, new Date(expires).getTime() - Date.now()))
 }
 
 /** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
-async function requestZoneWithdrawal(options: {
-  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
-  clientId: string | undefined
-  zone: charge.Zone
-  zoneId: number
-}): Promise<Zone.PendingWithdrawal> {
+async function requestZoneWithdrawal(
+  options: {
+    challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+    clientId: string | undefined
+    zone: charge.Zone
+    zoneId: number
+  },
+  state: { sent: boolean },
+): Promise<Zone.PendingWithdrawal> {
   const { challenge, clientId, zone, zoneId } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
@@ -541,6 +564,7 @@ async function requestZoneWithdrawal(options: {
     to: recipient,
     token: currency,
   })
+  state.sent = true
   const receipt = await sendTransactionSync(zone.client, {
     account,
     calls: [
@@ -551,7 +575,12 @@ async function requestZoneWithdrawal(options: {
       }),
       withdrawal,
     ],
-  } as never)
+  } as never).catch((cause) => {
+    throw new Error(
+      'Zone withdrawal outcome is unknown: it may have been sent. Retrying this challenge does not withdraw again.',
+      { cause },
+    )
+  })
   const [requested] = parseEventLogs({
     abi: Abis.zoneOutbox,
     eventName: 'WithdrawalRequested',
