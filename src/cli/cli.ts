@@ -18,6 +18,7 @@ import * as Mppx from '../client/Mppx.js'
 import * as Transport from '../client/Transport.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
+import { stripePreviewVersion } from '../stripe/internal/constants.js'
 import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
 import * as x402_Header from '../x402/Header.js'
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
@@ -1995,12 +1996,113 @@ const discover = Cli.create('discover', {
     },
   })
 
+const stripeApiUrl = 'https://api.stripe.com'
+
+const stripeDepositAddressSchema = z.object({
+  address: z.string(),
+  id: z.string(),
+  livemode: z.boolean(),
+  network: z.string(),
+  supportedTokens: z.array(z.object({ contractAddress: z.string(), currency: z.string() })),
+})
+
+const stripe = Cli.create('stripe', {
+  description: 'Stripe machine payments tooling',
+}).command('deposit-address', {
+  description: 'Create a Stripe crypto deposit address and print its public address',
+  usage: [{ suffix: '[--network tempo|base|solana] [options]' }],
+  options: z.object({
+    customer: z
+      .string()
+      .optional()
+      .describe(
+        'Scope the address to a Stripe customer (cus_...); it then only accepts their funds',
+      ),
+    network: z
+      .enum(['tempo', 'base', 'solana'])
+      .default('tempo')
+      .describe('Network to create the address on'),
+    stripeAccount: z
+      .string()
+      .optional()
+      .describe('Connected account to create the address for (acct_...)'),
+  }),
+  output: stripeDepositAddressSchema,
+  alias: { network: 'n' },
+  async run(c) {
+    const secretKey = process.env.STRIPE_SECRET_KEY?.trim()
+    if (!secretKey)
+      return c.error({
+        code: 'MISSING_STRIPE_SECRET_KEY',
+        message:
+          'Set STRIPE_SECRET_KEY to your Stripe secret key (sk_...) or restricted key (rk_...).',
+        exitCode: 2,
+      })
+
+    const body = new URLSearchParams({ network: c.options.network })
+    if (c.options.customer) body.set('customer', c.options.customer)
+    const response = await globalThis.fetch(
+      new URL('/v1/crypto/deposit_addresses', process.env.MPPX_STRIPE_API_URL ?? stripeApiUrl),
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Stripe-Version': stripePreviewVersion,
+          ...(c.options.stripeAccount ? { 'Stripe-Account': c.options.stripeAccount } : {}),
+        },
+        body,
+      },
+    )
+    const json = (await response.json().catch(() => ({}))) as {
+      address?: string
+      error?: { message?: string }
+      id?: string
+      livemode?: boolean
+      network?: string
+      supported_tokens?: { token_contract_address: string; token_currency: string }[]
+    }
+    if (!response.ok || !json.address)
+      return c.error({
+        code: 'STRIPE_REQUEST_FAILED',
+        message: `Stripe could not create a deposit address: ${json.error?.message ?? `HTTP ${response.status}`}`,
+        exitCode: 1,
+      })
+
+    const result = {
+      address: json.address,
+      id: json.id ?? '',
+      livemode: json.livemode ?? false,
+      network: json.network ?? c.options.network,
+      supportedTokens: (json.supported_tokens ?? []).map((token) => ({
+        contractAddress: token.token_contract_address,
+        currency: token.token_currency,
+      })),
+    }
+    return outputResult(c, result, () => {
+      console.log(result.address)
+      console.log(
+        `${pc.dim('Network')}  ${result.network} (${result.livemode ? 'live' : 'test'} mode)`,
+      )
+      console.log(`${pc.dim('ID')}       ${result.id}`)
+      for (const token of result.supportedTokens)
+        console.log(`${pc.dim('Token')}    ${token.currency} ${token.contractAddress}`)
+      console.log(
+        pc.dim(
+          `\nSet ${result.network.toUpperCase()}_DEPOSIT_ADDRESS=${result.address} for stripe.create({ depositAddresses }).`,
+        ),
+      )
+    })
+  },
+})
+
 cli.command(account)
 cli.command(discover)
 cli.command(init)
 cli.command(services)
 cli.command(sessions)
 cli.command(sign)
+cli.command(stripe)
 cli.command(validate)
 
 export default cli
