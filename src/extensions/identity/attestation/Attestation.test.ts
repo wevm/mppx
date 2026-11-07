@@ -126,3 +126,44 @@ test('keeps verifying with the last key set while the issuer is down', async () 
     status: 'valid',
   })
 })
+
+test('shares one key set fetch between concurrent unknown key IDs', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let requests = 0
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      requests++
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+    },
+    refreshInterval: 0,
+  })
+  await keyResolver({ issuer, keyId })
+  requests = 0
+  await new Promise((resolve) => setTimeout(resolve, 2))
+  const results = await Promise.all(
+    Array.from({ length: 20 }, (_, i) => keyResolver({ issuer, keyId: `unknown-${i}` })),
+  )
+  expect(results.every((key) => key === undefined)).toBe(true)
+  expect(requests).toBe(1)
+})
+
+test('stops serving the last key set once it is older than maxStale', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let up = true
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      if (!up) throw new Error('down')
+      return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+    },
+    maxStale: 0.01,
+    refreshInterval: 0,
+    ttl: 0,
+  })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  up = false
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await expect(keyResolver({ issuer, keyId })).rejects.toThrow('down')
+})

@@ -6,20 +6,24 @@ import type * as Types from './Types.js'
  *
  * Fetches `<issuer>/.well-known/jwks.json` and caches its Ed25519 keys for
  * `ttl` seconds. An unknown key ID refetches the set at most once every
- * `refreshInterval` seconds, so key rotation is picked up without letting
- * callers trigger a fetch per request. While the issuer is unreachable, the
- * last key set fetched successfully keeps verifying.
+ * `refreshInterval` seconds per issuer, and concurrent lookups share one fetch,
+ * so callers cannot trigger a fetch per request. While the issuer is
+ * unreachable, the last key set fetched successfully keeps verifying for up to
+ * `maxStale` seconds after it was fetched; after that, verification fails closed.
  */
 export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   const ttl = (options.ttl ?? 300) * 1_000
   const refreshInterval = (options.refreshInterval ?? 30) * 1_000
-  const fetch = options.fetch ?? globalThis.fetch
-  const sets = new Map<string, { fetchedAt: number; keys: Promise<Map<string, CryptoKey>> }>()
-  // The last set fetched successfully per issuer, served while a refetch fails.
-  const good = new Map<string, Map<string, CryptoKey>>()
+  const maxStale = (options.maxStale ?? 3_600) * 1_000
   const timeout = (options.timeout ?? 5) * 1_000
+  const fetch = options.fetch ?? globalThis.fetch
+  // The newest fetch per issuer, started at `startedAt`; shared by concurrent lookups.
+  const sets = new Map<string, { startedAt: number; keys: Promise<Map<string, CryptoKey>> }>()
+  // The last set fetched successfully per issuer, served while a refetch fails.
+  const good = new Map<string, { fetchedAt: number; keys: Map<string, CryptoKey> }>()
 
   function load(issuer: string) {
+    const startedAt = Date.now()
     const keys = (async () => {
       const response = await fetch(`${issuer.replace(/\/+$/, '')}${Constants.jwksPath}`, {
         headers: { accept: 'application/json' },
@@ -42,31 +46,39 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
           ]),
         )
       }
-      good.set(issuer, result)
+      good.set(issuer, { fetchedAt: startedAt, keys: result })
       return result
     })()
-    const entry = { fetchedAt: Date.now(), keys }
-    sets.set(issuer, entry)
     // A failed fetch is retried after `refreshInterval` rather than cached for `ttl`.
     keys.catch(() => {})
+    const entry = { startedAt, keys }
+    sets.set(issuer, entry)
     return entry
   }
 
-  return async ({ issuer, keyId }) => {
-    let entry = sets.get(issuer)
-    if (!entry || Date.now() - entry.fetchedAt > ttl) entry = load(issuer)
-    let keys = await entry.keys.catch(() => good.get(issuer))
-    if (keys?.has(keyId)) return keys.get(keyId)
-    if (Date.now() - entry.fetchedAt < refreshInterval) {
-      // Report a failed fetch as such rather than as an unknown key ID.
-      if (!keys) await entry.keys
-      return undefined
+  /** The newest fetch, or one started now if the newest is older than `age`. */
+  function current(issuer: string, age: number) {
+    const entry = sets.get(issuer)
+    return entry && Date.now() - entry.startedAt <= age ? entry : load(issuer)
+  }
+
+  /** Awaits a fetch, falling back to the last good set while it is within `maxStale`. */
+  async function keysOf(issuer: string, entry: { keys: Promise<Map<string, CryptoKey>> }) {
+    try {
+      return await entry.keys
+    } catch (error) {
+      const last = good.get(issuer)
+      if (last && Date.now() - last.fetchedAt <= maxStale) return last.keys
+      throw error
     }
-    keys = await load(issuer).keys.catch((error) => {
-      if (!keys) throw error
-      return keys
-    })
-    return keys.get(keyId)
+  }
+
+  return async ({ issuer, keyId }) => {
+    const keys = await keysOf(issuer, current(issuer, ttl))
+    if (keys.has(keyId)) return keys.get(keyId)
+    // An unknown key ID: join the newest fetch, or start one if it is old enough.
+    const refreshed = await keysOf(issuer, current(issuer, refreshInterval))
+    return refreshed.get(keyId)
   }
 }
 
@@ -78,7 +90,12 @@ export declare namespace resolver {
     ttl?: number | undefined
     /** Seconds before a key set fetch is abandoned. @default 5 */
     timeout?: number | undefined
-    /** Minimum seconds between refetches for an unknown key ID. @default 30 */
+    /** Minimum seconds between refetches for an unknown key ID, per issuer. @default 30 */
     refreshInterval?: number | undefined
+    /**
+     * Seconds after its fetch that the last good key set keeps verifying while
+     * the issuer is unreachable, so a rotated-out key stops working. @default 3600
+     */
+    maxStale?: number | undefined
   }
 }
