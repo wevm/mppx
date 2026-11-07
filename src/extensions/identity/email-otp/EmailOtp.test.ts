@@ -4,6 +4,7 @@ import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
+import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { afterEach, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -320,5 +321,83 @@ test('does not store an attestation for another requirement from an issuer', asy
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',
+  )
+})
+
+test("accepts the server's own identity system through a callback, or email", async () => {
+  const fake = await createIssuer()
+  const email = EmailOtp.Server.verifier({ audience, fetch: fake.fetch, issuer })
+  const apiKey = Attestation.Server.callback({
+    issuer: 'https://merchant.example/keys',
+    type: 'api-key',
+    verify(request) {
+      const key = request.headers.get('X-Api-Key')
+      if (!key) return undefined
+      if (key !== 'key-1')
+        throw new Attestation.Server.CallbackError('Unknown API key.', { code: 403 })
+      return { customer: 'acme' }
+    },
+  })
+  const either = Identity.anyOf(email, apiKey)
+  const mppx = Mppx.create({
+    methods: [serverMethod],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  const listener = ServerRequest.toNodeListener(async (request) => {
+    const result = await mppx.charge({ ...charge, identity: [either] })(request)
+    if (result.status === 402) return result.challenge
+    return result.withReceipt(
+      Response.json({ apiKey: result.identity?.get(apiKey), email: result.identity?.get(email) }),
+    )
+  })
+  const server = await Http.createServer(((request, response) =>
+    listener(request, response)) as RequestListener)
+  servers.push(server)
+
+  const none = await fetch(server.url)
+  expect(none.status).toBe(401)
+  expect(Attestation.Client.requirements(none.headers)).toEqual([
+    { issuer, type: 'email' },
+    { issuer: 'https://merchant.example/keys', type: 'api-key' },
+  ])
+
+  expect((await fetch(server.url, { headers: { 'X-Api-Key': 'wrong' } })).status).toBe(403)
+
+  const client = ClientMppx.create({
+    fetch: (input, init) => {
+      const request = new Request(input, init)
+      request.headers.set('X-Api-Key', 'key-1')
+      return fetch(request)
+    },
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const paid = await client.fetch(server.url)
+  expect(paid.status).toBe(200)
+  expect(await paid.json()).toEqual({ apiKey: { customer: 'acme' } })
+
+  // The email prover answers the same 401 when the caller has no key.
+  const emailClient = ClientMppx.create({
+    identity: [
+      EmailOtp.Client.prover({
+        code: ({ email: address }) => fake.inbox.find((m) => m.email === address)?.code,
+        email: 'dana@example.com',
+        fetch: fake.fetch,
+        issuers: [issuer],
+        scope: '*',
+      }),
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const viaEmail = await emailClient.fetch(server.url)
+  expect(viaEmail.status).toBe(200)
+  expect(await viaEmail.json()).toMatchObject({ email: { email: 'dana@example.com' } })
+})
+
+test('validates the callback identity type', () => {
+  expect(() => Attestation.Server.callback({ type: '1 bad', verify: () => undefined })).toThrow(
+    'Identity type',
   )
 })

@@ -6,7 +6,9 @@
 // one-time code by email from that issuer, exchanges it for an attestation
 // bound to this server's origin, and sends it in `Identity-Attestation`.
 // Only then does the server issue or accept an MPP payment challenge.
+import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
+import * as Identity from 'mppx/identity'
 import { Mppx, Store, tempo } from 'mppx/server'
 import { createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -24,6 +26,8 @@ type Env = {
   MPP_SECRET_KEY: string
   /** URL of the email attestation issuer this server trusts. */
   IDENTITY_ISSUER: string
+  /** Optional: comma-separated API keys accepted in `X-Api-Key` instead of a verified email. */
+  API_KEYS?: string | undefined
   /** Optional: only accept addresses at this domain, such as `example.com`. */
   ALLOWED_EMAIL_DOMAIN?: string | undefined
   /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
@@ -44,6 +48,20 @@ function createServer(env: Env) {
     allow: (address) =>
       !env.ALLOWED_EMAIL_DOMAIN || address.endsWith(`@${env.ALLOWED_EMAIL_DOMAIN}`),
   })
+  // Your own identity system, through a callback: here, API keys. Callers with a
+  // key skip email verification; the route accepts either.
+  const keys = new Set((env.API_KEYS ?? '').split(',').filter(Boolean))
+  const apiKey = Attestation.Server.callback({
+    type: 'api-key',
+    verify(request) {
+      const key = request.headers.get('X-Api-Key')
+      if (!key) return undefined
+      if (!keys.has(key))
+        throw new Attestation.Server.CallbackError('Unknown API key.', { code: 403 })
+      return { key: `${key.slice(0, 4)}…` }
+    },
+  })
+  const identity = keys.size > 0 ? Identity.anyOf(email, apiKey) : email
   const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
   const client = createClient({ chain: Chain.testnet, transport: http(env.TEMPO_RPC_URL) })
   const mppx = Mppx.create({
@@ -58,7 +76,7 @@ function createServer(env: Env) {
       }),
     ],
   })
-  return { email, mppx }
+  return { apiKey, email, identity, mppx }
 }
 
 export default {
@@ -68,17 +86,20 @@ export default {
     if (url.pathname !== '/api/report') return new Response('Not found', { status: 404 })
 
     server ??= createServer(env)
-    const { email, mppx } = server
-    const result = await mppx.charge({ amount: '0.01', identity: [email] })(request)
+    const { apiKey, email, identity, mppx } = server
+    const result = await mppx.charge({ amount: '0.01', identity: [identity] })(request)
 
     // No or an invalid attestation gets 401 (a disallowed address 403);
     // a verified caller without payment gets the 402 challenge.
     if (result.status === 402) return result.challenge
 
-    // The verified email address of the caller.
-    const verified = result.identity?.get(email)
+    // The verified email address, or the API key, of the caller.
     return result.withReceipt(
-      Response.json({ report: 'Quarterly usage report', email: verified?.email }),
+      Response.json({
+        report: 'Quarterly usage report',
+        email: result.identity?.get(email)?.email,
+        apiKey: result.identity?.get(apiKey)?.key,
+      }),
     )
   },
 }

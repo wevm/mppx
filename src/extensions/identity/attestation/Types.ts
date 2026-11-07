@@ -36,8 +36,8 @@ export type KeyResolver = (parameters: {
 export type Requirement = {
   /** Attestation type, such as `email`. */
   type: string
-  /** Issuer URL the route trusts. */
-  issuer: string
+  /** Issuer URL the route trusts, or where to obtain the identity. Absent for a server's own identity system without one. */
+  issuer?: string | undefined
 }
 
 /** A verified attestation. */

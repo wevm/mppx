@@ -112,3 +112,81 @@ export declare namespace verifier {
       | undefined
   }
 }
+
+/**
+ * Creates a request-stage verifier backed by the server's own identity system,
+ * such as API keys, its own login sessions or a KYC provider.
+ *
+ * `verify` returns the caller's identity, `undefined` when the request carries
+ * none (401 with `Identity-Attestation-Required` naming `type`, and `issuer` when
+ * set, so clients know what to obtain and where), or throws a
+ * {@link CallbackError} to reject a presented identity. Combine it with an
+ * attestation such as email OTP with `Identity.anyOf`, so callers use either.
+ *
+ * @example
+ * ```ts
+ * const apiKey = Attestation.Server.callback({
+ *   type: 'api-key',
+ *   verify: (request) => customers.byKey(request.headers.get('X-Api-Key')),
+ * })
+ * mppx.charge({ amount: '1', identity: [Identity.anyOf(email, apiKey)] })
+ * ```
+ */
+export function callback<value>(config: callback.Config<value>): Identity.Verifier<value> {
+  if (!/^[a-z][a-z0-9_.-]*$/i.test(config.type))
+    throw new TypeError(
+      'Identity type must start with a letter and use letters, digits, ".", "_" or "-".',
+    )
+  if (config.issuer !== undefined && !URL.canParse(config.issuer))
+    throw new TypeError('Identity issuer must be a URL.')
+  const parameters = new Map<string, string>()
+  if (config.issuer) parameters.set('issuer', config.issuer)
+  const required = {
+    [Constants.requiredHeader]: serializeList([[new Token(config.type), parameters] as Item]),
+  }
+  return {
+    stage: 'request',
+    async verify(request) {
+      let value: value | undefined
+      try {
+        value = await config.verify(request)
+      } catch (error) {
+        if (!(error instanceof CallbackError)) throw error
+        return { status: 'invalid', code: error.code, headers: required, reason: error.message }
+      }
+      if (value === undefined)
+        return {
+          status: 'missing',
+          code: 401,
+          headers: required,
+          reason: `An identity of type "${config.type}" is required.`,
+        }
+      return { status: 'valid', value }
+    },
+  }
+}
+
+export declare namespace callback {
+  type Config<value> = {
+    /** Identity type named in `Identity-Attestation-Required`, such as `api-key` or `session`. */
+    type: string
+    /** Where a client obtains this identity, such as a sign-in or key page. */
+    issuer?: string | undefined
+    /**
+     * Returns the request's verified identity, `undefined` when it carries none,
+     * or throws a {@link CallbackError} to reject the one it carries.
+     */
+    verify: (request: Request) => MaybePromise<value | undefined>
+  }
+}
+
+/** Rejects an identity a {@link callback} verifier was given. */
+export class CallbackError extends Error {
+  override readonly name = 'CallbackError'
+  /** HTTP status of the rejection. @default 401 */
+  readonly code: number
+  constructor(message: string, options: { code?: number | undefined } = {}) {
+    super(message)
+    this.code = options.code ?? 401
+  }
+}

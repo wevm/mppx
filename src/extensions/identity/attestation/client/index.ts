@@ -72,7 +72,7 @@ export function prover(config: prover.Config): Identity.Prover {
       for (const { type, issuer } of requirements(response.headers)) {
         // Only trusted issuers: a server-named one could relay a code and obtain an
         // attestation for another origin.
-        if (!config.issuers?.includes(issuer)) continue
+        if (!issuer || !config.issuers?.includes(issuer)) continue
         if (config.types && !config.types.includes(type)) continue
         const key = keyOf({ aud: audience, iss: issuer, type })
         let task = pending.get(key)
@@ -106,9 +106,14 @@ export declare namespace prover {
     attestations?: readonly string[] | undefined
     /** Obtains an attestation a server requires, or returns `undefined` to decline. */
     acquire?:
-      | ((
-          requirement: Types.Requirement & { audience: string },
-        ) => MaybePromise<string | undefined>)
+      | ((requirement: {
+          /** Origin the attestation must be bound to. */
+          audience: string
+          /** Issuer to obtain it from. */
+          issuer: string
+          /** Attestation type. */
+          type: string
+        }) => MaybePromise<string | undefined>)
       | undefined
     /** Issuers `acquire` may be asked for. Required with `acquire`. */
     issuers?: readonly string[] | undefined
@@ -131,6 +136,10 @@ export function requirements(headers: Headers): Types.Requirement[] {
   for (const member of list) {
     if (isInnerList(member) || !(member[0] instanceof Token)) continue
     const issuer = member[1].get('issuer')
+    if (issuer === undefined) {
+      result.push({ type: member[0].toString() })
+      continue
+    }
     if (typeof issuer !== 'string' || !isIssuer(issuer)) continue
     result.push({ type: member[0].toString(), issuer })
   }

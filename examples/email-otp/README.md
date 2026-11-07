@@ -52,6 +52,26 @@ ATTESTATION=$(curl -s $ISSUER/email/verify -H 'content-type: application/json' \
 curl -i $API/api/report -H "Identity-Attestation: $ATTESTATION"
 ```
 
+## Choose how callers prove identity
+
+A route can accept any of these, alone or together with `Identity.anyOf`:
+
+| Option                   | Server code                                                                        | When                                          |
+| ------------------------ | ---------------------------------------------------------------------------------- | --------------------------------------------- |
+| Hosted email OTP         | `EmailOtp.Server.verifier({ issuer: 'https://identity.mpp.tempo.xyz', audience })` | Lightweight check with nothing to run         |
+| Self-hosted email OTP    | Same verifier, `issuer` set to your deployment of `apps/mpp-identity`              | Your own sender domain and limits             |
+| Your own identity system | `Attestation.Server.callback({ type, verify })`                                    | API keys, sessions, SSO, KYC you already have |
+
+`callback` runs your function on each request: return the caller's identity, `undefined` when the request has none (the caller gets 401 with `Identity-Attestation-Required` naming your `type`), or throw `Attestation.Server.CallbackError` to reject it. This example accepts API keys when `API_KEYS` is set:
+
+```ts
+const apiKey = Attestation.Server.callback({
+  type: 'api-key',
+  verify: (request) => lookUpKey(request.headers.get('X-Api-Key')),
+})
+mppx.charge({ amount: '0.01', identity: [Identity.anyOf(email, apiKey)] })
+```
+
 ## How it works
 
 [`src/server.ts`](./src/server.ts) creates `EmailOtp.Server.verifier({ audience, issuer, allow })` and requires it per route: `mppx.charge({ amount, identity: [email] })`. The verifier checks the attestation's Ed25519 signature against the issuer's `/.well-known/jwks.json`, its issuer, its expiry and that its audience is this server's origin. `allow` applies the route's policy, here an optional domain allowlist. In a handler, `result.identity.get(email)` returns the verified address.
