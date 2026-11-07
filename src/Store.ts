@@ -227,7 +227,36 @@ function assertComparable(value: unknown, seen = new Set<object>()): void {
 }
 
 /** An `ArrayBuffer`'s resizable state, which older TypeScript libs leave out. */
-type Resizable = { maxByteLength?: number; resizable?: boolean }
+type Resizable = {
+  maxByteLength?: number
+  resizable?: boolean
+  resize?: (byteLength: number) => void
+}
+
+/**
+ * How a view on a resizable buffer follows resizes: its byte length once a copy's buffer
+ * grows to its maximum, and whether it is still in bounds once the copy shrinks to the view's
+ * offset. A length-tracking view and a fixed-length one differ in one of the two whenever any
+ * resize tells them apart; structured clone keeps which one a view is.
+ */
+function resizeBehavior(view: ArrayBufferView): string | undefined {
+  if (!(view.buffer as ArrayBuffer & Resizable).resizable) return undefined
+  const copy = structuredClone(view)
+  const buffer = copy.buffer as ArrayBuffer & Resizable
+  const byteOffset = copy.byteOffset
+  buffer.resize!(buffer.maxByteLength!)
+  const grown = copy.byteLength
+  buffer.resize!(byteOffset)
+  let inBounds = true
+  try {
+    // Out-of-bounds typed arrays and `DataView`s throw here.
+    if (copy instanceof DataView) void copy.byteLength
+    else void (copy as unknown as Uint8Array).slice(0, 0)
+  } catch {
+    inBounds = false
+  }
+  return `${grown}:${inBounds}`
+}
 
 /** `SameValueZero`, how maps and sets match keys. */
 function sameValueZero(a: unknown, b: unknown): boolean {
@@ -244,7 +273,7 @@ function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
 /**
  * Structural equality of stored values, as structured clone copies them:
  * primitives (bigints by value), arrays (holes included) and plain objects, maps
- * and sets, all in key or insertion order, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
+ * and sets, all in key or insertion order, typed arrays, `DataView`s and `ArrayBuffer`s (type, bytes and resizing), dates,
  * regular expressions and boxed primitives. A native compare-and-swap
  * needs it, since a value read back from storage is a copy. Throws for values it
  * cannot compare, rather than reporting a conflict that never resolves.
@@ -291,7 +320,8 @@ function deepEqual(
     return (
       a.byteOffset === other.byteOffset &&
       a.byteLength === other.byteLength &&
-      deepEqual(a.buffer, other.buffer, pairs)
+      deepEqual(a.buffer, other.buffer, pairs) &&
+      resizeBehavior(a) === resizeBehavior(other)
     )
   }
   if (tag === '[object ArrayBuffer]') {
