@@ -223,3 +223,14 @@ test('rejects a plaintext http issuer except on localhost', () => {
     Attestation.Server.verifier({ ...config, issuer: 'http://localhost:8787' }),
   ).not.toThrow()
 })
+
+test('rejects a non-finite clock tolerance or max age', () => {
+  const config = { audience, issuer, keyResolver: () => undefined, type: 'email' }
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1])
+    expect(() => Attestation.Server.verifier({ ...config, clockTolerance: value })).toThrow(
+      'non-negative integer',
+    )
+  expect(() => Attestation.Server.verifier({ ...config, maxAge: Number.NaN })).toThrow(
+    'non-negative integer',
+  )
+})
