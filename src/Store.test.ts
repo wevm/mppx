@@ -948,6 +948,27 @@ describe('durableObject', () => {
     expect(Object.hasOwn(Rpc, 'rpc')).toBe(false)
   })
 
+  test('rpc keeps the most-derived static and method when an ancestor made them non-configurable', () => {
+    class Base {}
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      describe() {
+        return 'parent'
+      }
+    }
+    Object.defineProperty(Parent, 'label', { configurable: false })
+    Object.defineProperty(Parent.prototype, 'describe', { configurable: false })
+    class Child extends Parent {
+      static override label = 'child'
+      override describe() {
+        return 'child'
+      }
+    }
+    const Rpc = Child.rpc(Base) as unknown as { label: string; prototype: { describe(): string } }
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.prototype.describe()).toBe('child')
+  })
+
   test('rejects native encoding over fetch', () => {
     expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
       'requires `transport: "rpc"`',
