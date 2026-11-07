@@ -430,3 +430,25 @@ test("accepts the server's own identity system through Identity.from, or email",
   expect(viaEmail.status).toBe(200)
   expect(await viaEmail.json()).toMatchObject({ email: { email: 'dana@example.com' } })
 })
+
+test('calls the issuer with the unwrapped fetch, so it never pays a 402', async () => {
+  const calls: string[] = []
+  const inner = (async () => {
+    calls.push('inner')
+    return Response.json({ id: 'otp-id', expires_at: new Date(Date.now() + 60_000).toISOString() })
+  }) as typeof globalThis.fetch
+  const wrapper = Object.assign(
+    (async () => {
+      calls.push('wrapper')
+      return new Response(null, { status: 402 })
+    }) as typeof globalThis.fetch,
+    { [Symbol.for('mppx.fetch.wrapper')]: inner },
+  )
+  await EmailOtp.Client.sendCode({
+    audience: 'https://api.example',
+    email: 'dana@example.com',
+    fetch: wrapper,
+    issuer,
+  })
+  expect(calls).toEqual(['inner'])
+})

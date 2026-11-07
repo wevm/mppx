@@ -1,3 +1,4 @@
+import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import { Constants } from '../Constants.js'
@@ -166,16 +167,20 @@ export class EmailOtpError extends Error {
 async function post(
   issuer: string,
   path: string,
-  fetch: typeof globalThis.fetch = globalThis.fetch,
+  fetch: typeof globalThis.fetch | undefined,
   body: Record<string, string>,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(`${issuer.replace(/\/+$/, '')}${path}`, {
-    body: JSON.stringify(body),
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-    // Workers reject 'error'; a redirect is not ok, so it fails below.
-    redirect: 'manual',
-  })
+  // The unwrapped fetch, so an issuer's 402 is never paid automatically.
+  const response = await unwrapFetch(fetch ?? globalThis.fetch)(
+    `${issuer.replace(/\/+$/, '')}${path}`,
+    {
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      // Workers reject 'error'; a redirect is not ok, so it fails below.
+      redirect: 'manual',
+    },
+  )
   const json = (await response.json().catch(() => ({}))) as Record<string, unknown>
   if (!response.ok)
     throw new EmailOtpError(

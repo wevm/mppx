@@ -24,7 +24,11 @@ export type Claims = {
   jti?: string | undefined
 }
 
-/** Resolves the issuer's public key for an attestation's `kid`. */
+/**
+ * Resolves the issuer's public key for an attestation's `kid`. Returns
+ * `undefined` for an unknown or malformed `kid`, and throws only when the keys
+ * cannot be fetched: a throw answers the request with 503.
+ */
 export type KeyResolver = (parameters: {
   /** Issuer URL the attestation claims. */
   issuer: string
