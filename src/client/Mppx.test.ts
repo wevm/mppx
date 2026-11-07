@@ -498,6 +498,7 @@ describe('prepareRequest', () => {
       headers: {
         Authorization: 'Bearer secret',
         Cookie: 'session=secret',
+        'Identity-Attestation': 'secret',
         'Payment-Authorization': 'secret',
         'PAYMENT-SIGNATURE': 'secret',
         'X-Alternate-Credential': 'Payment secret',
@@ -509,6 +510,7 @@ describe('prepareRequest', () => {
     expect(prepared.request.url).toBe('https://pay.example/resource')
     expect(prepared.request.headers.get('authorization')).toBeNull()
     expect(prepared.request.headers.get('cookie')).toBeNull()
+    expect(prepared.request.headers.get('identity-attestation')).toBeNull()
     expect(prepared.request.headers.get('payment-authorization')).toBeNull()
     expect(prepared.request.headers.get('payment-signature')).toBeNull()
     expect(prepared.request.headers.get('x-alternate-credential')).toBeNull()

@@ -12,6 +12,8 @@ const hopByHopHeaders = new Set([
 // Payment credentials are consumed by the proxy and must never reach upstream services.
 const paymentHeaders = new Set([
   'accept-payment',
+  'identity-attestation',
+  'identity-attestation-required',
   'authorization',
   'payment-authorization',
   'payment-receipt',
