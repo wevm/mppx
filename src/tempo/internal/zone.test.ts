@@ -17,6 +17,14 @@ describe('Zone', () => {
     expect(Zone.parentChainIdFromChainId(42_431)).toBeUndefined()
   })
 
+  test('isId', () => {
+    expect(Zone.isId(3)).toBe(true)
+    expect(Zone.isId(421_699_999)).toBe(true)
+    // viem would read this as Zone 5's chain ID and return Zone 5's portal.
+    expect(Zone.isId(421_700_005)).toBe(false)
+    expect(Zone.isId(0)).toBe(false)
+  })
+
   test('portalAddress', () => {
     expect(Zone.portalAddress(3)).toBe('0x5ad0000000000000000000000000000000000003')
   })

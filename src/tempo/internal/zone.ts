@@ -49,9 +49,15 @@ export type ProcessedEvent = {
 /** Zones a challenge accepts: a list of Zone IDs, or `true` for any Zone. */
 export type Accepted = readonly number[] | true
 
-/** Returns whether a value is a valid Zone ID: a positive 32-bit integer. */
+/**
+ * Zone IDs from here up read as Zone chain IDs in viem's portal lookup, which
+ * would map them to another Zone's portal.
+ */
+const maxIdExclusive = 421_700_000
+
+/** Returns whether a value is a valid Zone ID: a positive integer below the Zone chain ID ranges. */
 export function isId(zoneId: number): boolean {
-  return Number.isInteger(zoneId) && zoneId > 0 && zoneId < 2 ** 32
+  return Number.isInteger(zoneId) && zoneId > 0 && zoneId < maxIdExclusive
 }
 
 /** Returns whether a challenge's `zones` accepts withdrawals from a Zone. */
