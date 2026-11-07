@@ -55,12 +55,17 @@ export function prover(config: prover.Config): Identity.Prover {
 
   return {
     scope: config.scope,
-    prove(request) {
+    prove(request, context) {
       const origin = new URL(request.url).origin
       // A bearer attestation never goes over plaintext HTTP, except to localhost.
       if (!Attestation.isIssuer(origin)) return request
+      // An unpaid attempt sends only an attestation with time to spare, so one close to expiry
+      // is replaced before paying. The paid retry keeps sending it within the server's clock
+      // tolerance: dropping it there would reject a payment that may already be broadcast.
+      const paid = context.challenge !== undefined
+      const after = paid ? now() - Constants.clockTolerance : now() + Constants.refreshMargin
       const tokens = [...stored.values()]
-        .filter(({ claims }) => claims.aud === origin && claims.exp > now())
+        .filter(({ claims }) => claims.aud === origin && claims.exp > after)
         .map(({ token }) => token)
       if (tokens.length === 0) return request
       const headers = new Headers(request.headers)
@@ -73,6 +78,7 @@ export function prover(config: prover.Config): Identity.Prover {
       if (!config.acquire || !URL.canParse(response.url)) return false
       const audience = new URL(response.url).origin
       let acquired = false
+      let failure: { error: unknown } | undefined
       // A requirement listed twice is acquired once, so it sends one code.
       const seen = new Set<string>()
       for (const { type, issuer } of requirements(response.headers)) {
@@ -99,8 +105,15 @@ export function prover(config: prover.Config): Identity.Prover {
           })().finally(() => pending.delete(key))
           pending.set(key, task)
         }
-        if (await task) acquired = true
+        // A route may accept any one of the listed issuers, so one that fails does not stop
+        // the others; the failure surfaces only when none succeeded.
+        try {
+          if (await task) acquired = true
+        } catch (error) {
+          failure ??= { error }
+        }
       }
+      if (!acquired && failure) throw failure.error
       return acquired
     },
   }

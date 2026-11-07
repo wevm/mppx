@@ -359,6 +359,73 @@ test('matches a trusted issuer listed with a trailing slash', async () => {
   expect(calls).toBe(1)
 })
 
+test('acquires from the other listed issuers when one fails', async () => {
+  const other = 'https://other-issuer.example'
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  const iat = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    {
+      aud: 'https://api.example',
+      exp: iat + 600,
+      iat,
+      iss: other,
+      sub: 'dana@example.com',
+      type: 'email',
+    },
+    { key: keys.privateKey, keyId },
+  )
+  const asked: string[] = []
+  const prover = Attestation.Client.prover({
+    acquire: ({ issuer: from }) => {
+      asked.push(from)
+      if (from === issuer) throw new Error('issuer down')
+      return token
+    },
+    issuers: [issuer, other],
+    scope: '*',
+  })
+  const response = (header: string) => {
+    const value = new Response(null, {
+      status: 401,
+      headers: { [Attestation.Constants.requiredHeader]: header },
+    })
+    Object.defineProperty(value, 'url', { value: 'https://api.example/resource' })
+    return value
+  }
+  await expect(
+    prover.retry!(response(`email;issuer="${issuer}", email;issuer="${other}"`)),
+  ).resolves.toBe(true)
+  expect(asked).toEqual([issuer, other])
+  await expect(prover.retry!(response(`email;issuer="${issuer}"`))).rejects.toThrow('issuer down')
+})
+
+test('replaces an attestation near expiry before paying, and keeps it on the paid retry', async () => {
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  const iat = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    {
+      aud: 'https://api.example',
+      exp: iat + 30,
+      iat,
+      iss: issuer,
+      sub: 'dana@example.com',
+      type: 'email',
+    },
+    { key: keys.privateKey, keyId },
+  )
+  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
+  const context = { created: iat, nonce: 'n' }
+  const unpaid = await prover.prove(new Request('https://api.example/resource'), context)
+  expect(unpaid.headers.get(Attestation.Constants.header)).toBeNull()
+  const paid = await prover.prove(new Request('https://api.example/resource'), {
+    ...context,
+    challenge: {} as never,
+  })
+  expect(paid.headers.get(Attestation.Constants.header)).toBe(token)
+})
+
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',

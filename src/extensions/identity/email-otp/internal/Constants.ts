@@ -12,6 +12,8 @@ export const Constants = {
   jwksPath: '/.well-known/jwks.json',
   /** Clock tolerance, in seconds, applied to `iat` and `exp`. */
   clockTolerance: 60,
+  /** Seconds before expiry at which a client replaces an attestation instead of sending it unpaid. */
+  refreshMargin: 300,
   /** Longest attestation accepted, in characters. */
   maxLength: 8_192,
 } as const
