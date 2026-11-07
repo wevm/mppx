@@ -659,13 +659,17 @@ export declare namespace durableObject {
      * key, instead of one object per key: each shard holds its claims in a SQLite
      * table (`mppx_replay_claims`) and clears expired ones with an alarm, so short-lived claims leave no
      * objects behind. The class must be SQLite-backed. Claims then live only in
-     * the shards: `get` and `update` of a claimed key don't see them, and
-     * `delete` releases them. Changing the count moves keys between shards, so
+     * the shards: `get` and `update` of a claimed key don't see them, a value
+     * stored at the key doesn't block a claim (mppx stores only expiring claims
+     * at its replay keys), and `delete` releases them. Changing the count moves keys between shards, so
      * bump `replayShardVersion` with it to start from empty shards. A claim lives
      * only where it was made: enabling sharding, changing the count or version, or
      * running two settings side by side lets a key claimed under the old setting
      * be claimed again until that claim expires. Change it when no unexpired
      * claim matters, such as together with the secret that signs Challenges.
+     * Shards are objects of the bound class, so a subclass's `alarm` and
+     * constructor run in them too: skip the subclass's own work there with
+     * {@link DurableObjectStore.isReplayShard}, and never clear a shard's storage.
      */
     replayShards?: number | undefined
     /** Version in the shard objects' names, to start a fresh set of shards. @default 1 */
@@ -783,27 +787,48 @@ export class DurableObjectStore {
    * Handles the object's alarm, which a subclass sets through
    * {@link DurableObjectStore.storage}. In a replay shard it clears expired claims, so
    * a subclass that overrides it must call `super.alarm()`, or expired claims stay stored.
-   * Elsewhere, including on key-value-backed objects, it does nothing.
+   * Elsewhere, including on key-value-backed objects, it does nothing. The subclass's own
+   * alarm work runs in shards too: skip it there with {@link DurableObjectStore.isReplayShard}.
+   *
+   * @example
+   * ```ts
+   * override async alarm() {
+   *   await super.alarm()
+   *   if (this.isReplayShard()) return
+   *   // The subclass's own work.
+   * }
+   * ```
    */
   async alarm(): Promise<void> {
+    if (!this.isReplayShard()) return
     const { sql } = this.state.storage
     if (!sql) return
-    let shard: unknown[]
-    try {
-      shard = sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mppx_replay_claims'")
-        .toArray()
-    } catch {
-      // A key-value-backed object has `sql` but cannot run it, so it holds no replay shard.
-      return
-    }
-    if (shard.length === 0) return
     const now = Date.now()
     sql.exec('DELETE FROM mppx_replay_claims WHERE expires <= ?', now)
     const [{ expires } = {}] = sql
       .exec('SELECT MIN(expires) AS expires FROM mppx_replay_claims')
       .toArray()
     if (typeof expires === 'number') await this.state.storage.setAlarm?.(Math.max(expires, now + 1))
+  }
+
+  /**
+   * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
+   * object of the same class that holds only replay claims, in its own SQL table. A
+   * subclass skips its own alarm work there, and must not clear its storage.
+   */
+  protected isReplayShard(): boolean {
+    const { sql } = this.state.storage
+    if (!sql) return false
+    try {
+      return (
+        sql
+          .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mppx_replay_claims'")
+          .toArray().length > 0
+      )
+    } catch {
+      // A key-value-backed object has `sql` but cannot run it, so it holds no replay shard.
+      return false
+    }
   }
 
   /**

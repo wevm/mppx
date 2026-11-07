@@ -22,12 +22,16 @@ export class RecordingStore extends Store.DurableObjectStore {
   override async alarm() {
     // A subclass's alarm calls the store's, which clears expired replay claims in a shard.
     await super.alarm()
+    // A replay shard is an object of this class too: it holds only claims, so skip the subclass's work.
+    if (this.isReplayShard()) return
     const alarms = Number((await this.storage.get('__alarms')) ?? 0)
     await this.storage.put('__alarms', String(alarms + 1))
   }
 
   override async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname !== '/log') return super.fetch(request)
+    const { pathname } = new URL(request.url)
+    if (pathname === '/shard') return Response.json(this.isReplayShard())
+    if (pathname !== '/log') return super.fetch(request)
     return Response.json({
       alarms: Number((await this.storage.get('__alarms')) ?? 0),
       writes: JSON.parse(((await this.storage.get('__writes')) as string | undefined) ?? '[]'),
@@ -137,7 +141,7 @@ type Command = {
   | { op: 'bigint'; key: string; amount: string }
   | { op: 'claim'; key: string; expires: number }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
-  | { op: 'log'; key: string }
+  | { op: 'log' | 'shard'; key: string }
   | { op: 'arm' | 'hooked'; key: string }
   | { op: 'legacy'; key: string; amount: string }
   | { op: 'increment-bigint'; key: string }
@@ -281,6 +285,7 @@ export default {
           ),
         )
       case 'log':
+      case 'shard':
       case 'arm':
       case 'hooked':
         return namespace
