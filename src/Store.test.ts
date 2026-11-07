@@ -756,6 +756,23 @@ describe('durableObject', () => {
       [/a/g, /a/i],
       [new Date(0), new Date(1)],
       [{ a: 1n }, { a: 1 }],
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
+      [
+        new Map([
+          [1, 'a'],
+          [2, 'b'],
+        ]),
+        new Map([
+          [2, 'b'],
+          [1, 'a'],
+        ]),
+      ],
+      [new Set([1, 2]), new Set([2, 1])],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1)],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1, { maxByteLength: 4 })],
     ]
     for (const [stored, other] of pairs) {
       const object = objectStore()
@@ -763,6 +780,18 @@ describe('durableObject', () => {
       expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
       expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
     }
+  })
+
+  test('native compare-and-swap compares sparse arrays by their elements, not their length', async () => {
+    const sparse: number[] = []
+    sparse.length = 2 ** 32 - 1
+    sparse[5] = 1
+    const object = objectStore()
+    await object.put('k', sparse, 'native')
+    const other = structuredClone(sparse)
+    other[6] = 1
+    expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
+    expect((await object.swap('k', structuredClone(sparse), 'next', 'native')).applied).toBe(true)
   })
 
   test('native update handles cyclic values', async () => {
