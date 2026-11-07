@@ -45,25 +45,45 @@ export function channels(
   const base = Store.durableObject(namespace, options)
   const escrowContract = options?.escrowContract ?? tip20ChannelEscrow
 
-  /**
-   * Adds `channelId` to the front of the entry under `key`, keeping the most recent
-   * {@link maxLookupChannels}, or removes it.
-   */
-  async function index(key: string, channelId: Hex, present: boolean) {
+  /** Removes `channelId` from the entry under `key`. */
+  async function remove(key: string, channelId: Hex) {
     await base.update(key, (current) => {
       const ids = lookupIds(current)
-      if (ids.includes(channelId) === present) return noop
-      if (present)
-        return {
-          op: 'set',
-          value: [channelId, ...ids].slice(0, maxLookupChannels),
-          result: undefined,
-        }
+      if (!ids.includes(channelId)) return noop
       const rest = ids.filter((id) => id !== channelId)
       return rest.length
         ? { op: 'set', value: rest, result: undefined }
         : { op: 'delete', result: undefined }
     })
+  }
+
+  /**
+   * Adds `channelId` to the front of the entry under `key` while its stored channel still
+   * resumes, so a delayed add after its close leaves it out. A full entry drops channels that no
+   * longer resume before the oldest open one, keeping the most recent {@link maxLookupChannels}.
+   */
+  async function add(key: string, channelId: Hex) {
+    for (let attempt = 1; ; attempt++) {
+      const ids = lookupIds(await base.get(key))
+      if (ids.includes(channelId)) return
+      if (!resumable(await base.get(channelId))) return
+      const full = ids.length >= maxLookupChannels
+      const states = full ? await Promise.all(ids.map((id) => base.get(id))) : []
+      const closed = new Set(ids.filter((_, i) => full && !resumable(states[i])))
+      const added = await base.update(key, (current) => {
+        const listed = lookupIds(current)
+        if (listed.includes(channelId)) return { op: 'noop', result: true }
+        // The entry changed since its channels were read: read them again, a few times at most.
+        if (attempt < maxLookupAttempts && !sameIds(listed, ids))
+          return { op: 'noop', result: false }
+        return {
+          op: 'set',
+          value: [channelId, ...listed.filter((id) => !closed.has(id))].slice(0, maxLookupChannels),
+          result: true,
+        }
+      })
+      if (added) return
+    }
   }
 
   /**
@@ -80,8 +100,8 @@ export function channels(
     await Promise.allSettled([
       ...before
         .filter((key) => !after.includes(key))
-        .map((key) => index(key, (previous as State).channelId, false)),
-      ...after.map((key) => index(key, (next as State).channelId, true)),
+        .map((key) => remove(key, (previous as State).channelId)),
+      ...after.map((key) => add(key, (next as State).channelId)),
     ])
   }
 
@@ -340,6 +360,14 @@ function lookupKey(lookup: {
 
 /** Most channels a lookup entry keeps per payer, payee, token, escrow and chain. */
 const maxLookupChannels = 8
+
+/** Reads of a full lookup entry's channels before adding to it regardless of concurrent changes. */
+const maxLookupAttempts = 3
+
+/** Whether two lookup entries list the same channels in the same order. */
+function sameIds(a: readonly Hex[], b: readonly Hex[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i])
+}
 
 /** The channel IDs of a lookup entry, most recent first. */
 function lookupIds(entry: unknown): Hex[] {
