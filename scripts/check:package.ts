@@ -8,7 +8,7 @@ const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-package-'
 const limits = {
   fileCount: 550,
   packedBytes: 1_200_000,
-  unpackedBytes: 5_000_000,
+  unpackedBytes: 4_900_000,
 }
 
 /** Run a package validation command and fail with its exit status. */

@@ -1,5 +1,3 @@
-/** Email address verification with a one-time code. */
-export * as EmailOtp from './email-otp/index.js'
 /** Client and server adapters for the TAP agent-recognition signature profile. */
 export * as Tap from './tap/index.js'
 /** Client and server adapters for the Web Bot Auth HTTPS-directory profile. */
