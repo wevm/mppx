@@ -506,7 +506,8 @@ const replayShardName = /^mppx:replay:v\d+:\d+$/
 /**
  * Atomic store backed by Cloudflare Durable Objects.
  *
- * Each key lives in its own Durable Object instance (`idFromName(key)`), so
+ * Each key lives in its own Durable Object instance (`idFromName(key)`; a key named
+ * like a replay shard, `mppx:replay:v<version>:<shard>`, uses `mppx:key:<key>`), so
  * reads and writes of one key are linearizable across every Worker isolate and
  * location, while different keys (such as different payment channels) scale
  * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
@@ -567,10 +568,12 @@ export function durableObject(
       `Store.durableObject: \`replayShardVersion\` must be a positive integer, got ${replayShardVersion}.`,
     )
 
-  const object = (key: string) => namespace.get(namespace.idFromName(key))
+  const object = (name: string) => namespace.get(namespace.idFromName(name))
+  // A key named like a replay shard gets its own object name, so its object never passes for a shard.
+  const keyObject = (key: string) => (replayShardName.test(key) ? `mppx:key:${key}` : key)
 
-  async function call<result>(key: string, body: DurableObjectStore.Request): Promise<result> {
-    const response = await object(key).fetch('https://mppx-store/', {
+  async function call<result>(name: string, body: DurableObjectStore.Request): Promise<result> {
+    const response = await object(name).fetch('https://mppx-store/', {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -593,17 +596,17 @@ export function durableObject(
           claim: (key, expires) => stub(key).storeClaim(key, expires, encoding),
         }
       : {
-          get: (key) => call(key, { op: 'get', key }),
-          put: (key, value) => call(key, { op: 'put', key, value: value as string }),
-          delete: (key) => call(key, { op: 'delete', key }),
+          get: (key) => call(keyObject(key), { op: 'get', key }),
+          put: (key, value) => call(keyObject(key), { op: 'put', key, value: value as string }),
+          delete: (key) => call(keyObject(key), { op: 'delete', key }),
           swap: (key, expected, value) =>
-            call(key, {
+            call(keyObject(key), {
               op: 'swap',
               key,
               expected: expected as string | null,
               value: value as string | null,
             }),
-          claim: (key, expires) => call(key, { op: 'claim', key, expires }),
+          claim: (key, expires) => call(keyObject(key), { op: 'claim', key, expires }),
         }
   type Remote = {
     get: (key: string) => Promise<unknown>
@@ -617,7 +620,7 @@ export function durableObject(
     claim: (key: string, expires: number) => Promise<boolean>
   }
   function stub(key: string) {
-    return object(key) as unknown as DurableObjectStore.Stub
+    return object(keyObject(key)) as unknown as DurableObjectStore.Stub
   }
 
   // Replay claims in `replayShards` SQLite-backed shard objects instead of one object per key.
