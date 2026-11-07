@@ -226,6 +226,14 @@ function assertComparable(value: unknown, seen = new Set<object>()): void {
   else if (!comparableTags.has(tag)) throw incomparable(`${tag.slice(8, -1)} values`)
 }
 
+/** An `ArrayBuffer`'s resizable state, which older TypeScript libs leave out. */
+type Resizable = { maxByteLength?: number; resizable?: boolean }
+
+/** `SameValueZero`, how maps and sets match keys. */
+function sameValueZero(a: unknown, b: unknown): boolean {
+  return a === b || (a !== a && b !== b)
+}
+
 /** A view's bytes. */
 function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
   return ArrayBuffer.isView(view)
@@ -235,8 +243,8 @@ function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
 
 /**
  * Structural equality of stored values, as structured clone copies them:
- * primitives (bigints by value), arrays (holes included), plain objects, maps,
- * sets, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
+ * primitives (bigints by value), arrays (holes included) and plain objects, maps
+ * and sets, all in key or insertion order, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
  * regular expressions and boxed primitives. A native compare-and-swap
  * needs it, since a value read back from storage is a copy. Throws for values it
  * cannot compare, rather than reporting a conflict that never resolves.
@@ -257,19 +265,24 @@ function deepEqual(
   right.set(b, a)
   const tag = Object.prototype.toString.call(a)
   if (tag !== Object.prototype.toString.call(b)) return false
-  if (Array.isArray(a)) {
-    const other = b as unknown[]
-    if (a.length !== other.length) return false
-    for (let i = 0; i < a.length; i++)
-      if (i in a !== i in other || !deepEqual(a[i], other[i], pairs)) return false
-    // Structured clone keeps named properties on arrays too: compare them like an object's.
+  // Arrays and plain objects: own enumerable keys in order (array indexes first, so holes,
+  // sparse lengths and named properties count, and inherited indexes don't), then values.
+  // Structured clone keeps key order, so values that differ only in order are different values.
+  if (Array.isArray(a) || tag === '[object Object]') {
+    if (Array.isArray(a) && a.length !== (b as unknown[]).length) return false
     const keys = Object.keys(a)
-    if (keys.length !== Object.keys(other).length) return false
-    return keys.every(
-      (key) =>
-        (/^(?:0|[1-9]\d*)$/.test(key) && Number(key) < a.length) ||
-        (Object.prototype.hasOwnProperty.call(other, key) &&
-          deepEqual((a as never)[key], (other as never)[key], pairs)),
+    const other = Object.keys(b)
+    return (
+      keys.length === other.length &&
+      keys.every(
+        (key, i) =>
+          key === other[i] &&
+          deepEqual(
+            (a as Record<string, unknown>)[key],
+            (b as Record<string, unknown>)[key],
+            pairs,
+          ),
+      )
     )
   }
   // Structured clone keeps a view's whole backing buffer and offset, not only its visible bytes.
@@ -282,39 +295,40 @@ function deepEqual(
     )
   }
   if (tag === '[object ArrayBuffer]') {
-    const x = bytesOf(a as ArrayBuffer)
-    const y = bytesOf(b as ArrayBuffer)
-    return x.length === y.length && x.every((byte, i) => byte === y[i])
+    const x = a as ArrayBuffer & Resizable
+    const y = b as ArrayBuffer & Resizable
+    // Structured clone keeps whether a buffer is resizable, and up to what length.
+    if (x.resizable !== y.resizable || x.maxByteLength !== y.maxByteLength) return false
+    const xs = bytesOf(x)
+    const ys = bytesOf(y)
+    return xs.length === ys.length && xs.every((byte, i) => byte === ys[i])
   }
   if (a instanceof Map) {
     const other = b as Map<unknown, unknown>
     if (a.size !== other.size) return false
+    // In insertion order, which structured clone keeps.
+    const entries = other.entries()
     for (const [key, item] of a) {
       assertPrimitiveKey(key, tag)
-      if (!other.has(key) || !deepEqual(item, other.get(key), pairs)) return false
+      const [otherKey, otherItem] = entries.next().value!
+      if (!sameValueZero(key, otherKey) || !deepEqual(item, otherItem, pairs)) return false
     }
     return true
   }
   if (a instanceof Set) {
     const other = b as Set<unknown>
     if (a.size !== other.size) return false
+    const items = other.values()
     for (const item of a) {
       assertPrimitiveKey(item, tag)
-      if (!other.has(item)) return false
+      if (!sameValueZero(item, items.next().value)) return false
     }
     return true
   }
   if (a instanceof RegExp)
     return a.source === (b as RegExp).source && a.flags === (b as RegExp).flags
   if (comparableTags.has(tag)) return Object.is(a.valueOf(), (b as object).valueOf())
-  if (tag !== '[object Object]') throw incomparable(`${tag.slice(8, -1)} values`)
-  const keys = Object.keys(a)
-  if (keys.length !== Object.keys(b).length) return false
-  return keys.every(
-    (key) =>
-      Object.prototype.hasOwnProperty.call(b, key) &&
-      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], pairs),
-  )
+  throw incomparable(`${tag.slice(8, -1)} values`)
 }
 
 /** 32-bit FNV-1a hash of a string's UTF-16 code units: cheap and stable, to pick a replay shard. */
@@ -713,8 +727,9 @@ export class DurableObjectStore {
    * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
    * and taking it as an argument keeps this module free of that import. Called
    * on a subclass, it keeps the subclass's methods (such as `onWrite` and
-   * `alarm`), but not its constructor or field initializers: subclass the
-   * returned class, or set state up lazily.
+   * `alarm`), but not its constructor, field initializers or `#private` members,
+   * which the copied methods cannot reach: subclass the returned class, or set
+   * state up lazily in ordinary members.
    *
    * @example
    * ```ts
