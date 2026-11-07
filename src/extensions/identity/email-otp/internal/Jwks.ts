@@ -80,6 +80,11 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   }
 
   return async ({ issuer, keyId }) => {
+    // A known key in a set fetched within `ttl` is served at once, so a refetch
+    // an unknown key ID started does not hold up other lookups.
+    const last = good.get(issuer)
+    if (last && Date.now() - last.fetchedAt <= ttl && last.keys.has(keyId))
+      return last.keys.get(keyId)
     const keys = await keysOf(issuer, current(issuer, ttl))
     if (keys.has(keyId)) return keys.get(keyId)
     // An unknown key ID: join the newest fetch, or start one if it is old enough.

@@ -150,6 +150,28 @@ test('shares one key set fetch between concurrent unknown key IDs', async () => 
   expect(requests).toBe(1)
 })
 
+test('serves a cached key while an unknown key ID refetches the set', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let hang = false
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      if (hang) return new Promise<Response>(() => {})
+      return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+    },
+    refreshInterval: 0,
+  })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  hang = true
+  await new Promise((resolve) => setTimeout(resolve, 2))
+  void keyResolver({ issuer, keyId: 'unknown' })
+  // Let the unknown key ID start its refetch.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const lookup = keyResolver({ issuer, keyId })
+  const timedOut = new Promise((resolve) => setTimeout(() => resolve('timeout'), 50))
+  expect(await Promise.race([lookup, timedOut])).not.toBe('timeout')
+})
+
 test('stops serving the last key set once it is older than maxStale', async () => {
   const { keyId, keys } = await setup()
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
