@@ -6,7 +6,6 @@
 // one-time code by email from that issuer, exchanges it for an attestation
 // bound to this server's origin, and sends it in `Identity-Attestation`.
 // Only then does the server issue or accept an MPP payment challenge.
-import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
 import { Mppx, Store, tempo } from 'mppx/server'
@@ -51,14 +50,12 @@ function createServer(env: Env) {
   // Your own identity system, through a callback: here, API keys. Callers with a
   // key skip email verification; the route accepts either.
   const keys = new Set((env.API_KEYS ?? '').split(',').filter(Boolean))
-  const apiKey = Attestation.Server.callback({
-    type: 'api-key',
+  const apiKey = Identity.from({
     verify(request) {
       const key = request.headers.get('X-Api-Key')
       if (!key) return undefined
-      if (!keys.has(key))
-        throw new Attestation.Server.CallbackError('Unknown API key.', { code: 403 })
-      return { key: `${key.slice(0, 4)}…` }
+      if (!keys.has(key)) throw new Identity.Rejection('Unknown API key.', { code: 403 })
+      return { key: key.slice(0, 4) + '…' }
     },
   })
   const identity = keys.size > 0 ? Identity.anyOf(email, apiKey) : email

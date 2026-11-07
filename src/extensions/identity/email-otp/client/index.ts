@@ -1,7 +1,7 @@
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
-import * as Attestation from '../../attestation/client/index.js'
 import { Constants } from '../Constants.js'
+import * as Attestation from '../internal/Prover.js'
 
 /**
  * Asks an issuer to email a one-time code for `audience`.

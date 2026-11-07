@@ -1,8 +1,8 @@
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
-import * as Attestation from '../../attestation/server/index.js'
-import type * as AttestationTypes from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
+import type * as AttestationTypes from '../internal/Types.js'
+import * as Attestation from '../internal/Verifier.js'
 import type * as Types from '../Types.js'
 
 /**

@@ -2,13 +2,14 @@ import type { RequestListener } from 'node:http'
 
 import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
-import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { afterEach, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
+
+import * as Attestation from './internal/index.js'
 
 const issuer = 'https://issuer.example'
 
@@ -324,17 +325,14 @@ test('requires issuers to acquire attestations', () => {
   )
 })
 
-test("accepts the server's own identity system through a callback, or email", async () => {
+test("accepts the server's own identity system through Identity.from, or email", async () => {
   const fake = await createIssuer()
   const email = EmailOtp.Server.verifier({ audience, fetch: fake.fetch, issuer })
-  const apiKey = Attestation.Server.callback({
-    issuer: 'https://merchant.example/keys',
-    type: 'api-key',
+  const apiKey = Identity.from({
     verify(request) {
       const key = request.headers.get('X-Api-Key')
       if (!key) return undefined
-      if (key !== 'key-1')
-        throw new Attestation.Server.CallbackError('Unknown API key.', { code: 403 })
+      if (key !== 'key-1') throw new Identity.Rejection('Unknown API key.', { code: 403 })
       return { customer: 'acme' }
     },
   })
@@ -357,10 +355,7 @@ test("accepts the server's own identity system through a callback, or email", as
 
   const none = await fetch(server.url)
   expect(none.status).toBe(401)
-  expect(Attestation.Client.requirements(none.headers)).toEqual([
-    { issuer, type: 'email' },
-    { issuer: 'https://merchant.example/keys', type: 'api-key' },
-  ])
+  expect(Attestation.Client.requirements(none.headers)).toEqual([{ issuer, type: 'email' }])
 
   expect((await fetch(server.url, { headers: { 'X-Api-Key': 'wrong' } })).status).toBe(403)
 
@@ -394,10 +389,4 @@ test("accepts the server's own identity system through a callback, or email", as
   const viaEmail = await emailClient.fetch(server.url)
   expect(viaEmail.status).toBe(200)
   expect(await viaEmail.json()).toMatchObject({ email: { email: 'dana@example.com' } })
-})
-
-test('validates the callback identity type', () => {
-  expect(() => Attestation.Server.callback({ type: '1 bad', verify: () => undefined })).toThrow(
-    'Identity type',
-  )
 })

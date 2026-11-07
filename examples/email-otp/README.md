@@ -60,13 +60,12 @@ A route can accept any of these, alone or together with `Identity.anyOf`:
 | ------------------------ | ---------------------------------------------------------------------------------- | --------------------------------------------- |
 | Hosted email OTP         | `EmailOtp.Server.verifier({ issuer: 'https://identity.mpp.tempo.xyz', audience })` | Lightweight check with nothing to run         |
 | Self-hosted email OTP    | Same verifier, `issuer` set to your deployment of `apps/mpp-identity`              | Your own sender domain and limits             |
-| Your own identity system | `Attestation.Server.callback({ type, verify })`                                    | API keys, sessions, SSO, KYC you already have |
+| Your own identity system | `Identity.from({ verify })`                                                        | API keys, sessions, SSO, KYC you already have |
 
-`callback` runs your function on each request: return the caller's identity, `undefined` when the request has none (the caller gets 401 with `Identity-Attestation-Required` naming your `type`), or throw `Attestation.Server.CallbackError` to reject it. This example accepts API keys when `API_KEYS` is set:
+`Identity.from` (from `mppx/identity`) runs your function on each request, such as a lookup in your database: return the caller's identity, `undefined` when the request has none (401), or throw `Identity.Rejection` to reject it. This example accepts API keys when `API_KEYS` is set:
 
 ```ts
-const apiKey = Attestation.Server.callback({
-  type: 'api-key',
+const apiKey = Identity.from({
   verify: (request) => lookUpKey(request.headers.get('X-Api-Key')),
 })
 mppx.charge({ amount: '0.01', identity: [Identity.anyOf(email, apiKey)] })

@@ -1,4 +1,4 @@
-import type { MaybePromise } from '../../../internal/types.js'
+import type { MaybePromise } from '../../../../internal/types.js'
 
 /**
  * Claims of an MPP identity attestation.

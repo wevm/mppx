@@ -18,7 +18,10 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   const timeout = (options.timeout ?? 5) * 1_000
   const fetch = options.fetch ?? globalThis.fetch
   // The newest fetch per issuer, started at `startedAt`; shared by concurrent lookups.
-  const sets = new Map<string, { startedAt: number; keys: Promise<Map<string, CryptoKey>> }>()
+  const sets = new Map<
+    string,
+    { failed: boolean; startedAt: number; keys: Promise<Map<string, CryptoKey>> }
+  >()
   // The last set fetched successfully per issuer, served while a refetch fails.
   const good = new Map<string, { fetchedAt: number; keys: Map<string, CryptoKey> }>()
 
@@ -49,9 +52,11 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
       good.set(issuer, { fetchedAt: startedAt, keys: result })
       return result
     })()
+    const entry = { failed: false, startedAt, keys }
     // A failed fetch is retried after `refreshInterval` rather than cached for `ttl`.
-    keys.catch(() => {})
-    const entry = { startedAt, keys }
+    keys.catch(() => {
+      entry.failed = true
+    })
     sets.set(issuer, entry)
     return entry
   }
@@ -59,7 +64,8 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   /** The newest fetch, or one started now if the newest is older than `age`. */
   function current(issuer: string, age: number) {
     const entry = sets.get(issuer)
-    return entry && Date.now() - entry.startedAt <= age ? entry : load(issuer)
+    const limit = entry?.failed ? Math.min(age, refreshInterval) : age
+    return entry && Date.now() - entry.startedAt <= limit ? entry : load(issuer)
   }
 
   /** Awaits a fetch, falling back to the last good set while it is within `maxStale`. */

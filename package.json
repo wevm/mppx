@@ -242,11 +242,6 @@
       "types": "./dist/extensions/identity/tap/index.d.ts",
       "default": "./dist/extensions/identity/tap/index.js"
     },
-    "./extensions/identity/attestation": {
-      "src": "./src/extensions/identity/attestation/index.ts",
-      "types": "./dist/extensions/identity/attestation/index.d.ts",
-      "default": "./dist/extensions/identity/attestation/index.js"
-    },
     "./extensions/identity/email-otp": {
       "src": "./src/extensions/identity/email-otp/index.ts",
       "types": "./dist/extensions/identity/email-otp/index.d.ts",

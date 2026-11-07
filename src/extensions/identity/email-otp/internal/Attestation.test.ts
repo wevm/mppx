@@ -1,6 +1,7 @@
-import * as Attestation from 'mppx/extensions/identity/attestation'
 import { expect, test } from 'vp/test'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
+
+import * as Attestation from './index.js'
 
 const issuer = 'https://issuer.example'
 const audience = 'https://api.example'
@@ -166,4 +167,22 @@ test('stops serving the last key set once it is older than maxStale', async () =
   up = false
   await new Promise((resolve) => setTimeout(resolve, 20))
   await expect(keyResolver({ issuer, keyId })).rejects.toThrow('down')
+})
+
+test('retries a failed key set fetch after refreshInterval, not ttl', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let up = false
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      if (!up) throw new Error('down')
+      return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+    },
+    refreshInterval: 0.01,
+    ttl: 300,
+  })
+  await expect(keyResolver({ issuer, keyId })).rejects.toThrow('down')
+  up = true
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
 })

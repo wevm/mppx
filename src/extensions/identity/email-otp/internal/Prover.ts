@@ -2,9 +2,9 @@ import { isInnerList, parseList, Token } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
-import * as Attestation from '../Attestation.js'
-import { Constants } from '../Constants.js'
-import type * as Types from '../Types.js'
+import * as Attestation from './Attestation.js'
+import { Constants } from './Constants.js'
+import type * as Types from './Types.js'
 
 /**
  * Creates a prover that presents identity attestations.
