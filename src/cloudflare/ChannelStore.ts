@@ -87,6 +87,7 @@ export class ChannelStore extends Store.DurableObjectStore {
             capturedAtSend: sending.capturedAtSend,
             closeRequestAtSend: sending.closeRequestAtSend,
             settledAtSend: sending.settledAtSend,
+            watchdogAt: sending.watchdogAt,
           }
         : {}),
     }
@@ -130,6 +131,12 @@ export class ChannelStore extends Store.DurableObjectStore {
       pending = { ...pending, sends: 0 }
       await this.storage.put(settlementKey, pending)
     }
+    // An alarm set for something that no longer needs a send, such as the end of a close marker a
+    // failed close then cleared: wait for the watchdog rather than spend an attempt early.
+    if (pending.sends && pending.watchdogAt !== undefined && Date.now() < pending.watchdogAt)
+      return this.storage.setAlarm!(
+        Math.min(pending.watchdogAt, pendingCloseEnd(state as State) ?? Infinity),
+      )
     await this.send(pending, state as State, settlement, this.storage)
   }
 
@@ -146,6 +153,10 @@ export class ChannelStore extends Store.DurableObjectStore {
   ): Promise<void> {
     const sends = pending.sends + 1
     if (sends > settlement.maxAttempts) {
+      // A live close marker may hide a payer close request merged into it: wake when it ends,
+      // when a close request restarts the count, rather than giving up for good now.
+      const markerEnd = pendingCloseEnd(state)
+      if (markerEnd !== undefined) return wakeBy(storage, markerEnd)
       await storage.delete(settlementKey)
       return
     }
@@ -156,7 +167,11 @@ export class ChannelStore extends Store.DurableObjectStore {
     try {
       await settlement.queue.send({ channelId: pending.channelId } satisfies ChannelStore.Message)
     } catch {
-      // Keep a sooner alarm that a write during the send set, such as for a close request.
+      // Retry from the alarm without waiting for the last watchdog. Keep a sooner alarm that a
+      // write during the send set, such as for a close request.
+      const current = (await storage.get(settlementKey)) as Pending | undefined
+      if (current?.key === pending.key && current.watchdogAt !== undefined)
+        await storage.put(settlementKey, { ...current, watchdogAt: undefined } satisfies Pending)
       await wakeBy(storage, Date.now() + settlement.retryMs)
       return
     }
@@ -165,24 +180,22 @@ export class ChannelStore extends Store.DurableObjectStore {
     const current = (await storage.get(settlementKey)) as Pending | undefined
     if (current?.key !== pending.key) return
     const counted = current.sends + 1
+    const watchdog = settlement.watchdogMs * 2 ** (counted - 1)
+    // Once the escrow's grace period ends, the payer can withdraw what is unsettled: resend a
+    // closing channel often enough that every attempt fits inside it.
+    const watchdogAt =
+      Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog)
     await storage.put(settlementKey, {
       ...current,
       capturedAtSend: settleableAmount(state),
       closeRequestAtSend: closeRequest(state),
       sends: counted,
       settledAtSend: state.settledOnChain,
+      watchdogAt,
     } satisfies Pending)
-    const watchdog = settlement.watchdogMs * 2 ** (counted - 1)
-    // Once the escrow's grace period ends, the payer can withdraw what is unsettled: resend a
-    // closing channel often enough that every attempt fits inside it. A write during the send
-    // (such as a close request) may have set a sooner alarm from a newer state: keep it.
-    await wakeBy(
-      storage,
-      Math.min(
-        Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog),
-        pendingCloseEnd(state) ?? Infinity,
-      ),
-    )
+    // A write during the send (such as a close request) may have set a sooner alarm from a newer
+    // state: keep it.
+    await wakeBy(storage, Math.min(watchdogAt, pendingCloseEnd(state) ?? Infinity))
   }
 }
 
@@ -237,6 +250,8 @@ type Pending = {
   closeRequestAtSend?: bigint | undefined
   /** Unix milliseconds of the channel's last write. */
   updatedAt: number
+  /** Unix milliseconds the last successful send's watchdog resends at, so an earlier alarm waits for it. */
+  watchdogAt?: number | undefined
 }
 
 /** A {@link ChannelStore.Settlement} with its defaults filled in. */
@@ -248,7 +263,7 @@ type ResolvedSettlement = {
 
 /** Fills in the defaults of a {@link ChannelStore.Settlement}. */
 function resolveSettlement(settlement: ChannelStore.Settlement): ResolvedSettlement {
-  return {
+  const resolved = {
     maxAttempts: settlement.maxAttempts ?? 6,
     minUnsettledAmount: settlement.minUnsettledAmount ?? 100_000n,
     queue: settlement.queue,
@@ -256,6 +271,13 @@ function resolveSettlement(settlement: ChannelStore.Settlement): ResolvedSettlem
     staleAfterMs: settlement.staleAfterMs ?? 300_000,
     watchdogMs: settlement.watchdogMs ?? 5 * 60_000,
   }
+  // A non-finite delay would schedule no alarm at all, silently never settling.
+  for (const name of ['retryMs', 'staleAfterMs', 'watchdogMs'] as const)
+    if (!(Number.isFinite(resolved[name]) && resolved[name] >= 0))
+      throw new Error(`ChannelStore: \`${name}\` must be a finite, non-negative number.`)
+  if (!(Number.isSafeInteger(resolved.maxAttempts) && resolved.maxAttempts > 0))
+    throw new Error('ChannelStore: `maxAttempts` must be a positive integer.')
+  return resolved
 }
 
 /** Whether a stored value is a precompile-backed session channel state. */
