@@ -93,7 +93,7 @@ function namespace() {
 }
 
 /** The lookup entry key of the test payer's channels. */
-const lookupKey = `mppx:session-lookup:v2:${[payer, payee, token, '0x4d50500000000000000000000000000000000000'].join(':')}:42431`
+const lookupKey = `mppx:session-lookup:v3:${[payer, payee, token, '0x4d50500000000000000000000000000000000000', '0x0000000000000000000000000000000000000000'].join(':')}:42431`
 
 function resolve(lookup: ReturnType<typeof channels>, operator?: `0x${string}`) {
   return lookup.resolveChannelId({
@@ -193,8 +193,21 @@ describe('channels', () => {
     expect(await resolve(lookup, operator)).toBe(a)
     expect(await resolve(lookup, '0x0000000000000000000000000000000000000000')).toBe(b)
     expect(await resolve(lookup, '0x00000000000000000000000000000000000000dd')).toBeUndefined()
-    // A challenge without an operator accepts any channel's.
+    // mppx verifies a challenge without an operator against the zero operator.
     expect(await resolve(lookup)).toBe(b)
+    await lookup.store.put(b, channel(b, { finalized: true }))
+    expect(await resolve(lookup)).toBeUndefined()
+  })
+
+  test('keeps a channel findable behind eight newer ones with another operator', async () => {
+    const objects = namespace()
+    const lookup = channels(objects)
+    const operator = '0x00000000000000000000000000000000000000cc'
+    await lookup.store.put(a, channel(a))
+    const ids = Array.from({ length: 8 }, (_, i) => `0x${(i + 1).toString(16).repeat(64)}`)
+    for (const id of ids) await lookup.store.put(id, channel(id, { operator }))
+    expect(await resolve(lookup)).toBe(a)
+    expect(await resolve(lookup, operator)).toBe(ids[7])
   })
 
   test('keeps the most recent open channels of a payer', async () => {

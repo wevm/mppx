@@ -173,8 +173,10 @@ export class ChannelStore extends Store.DurableObjectStore {
     } satisfies Pending)
     const watchdog = settlement.watchdogMs * 2 ** (counted - 1)
     // Once the escrow's grace period ends, the payer can withdraw what is unsettled: resend a
-    // closing channel often enough that every attempt fits inside it.
-    await storage.setAlarm!(
+    // closing channel often enough that every attempt fits inside it. A write during the send
+    // (such as a close request) may have set a sooner alarm from a newer state: keep it.
+    await wakeBy(
+      storage,
       Math.min(
         Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog),
         pendingCloseEnd(state) ?? Infinity,
