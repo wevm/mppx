@@ -395,6 +395,28 @@ describe('ChannelStore', () => {
     }
   })
 
+  test('sends at once a threshold of vouchers written while a send is in flight', async () => {
+    let during: (() => Promise<unknown>) | undefined
+    const sent: unknown[] = []
+    const channels = object({
+      queue: {
+        async send(body) {
+          sent.push(body)
+          await during?.()
+        },
+      },
+    })
+    await channels.write(channel({ voucher: 2_000n }))
+    await channels.fire()
+    // A threshold's worth more (1_000) arrives while the watchdog's send awaits the queue.
+    during = () => channels.write(channel({ voucher: 3_500n }))
+    await channels.fire()
+    during = undefined
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(sent).toHaveLength(3)
+  })
+
   test('does not spend a watchdog attempt on the alarm of a close marker that was cleared', async () => {
     const channels = object()
     await channels.write(channel({ voucher: 2_000n }))

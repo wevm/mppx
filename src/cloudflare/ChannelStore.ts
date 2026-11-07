@@ -133,7 +133,18 @@ export class ChannelStore extends Store.DurableObjectStore {
     }
     // An alarm set for something that no longer needs a send, such as the end of a close marker a
     // failed close then cleared: wait for the watchdog rather than spend an attempt early.
-    if (pending.sends && pending.watchdogAt !== undefined && Date.now() < pending.watchdogAt)
+    // A threshold's worth of vouchers the last send did not capture, such as ones written while
+    // it was in flight, still goes at once.
+    const uncaptured =
+      pending.capturedAtSend !== undefined &&
+      settleableAmount(state as State) - pending.capturedAtSend >=
+        threshold(state as State, settlement)
+    if (
+      pending.sends &&
+      !uncaptured &&
+      pending.watchdogAt !== undefined &&
+      Date.now() < pending.watchdogAt
+    )
       return this.storage.setAlarm!(
         Math.min(pending.watchdogAt, pendingCloseEnd(state as State) ?? Infinity),
       )
