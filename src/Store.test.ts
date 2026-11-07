@@ -986,10 +986,12 @@ describe('durableObject', () => {
       await store.put('mppx:replay:v1:0', 1)
       expect(await store.get('mppx:replay:v1:0')).toBe(1)
       await store.put('mppx:replay:v1:x', 2)
+      await store.put('mppx:key:mppx:replay:v1:0', 3)
       expect(names).toEqual([
         'mppx:key:mppx:replay:v1:0',
         'mppx:key:mppx:replay:v1:0',
         'mppx:replay:v1:x',
+        'mppx:key:mppx:key:mppx:replay:v1:0',
       ])
     }
   })

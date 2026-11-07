@@ -500,6 +500,9 @@ export declare namespace cloudflare {
 /** Name prefix of {@link durableObject}'s replay shard objects. */
 const replayShardPrefix = 'mppx:replay:'
 
+/** Object name prefix of {@link durableObject}'s keys named like a replay shard or with this prefix. */
+const keyObjectPrefix = 'mppx:key:'
+
 /** A replay shard object's whole name: `mppx:replay:v<version>:<shard>`. */
 const replayShardName = /^mppx:replay:v\d+:\d+$/
 
@@ -507,7 +510,8 @@ const replayShardName = /^mppx:replay:v\d+:\d+$/
  * Atomic store backed by Cloudflare Durable Objects.
  *
  * Each key lives in its own Durable Object instance (`idFromName(key)`; a key named
- * like a replay shard, `mppx:replay:v<version>:<shard>`, uses `mppx:key:<key>`), so
+ * like a replay shard, `mppx:replay:v<version>:<shard>`, or starting with `mppx:key:`
+ * uses `mppx:key:<key>`), so
  * reads and writes of one key are linearizable across every Worker isolate and
  * location, while different keys (such as different payment channels) scale
  * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
@@ -569,8 +573,10 @@ export function durableObject(
     )
 
   const object = (name: string) => namespace.get(namespace.idFromName(name))
-  // A key named like a replay shard gets its own object name, so its object never passes for a shard.
-  const keyObject = (key: string) => (replayShardName.test(key) ? `mppx:key:${key}` : key)
+  // A key named like a replay shard gets its own object name, so its object never passes for a
+  // shard. Keys already in that escape namespace are escaped too, so no two keys share an object.
+  const keyObject = (key: string) =>
+    replayShardName.test(key) || key.startsWith(keyObjectPrefix) ? `${keyObjectPrefix}${key}` : key
 
   async function call<result>(name: string, body: DurableObjectStore.Request): Promise<result> {
     const response = await object(name).fetch('https://mppx-store/', {
