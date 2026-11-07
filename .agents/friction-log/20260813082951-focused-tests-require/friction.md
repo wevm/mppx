@@ -1,6 +1,7 @@
 ---
 title: 'focused tests require an unavailable Tempo RPC'
 severity: 'minor'
+issue: 'wevm/mppx#790'
 ---
 
 ## Expected Behavior
