@@ -65,7 +65,10 @@ export function decode(token: string): Decoded | undefined {
 export async function verify(
   token: string,
   options: verify.Options,
-): Promise<{ status: 'valid'; claims: Types.Claims } | { status: 'invalid'; reason: string }> {
+): Promise<
+  | { status: 'valid'; claims: Types.Claims }
+  | { status: 'invalid'; reason: string; unavailable?: true }
+> {
   const decoded = decode(token)
   if (!decoded) return invalid('The attestation is malformed.')
   const { header, claims } = decoded
@@ -91,7 +94,8 @@ export async function verify(
   try {
     key = await options.keyResolver({ issuer: options.issuer, keyId: header.kid })
   } catch {
-    return invalid('The attestation key could not be resolved.')
+    // The issuer's keys are unreachable, which says nothing about the token.
+    return { ...invalid('The attestation key could not be resolved.'), unavailable: true }
   }
   if (!key) return invalid('No public key is available for the attestation key ID.')
   let valid = false

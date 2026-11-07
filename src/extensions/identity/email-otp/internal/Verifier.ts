@@ -79,6 +79,10 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           maxAge: config.maxAge,
           type: config.type,
         })
+        // 503 rather than 401, so a client keeps its attestation instead of
+        // discarding it and asking for a new code while the issuer is down.
+        if (result.status === 'invalid' && result.unavailable)
+          return { status: 'invalid', code: 503, reason: result.reason }
         if (result.status === 'invalid') {
           reason = result.reason
           continue

@@ -273,3 +273,24 @@ test('rejects a non-finite clock tolerance or max age', () => {
     'non-negative integer',
   )
 })
+
+test('answers 503 while the issuer keys are unreachable', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: () => {
+      throw new Error('down')
+    },
+    type: 'email',
+  })
+  const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
+  const result = await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])
+  expect(result).toMatchObject({ status: 'invalid', code: 503 })
+  expect(result).not.toHaveProperty('headers')
+})
