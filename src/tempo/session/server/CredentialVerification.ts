@@ -1394,7 +1394,7 @@ async function handleCloseCredential(
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
-          ? { ...current, closeRequestedAt: 0n }
+          ? { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
           : current,
       )
     }
