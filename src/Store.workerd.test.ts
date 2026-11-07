@@ -23,6 +23,8 @@ beforeAll(async () => {
     // SQLite-backed, as production binds them: replay shards need SQL.
     durableObjects: {
       FAILING: { className: 'FailingStore', useSQLite: true },
+      // Key-value-backed, as classes bound with `new_classes` are.
+      KV_RECORDING: { className: 'KvRecordingStore', useSQLite: false },
       NATIVE_STORE: { className: 'NativeStore', useSQLite: true },
       RECORDING: { className: 'RecordingStore', useSQLite: true },
       RECORDING_RPC: { className: 'RecordingRpcStore', useSQLite: true },
@@ -245,6 +247,21 @@ describe('Store.DurableObjectStore hooks in workerd', () => {
 
     await expect
       .poll(async () => (await run<Log>({ op: 'log', key })).alarms, { timeout: 5_000 })
+      .toBeGreaterThan(0)
+  })
+})
+
+describe('Store.DurableObjectStore on key-value storage in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'kv-recording' })
+
+  test("runs a subclass's alarm that calls super.alarm()", async () => {
+    const key = 'kv-hooked'
+    await run({ op: 'put', key, value: { a: 1 } })
+    await expect
+      .poll(async () => (await run<{ alarms: number }>({ op: 'log', key })).alarms, {
+        timeout: 5_000,
+      })
       .toBeGreaterThan(0)
   })
 })

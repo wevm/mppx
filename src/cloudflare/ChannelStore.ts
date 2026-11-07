@@ -18,7 +18,9 @@ const settlementKey = 'mppx:channel-store:settlement'
  * write for `staleAfterMs`. The Worker's `queue()` handler settles it with
  * {@link settle}. After each send, a watchdog alarm sends it again while the channel
  * stays unsettled (a dropped, dead-lettered or failed job), waiting twice as long each
- * time, up to `maxAttempts` sends; settling more on-chain restarts the count.
+ * time, up to `maxAttempts` sends; settling more on-chain restarts the count. A close request,
+ * or a threshold's worth of new vouchers since the last send, sends it again at once and
+ * restarts the count, so a failed job never leaves them waiting on a long watchdog.
  *
  * Export a subclass from your Worker, bind it with a `new_sqlite_classes` migration and
  * bind the queue as `MPPX_SETTLEMENT_QUEUE`, or override
@@ -61,19 +63,36 @@ export class ChannelStore extends Store.DurableObjectStore {
     // A job settled more on-chain since it was sent: the job is done, so restart the count.
     const progressed =
       pending?.settledAtSend !== undefined && next.settledOnChain > pending.settledAtSend
-    const sending = progressed ? undefined : pending?.sends ? pending : undefined
+    // Work the last send did not cover: a close request (once the escrow's grace period ends,
+    // the payer can withdraw what is unsettled) or a threshold's worth of new vouchers. Send it
+    // at once and restart the count instead of waiting for a watchdog that may be far off.
+    const renewed =
+      !!pending?.sends &&
+      ((closing(next) && !pending.closingAtSend) ||
+        (pending.capturedAtSend !== undefined &&
+          settleableAmount(next) - pending.capturedAtSend >= threshold(next, settlement)))
+    const sending = progressed || renewed ? undefined : pending?.sends ? pending : undefined
     const updated: Pending = {
       channelId: next.channelId,
       key,
       sends: sending?.sends ?? 0,
       updatedAt: Date.now(),
-      ...(sending ? { settledAtSend: sending.settledAtSend } : {}),
+      ...(sending
+        ? {
+            capturedAtSend: sending.capturedAtSend,
+            closingAtSend: sending.closingAtSend,
+            settledAtSend: sending.settledAtSend,
+          }
+        : {}),
     }
     await storage.put(settlementKey, updated)
     // A job is in flight: it settles the latest voucher, and its watchdog alarm stays.
     if (sending) return
     // Sent from an alarm that fires at once: a queue send here would let another write in before this one commits.
-    const at = due === 'threshold' ? Date.now() : updated.updatedAt + settlement.staleAfterMs
+    const at =
+      due === 'threshold' || closing(next)
+        ? Date.now()
+        : updated.updatedAt + settlement.staleAfterMs
     const alarm = await storage.getAlarm!()
     if (alarm === null || at < alarm) await storage.setAlarm!(at)
   }
@@ -94,7 +113,7 @@ export class ChannelStore extends Store.DurableObjectStore {
     }
     // The channel had a write since this alarm was set: wait until it has been idle long enough.
     const staleAt = pending.updatedAt + settlement.staleAfterMs
-    if (!pending.sends && due === 'stale' && Date.now() < staleAt)
+    if (!pending.sends && due === 'stale' && !closing(state as State) && Date.now() < staleAt)
       return this.storage.setAlarm!(staleAt)
     await this.send(pending, state as State, settlement, this.storage)
   }
@@ -132,6 +151,8 @@ export class ChannelStore extends Store.DurableObjectStore {
     const counted = current.sends + 1
     await storage.put(settlementKey, {
       ...current,
+      capturedAtSend: settleableAmount(state),
+      closingAtSend: closing(state),
       sends: counted,
       settledAtSend: state.settledOnChain,
     } satisfies Pending)
@@ -177,6 +198,10 @@ type Pending = {
   sends: number
   /** `settledOnChain` at the last send, to tell when that job made progress. */
   settledAtSend?: bigint | undefined
+  /** The cumulative amount the last send could settle, to tell when a threshold's worth more arrived. */
+  capturedAtSend?: bigint | undefined
+  /** Whether the channel had a close request at the last send. */
+  closingAtSend?: boolean | undefined
   /** Unix milliseconds of the channel's last write. */
   updatedAt: number
 }
@@ -219,8 +244,27 @@ export function isChannelState(value: unknown): value is State {
  * within `spent` (as mppx's `settle` picks it) above `settledOnChain`.
  */
 export function unsettledAmount(state: State): bigint {
-  const voucher = resolveSettleableVoucher(state)
-  return voucher ? voucher.cumulativeAmount - state.settledOnChain : 0n
+  return settleableAmount(state) - state.settledOnChain
+}
+
+/** The cumulative amount a settlement of the channel would bring it to: its settleable voucher's, or `settledOnChain`. */
+function settleableAmount(state: State): bigint {
+  return resolveSettleableVoucher(state)?.cumulativeAmount ?? state.settledOnChain
+}
+
+/** Whether the payer requested a close, after which the escrow's grace period runs. */
+function closing(state: State): boolean {
+  return !!state.closeRequestedAt
+}
+
+/** The unsettled amount that sends a channel at once: `max(10% of deposit, minUnsettledAmount)`. */
+function threshold(
+  state: State,
+  settlement: Pick<ChannelStore.Settlement, 'minUnsettledAmount'>,
+): bigint {
+  const minimum = settlement.minUnsettledAmount ?? 100_000n
+  const tenth = state.deposit / 10n
+  return tenth > minimum ? tenth : minimum
 }
 
 /**
@@ -235,7 +279,5 @@ export function settlementDue(
   if (state.finalized) return undefined
   const unsettled = unsettledAmount(state)
   if (unsettled <= 0n) return undefined
-  const minimum = settlement.minUnsettledAmount ?? 100_000n
-  const tenth = state.deposit / 10n
-  return unsettled >= (tenth > minimum ? tenth : minimum) ? 'threshold' : 'stale'
+  return unsettled >= threshold(state, settlement) ? 'threshold' : 'stale'
 }
