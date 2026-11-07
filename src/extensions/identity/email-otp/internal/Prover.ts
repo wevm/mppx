@@ -146,16 +146,8 @@ export function requirements(headers: Headers): Types.Requirement[] {
       result.push({ type: member[0].toString() })
       continue
     }
-    if (typeof issuer !== 'string' || !isIssuer(issuer)) continue
+    if (typeof issuer !== 'string' || !Attestation.isIssuer(issuer)) continue
     result.push({ type: member[0].toString(), issuer })
   }
   return result
-}
-
-/** Accepts https issuers, and http only on localhost for development. */
-function isIssuer(value: string): boolean {
-  if (!URL.canParse(value)) return false
-  const url = new URL(value)
-  if (url.protocol === 'https:') return true
-  return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
 }

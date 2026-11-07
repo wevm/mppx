@@ -31,7 +31,8 @@ import type * as Types from './Types.js'
  */
 export function verifier(config: verifier.Config): Identity.Verifier<Types.Verified> {
   const issuer = config.issuer.replace(/\/+$/, '')
-  if (!URL.canParse(issuer)) throw new TypeError('Attestation issuer must be a URL.')
+  if (!Attestation.isIssuer(issuer))
+    throw new TypeError('Attestation issuer must be an https URL (http only on localhost).')
   const keyResolver = config.keyResolver ?? Jwks.resolver({ fetch: config.fetch })
   const required = {
     [Constants.requiredHeader]: serializeList([
@@ -41,12 +42,20 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   return {
     stage: 'request',
     async verify(request) {
-      const tokens = Attestation.parseHeader(request.headers.get(Constants.header)).filter(
-        (token) => {
-          const claims = Attestation.decode(token)?.claims
-          return claims?.iss === issuer && claims.type === config.type
-        },
-      )
+      const audience =
+        typeof config.audience === 'function' ? config.audience(request) : config.audience
+      // Only one token is verified, so repeated or forged tokens cost one
+      // signature check: the unexpired one for this audience that expires last,
+      // or else the first, whose rejection says why.
+      const now = Math.floor(Date.now() / 1_000)
+      const tolerance = config.clockTolerance ?? Constants.clockTolerance
+      const candidates = Attestation.parseHeader(request.headers.get(Constants.header))
+        .map((token) => ({ token, claims: Attestation.decode(token)?.claims }))
+        .filter(({ claims }) => claims?.iss === issuer && claims.type === config.type)
+      const usable = candidates
+        .filter(({ claims }) => claims?.aud === audience && (claims.exp ?? 0) > now - tolerance)
+        .sort((a, b) => (b.claims?.exp ?? 0) - (a.claims?.exp ?? 0))
+      const tokens = (usable.length > 0 ? usable : candidates).slice(0, 1).map(({ token }) => token)
       if (tokens.length === 0)
         return {
           status: 'missing',
@@ -54,8 +63,6 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           headers: required,
           reason: `An identity attestation of type "${config.type}" is required.`,
         }
-      const audience =
-        typeof config.audience === 'function' ? config.audience(request) : config.audience
       let reason = 'The identity attestation is invalid.'
       for (const token of tokens) {
         const result = await Attestation.verify(token, {

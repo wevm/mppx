@@ -186,3 +186,40 @@ test('retries a failed key set fetch after refreshInterval, not ttl', async () =
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(await keyResolver({ issuer, keyId })).toBeDefined()
 })
+
+test('verifies one token however many the header repeats', async () => {
+  const { claims, keyId } = await setup()
+  const forger = await keyPair()
+  const current = Math.floor(Date.now() / 1_000)
+  const forged = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: forger.privateKey, keyId },
+  )
+  let lookups = 0
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: () => {
+      lookups++
+      return undefined
+    },
+    type: 'email',
+  })
+  const request = new Request(audience, {
+    headers: { [Attestation.Constants.header]: Array(50).fill(forged).join(', ') },
+  })
+  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
+    { status: 'invalid', code: 401 },
+  )
+  expect(lookups).toBe(1)
+})
+
+test('rejects a plaintext http issuer except on localhost', () => {
+  const config = { audience, keyResolver: () => undefined, type: 'email' }
+  expect(() => Attestation.Server.verifier({ ...config, issuer: 'http://issuer.example' })).toThrow(
+    'https',
+  )
+  expect(() =>
+    Attestation.Server.verifier({ ...config, issuer: 'http://localhost:8787' }),
+  ).not.toThrow()
+})

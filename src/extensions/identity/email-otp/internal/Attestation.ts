@@ -150,3 +150,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function isTime(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
+
+/** Accepts https issuers, and http only on localhost for development. */
+export function isIssuer(value: string): boolean {
+  if (!URL.canParse(value)) return false
+  const url = new URL(value)
+  if (url.protocol === 'https:') return true
+  return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+}
