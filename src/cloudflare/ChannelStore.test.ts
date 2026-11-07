@@ -336,6 +336,32 @@ describe('ChannelStore', () => {
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
   })
 
+  test('keeps the immediate send of a close request written while a send fails', async () => {
+    let during: (() => Promise<unknown>) | undefined
+    const channels = object({
+      queue: {
+        async send() {
+          await during?.()
+          throw new Error('queue unavailable')
+        },
+      },
+    })
+    await channels.write(channel({ voucher: 2_000n }))
+    during = () => channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
+    await channels.fire()
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+  })
+
+  test('stops resending after maxAttempts with a zero minUnsettledAmount', async () => {
+    const channels = object({ minUnsettledAmount: 0n })
+    await channels.write(channel({ deposit: 5n, voucher: 2n }))
+    await channels.fire()
+    expect(channels.sent).toHaveLength(1)
+    // A write with no new vouchers, such as a settlement lease, keeps the count and the watchdog.
+    await channels.write(channel({ deposit: 5n, voucher: 2n }))
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+  })
+
   test("resends a closing channel within the escrow's close grace period", async () => {
     const channels = object({ watchdogMs: 20 * 60_000 })
     await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
