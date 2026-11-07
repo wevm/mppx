@@ -969,6 +969,33 @@ describe('durableObject', () => {
     expect(Rpc.prototype.describe()).toBe('child')
   })
 
+  test('keeps keys named like replay shards out of shard objects', async () => {
+    for (const transport of ['fetch', 'rpc'] as const) {
+      const names: string[] = []
+      const namespace = fakeDurableObjectNamespace()
+      const store = Store.durableObject(
+        {
+          ...namespace,
+          idFromName: (name: string) => {
+            names.push(name)
+            return namespace.idFromName(name)
+          },
+        },
+        { transport },
+      )
+      await store.put('mppx:replay:v1:0', 1)
+      expect(await store.get('mppx:replay:v1:0')).toBe(1)
+      await store.put('mppx:replay:v1:x', 2)
+      await store.put('mppx:key:mppx:replay:v1:0', 3)
+      expect(names).toEqual([
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:replay:v1:x',
+        'mppx:key:mppx:key:mppx:replay:v1:0',
+      ])
+    }
+  })
+
   test('rejects native encoding over fetch', () => {
     expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
       'requires `transport: "rpc"`',
