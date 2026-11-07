@@ -156,7 +156,8 @@ export class ChannelStore extends Store.DurableObjectStore {
     try {
       await settlement.queue.send({ channelId: pending.channelId } satisfies ChannelStore.Message)
     } catch {
-      await storage.setAlarm!(Date.now() + settlement.retryMs)
+      // Keep a sooner alarm that a write during the send set, such as for a close request.
+      await wakeBy(storage, Date.now() + settlement.retryMs)
       return
     }
     // The send awaited the queue, so a channel write may have changed the bookkeeping since
@@ -343,7 +344,10 @@ function threshold(
 ): bigint {
   const minimum = settlement.minUnsettledAmount ?? 100_000n
   const tenth = state.deposit / 10n
-  return tenth > minimum ? tenth : minimum
+  const amount = tenth > minimum ? tenth : minimum
+  // At least 1: a zero threshold would count every write as a threshold's worth of new vouchers
+  // and restart the send count forever, past `maxAttempts`.
+  return amount > 0n ? amount : 1n
 }
 
 /**

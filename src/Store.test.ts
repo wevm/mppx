@@ -775,14 +775,6 @@ describe('durableObject', () => {
       [new Set([1, 2]), new Set([2, 1])],
       [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1)],
       [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1, { maxByteLength: 4 })],
-      (() => {
-        const buffer = new ArrayBuffer(4, { maxByteLength: 8 })
-        return [new Uint8Array(buffer), new Uint8Array(structuredClone(buffer), 0, 4)]
-      })(),
-      (() => {
-        const buffer = new ArrayBuffer(4, { maxByteLength: 4 })
-        return [new DataView(buffer, 2), new DataView(structuredClone(buffer), 2, 2)]
-      })(),
     ]
     for (const [stored, other] of pairs) {
       const object = objectStore()
@@ -827,6 +819,22 @@ describe('durableObject', () => {
     const stored = (await store.get('cycle')) as typeof value
     expect(stored.n).toBe(1)
     expect(stored.self).toBe(stored)
+  })
+
+  test('native encoding rejects views of resizable buffers, whose length tracking it would have to probe', async () => {
+    const view = new Uint8Array(new ArrayBuffer(4, { maxByteLength: 8 }))
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { view })).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
+    const object = objectStore()
+    await object.storePut('k', new Uint8Array(4), 'native')
+    await expect(object.storeSwap('k', view, null, 'native')).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
   })
 
   test('native encoding rejects errors, whose cause and stack it cannot compare', async () => {
