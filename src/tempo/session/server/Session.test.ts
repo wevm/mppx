@@ -1,6 +1,8 @@
 import * as node_http from 'node:http'
+import { Readable } from 'node:stream'
 
 import { serve } from '@hono/node-server'
+import express from 'express'
 import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
@@ -28,6 +30,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
 import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
+import { payment as expressPayment } from '../../../middlewares/express.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
@@ -2256,6 +2259,84 @@ describe('precompile server session unit guardrails', () => {
     })
   })
 
+  test.each(['json', 'send', 'end', 'write', 'pipe'] as const)(
+    'Express %s charges SSE non-request POST output and rejects exhausted vouchers',
+    async (output) => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const open = await createOpenPayload({ initialAmount: 2n })
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        open.descriptor,
+        Types.uint96(2n),
+        chainId,
+      )
+      await persistPrecompileChannel(store, open)
+      const mppx = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            chainId,
+            currency: token,
+            decimals: 0,
+            recipient: payee,
+            store: rawStore,
+            unitType: 'token',
+            sse: true,
+            getClient: () =>
+              createStateClient(payer, { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 }),
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const app = express()
+      app.use(express.text())
+      app.post(
+        '/resource',
+        expressPayment(mppx.session, { amount: '1', decimals: 0, unitType: 'token' }),
+        (_req, res) => {
+          if (output === 'json') res.json({ content: 'protected' })
+          else if (output === 'send') res.send('protected')
+          else if (output === 'end') res.end('protected')
+          else if (output === 'write') {
+            res.writeHead(200, { 'Content-Type': 'text/plain' })
+            res.write('protected')
+            res.end()
+          } else Readable.from(['protected']).pipe(res)
+        },
+      )
+      const server = await Http.createServer(app)
+      const call = (authorization?: string) =>
+        fetch(server.url + '/resource', {
+          method: 'POST',
+          body: 'work',
+          headers: authorization ? { Authorization: authorization } : {},
+        })
+      try {
+        const challenge = Challenge.fromResponse(await call())
+        const authorization = Credential.serialize({
+          challenge,
+          payload: voucher,
+          source: sourceFor(),
+        })
+        for (let count = 1; count <= 2; count++) {
+          const paid = await call(authorization)
+          expect(paid.status).toBe(200)
+          expect(await paid.text()).toContain('protected')
+          expect(paid.headers.has('Payment-Receipt')).toBe(true)
+          expect((await store.getChannel(open.channelId))?.spent).toBe(BigInt(count))
+        }
+        const rejected = await call(authorization)
+        expect(rejected.status).toBe(402)
+        expect(await rejected.text()).not.toContain('protected')
+        expect((await store.getChannel(open.channelId))?.spent).toBe(2n)
+      } finally {
+        server.close()
+      }
+    },
+  )
+
   describe('default HTTP auto-billing', () => {
     function createRoute(rawStore: Store.AtomicStore) {
       return Mppx_server.create({
@@ -2500,6 +2581,68 @@ describe('precompile server session unit guardrails', () => {
         }
 
         expect(await store.getChannel(openPayload.channelId)).toMatchObject({ spent: 1n, units: 1 })
+      },
+    )
+
+    test.each([
+      { freshChallenge: false, idempotencyKey: undefined },
+      { freshChallenge: false, idempotencyKey: 'reused-request' },
+      { freshChallenge: true, idempotencyKey: undefined },
+    ])(
+      'concurrent copied vouchers authorize one handler invocation (%j)',
+      async ({ freshChallenge, idempotencyKey }) => {
+        const rawStore = Store.memory()
+        const store = channelStore(rawStore)
+        const openPayload = await createOpenPayload({ initialAmount: 1n })
+        await persistPrecompileChannel(store, openPayload, { spent: 0n, units: 0 })
+        const route = createRoute(rawStore)
+        const voucher = await ClientOps.createVoucherPayload(
+          createSigningClient(),
+          payer,
+          openPayload.descriptor,
+          Types.uint96(10n),
+          chainId,
+        )
+        const authorizations: string[] = []
+        for (let i = 0; i < 10; i++) {
+          if (!freshChallenge && authorizations.length) {
+            authorizations.push(authorizations[0]!)
+            continue
+          }
+          const result = await route(new Request('https://api.example.com/resource'))
+          if (result.status !== 402) throw new Error('expected challenge')
+          authorizations.push(
+            Credential.serialize({
+              challenge: Challenge.fromResponse(result.challenge),
+              payload: voucher,
+              source: sourceFor(),
+            }),
+          )
+        }
+        let calls = 0
+        const responses = await Promise.all(
+          authorizations.map(async (authorization) => {
+            const result = await route(
+              new Request('https://api.example.com/resource', {
+                headers: {
+                  Authorization: authorization,
+                  ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+                },
+              }),
+            )
+            if (result.status === 402) return result.challenge
+            calls++
+            return result.withReceipt(new Response('paid-content'))
+          }),
+        )
+        expect(responses.filter((response) => response.status === 200)).toHaveLength(1)
+        expect(responses.filter((response) => response.status === 402)).toHaveLength(9)
+        expect(calls).toBe(1)
+        expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+          highestVoucherAmount: 10n,
+          spent: 1n,
+          units: 1,
+        })
       },
     )
 

@@ -24,6 +24,8 @@ export function remoteFeePayerTransport(
 
 export function getResolver(
   parameters: getResolver.Parameters & {
+    /** Require custom clients to declare the requested chain before applying defaults. */
+    requireChain?: boolean | undefined
     /** Default chain to use if not provided. */
     chain?: Chain | undefined
     /** Remote fee-payer configuration. When set, the transport is wrapped with `withFeePayer`. */
@@ -39,9 +41,16 @@ export function getResolver(
     // ensure user-provided clients inherit those serializers. Without this, clients
     // created without the Tempo chain config will use the default viem serializer,
     // causing errors like "maxFeePerGas is not a valid Legacy Transaction attribute".
-    if (!chain?.serializers && !remoteFeePayer) return getClient
+    if (!chain?.serializers && !remoteFeePayer && !parameters.requireChain) return getClient
     return async (params) => {
       const client = await getClient(params)
+      if (
+        parameters.requireChain &&
+        (client.chain?.id === undefined || client.chain.id !== params.chainId)
+      )
+        throw new Error(
+          `Subscription chain mismatch: expected ${params.chainId}, got ${client.chain?.id ?? 'unknown'}.`,
+        )
       let resolvedClient = client
 
       // Wrap the client's transport with `withFeePayer` when a fee payer URL is provided.

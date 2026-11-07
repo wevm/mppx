@@ -6,6 +6,13 @@ import type * as Store from '../../Store.js'
 /** Options for replaying paid proxy deliveries. */
 export type Options = {
   /**
+   * Trusted payment-authority identifier. Use the same value only for replicas
+   * with identical payment policies and upstream permissions. Never derive it
+   * from request headers. Omitted values isolate replay to this proxy instance.
+   * Changing it invalidates outstanding replay records.
+   */
+  authority?: string | undefined
+  /**
    * Upstream attempts per credential, including the first, before a retry gets `502`.
    * A retry after a failed delivery (an upstream error, a 5xx or a body that broke
    * off) sends the paid request upstream again without charging, so a
@@ -34,6 +41,7 @@ export type Options = {
 
 /** Replay options with defaults applied. */
 export type Resolved = {
+  authority: string
   maxAttempts: number
   maxBodySize: number
   maxRequestBodySize: number
@@ -79,7 +87,10 @@ export function resolve(options: Options): Resolved {
     throw new RangeError(
       'replay.ttl must be a positive integer number of milliseconds up to 2147483647.',
     )
+  if (options.authority !== undefined && !options.authority.trim())
+    throw new TypeError('replay.authority must not be empty.')
   return {
+    authority: options.authority ?? globalThis.crypto.randomUUID(),
     maxAttempts: options.maxAttempts ?? 3,
     maxBodySize: options.maxBodySize ?? 1_048_576,
     maxRequestBodySize: options.maxRequestBodySize ?? 1_048_576,
@@ -114,6 +125,8 @@ export async function readBody(request: Request, maxRequestBodySize: number) {
 
 /** Derives the replay key from the credential and the exact request (origin, path, query, method, body) it paid for. */
 export function key(parameters: {
+  authority: string
+  scope: string
   body: Uint8Array
   credential: string
   method: string
@@ -121,6 +134,8 @@ export function key(parameters: {
 }): string {
   const bodyHash = Hash.sha256(parameters.body, { as: 'Hex' })
   const input = JSON.stringify([
+    parameters.authority,
+    parameters.scope,
     parameters.credential,
     parameters.method.toUpperCase(),
     parameters.target,
