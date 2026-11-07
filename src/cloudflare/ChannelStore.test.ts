@@ -340,27 +340,75 @@ describe('ChannelStore', () => {
     expect(channels.sent).toEqual([{ channelId }])
   })
 
-  test("waits for the stale alarm on the server's own cooperative-close marker", async () => {
+  test("waits on the server's own cooperative-close marker until that close can no longer land", async () => {
     const channels = object()
+    const marker = BigInt(Math.floor(Date.now() / 1000))
     await channels.write(
       channel({
         deposit: 1_000_000n,
         voucher: 500n,
-        closeRequestedAt: 1_000n,
-        pendingCloseAt: 1_000n,
+        closeRequestedAt: marker,
+        pendingCloseAt: marker,
       }),
     )
-    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
-    // A payer's close request after the marker cleared still goes at once.
+    // Not at once, but by the end of the marker's window (validity and clock skew, 55 s).
+    expect(channels.alarmIn()).toBeGreaterThan(0)
+    expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)
+    // A payer's close request after the marker still goes at once.
     await channels.write(
       channel({
         deposit: 1_000_000n,
         voucher: 500n,
-        closeRequestedAt: 1_100n,
-        pendingCloseAt: 1_000n,
+        closeRequestedAt: marker + 100n,
+        pendingCloseAt: marker,
       }),
     )
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+  })
+
+  test("sends at once a close request merged into the server's expired close marker", async () => {
+    const channels = object()
+    // On-chain merges keep the greater timestamp, so a payer's earlier request reads as the marker.
+    const marker = BigInt(Math.floor(Date.now() / 1000)) - 120n
+    await channels.write(
+      channel({
+        deposit: 1_000_000n,
+        voucher: 500n,
+        closeRequestedAt: marker,
+        pendingCloseAt: marker,
+      }),
+    )
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toEqual([{ channelId }])
+  })
+
+  test("sends a backed-off channel again once the server's close marker expires", async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    try {
+      const channels = object()
+      await channels.write(channel({ voucher: 2_000n }))
+      // Every job fails, so the watchdog backs off past 15 minutes.
+      for (let sends = 1; sends <= 3; sends++) {
+        await channels.fire()
+        expect(channels.sent).toHaveLength(sends)
+      }
+      expect(channels.alarmIn()).toBeGreaterThan(15 * 60_000)
+      // The server marks its close; a payer's close request merged into it stays hidden while it may land.
+      const marker = BigInt(Math.floor(Date.now() / 1000))
+      await channels.write(
+        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+      )
+      expect(channels.alarmIn()).toBeGreaterThan(0)
+      expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)
+      // Its close never landed: the alarm at the window's end sends it and restarts the count.
+      vi.setSystemTime(Date.now() + channels.alarmIn()!)
+      await channels.fire()
+      expect(channels.sent).toHaveLength(4)
+      expect(channels.alarmIn()).toBeLessThanOrEqual(2 * 60_000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('sends a new close request at once after the one a send covered cleared', async () => {

@@ -91,21 +91,21 @@ export class ChannelStore extends Store.DurableObjectStore {
         : {}),
     }
     await storage.put(settlementKey, updated)
-    // A job is in flight: it settles the latest voucher, and its watchdog alarm stays.
-    if (sending) return
+    // A job is in flight: it settles the latest voucher, and its watchdog alarm stays, waking no
+    // later than the end of the server's close marker, after which a payer close request it hid shows.
+    if (sending) return wakeBy(storage, pendingCloseEnd(next) ?? Infinity)
     // Sent from an alarm that fires at once: a queue send here would let another write in before this one commits.
     const at =
       due === 'threshold' || closing(next)
         ? Date.now()
-        : updated.updatedAt + settlement.staleAfterMs
-    const alarm = await storage.getAlarm!()
-    if (alarm === null || at < alarm) await storage.setAlarm!(at)
+        : Math.min(updated.updatedAt + settlement.staleAfterMs, pendingCloseEnd(next) ?? Infinity)
+    await wakeBy(storage, at)
   }
 
   /** Sends a channel over the threshold or gone stale to the queue, or sends it again from the watchdog while unsettled. */
   override async alarm(): Promise<void> {
     await super.alarm()
-    const pending = (await this.storage.get(settlementKey)) as Pending | undefined
+    let pending = (await this.storage.get(settlementKey)) as Pending | undefined
     if (!pending) return
     const raw = await this.storage.get(pending.key)
     // The store writes JSON text, or native values with `encoding: 'native'`.
@@ -119,7 +119,17 @@ export class ChannelStore extends Store.DurableObjectStore {
     // The channel had a write since this alarm was set: wait until it has been idle long enough.
     const staleAt = pending.updatedAt + settlement.staleAfterMs
     if (!pending.sends && due === 'stale' && !closing(state as State) && Date.now() < staleAt)
-      return this.storage.setAlarm!(staleAt)
+      return this.storage.setAlarm!(Math.min(staleAt, pendingCloseEnd(state as State) ?? Infinity))
+    // A close request the last send did not cover, such as one the server's close marker hid until
+    // it expired, restarts the count as a write would.
+    if (
+      pending.sends &&
+      closing(state as State) &&
+      closeRequest(state as State) !== pending.closeRequestAtSend
+    ) {
+      pending = { ...pending, sends: 0 }
+      await this.storage.put(settlementKey, pending)
+    }
     await this.send(pending, state as State, settlement, this.storage)
   }
 
@@ -165,7 +175,10 @@ export class ChannelStore extends Store.DurableObjectStore {
     // Once the escrow's grace period ends, the payer can withdraw what is unsettled: resend a
     // closing channel often enough that every attempt fits inside it.
     await storage.setAlarm!(
-      Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog),
+      Math.min(
+        Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog),
+        pendingCloseEnd(state) ?? Infinity,
+      ),
     )
   }
 }
@@ -276,13 +289,36 @@ function closing(state: State): boolean {
 
 /**
  * The payer's close request: `closeRequestedAt`, or `0n` without one. The server's own
- * cooperative-close marker ({@link State.pendingCloseAt}) is not one: that close captures
- * the vouchers itself.
+ * cooperative-close marker ({@link State.pendingCloseAt}) is not one while that close may still
+ * land ({@link pendingClose}): it captures the vouchers itself. An on-chain close request merged
+ * into the marker keeps its timestamp when the payer's is not later, so once the marker can no
+ * longer land, it counts as one.
  */
 function closeRequest(state: State): bigint {
-  const requestedAt = BigInt(state.closeRequestedAt ?? 0n)
-  if (state.pendingCloseAt !== undefined && requestedAt === BigInt(state.pendingCloseAt)) return 0n
-  return requestedAt
+  if (pendingClose(state)) return 0n
+  return BigInt(state.closeRequestedAt ?? 0n)
+}
+
+/**
+ * Unix milliseconds at which the server's close marker stops counting as {@link pendingClose},
+ * or `undefined` when it does not count now.
+ */
+function pendingCloseEnd(state: State): number | undefined {
+  if (!pendingClose(state)) return undefined
+  return (
+    (Number(state.closeRequestedAt) +
+      pendingCloseValiditySeconds +
+      pendingCloseClockSkewSeconds +
+      1) *
+    1000
+  )
+}
+
+/** Sets the alarm to `at`, unless it already fires sooner. */
+async function wakeBy(storage: Store.DurableObjectStore.Storage, at: number): Promise<void> {
+  if (!Number.isFinite(at)) return
+  const alarm = await storage.getAlarm!()
+  if (alarm === null || at < alarm) await storage.setAlarm!(at)
 }
 
 /**

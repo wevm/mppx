@@ -38,16 +38,25 @@ function channel(channelId: string, overrides: Partial<State> = {}): State {
 /** Durable Objects in memory, reached over `fetch`, that can hold back one lookup entry swap. */
 function namespace() {
   const objects = new Map<string, Store.DurableObjectStore>()
-  let hold: { held: () => void; released: Promise<void> } | undefined
+  let hold:
+    | {
+        held: () => void
+        match: (body: Store.DurableObjectStore.Request) => boolean
+        released: Promise<void>
+      }
+    | undefined
   return {
-    /** Holds back the next swap of a lookup entry until `release` is called. */
-    hold() {
+    /** Holds back the next request that `match` picks (a lookup entry swap) until `release` is called. */
+    hold(
+      match: (body: Store.DurableObjectStore.Request) => boolean = (body) =>
+        body.op === 'swap' && body.key.startsWith('mppx:session-lookup:'),
+    ) {
       let release!: () => void
       let held!: () => void
       const reached = new Promise<void>((resolve) => {
         held = resolve
       })
-      hold = { held, released: new Promise((resolve) => (release = resolve)) }
+      hold = { held, match, released: new Promise((resolve) => (release = resolve)) }
       return { reached, release }
     },
     idFromName: (name: string) => name,
@@ -70,7 +79,7 @@ function namespace() {
       return {
         async fetch(input: string, init: RequestInit) {
           const body = JSON.parse(init.body as string) as Store.DurableObjectStore.Request
-          if (hold && body.op === 'swap' && body.key.startsWith('mppx:session-lookup:')) {
+          if (hold?.match(body)) {
             const { held, released } = hold
             hold = undefined
             held()
@@ -82,6 +91,9 @@ function namespace() {
     },
   }
 }
+
+/** The lookup entry key of the test payer's channels. */
+const lookupKey = `mppx:session-lookup:v2:${[payer, payee, token, '0x4d50500000000000000000000000000000000000'].join(':')}:42431`
 
 function resolve(lookup: ReturnType<typeof channels>, operator?: `0x${string}`) {
   return lookup.resolveChannelId({
@@ -116,6 +128,37 @@ describe('channels', () => {
     release()
     await opening
     expect(await resolve(lookup)).toBe(b)
+  })
+
+  test('a lookup add delayed past its channel closing leaves the channel out', async () => {
+    const objects = namespace()
+    const lookup = channels(objects)
+    const { reached, release } = objects.hold(
+      (body) => body.op === 'get' && body.key.startsWith('mppx:session-lookup:'),
+    )
+    // Channel A opens, and its lookup add is held back until A has closed.
+    const opening = lookup.store.put(a, channel(a))
+    await reached
+    await Store.durableObject(objects).put(a, channel(a, { finalized: true }))
+    release()
+    await opening
+    expect(await Store.durableObject(objects).get(lookupKey)).toBeNull()
+  })
+
+  test('a full entry drops channels that no longer resume before an open one', async () => {
+    const objects = namespace()
+    const lookup = channels(objects)
+    const ids = Array.from({ length: 9 }, (_, i) => `0x${i.toString(16).repeat(64)}`)
+    for (const id of ids.slice(0, 8)) await lookup.store.put(id, channel(id))
+    // The most recent closes without its entry removed, as when that write was delayed or failed.
+    await Store.durableObject(objects).put(ids[7]!, channel(ids[7]!, { finalized: true }))
+    await lookup.store.put(ids[8]!, channel(ids[8]!))
+    // The closed channel made room, so the oldest open one stays findable.
+    for (const id of [ids[8]!, ...ids.slice(1, 7).reverse()]) {
+      expect(await resolve(lookup)).toBe(id)
+      await lookup.store.put(id, channel(id, { finalized: true }))
+    }
+    expect(await resolve(lookup)).toBe(ids[0])
   })
 
   test('replaces an entry whose channel no longer resumes', async () => {
