@@ -1,3 +1,4 @@
+import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import { Constants } from './Constants.js'
 import type * as Types from './Types.js'
 
@@ -16,7 +17,8 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   const refreshInterval = (options.refreshInterval ?? 30) * 1_000
   const maxStale = (options.maxStale ?? 3_600) * 1_000
   const timeout = (options.timeout ?? 5) * 1_000
-  const fetch = options.fetch ?? globalThis.fetch
+  // Unwrapped, so an issuer's 402 is never paid in a process that also runs the client.
+  const fetch = unwrapFetch(options.fetch ?? globalThis.fetch)
   // The newest fetch per issuer, started at `startedAt`; shared by concurrent lookups.
   const sets = new Map<
     string,

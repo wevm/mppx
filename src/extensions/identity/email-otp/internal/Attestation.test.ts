@@ -294,3 +294,23 @@ test('answers 503 while the issuer keys are unreachable', async () => {
   expect(result).toMatchObject({ status: 'invalid', code: 503 })
   expect(result).not.toHaveProperty('headers')
 })
+
+test('fetches the key set with the unwrapped fetch, so it never pays a 402', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  const calls: string[] = []
+  const inner = (async () => {
+    calls.push('inner')
+    return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+  }) as typeof globalThis.fetch
+  const wrapper = Object.assign(
+    (async () => {
+      calls.push('wrapper')
+      return new Response(null, { status: 402 })
+    }) as typeof globalThis.fetch,
+    { [Symbol.for('mppx.fetch.wrapper')]: inner },
+  )
+  const keyResolver = Attestation.Jwks.resolver({ fetch: wrapper })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  expect(calls).toEqual(['inner'])
+})
