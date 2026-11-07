@@ -55,6 +55,7 @@ test('rejects wrong claims, times, keys and tampering', async () => {
   expect(await reason(await sign({ exp: now - 61 }))).toMatch(/expired/)
   expect(await reason(await sign({ iat: now + 61 }))).toMatch(/future/)
   expect(await reason(await sign({ iat: now - 3_600 }), { maxAge: 60 })).toMatch(/too old/)
+  expect(await reason(await sign({ jti: 1 as never }))).toMatch(/ID is malformed/)
   expect(await reason(await sign({}), { keyResolver: () => undefined })).toMatch(/No public key/)
 
   const other = await keyPair()
@@ -103,6 +104,28 @@ test('parses requirements and ignores malformed members', () => {
     { issuer: 'https://b.example', type: 'kyc' },
     { issuer: 'http://localhost:8787', type: 'dev' },
   ])
+})
+
+test('keeps the last key set when a refresh has no keys list', async () => {
+  const { claims, keyId, keys, options } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let body: unknown = { keys: [{ ...jwk, kid: keyId }] }
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      return Response.json(body)
+    },
+    refreshInterval: 0,
+    ttl: 0,
+  })
+  const token = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+  expect(await Attestation.verify(token, { ...options, keyResolver })).toMatchObject({
+    status: 'valid',
+  })
+  body = { error: 'partial' }
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  expect(await Attestation.verify(token, { ...options, keyResolver })).toMatchObject({
+    status: 'valid',
+  })
 })
 
 test('keeps verifying with the last key set while the issuer is down', async () => {

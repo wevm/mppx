@@ -37,9 +37,11 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
         redirect: 'manual',
       })
       if (!response.ok) throw new Error(`JWKS request failed with ${response.status}.`)
-      const body = (await response.json()) as { keys?: unknown }
+      const body = (await response.json()) as { keys?: unknown } | null
+      // A body without a key list is a failed fetch, so it never replaces the last good set.
+      if (!body || !Array.isArray(body.keys)) throw new Error('JWKS response has no keys list.')
       const result = new Map<string, CryptoKey>()
-      for (const jwk of Array.isArray(body.keys) ? body.keys : []) {
+      for (const jwk of body.keys) {
         if (!jwk || typeof jwk !== 'object') continue
         const { alg, crv, key_ops, kid, kty, use, x } = jwk as Record<string, unknown>
         if (kty !== 'OKP' || crv !== 'Ed25519' || typeof x !== 'string' || typeof kid !== 'string')

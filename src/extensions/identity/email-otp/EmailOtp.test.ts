@@ -558,6 +558,18 @@ test('keeps an earlier attestation fresh while a later code takes long', async (
   }
 })
 
+test('rejects an issuer response with an invalid expiry', async () => {
+  const fetch = async () => Response.json({ expires_at: 'soon', id: 'otp-id' })
+  await expect(
+    EmailOtp.Client.sendCode({
+      audience: 'https://api.example',
+      email: 'a@b.example',
+      fetch,
+      issuer,
+    }),
+  ).rejects.toThrow('malformed')
+})
+
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',

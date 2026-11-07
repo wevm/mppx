@@ -14,9 +14,10 @@ export async function sendCode(parameters: sendCode.Parameters): Promise<sendCod
     audience: parameters.audience,
     email: parameters.email,
   })
-  if (typeof body.id !== 'string' || typeof body.expires_at !== 'string')
+  const expiresAt = date(body.expires_at)
+  if (typeof body.id !== 'string' || body.id === '' || !expiresAt)
     throw new EmailOtpError('The issuer returned a malformed code request.')
-  return { expiresAt: new Date(body.expires_at), id: body.id }
+  return { expiresAt, id: body.id }
 }
 
 export declare namespace sendCode {
@@ -41,9 +42,10 @@ export async function verifyCode(
     code: parameters.code,
     id: parameters.id,
   })
-  if (typeof body.attestation !== 'string' || typeof body.expires_at !== 'string')
+  const expiresAt = date(body.expires_at)
+  if (typeof body.attestation !== 'string' || body.attestation === '' || !expiresAt)
     throw new EmailOtpError('The issuer returned a malformed attestation.')
-  return { attestation: body.attestation, expiresAt: new Date(body.expires_at) }
+  return { attestation: body.attestation, expiresAt }
 }
 
 export declare namespace verifyCode {
@@ -58,6 +60,13 @@ export declare namespace verifyCode {
     fetch?: typeof globalThis.fetch | undefined
   }
   type ReturnType = { attestation: string; expiresAt: Date }
+}
+
+/** Parses an issuer timestamp, or returns `undefined` when it is not a valid date. */
+function date(value: unknown): Date | undefined {
+  if (typeof value !== 'string') return undefined
+  const result = new Date(value)
+  return Number.isFinite(result.getTime()) ? result : undefined
 }
 
 /**

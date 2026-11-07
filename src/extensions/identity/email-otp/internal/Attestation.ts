@@ -81,6 +81,8 @@ export async function verify(
   if (claims.aud !== options.audience) return invalid('The attestation is for another audience.')
   if (typeof claims.sub !== 'string' || claims.sub === '')
     return invalid('The attestation has no subject.')
+  if (claims.jti !== undefined && typeof claims.jti !== 'string')
+    return invalid('The attestation ID is malformed.')
   if (!isTime(claims.iat) || !isTime(claims.exp))
     return invalid('The attestation times are malformed.')
   const now = options.now ?? Math.floor(Date.now() / 1_000)
