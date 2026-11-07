@@ -1,4 +1,4 @@
-import type { Address, Hex } from 'viem'
+import { type Address, type Hex, zeroAddress } from 'viem'
 
 import { ChannelNotFoundError, VerificationFailedError } from '../Errors.js'
 import type { MaybePromise } from '../internal/types.js'
@@ -19,7 +19,7 @@ import { type ChannelStore, isChannelState, pendingClose, unsettledAmount } from
  * Tempo session channel storage on a {@link ChannelStore} Durable Object namespace, to spread
  * into `tempo.session()`: `store` keeps each channel in its own object, which schedules its
  * settlement, and `resolveChannelId` finds the payer's open channel to the same payee, token,
- * escrow and chain, so a client that lost its state resumes it instead of opening another.
+ * escrow, operator and chain, so a client that lost its state resumes it instead of opening another.
  * The lookup needs the payer's identity, which only a `bootstrap` HEAD proof supplies: enable
  * `bootstrap` on the session and in the client's session manager, or it never resolves.
  *
@@ -143,27 +143,29 @@ export function channels(
     if (!payer || !recipient) return undefined
     if (paymentRequest.chainId !== undefined && paymentRequest.chainId !== payer.chainId)
       return undefined
+    const operator = (paymentRequest.operator as Address | undefined) ?? zeroAddress
     const ids = lookupIds(
       await base.get(
         lookupKey({
           chainId: payer.chainId,
           escrowContract: (paymentRequest.escrowContract as Address | undefined) ?? escrowContract,
           payee: recipient,
+          operator,
           payer: payer.address,
           token: paymentRequest.currency,
         }),
       ),
     )
-    // The challenge's operator is not in the key, so a channel opened with another one shares it:
-    // skip it, since mppx rejects its vouchers for this challenge.
-    const operator = paymentRequest.operator as Address | undefined
     // An ID a delayed write left for a channel that has since closed resumes nothing.
     for (const id of ids) {
       const state = await base.get(id)
       if (!resumable(state)) continue
+      // mppx verifies a challenge without an operator against the zero operator, and only
+      // channels without one (legacy escrow channels) are not keyed by theirs.
       if (
-        operator &&
-        !(isPrecompileState(state) && state.operator.toLowerCase() === operator.toLowerCase())
+        isPrecompileState(state)
+          ? state.operator.toLowerCase() !== operator.toLowerCase()
+          : paymentRequest.operator !== undefined
       )
         continue
       return id
@@ -346,19 +348,24 @@ function isPermanent(error: unknown): boolean {
   )
 }
 
-/** The lookup key of a payer's channel to a payee, token, escrow and chain. */
+/**
+ * The lookup key of a payer's channel to a payee, token, escrow, operator and chain. The operator
+ * is part of it so that channels opened with other operators cannot push a matching one out of
+ * the entry's {@link maxLookupChannels}.
+ */
 function lookupKey(lookup: {
   chainId: number
   escrowContract: string
+  operator: string
   payee: string
   payer: string
   token: string
 }): string {
-  const { chainId, escrowContract, payee, payer, token } = lookup
-  return `mppx:session-lookup:v2:${[payer, payee, token, escrowContract].map((address) => address.toLowerCase()).join(':')}:${chainId}`
+  const { chainId, escrowContract, operator, payee, payer, token } = lookup
+  return `mppx:session-lookup:v3:${[payer, payee, token, escrowContract, operator].map((address) => address.toLowerCase()).join(':')}:${chainId}`
 }
 
-/** Most channels a lookup entry keeps per payer, payee, token, escrow and chain. */
+/** Most channels a lookup entry keeps per payer, payee, token, escrow, operator and chain. */
 const maxLookupChannels = 8
 
 /** Reads of a full lookup entry's channels before adding to it regardless of concurrent changes. */
@@ -387,6 +394,7 @@ function lookupKeys(state: unknown): string[] {
     lookupKey({
       chainId: state.chainId,
       escrowContract: state.escrowContract,
+      operator: isPrecompileState(state) ? state.operator : zeroAddress,
       payee: state.payee,
       payer,
       token: state.token,

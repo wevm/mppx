@@ -319,6 +319,23 @@ describe('ChannelStore', () => {
     expect(channels.alarmIn()).toBeLessThanOrEqual(2 * 60_000)
   })
 
+  test('keeps the immediate send of a close request written while a send is in flight', async () => {
+    let during: (() => Promise<unknown>) | undefined
+    const channels = object({
+      queue: {
+        async send() {
+          await during?.()
+        },
+      },
+    })
+    await channels.write(channel({ voucher: 2_000n }))
+    await channels.fire()
+    // The payer requests a close while the next send awaits the queue.
+    during = () => channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
+    await channels.fire()
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+  })
+
   test("resends a closing channel within the escrow's close grace period", async () => {
     const channels = object({ watchdogMs: 20 * 60_000 })
     await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
