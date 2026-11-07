@@ -6,7 +6,7 @@ import type * as Types from './Types.js'
  * own database, session store or KYC provider.
  *
  * `verify` returns the caller's identity, which the route handler reads with
- * `result.identity.get(verifier)`; `undefined` when the request carries none
+ * `result.identity.get(verifier)`; `undefined` or `null` when the request carries none
  * (401, with `challenge` headers if set); or throws a {@link Rejection} to
  * reject the identity it carries.
  *
@@ -28,7 +28,7 @@ export function from<value>(config: from.Config<value>): Types.Verifier<value> {
   return {
     stage: 'request',
     async verify(request) {
-      let value: value | undefined
+      let value: value | null | undefined
       try {
         value = await config.verify(request)
       } catch (error) {
@@ -40,7 +40,8 @@ export function from<value>(config: from.Config<value>): Types.Verifier<value> {
           reason: error.message,
         }
       }
-      if (value === undefined)
+      // A lookup that found nothing often returns null: treat it as no identity.
+      if (value === undefined || value === null)
         return {
           status: 'missing',
           code: 401,
@@ -55,10 +56,10 @@ export function from<value>(config: from.Config<value>): Types.Verifier<value> {
 export declare namespace from {
   type Config<value> = {
     /**
-     * Returns the request's verified identity, `undefined` when it carries none,
+     * Returns the request's verified identity, `undefined` or `null` when it carries none,
      * or throws a {@link Rejection} to reject the one it carries.
      */
-    verify: (request: Request) => MaybePromise<value | undefined>
+    verify: (request: Request) => MaybePromise<value | null | undefined>
     /** Headers sent with a rejection, telling the client what identity to present. */
     challenge?: HeadersInit | undefined
   }
