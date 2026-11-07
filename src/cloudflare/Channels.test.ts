@@ -128,14 +128,28 @@ describe('channels', () => {
     expect(await resolve(lookup)).toBe(b)
   })
 
-  test('keeps the entry of an open channel when another one opens', async () => {
+  test("keeps a payer's other open channel findable when the most recent one closes", async () => {
     const objects = namespace()
     const lookup = channels(objects)
     await lookup.store.put(a, channel(a))
     await lookup.store.put(b, channel(b))
-    expect(await resolve(lookup)).toBe(a)
-    await lookup.store.put(a, channel(a, { closeRequestedAt: 1n }))
-    await lookup.store.put(b, channel(b, { spent: 1n }))
     expect(await resolve(lookup)).toBe(b)
+    await lookup.store.put(b, channel(b, { closeRequestedAt: 1n }))
+    expect(await resolve(lookup)).toBe(a)
+    await lookup.store.put(a, channel(a, { finalized: true }))
+    expect(await resolve(lookup)).toBeUndefined()
+  })
+
+  test('keeps the most recent open channels of a payer', async () => {
+    const objects = namespace()
+    const lookup = channels(objects)
+    const ids = Array.from({ length: 9 }, (_, i) => `0x${i.toString(16).repeat(64)}`)
+    for (const id of ids) await lookup.store.put(id, channel(id))
+    // The oldest falls out of the entry once it holds eight newer ones.
+    for (const id of ids.slice(1).reverse()) {
+      expect(await resolve(lookup)).toBe(id)
+      await lookup.store.put(id, channel(id, { finalized: true }))
+    }
+    expect(await resolve(lookup)).toBeUndefined()
   })
 })

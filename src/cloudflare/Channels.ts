@@ -13,7 +13,7 @@ import {
   SettlementCheckpointError,
   type SettlementTransactionOptions,
 } from '../tempo/session/server/Settlement.js'
-import { type ChannelStore, isChannelState, unsettledAmount } from './ChannelStore.js'
+import { type ChannelStore, isChannelState, pendingClose, unsettledAmount } from './ChannelStore.js'
 
 /**
  * Tempo session channel storage on a {@link ChannelStore} Durable Object namespace, to spread
@@ -25,9 +25,9 @@ import { type ChannelStore, isChannelState, unsettledAmount } from './ChannelSto
  *
  * The store keeps that lookup current: after a write opens, closes or finalizes a channel,
  * it adds or removes the channel under its payer and authorized signer. Each lookup entry is
- * its own key, written with a conditional update that never replaces another channel the payer
- * can still resume, so a delayed write for a channel that has since closed cannot hide a newer
- * one; the lookup skips an entry whose channel no longer resumes, and mppx validates any
+ * its own key holding the payer's open channels there, most recent first, so closing one leaves
+ * the others findable. The lookup returns the first whose channel still resumes, so a delayed
+ * write for a channel that has since closed cannot hide an open one, and mppx validates any
  * channel it resolves before reusing it.
  *
  * @example
@@ -46,28 +46,24 @@ export function channels(
   const escrowContract = options?.escrowContract ?? tip20ChannelEscrow
 
   /**
-   * Adds or removes `channelId` under `key`. Removing leaves an entry for another channel
-   * alone; adding replaces one only once that channel no longer resumes, comparing against the
-   * entry it checked so a concurrent change is checked again.
+   * Adds `channelId` to the front of the entry under `key`, keeping the most recent
+   * {@link maxLookupChannels}, or removes it.
    */
   async function index(key: string, channelId: Hex, present: boolean) {
-    if (!present) {
-      await base.update(key, (current) =>
-        current === channelId ? { op: 'delete', result: undefined } : noop,
-      )
-      return
-    }
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const entry = (await base.get(key)) ?? null
-      if (entry === channelId) return
-      if (typeof entry === 'string' && resumable(await base.get(entry))) return
-      const applied = await base.update(key, (current) =>
-        (current ?? null) === entry
-          ? { op: 'set', value: channelId, result: true }
-          : { op: 'noop', result: false },
-      )
-      if (applied) return
-    }
+    await base.update(key, (current) => {
+      const ids = lookupIds(current)
+      if (ids.includes(channelId) === present) return noop
+      if (present)
+        return {
+          op: 'set',
+          value: [channelId, ...ids].slice(0, maxLookupChannels),
+          result: undefined,
+        }
+      const rest = ids.filter((id) => id !== channelId)
+      return rest.length
+        ? { op: 'set', value: rest, result: undefined }
+        : { op: 'delete', result: undefined }
+    })
   }
 
   /**
@@ -127,18 +123,20 @@ export function channels(
     if (!payer || !recipient) return undefined
     if (paymentRequest.chainId !== undefined && paymentRequest.chainId !== payer.chainId)
       return undefined
-    const channelId = await base.get(
-      lookupKey({
-        chainId: payer.chainId,
-        escrowContract: (paymentRequest.escrowContract as Address | undefined) ?? escrowContract,
-        payee: recipient,
-        payer: payer.address,
-        token: paymentRequest.currency,
-      }),
+    const ids = lookupIds(
+      await base.get(
+        lookupKey({
+          chainId: payer.chainId,
+          escrowContract: (paymentRequest.escrowContract as Address | undefined) ?? escrowContract,
+          payee: recipient,
+          payer: payer.address,
+          token: paymentRequest.currency,
+        }),
+      ),
     )
-    if (typeof channelId !== 'string') return undefined
-    // An entry a delayed write left for a channel that has since closed resumes nothing.
-    return resumable(await base.get(channelId)) ? channelId : undefined
+    // An ID a delayed write left for a channel that has since closed resumes nothing.
+    for (const id of ids) if (resumable(await base.get(id))) return id
+    return undefined
   }
 
   return { resolveChannelId, store }
@@ -196,6 +194,11 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
       // A duplicate job, such as one the watchdog sent while the first was queued, has nothing left.
       if (!isChannelState(state) || state.finalized || unsettledAmount(state) <= 0n) {
         message.ack()
+        continue
+      }
+      // The server's own cooperative close captures it: check again once that close lands or expires.
+      if (pendingClose(state)) {
+        message.retry({ delaySeconds: 60 })
         continue
       }
       // Another job or a scheduled settlement is settling it: check again once that one is done.
@@ -299,7 +302,15 @@ function lookupKey(lookup: {
   token: string
 }): string {
   const { chainId, escrowContract, payee, payer, token } = lookup
-  return `mppx:session-lookup:v1:${[payer, payee, token, escrowContract].map((address) => address.toLowerCase()).join(':')}:${chainId}`
+  return `mppx:session-lookup:v2:${[payer, payee, token, escrowContract].map((address) => address.toLowerCase()).join(':')}:${chainId}`
+}
+
+/** Most channels a lookup entry keeps per payer, payee, token, escrow and chain. */
+const maxLookupChannels = 8
+
+/** The channel IDs of a lookup entry, most recent first. */
+function lookupIds(entry: unknown): Hex[] {
+  return Array.isArray(entry) ? entry.filter((id): id is Hex => typeof id === 'string') : []
 }
 
 /** Whether a payer may resume a stored channel: open, with no close requested. */

@@ -182,6 +182,20 @@ describe('settle', () => {
     expect(leases).toEqual([expect.any(String), expect.any(String)])
   })
 
+  test("leaves a channel the server's own cooperative close captures until that close expires", async () => {
+    const now = BigInt(Math.floor(Date.now() / 1000))
+    expect(await run(channel({ closeRequestedAt: now, pendingCloseAt: now }))).toEqual({
+      calls: 0,
+      delaySeconds: 60,
+    })
+    // An expired marker means the close can no longer land.
+    const expired = now - 120n
+    expect(await run(channel({ closeRequestedAt: expired, pendingCloseAt: expired }))).toEqual({
+      acked: true,
+      calls: 1,
+    })
+  })
+
   test('retries any other failure with backoff', async () => {
     expect(await run(channel(), new Error('rpc unavailable'))).toEqual({
       calls: 1,
@@ -274,5 +288,41 @@ describe('ChannelStore', () => {
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
     await channels.fire()
     expect(channels.sent).toEqual([{ channelId }])
+  })
+
+  test("waits for the stale alarm on the server's own cooperative-close marker", async () => {
+    const channels = object()
+    await channels.write(
+      channel({
+        deposit: 1_000_000n,
+        voucher: 500n,
+        closeRequestedAt: 1_000n,
+        pendingCloseAt: 1_000n,
+      }),
+    )
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    // A payer's close request after the marker cleared still goes at once.
+    await channels.write(
+      channel({
+        deposit: 1_000_000n,
+        voucher: 500n,
+        closeRequestedAt: 1_100n,
+        pendingCloseAt: 1_000n,
+      }),
+    )
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+  })
+
+  test('sends a new close request at once after the one a send covered cleared', async () => {
+    const channels = object()
+    await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
+    await channels.fire()
+    expect(channels.sent).toHaveLength(1)
+    await channels.write(channel({ voucher: 2_000n }))
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 2n }))
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toHaveLength(2)
   })
 })

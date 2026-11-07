@@ -2,7 +2,12 @@ import { Json } from 'ox'
 import type { Hex } from 'viem'
 
 import * as Store from '../Store.js'
-import { resolveSettleableVoucher, type State } from '../tempo/session/server/ChannelStore.js'
+import {
+  pendingCloseClockSkewSeconds,
+  pendingCloseValiditySeconds,
+  resolveSettleableVoucher,
+  type State,
+} from '../tempo/session/server/ChannelStore.js'
 
 /** Storage key of a channel object's settlement bookkeeping, beside the channel state. */
 const settlementKey = 'mppx:channel-store:settlement'
@@ -68,7 +73,7 @@ export class ChannelStore extends Store.DurableObjectStore {
     // at once and restart the count instead of waiting for a watchdog that may be far off.
     const renewed =
       !!pending?.sends &&
-      ((closing(next) && !pending.closingAtSend) ||
+      ((closing(next) && closeRequest(next) !== pending.closeRequestAtSend) ||
         (pending.capturedAtSend !== undefined &&
           settleableAmount(next) - pending.capturedAtSend >= threshold(next, settlement)))
     const sending = progressed || renewed ? undefined : pending?.sends ? pending : undefined
@@ -80,7 +85,7 @@ export class ChannelStore extends Store.DurableObjectStore {
       ...(sending
         ? {
             capturedAtSend: sending.capturedAtSend,
-            closingAtSend: sending.closingAtSend,
+            closeRequestAtSend: sending.closeRequestAtSend,
             settledAtSend: sending.settledAtSend,
           }
         : {}),
@@ -152,7 +157,7 @@ export class ChannelStore extends Store.DurableObjectStore {
     await storage.put(settlementKey, {
       ...current,
       capturedAtSend: settleableAmount(state),
-      closingAtSend: closing(state),
+      closeRequestAtSend: closeRequest(state),
       sends: counted,
       settledAtSend: state.settledOnChain,
     } satisfies Pending)
@@ -200,8 +205,8 @@ type Pending = {
   settledAtSend?: bigint | undefined
   /** The cumulative amount the last send could settle, to tell when a threshold's worth more arrived. */
   capturedAtSend?: bigint | undefined
-  /** Whether the channel had a close request at the last send. */
-  closingAtSend?: boolean | undefined
+  /** The payer's close request (its `closeRequestedAt`, or `0n`) at the last send, to tell a new one from it. */
+  closeRequestAtSend?: bigint | undefined
   /** Unix milliseconds of the channel's last write. */
   updatedAt: number
 }
@@ -254,7 +259,31 @@ function settleableAmount(state: State): bigint {
 
 /** Whether the payer requested a close, after which the escrow's grace period runs. */
 function closing(state: State): boolean {
-  return !!state.closeRequestedAt
+  return closeRequest(state) !== 0n
+}
+
+/**
+ * The payer's close request: `closeRequestedAt`, or `0n` without one. The server's own
+ * cooperative-close marker ({@link State.pendingCloseAt}) is not one: that close captures
+ * the vouchers itself.
+ */
+function closeRequest(state: State): bigint {
+  const requestedAt = BigInt(state.closeRequestedAt ?? 0n)
+  if (state.pendingCloseAt !== undefined && requestedAt === BigInt(state.pendingCloseAt)) return 0n
+  return requestedAt
+}
+
+/**
+ * Whether the server's own cooperative close may still land: its marker stands in
+ * `closeRequestedAt` and its transaction has not expired. That close captures every voucher a
+ * settlement could, so settling meanwhile only spends gas.
+ */
+export function pendingClose(state: State, now = Date.now()): boolean {
+  if (state.pendingCloseAt === undefined || state.finalized) return false
+  const requestedAt = BigInt(state.closeRequestedAt ?? 0n)
+  if (requestedAt === 0n || requestedAt !== BigInt(state.pendingCloseAt)) return false
+  const expiresAt = Number(requestedAt) + pendingCloseValiditySeconds + pendingCloseClockSkewSeconds
+  return Math.floor(now / 1000) <= expiresAt
 }
 
 /** The unsettled amount that sends a channel at once: `max(10% of deposit, minUnsettledAmount)`. */
