@@ -251,7 +251,7 @@ function resizeBehavior(view: ArrayBufferView): string | undefined {
   try {
     // Out-of-bounds typed arrays and `DataView`s throw here.
     if (copy instanceof DataView) void copy.byteLength
-    else void (copy as unknown as Uint8Array).at(0)
+    else void (copy as unknown as Uint8Array).slice(0, 0)
   } catch {
     inBounds = false
   }
