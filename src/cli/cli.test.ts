@@ -657,6 +657,116 @@ describe('agent attribution', () => {
   })
 })
 
+describe('stripe deposit-address', () => {
+  async function withStripe<T>(
+    fn: (
+      url: string,
+      requests: { body: string; headers: Record<string, unknown>; url?: string | undefined }[],
+    ) => Promise<T>,
+    status = 200,
+  ) {
+    const requests: { body: string; headers: Record<string, unknown>; url?: string | undefined }[] =
+      []
+    const server = await Http.createServer(async (req, res) => {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      requests.push({ body, headers: req.headers, url: req.url })
+      res.statusCode = status
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify(
+          status === 200
+            ? {
+                id: 'cda_test',
+                object: 'crypto.deposit_address',
+                livemode: false,
+                network: 'tempo',
+                address: '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c',
+                supported_tokens: [
+                  {
+                    token_currency: 'usdc',
+                    token_contract_address: '0x20c0000000000000000000009e8d7eb59b783726',
+                  },
+                ],
+              }
+            : { error: { message: 'Invalid API Key provided' } },
+        ),
+      )
+    })
+    try {
+      return await fn(server.url, requests)
+    } finally {
+      server.close()
+    }
+  }
+
+  test('creates a deposit address and prints it', async () => {
+    await withStripe(async (url, requests) => {
+      const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
+        env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output.split('\n')[0]).toBe('0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')
+      expect(output).toContain('TEMPO_DEPOSIT_ADDRESS=0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]!.url).toBe('/v1/crypto/deposit_addresses')
+      expect(requests[0]!.body).toBe('network=tempo')
+      expect(requests[0]!.headers.authorization).toBe('Bearer sk_test_123')
+      expect(requests[0]!.headers['stripe-version']).toBe(stripePreviewVersion)
+    })
+  })
+
+  test('passes network, customer and connected account', async () => {
+    await withStripe(async (url, requests) => {
+      const { output, exitCode } = await serve(
+        [
+          'stripe',
+          'deposit-address',
+          '--network',
+          'base',
+          '--customer',
+          'cus_123',
+          '--stripe-account',
+          'acct_123',
+          '--json',
+        ],
+        { env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' } },
+      )
+
+      expect(exitCode).toBeUndefined()
+      expect(JSON.parse(output)).toMatchObject({
+        address: '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c',
+        id: 'cda_test',
+        livemode: false,
+        supportedTokens: [
+          { contractAddress: '0x20c0000000000000000000009e8d7eb59b783726', currency: 'usdc' },
+        ],
+      })
+      expect(requests[0]!.body).toBe('network=base&customer=cus_123')
+      expect(requests[0]!.headers['stripe-account']).toBe('acct_123')
+    })
+  })
+
+  test('errors without STRIPE_SECRET_KEY', async () => {
+    const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
+      env: { STRIPE_SECRET_KEY: undefined },
+    })
+    expect(exitCode).toBe(2)
+    expect(output).toContain('MISSING_STRIPE_SECRET_KEY')
+  })
+
+  test('reports Stripe errors', async () => {
+    await withStripe(async (url) => {
+      const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
+        env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_bad' },
+      })
+      expect(exitCode).toBe(1)
+      expect(output).toContain('Invalid API Key provided')
+    }, 401)
+  })
+})
+
 async function serve(
   argv: string[],
   options?: { env?: Record<string, string | undefined>; onOutput?: (chunk: string) => void },
