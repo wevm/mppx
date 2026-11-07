@@ -314,3 +314,57 @@ test('fetches the key set with the unwrapped fetch, so it never pays a 402', asy
   expect(await keyResolver({ issuer, keyId })).toBeDefined()
   expect(calls).toEqual(['inner'])
 })
+
+test('skips keys the issuer restricts to other uses', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      return Response.json({
+        keys: [
+          { ...jwk, kid: 'enc', use: 'enc' },
+          { ...jwk, kid: 'rs', alg: 'RS256' },
+          { ...jwk, kid: 'ops', key_ops: ['encrypt'] },
+          { ...jwk, kid: keyId, use: 'sig', alg: 'EdDSA', key_ops: ['verify'] },
+        ],
+      })
+    },
+  })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  for (const kid of ['enc', 'rs', 'ops'])
+    expect(await keyResolver({ issuer, keyId: kid })).toBeUndefined()
+})
+
+test('accepts an audience configured with a trailing slash', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience: `${audience}/`,
+    issuer,
+    keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+    type: 'email',
+  })
+  const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
+  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
+    { status: 'valid' },
+  )
+})
+
+test('never attaches an attestation over plaintext http', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    { ...claims, aud: 'http://api.example', exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
+  const request = await prover.prove(
+    new Request('http://api.example/resource'),
+    {} as Parameters<typeof prover.prove>[1],
+  )
+  expect(request.headers.get(Attestation.Constants.header)).toBeNull()
+})

@@ -48,8 +48,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   return {
     stage: 'request',
     async verify(request) {
-      const audience =
-        typeof config.audience === 'function' ? config.audience(request) : config.audience
+      const audience = origin(
+        typeof config.audience === 'function' ? config.audience(request) : config.audience,
+      )
       // Only one token is verified, so repeated or forged tokens cost one
       // signature check: the unexpired one for this audience that expires last,
       // or else the first, whose rejection says why.
@@ -128,4 +129,9 @@ export declare namespace verifier {
       | ((claims: Types.Claims, request: Request) => MaybePromise<string | undefined>)
       | undefined
   }
+}
+
+/** An audience as the origin attestations carry, so `https://api.example/` matches. */
+function origin(audience: string): string {
+  return URL.canParse(audience) ? new URL(audience).origin : audience
 }

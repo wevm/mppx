@@ -41,8 +41,13 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
       const result = new Map<string, CryptoKey>()
       for (const jwk of Array.isArray(body.keys) ? body.keys : []) {
         if (!jwk || typeof jwk !== 'object') continue
-        const { crv, kid, kty, x } = jwk as Record<string, unknown>
+        const { alg, crv, key_ops, kid, kty, use, x } = jwk as Record<string, unknown>
         if (kty !== 'OKP' || crv !== 'Ed25519' || typeof x !== 'string' || typeof kid !== 'string')
+          continue
+        // Honor the issuer's restrictions on what the key may do.
+        if (use !== undefined && use !== 'sig') continue
+        if (alg !== undefined && alg !== 'EdDSA' && alg !== 'Ed25519') continue
+        if (key_ops !== undefined && !(Array.isArray(key_ops) && key_ops.includes('verify')))
           continue
         // A malformed key is skipped, so it cannot take the issuer's other keys down.
         try {

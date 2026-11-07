@@ -57,6 +57,8 @@ export function prover(config: prover.Config): Identity.Prover {
     scope: config.scope,
     prove(request) {
       const origin = new URL(request.url).origin
+      // A bearer attestation never goes over plaintext HTTP, except to localhost.
+      if (!Attestation.isIssuer(origin)) return request
       const tokens = [...stored.values()]
         .filter(({ claims }) => claims.aud === origin && claims.exp > now())
         .map(({ token }) => token)

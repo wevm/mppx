@@ -35,6 +35,13 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
+  test('behavior: strips identity attestation header', () => {
+    const headers = new globalThis.Headers({ 'Identity-Attestation': 'token', 'X-Public': 'value' })
+    const result = Headers.scrub(headers)
+    expect(result.get('identity-attestation')).toBeNull()
+    expect(result.get('x-public')).toBe('value')
+  })
+
   test('behavior: strips cookie header', () => {
     const headers = new globalThis.Headers({
       Cookie: 'session=abc123',
