@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-email-otp",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    // The email attestation issuer this server trusts (tempoxyz/tempo-apps apps/mpp-identity).
+    // Point it at a local issuer with IDENTITY_ISSUER in .dev.vars.
+    "IDENTITY_ISSUER": "https://identity.mpp.tempo.xyz",
+  },
+  // A Durable Object holds spent payment credentials, so none can be replayed on another isolate.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+}
