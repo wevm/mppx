@@ -123,3 +123,12 @@ test('rethrows errors that are not rejections', async () => {
     'database down',
   )
 })
+
+test('treats a null lookup result as no identity', async () => {
+  const lookup = Identity.from({ verify: () => null })
+  const result = await lookup.verify(
+    new Request('http://localhost'),
+    {} as Parameters<typeof lookup.verify>[1],
+  )
+  expect(result).toMatchObject({ status: 'missing', code: 401 })
+})

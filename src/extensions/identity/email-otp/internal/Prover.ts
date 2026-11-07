@@ -69,12 +69,16 @@ export function prover(config: prover.Config): Identity.Prover {
       if (!config.acquire || !URL.canParse(response.url)) return false
       const audience = new URL(response.url).origin
       let acquired = false
+      // A requirement listed twice is acquired once, so it sends one code.
+      const seen = new Set<string>()
       for (const { type, issuer } of requirements(response.headers)) {
         // Only trusted issuers: a server-named one could relay a code and obtain an
         // attestation for another origin.
         if (!issuer || !config.issuers?.includes(issuer)) continue
         if (config.types && !config.types.includes(type)) continue
         const key = keyOf({ aud: audience, iss: issuer, type })
+        if (seen.has(key)) continue
+        seen.add(key)
         let task = pending.get(key)
         if (!task) {
           // A stored attestation the server rejected is replaced.
