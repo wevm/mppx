@@ -576,10 +576,12 @@ async function requestZoneWithdrawal(
       withdrawal,
     ],
   } as never).catch((cause) => {
-    throw new Error(
+    const error = new Error(
       'Zone withdrawal outcome is unknown: it may have been sent. Retrying this challenge does not withdraw again.',
-      { cause },
     )
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+    throw error
   })
   const [requested] = parseEventLogs({
     abi: Abis.zoneOutbox,
