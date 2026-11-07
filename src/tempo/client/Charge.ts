@@ -599,6 +599,11 @@ async function requestZoneWithdrawal(
         throw error
       }),
   )
+  // A reverted withdrawal moved nothing, so the challenge may be retried.
+  if (receipt.status === 'reverted') {
+    state.sent = false
+    throw new Error(`Zone withdrawal transaction ${receipt.transactionHash} reverted.`)
+  }
   const [requested] = parseEventLogs({
     abi: Abis.zoneOutbox,
     eventName: 'WithdrawalRequested',

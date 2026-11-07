@@ -132,8 +132,25 @@ describe('tempo.charge client zone selection', () => {
     ).toThrow('does not match Zone 3')
   })
 
+  const revertedReceipt = {
+    blockHash: `0x${'11'.repeat(32)}`,
+    blockNumber: '0x1',
+    contractAddress: null,
+    cumulativeGasUsed: '0x1',
+    effectiveGasPrice: '0x1',
+    from: payer.address,
+    gasUsed: '0x1',
+    logs: [],
+    logsBloom: `0x${'00'.repeat(256)}`,
+    status: '0x0',
+    to: null,
+    transactionHash: `0x${'22'.repeat(32)}`,
+    transactionIndex: '0x0',
+    type: '0x76',
+  }
+
   /** A Zone client that prepares and signs withdrawals, then fails to send them or earlier. */
-  function failingZoneClient(calls: string[], failing: 'prepare' | 'send') {
+  function failingZoneClient(calls: string[], failing: 'prepare' | 'send' | 'revert') {
     let sent = false
     return createClient({
       account: payer,
@@ -145,6 +162,8 @@ describe('tempo.charge client zone selection', () => {
             if (method === 'eth_chainId') return `0x${(1_424_310_003).toString(16)}`
             if (method === 'eth_call') return `0x${'00'.repeat(32)}`
             if (failing === 'prepare' || sent) throw new Error('connection lost')
+            if (method === 'eth_sendRawTransactionSync' && failing === 'revert')
+              return revertedReceipt
             if (method === 'eth_sendRawTransactionSync') {
               sent = true
               throw new Error('connection lost')
@@ -184,6 +203,22 @@ describe('tempo.charge client zone selection', () => {
       'Zone withdrawal outcome is unknown',
     )
     expect(calls).toHaveLength(sent)
+  })
+
+  test('retries a withdrawal that reverted', async () => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: failingZoneClient(calls, 'revert') },
+    })
+    const c = await challenge()
+    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
+      'reverted',
+    )
+    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
+      'reverted',
+    )
+    expect(calls.filter((call) => call === 'eth_sendRawTransactionSync')).toHaveLength(2)
   })
 
   test('retries a withdrawal that failed before it was sent', async () => {
