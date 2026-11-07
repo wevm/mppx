@@ -775,6 +775,14 @@ describe('durableObject', () => {
       [new Set([1, 2]), new Set([2, 1])],
       [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1)],
       [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1, { maxByteLength: 4 })],
+      (() => {
+        const buffer = new ArrayBuffer(4, { maxByteLength: 8 })
+        return [new Uint8Array(buffer), new Uint8Array(structuredClone(buffer), 0, 4)]
+      })(),
+      (() => {
+        const buffer = new ArrayBuffer(4, { maxByteLength: 4 })
+        return [new DataView(buffer, 2), new DataView(structuredClone(buffer), 2, 2)]
+      })(),
     ]
     for (const [stored, other] of pairs) {
       const object = objectStore()
