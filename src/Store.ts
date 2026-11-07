@@ -470,6 +470,9 @@ export declare namespace cloudflare {
 /** Name prefix of {@link durableObject}'s replay shard objects. */
 const replayShardPrefix = 'mppx:replay:'
 
+/** A replay shard object's whole name: `mppx:replay:v<version>:<shard>`. */
+const replayShardName = /^mppx:replay:v\d+:\d+$/
+
 /**
  * Atomic store backed by Cloudflare Durable Objects.
  *
@@ -821,7 +824,8 @@ export class DurableObjectStore {
    * ```
    */
   async alarm(): Promise<void> {
-    if (!this.isReplayShard()) return
+    // Only an object that holds claims has any to clear, whatever its name.
+    if (!this.hasReplayClaims()) return
     const { sql } = this.state.storage
     if (!sql) return
     const now = Date.now()
@@ -836,13 +840,17 @@ export class DurableObjectStore {
    * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
    * object of the same class that holds only replay claims, in its own SQL table. A
    * subclass skips its own work there, and must not clear its storage. It tells by the
-   * object's name (`mppx:replay:…`) where the runtime gives it (`ctx.id.name`, so it
+   * object's whole name (`mppx:replay:v<version>:<shard>`) where the runtime gives it (`ctx.id.name`, so it
    * works in the constructor of a fresh shard), and otherwise by the claims table, which a
    * shard creates on its first claim.
    */
   protected isReplayShard(): boolean {
     const name = this.state.id?.name
-    if (typeof name === 'string') return name.startsWith(replayShardPrefix)
+    return typeof name === 'string' ? replayShardName.test(name) : this.hasReplayClaims()
+  }
+
+  /** Whether this object holds the replay claims table, which a shard creates on its first claim. */
+  private hasReplayClaims(): boolean {
     const { sql } = this.state.storage
     if (!sql) return false
     try {

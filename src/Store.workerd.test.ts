@@ -266,6 +266,8 @@ describe('Store.DurableObjectStore replay shards of a subclass in workerd', () =
   test('tells a replay shard apart, so the subclass skips its own alarm work there', async () => {
     // A shard that never held a claim, such as in its constructor, is told apart by its name.
     expect(await run({ op: 'shard', key: 'mppx:replay:v1:3' })).toBe(true)
+    // An ordinary key that only starts like a shard's name is not one.
+    expect(await run({ op: 'shard', key: 'mppx:replay:other' })).toBe(false)
     const shard = 'mppx:replay:v1:0'
     expect(await run({ op: 'claim', key: 'sharded', expires: Date.now() + 200 })).toBe(true)
     expect(await run({ op: 'shard', key: shard })).toBe(true)
