@@ -251,6 +251,29 @@ describe('Store.DurableObjectStore hooks in workerd', () => {
   })
 })
 
+describe('Store.DurableObjectStore replay shards of a subclass in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'recording', options: { replayShards: 1 } })
+
+  test('tells a replay shard apart, so the subclass skips its own alarm work there', async () => {
+    // A shard that never held a claim, such as in its constructor, is told apart by its name.
+    expect(await run({ op: 'shard', key: 'mppx:replay:v1:3' })).toBe(true)
+    const shard = 'mppx:replay:v1:0'
+    expect(await run({ op: 'claim', key: 'sharded', expires: Date.now() + 200 })).toBe(true)
+    expect(await run({ op: 'shard', key: shard })).toBe(true)
+    await run({ op: 'put', key: 'unsharded', value: 1 })
+    expect(await run({ op: 'shard', key: 'unsharded' })).toBe(false)
+    // The shard's alarm clears the expired claim without running the subclass's work.
+    await expect
+      .poll(async () => run({ op: 'claim', key: 'sharded', expires: Date.now() + 60_000 }), {
+        timeout: 5_000,
+        interval: 100,
+      })
+      .toBe(true)
+    expect((await run<{ alarms: number }>({ op: 'log', key: shard })).alarms).toBe(0)
+  })
+})
+
 describe('Store.DurableObjectStore on key-value storage in workerd', () => {
   const run = <result>(command: Record<string, unknown>) =>
     request<result>({ ...command, backend: 'kv-recording' })
