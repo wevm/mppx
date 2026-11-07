@@ -4,7 +4,7 @@ import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
 import type { State } from '../tempo/session/server/ChannelStore.js'
 import { settle } from './Channels.js'
-import { settlementDue, unsettledAmount } from './ChannelStore.js'
+import { ChannelStore, settlementDue, unsettledAmount } from './ChannelStore.js'
 
 const channelId = `0x${'1'.repeat(64)}` as const
 
@@ -187,5 +187,92 @@ describe('settle', () => {
       calls: 1,
       delaySeconds: 60,
     })
+  })
+})
+
+describe('ChannelStore', () => {
+  /** A channel object on in-memory storage whose alarm a test fires by hand. */
+  function object(settlement: Partial<ChannelStore.Settlement> = {}) {
+    const map = new Map<string, unknown>()
+    const sent: ChannelStore.Message[] = []
+    let alarm: number | null = null
+    class TestStore extends ChannelStore {
+      protected override settlement(): ChannelStore.Settlement {
+        return {
+          minUnsettledAmount: 100n,
+          queue: {
+            async send(body) {
+              sent.push(body)
+            },
+          },
+          ...settlement,
+        }
+      }
+    }
+    const store = new TestStore({
+      storage: {
+        get: async (key) => structuredClone(map.get(key)),
+        async put(key, value) {
+          map.set(key, structuredClone(value))
+        },
+        delete: async (key) => map.delete(key),
+        getAlarm: async () => alarm,
+        async setAlarm(time) {
+          alarm = Number(time)
+        },
+      },
+    })
+    return {
+      sent,
+      /** Milliseconds until the alarm, or null without one. */
+      alarmIn: () => (alarm === null ? null : alarm - Date.now()),
+      async fire() {
+        alarm = null
+        await store.alarm()
+      },
+      write: (state: State) => store.put(channelId, state, 'native'),
+    }
+  }
+
+  test('sends a close request or a threshold of new vouchers at once while the watchdog waits', async () => {
+    const channels = object()
+    // 10% of the deposit, 1_000, is the threshold.
+    await channels.write(channel({ voucher: 2_000n }))
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    // Every job fails, so the watchdog backs off: 5, 10, then 20 minutes.
+    for (let sends = 1; sends <= 3; sends++) {
+      await channels.fire()
+      expect(channels.sent).toHaveLength(sends)
+    }
+    expect(channels.alarmIn()).toBeGreaterThan(15 * 60_000)
+    // Less than a threshold's worth more waits for the watchdog.
+    await channels.write(channel({ voucher: 2_500n }))
+    expect(channels.alarmIn()).toBeGreaterThan(15 * 60_000)
+    // A threshold's worth more than the last send could settle goes at once, and restarts the count.
+    await channels.write(channel({ voucher: 3_000n }))
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toHaveLength(4)
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    expect(channels.alarmIn()).toBeLessThanOrEqual(5 * 60_000)
+    await channels.write(channel({ voucher: 3_000n }))
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    // A close request goes at once, once.
+    await channels.write(channel({ voucher: 3_000n, closeRequestedAt: 1n }))
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toHaveLength(5)
+    await channels.write(channel({ voucher: 3_000n, closeRequestedAt: 1n }))
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+  })
+
+  test('sends a channel below the threshold at once when its payer requests a close', async () => {
+    const channels = object()
+    await channels.write(channel({ deposit: 1_000_000n, voucher: 500n }))
+    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    await channels.write(channel({ deposit: 1_000_000n, voucher: 500n, closeRequestedAt: 1n }))
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toEqual([{ channelId }])
   })
 })

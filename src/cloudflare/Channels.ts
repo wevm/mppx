@@ -25,8 +25,10 @@ import { type ChannelStore, isChannelState, unsettledAmount } from './ChannelSto
  *
  * The store keeps that lookup current: after a write opens, closes or finalizes a channel,
  * it adds or removes the channel under its payer and authorized signer. Each lookup entry is
- * its own key, written with a conditional update, so a stale entry never replaces another
- * channel's, and mppx validates any channel it resolves before reusing it.
+ * its own key, written with a conditional update that never replaces another channel the payer
+ * can still resume, so a delayed write for a channel that has since closed cannot hide a newer
+ * one; the lookup skips an entry whose channel no longer resumes, and mppx validates any
+ * channel it resolves before reusing it.
  *
  * @example
  * ```ts
@@ -43,13 +45,30 @@ export function channels(
   const base = Store.durableObject(namespace, options)
   const escrowContract = options?.escrowContract ?? tip20ChannelEscrow
 
-  /** Adds or removes `channelId` under `key`, leaving an entry for another channel alone. */
-  const index = (key: string, channelId: Hex, present: boolean) =>
-    base.update(key, (current) => {
-      if (present)
-        return current === channelId ? noop : { op: 'set', value: channelId, result: undefined }
-      return current === channelId ? { op: 'delete', result: undefined } : noop
-    })
+  /**
+   * Adds or removes `channelId` under `key`. Removing leaves an entry for another channel
+   * alone; adding replaces one only once that channel no longer resumes, comparing against the
+   * entry it checked so a concurrent change is checked again.
+   */
+  async function index(key: string, channelId: Hex, present: boolean) {
+    if (!present) {
+      await base.update(key, (current) =>
+        current === channelId ? { op: 'delete', result: undefined } : noop,
+      )
+      return
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const entry = (await base.get(key)) ?? null
+      if (entry === channelId) return
+      if (typeof entry === 'string' && resumable(await base.get(entry))) return
+      const applied = await base.update(key, (current) =>
+        (current ?? null) === entry
+          ? { op: 'set', value: channelId, result: true }
+          : { op: 'noop', result: false },
+      )
+      if (applied) return
+    }
+  }
 
   /**
    * Moves the lookup entries of a channel from its previous state to its next one. Entries
@@ -117,7 +136,9 @@ export function channels(
         token: paymentRequest.currency,
       }),
     )
-    return typeof channelId === 'string' ? channelId : undefined
+    if (typeof channelId !== 'string') return undefined
+    // An entry a delayed write left for a channel that has since closed resumes nothing.
+    return resumable(await base.get(channelId)) ? channelId : undefined
   }
 
   return { resolveChannelId, store }
@@ -281,9 +302,14 @@ function lookupKey(lookup: {
   return `mppx:session-lookup:v1:${[payer, payee, token, escrowContract].map((address) => address.toLowerCase()).join(':')}:${chainId}`
 }
 
-/** The lookup keys of a channel a payer may resume: open, with no close requested. */
+/** Whether a payer may resume a stored channel: open, with no close requested. */
+function resumable(state: unknown): state is State {
+  return isChannelState(state) && !state.finalized && !state.closeRequestedAt
+}
+
+/** The lookup keys of a channel a payer may resume. */
 function lookupKeys(state: unknown): string[] {
-  if (!isChannelState(state) || state.finalized || state.closeRequestedAt !== 0n) return []
+  if (!resumable(state)) return []
   const signers = new Set([state.payer.toLowerCase(), state.authorizedSigner.toLowerCase()])
   return [...signers].map((payer) =>
     lookupKey({

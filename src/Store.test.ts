@@ -830,6 +830,37 @@ describe('durableObject', () => {
     await expect(store.tryClaim!('nonce', Date.now() + 60_000)).rejects.toThrow('SQLite-backed')
   })
 
+  test('a replay shard releases a claim whose cleanup alarm it could not schedule', async () => {
+    const db = new DatabaseSync(':memory:')
+    let alarm: number | null = null
+    let failAlarm = true
+    const object = new Store.DurableObjectStore({
+      storage: {
+        get: async () => undefined,
+        put: async () => {},
+        delete: async () => false,
+        getAlarm: async () => alarm,
+        async setAlarm(time) {
+          if (failAlarm) throw new Error('alarm unavailable')
+          alarm = Number(time)
+        },
+        sql: {
+          exec(query, ...bindings) {
+            const rows = db.prepare(query).all(...(bindings as never[]))
+            return { toArray: () => rows as Record<string, unknown>[] }
+          },
+        },
+      },
+    })
+    const expires = Date.now() + 60_000
+    await expect(object.claimReplay('nonce', expires)).rejects.toThrow('alarm unavailable')
+    // The failed claim left nothing behind, so a retry claims the key.
+    failAlarm = false
+    expect(await object.claimReplay('nonce', expires)).toBe(true)
+    expect(alarm).toBe(expires)
+    expect(await object.claimReplay('nonce', expires)).toBe(false)
+  })
+
   test('rejects native encoding over fetch', () => {
     expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
       'requires `transport: "rpc"`',

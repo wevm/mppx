@@ -643,7 +643,7 @@ export declare namespace durableObject {
      * Spreads replay claims ({@link AtomicStore.tryClaim}) over this many shard
      * objects, named `mppx:replay:v<version>:<shard>` by an FNV-1a hash of the
      * key, instead of one object per key: each shard holds its claims in a SQLite
-     * table and clears expired ones with an alarm, so short-lived claims leave no
+     * table (`mppx_replay_claims`) and clears expired ones with an alarm, so short-lived claims leave no
      * objects behind. The class must be SQLite-backed. Claims then live only in
      * the shards: `get` and `update` of a claimed key don't see them, and
      * `delete` releases them. Changing the count moves keys between shards, so
@@ -768,6 +768,7 @@ export class DurableObjectStore {
    * Handles the object's alarm, which a subclass sets through
    * {@link DurableObjectStore.storage}. In a replay shard it clears expired claims, so
    * a subclass that overrides it must call `super.alarm()`, or expired claims stay stored.
+   * Elsewhere, including on key-value-backed objects, it does nothing.
    */
   async alarm(): Promise<void> {
     const { sql } = this.state.storage
@@ -775,7 +776,7 @@ export class DurableObjectStore {
     let shard: unknown[]
     try {
       shard = sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'replay_claims'")
+        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mppx_replay_claims'")
         .toArray()
     } catch {
       // A key-value-backed object has `sql` but cannot run it, so it holds no replay shard.
@@ -783,9 +784,9 @@ export class DurableObjectStore {
     }
     if (shard.length === 0) return
     const now = Date.now()
-    sql.exec('DELETE FROM replay_claims WHERE expires <= ?', now)
+    sql.exec('DELETE FROM mppx_replay_claims WHERE expires <= ?', now)
     const [{ expires } = {}] = sql
-      .exec('SELECT MIN(expires) AS expires FROM replay_claims')
+      .exec('SELECT MIN(expires) AS expires FROM mppx_replay_claims')
       .toArray()
     if (typeof expires === 'number') await this.state.storage.setAlarm?.(Math.max(expires, now + 1))
   }
@@ -802,7 +803,7 @@ export class DurableObjectStore {
     const claimed =
       sql
         .exec(
-          'INSERT INTO replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE replay_claims.expires <= ? RETURNING key',
+          'INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE mppx_replay_claims.expires <= ? RETURNING key',
           key,
           expires,
           now,
@@ -816,7 +817,7 @@ export class DurableObjectStore {
           await storage.setAlarm?.(Math.max(expires, Date.now() + 1))
       } catch (error) {
         // Without the alarm that clears it the claim must not stay: release it so a retry can claim.
-        sql.exec('DELETE FROM replay_claims WHERE key = ? AND expires = ?', key, expires)
+        sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND expires = ?', key, expires)
         throw error
       }
     }
@@ -825,7 +826,7 @@ export class DurableObjectStore {
 
   /** Releases `key`'s claim in this replay shard, if it has one. */
   async releaseReplay(key: string): Promise<void> {
-    this.replayClaims().exec('DELETE FROM replay_claims WHERE key = ?', key)
+    this.replayClaims().exec('DELETE FROM mppx_replay_claims WHERE key = ?', key)
   }
 
   /** Reads a key: its JSON text, or its stored value with `native` encoding. */
@@ -912,9 +913,11 @@ export class DurableObjectStore {
         'Store.durableObject: `replayShards` needs a SQLite-backed Durable Object (a `new_sqlite_classes` migration).',
       )
     sql.exec(
-      'CREATE TABLE IF NOT EXISTS replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS mppx_replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
     )
-    sql.exec('CREATE INDEX IF NOT EXISTS replay_claims_by_expiry ON replay_claims (expires)')
+    sql.exec(
+      'CREATE INDEX IF NOT EXISTS mppx_replay_claims_by_expiry ON mppx_replay_claims (expires)',
+    )
     return sql
   }
 
