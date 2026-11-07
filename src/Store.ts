@@ -470,6 +470,9 @@ export declare namespace cloudflare {
 /** Name prefix of {@link durableObject}'s replay shard objects. */
 const replayShardPrefix = 'mppx:replay:'
 
+/** A replay shard object's whole name: `mppx:replay:v<version>:<shard>`. */
+const replayShardName = /^mppx:replay:v\d+:\d+$/
+
 /**
  * Atomic store backed by Cloudflare Durable Objects.
  *
@@ -550,14 +553,14 @@ export function durableObject(
   }
 
   // The object's operations on stored values: JSON text, or native values over RPC.
-  const remote: DurableObjectStore.Stub =
+  const remote: Remote =
     transport === 'rpc'
       ? {
-          get: (key) => stub(key).get(key, encoding),
-          put: (key, value) => stub(key).put(key, value, encoding),
-          delete: (key) => stub(key).delete(key, encoding),
-          swap: (key, expected, value) => stub(key).swap(key, expected, value, encoding),
-          claim: (key, expires) => stub(key).claim(key, expires, encoding),
+          get: (key) => stub(key).storeGet(key, encoding),
+          put: (key, value) => stub(key).storePut(key, value, encoding),
+          delete: (key) => stub(key).storeDelete(key, encoding),
+          swap: (key, expected, value) => stub(key).storeSwap(key, expected, value, encoding),
+          claim: (key, expires) => stub(key).storeClaim(key, expires, encoding),
         }
       : {
           get: (key) => call(key, { op: 'get', key }),
@@ -572,6 +575,17 @@ export function durableObject(
             }),
           claim: (key, expires) => call(key, { op: 'claim', key, expires }),
         }
+  type Remote = {
+    get: (key: string) => Promise<unknown>
+    put: (key: string, value: unknown) => Promise<unknown>
+    delete: (key: string) => Promise<unknown>
+    swap: (
+      key: string,
+      expected: unknown,
+      value: unknown,
+    ) => Promise<DurableObjectStore.SwapResult<unknown>>
+    claim: (key: string, expires: number) => Promise<boolean>
+  }
   function stub(key: string) {
     return object(key) as unknown as DurableObjectStore.Stub
   }
@@ -734,7 +748,7 @@ export class DurableObjectStore {
    * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
    * and taking it as an argument keeps this module free of that import. Called
    * on a subclass, it keeps the subclass's methods (such as `onWrite` and
-   * `alarm`), but not its constructor, field initializers or `#private` members,
+   * `alarm`) and static members, but not its constructor, field initializers or `#private` members,
    * which the copied methods cannot reach: subclass the returned class, or set
    * state up lazily in ordinary members.
    *
@@ -764,6 +778,13 @@ export class DurableObjectStore {
     for (const proto of chain)
       for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
         if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
+    // And the subclasses' static members, without DurableObjectStore's own (such as `rpc`).
+    for (const proto of chain.slice(1)) {
+      const ctor = (proto as { constructor: object }).constructor
+      for (const name of Reflect.ownKeys(ctor))
+        if (name !== 'length' && name !== 'name' && name !== 'prototype')
+          Object.defineProperty(RpcStore, name, Object.getOwnPropertyDescriptor(ctor, name)!)
+    }
     return RpcStore as unknown as store
   }
 
@@ -803,7 +824,8 @@ export class DurableObjectStore {
    * ```
    */
   async alarm(): Promise<void> {
-    if (!this.isReplayShard()) return
+    // Only an object that holds claims has any to clear, whatever its name.
+    if (!this.hasReplayClaims()) return
     const { sql } = this.state.storage
     if (!sql) return
     const now = Date.now()
@@ -818,13 +840,17 @@ export class DurableObjectStore {
    * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
    * object of the same class that holds only replay claims, in its own SQL table. A
    * subclass skips its own work there, and must not clear its storage. It tells by the
-   * object's name (`mppx:replay:…`) where the runtime gives it (`ctx.id.name`, so it
+   * object's whole name (`mppx:replay:v<version>:<shard>`) where the runtime gives it (`ctx.id.name`, so it
    * works in the constructor of a fresh shard), and otherwise by the claims table, which a
    * shard creates on its first claim.
    */
   protected isReplayShard(): boolean {
     const name = this.state.id?.name
-    if (typeof name === 'string') return name.startsWith(replayShardPrefix)
+    return typeof name === 'string' ? replayShardName.test(name) : this.hasReplayClaims()
+  }
+
+  /** Whether this object holds the replay claims table, which a shard creates on its first claim. */
+  private hasReplayClaims(): boolean {
     const { sql } = this.state.storage
     if (!sql) return false
     try {
@@ -877,18 +903,27 @@ export class DurableObjectStore {
     this.replayClaims().exec('DELETE FROM mppx_replay_claims WHERE key = ?', key)
   }
 
+  // The store's operations are named `store*`, not `get`, `put` and `delete`: on a Worker
+  // with the `fetcher_has_get_put_delete` flag (or the `rpc` flag before 2024-03-26), a stub's
+  // own HTTP methods of those names shadow RPC methods, and the prefix keeps them apart
+  // from methods a subclass already has.
+
   /** Reads a key: its JSON text, or its stored value with `native` encoding. */
-  async get(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
+  async storeGet(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
     return (await this.state.storage.get(key)) ?? null
   }
 
   /** Writes a key: JSON text, or any structured-clone value with `native` encoding. */
-  async put(key: string, value: unknown, encoding: durableObject.Encoding = 'json'): Promise<void> {
+  async storePut(
+    key: string,
+    value: unknown,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<void> {
     await this.commit(key, value, encoding)
   }
 
   /** Deletes a key. */
-  async delete(key: string, encoding: durableObject.Encoding = 'json'): Promise<void> {
+  async storeDelete(key: string, encoding: durableObject.Encoding = 'json'): Promise<void> {
     await this.commit(key, null, encoding)
   }
 
@@ -898,13 +933,13 @@ export class DurableObjectStore {
    * It reads and writes without awaiting other I/O in between, so the object's
    * input gate makes it atomic.
    */
-  async swap(
+  async storeSwap(
     key: string,
     expected: unknown,
     value: unknown,
     encoding: durableObject.Encoding = 'json',
   ): Promise<DurableObjectStore.SwapResult<unknown>> {
-    const current = await this.get(key)
+    const current = await this.storeGet(key)
     if (encoding === 'native' ? !deepEqual(current, expected ?? null) : current !== expected)
       return { applied: false, current }
     await this.commit(key, value, encoding, current)
@@ -912,13 +947,13 @@ export class DurableObjectStore {
   }
 
   /** Records a replay marker until `expires` unless the key holds a value or an unexpired marker. */
-  async claim(
+  async storeClaim(
     key: string,
     expires: number,
     encoding: durableObject.Encoding = 'json',
   ): Promise<boolean> {
     if (!Number.isFinite(expires) || expires <= Date.now()) return false
-    const raw = await this.get(key)
+    const raw = await this.storeGet(key)
     const current = decode(raw, encoding)
     if (current !== null && (!isReplayMarker(current) || current.expires > Date.now())) return false
     const marker = { expires, type: 'mppx:replay' } satisfies ReplayMarker
@@ -932,17 +967,17 @@ export class DurableObjectStore {
     const body = (await request.json()) as DurableObjectStore.Request
     switch (body.op) {
       case 'get':
-        return Response.json(await this.get(body.key))
+        return Response.json(await this.storeGet(body.key))
       case 'put':
-        await this.put(body.key, body.value)
+        await this.storePut(body.key, body.value)
         return Response.json(true)
       case 'delete':
-        await this.delete(body.key)
+        await this.storeDelete(body.key)
         return Response.json(true)
       case 'swap':
-        return Response.json(await this.swap(body.key, body.expected, body.value))
+        return Response.json(await this.storeSwap(body.key, body.expected, body.value))
       case 'claim':
-        return Response.json(await this.claim(body.key, body.expires))
+        return Response.json(await this.storeClaim(body.key, body.expires))
       case 'claimReplay':
         return Response.json(await this.claimReplay(body.key, body.expires))
       case 'releaseReplay':
@@ -1043,16 +1078,20 @@ export declare namespace DurableObjectStore {
 
   /** The object's methods that {@link durableObject} calls, positionally, over Workers RPC. */
   export type Stub = {
-    get: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
-    put: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>
-    delete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
-    swap: (
+    storeGet: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    storePut: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>
+    storeDelete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    storeSwap: (
       key: string,
       expected: unknown,
       value: unknown,
       encoding?: durableObject.Encoding,
     ) => Promise<SwapResult<unknown>>
-    claim: (key: string, expires: number, encoding?: durableObject.Encoding) => Promise<boolean>
+    storeClaim: (
+      key: string,
+      expires: number,
+      encoding?: durableObject.Encoding,
+    ) => Promise<boolean>
   }
 
   /** An operation sent from {@link durableObject} to the object. */

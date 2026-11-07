@@ -282,7 +282,7 @@ describe('ChannelStore', () => {
         alarm = null
         await store.alarm()
       },
-      write: (state: State) => store.put(channelId, state, 'native'),
+      write: (state: State) => store.storePut(channelId, state, 'native'),
     }
   }
 

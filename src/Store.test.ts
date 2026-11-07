@@ -109,7 +109,7 @@ function fakeDurableObjectNamespace() {
       }
       // RPC arguments and results are structured clones.
       const rpc =
-        (method: 'get' | 'put' | 'delete' | 'swap' | 'claim') =>
+        (method: 'storeGet' | 'storePut' | 'storeDelete' | 'storeSwap' | 'storeClaim') =>
         (...args: unknown[]) =>
           queue(async () =>
             structuredClone(
@@ -120,11 +120,11 @@ function fakeDurableObjectNamespace() {
         fetch(input: string, init: RequestInit) {
           return queue(() => target.fetch(new Request(input, init)))
         },
-        get: rpc('get'),
-        put: rpc('put'),
-        delete: rpc('delete'),
-        swap: rpc('swap'),
-        claim: rpc('claim'),
+        storeGet: rpc('storeGet'),
+        storePut: rpc('storePut'),
+        storeDelete: rpc('storeDelete'),
+        storeSwap: rpc('storeSwap'),
+        storeClaim: rpc('storeClaim'),
       }
     },
   }
@@ -699,9 +699,11 @@ function richValue() {
 }
 
 /** A DurableObjectStore on an in-memory storage that copies values as Durable Object storage does. */
-function objectStore() {
+function objectStore<store extends Store.DurableObjectStore = Store.DurableObjectStore>(
+  Class: new (state: Store.DurableObjectStore.State) => store = Store.DurableObjectStore as never,
+) {
   const map = new Map<string, unknown>()
-  return new Store.DurableObjectStore({
+  return new Class({
     storage: {
       async get(key: string) {
         return structuredClone(map.get(key))
@@ -776,9 +778,11 @@ describe('durableObject', () => {
     ]
     for (const [stored, other] of pairs) {
       const object = objectStore()
-      await object.put('k', stored, 'native')
-      expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
-      expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
+      await object.storePut('k', stored, 'native')
+      expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+      expect((await object.storeSwap('k', structuredClone(stored), 'next', 'native')).applied).toBe(
+        true,
+      )
     }
   })
 
@@ -787,11 +791,13 @@ describe('durableObject', () => {
     sparse.length = 2 ** 32 - 1
     sparse[5] = 1
     const object = objectStore()
-    await object.put('k', sparse, 'native')
+    await object.storePut('k', sparse, 'native')
     const other = structuredClone(sparse)
     other[6] = 1
-    expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
-    expect((await object.swap('k', structuredClone(sparse), 'next', 'native')).applied).toBe(true)
+    expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+    expect((await object.storeSwap('k', structuredClone(sparse), 'next', 'native')).applied).toBe(
+      true,
+    )
   })
 
   test('native update handles cyclic values', async () => {
@@ -838,8 +844,8 @@ describe('durableObject', () => {
     ).rejects.toThrow('cannot compare a Set with object keys')
     // A value written directly to storage fails the swap instead of conflicting.
     const object = objectStore()
-    await object.put('k', new Map([[{}, 1]]), 'native')
-    await expect(object.swap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
+    await object.storePut('k', new Map([[{}, 1]]), 'native')
+    await expect(object.storeSwap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
       'cannot compare',
     )
   })
@@ -888,6 +894,50 @@ describe('durableObject', () => {
     expect(await object.claimReplay('nonce', expires)).toBe(true)
     expect(alarm).toBe(expires)
     expect(await object.claimReplay('nonce', expires)).toBe(false)
+  })
+
+  test('fetch keeps to the store operations when a subclass has its own get, put and delete', async () => {
+    class Legacy extends Store.DurableObjectStore {
+      // A subclass's own methods, which the store must not call.
+      async get() {
+        throw new Error('subclass get')
+      }
+      async put() {
+        throw new Error('subclass put')
+      }
+      async delete() {
+        throw new Error('subclass delete')
+      }
+    }
+    const object = objectStore(Legacy)
+    const store = Store.durableObject({
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (input, init) => object.fetch(new Request(input, init)) }),
+    })
+    await store.put('k', { n: 1 })
+    expect(await store.get('k')).toEqual({ n: 1 })
+    expect(await store.update('k', () => ({ op: 'set', value: 2, result: 'ok' }))).toBe('ok')
+    await store.delete('k')
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('rpc keeps a subclass static members', () => {
+    class Base {
+      base = true
+    }
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      static describe() {
+        return this.label
+      }
+    }
+    class Child extends Parent {
+      static override label = 'child'
+    }
+    const Rpc = Child.rpc(Base)
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.describe()).toBe('child')
+    expect(Object.hasOwn(Rpc, 'rpc')).toBe(false)
   })
 
   test('rejects native encoding over fetch', () => {
