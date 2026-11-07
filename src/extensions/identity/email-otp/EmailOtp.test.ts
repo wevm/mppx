@@ -452,12 +452,12 @@ test('sends a short-lived attestation while more than half its lifetime remains'
 test('sends a just-acquired short-lived attestation when the issuer clock is behind', async () => {
   const keys = await keyPair()
   const keyId = await jwkThumbprint(keys.publicKey)
-  // The issuer's clock is 100 seconds behind the client's, and its attestations live 120 seconds.
-  const iat = Math.floor(Date.now() / 1_000) - 100
+  // The issuer clock is 550 seconds behind the client, and its attestations live 600 seconds.
+  const iat = Math.floor(Date.now() / 1_000) - 550
   const token = await Attestation.sign(
     {
       aud: 'https://api.example',
-      exp: iat + 120,
+      exp: iat + 600,
       iat,
       iss: issuer,
       sub: 'dana@example.com',
@@ -472,11 +472,14 @@ test('sends a just-acquired short-lived attestation when the issuer clock is beh
   })
   Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
   expect(await prover.retry!(response)).toBe(true)
-  const sent = await prover.prove(new Request('https://api.example/resource'), {
-    created: iat,
-    nonce: 'n',
-  })
-  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
+  // Concurrent resends each carry it: one does not use it up for the others.
+  for (const _ of [1, 2]) {
+    const sent = await prover.prove(new Request('https://api.example/resource'), {
+      created: iat,
+      nonce: 'n',
+    })
+    expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
+  }
 })
 
 test('sends a cached short-lived attestation within the clock tolerance', async () => {

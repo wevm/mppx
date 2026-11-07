@@ -75,12 +75,12 @@ export function prover(config: prover.Config): Identity.Prover {
       const usable = (entry: Entry) => {
         if (entry.claims.aud !== origin) return false
         if (entry.claims.exp <= now() - Constants.clockTolerance) return false
-        // An attestation just acquired for this request is always sent on its resend.
-        return paid || entry.fresh || entry.claims.exp > now() + Math.max(0, margin(entry))
+        // An attestation acquired moments ago is always sent, so every request resent after
+        // acquiring it carries it; the window is time-based, so concurrent requests cannot use it up.
+        const fresh = entry.fresh && now() - entry.added <= Constants.clockTolerance
+        return paid || fresh || entry.claims.exp > now() + Math.max(0, margin(entry))
       }
-      const entries = [...stored.values()].filter(usable)
-      if (!paid) for (const entry of entries) entry.fresh = false
-      const tokens = entries.map(({ token }) => token)
+      const tokens = [...stored.values()].filter(usable).map(({ token }) => token)
       if (tokens.length === 0) return request
       const headers = new Headers(request.headers)
       const existing = headers.get(Constants.header)
