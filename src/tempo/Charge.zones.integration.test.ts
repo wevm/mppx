@@ -1,7 +1,7 @@
 import { Challenge, Credential, Errors, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { type Address, createClient, defineChain, type Hex, http, parseUnits } from 'viem'
+import { type Address, createClient, custom, defineChain, type Hex, http, parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { readContract, waitForTransactionReceipt } from 'viem/actions'
 import { tempoLocalnet } from 'viem/chains'
@@ -256,6 +256,37 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     expect(await balanceOf(payer.zone, payer.account.address)).toBe(
       zoneBefore - parseUnits(price, 6) - fee,
     )
+  }, 120_000)
+
+  test('recovers a withdrawal whose send response is lost', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient })
+    const challenge = Challenge.fromResponse(
+      await handler(new Request('https://zones.example.com')),
+    )
+    // The Zone accepts the withdrawal, but its response never reaches the client.
+    const zone = createClient({
+      account: payer.account,
+      chain: zoneChain,
+      transport: custom({
+        async request(args) {
+          const result = await payer.zone.request(args as never)
+          if (args.method === 'eth_sendRawTransactionSync') throw new Error('response lost')
+          return result
+        },
+      }),
+    })
+    const method = tempo_client.charge({ getClient: () => l1, zone: { client: zone } })
+
+    const credential = await method.createCredential({
+      challenge: challenge as never,
+      context: {},
+    })
+    expect(Credential.deserialize(credential).payload).toMatchObject({ type: 'zone' })
+    const response = await handler(
+      new Request('https://zones.example.com', { headers: { Authorization: credential } }),
+    )
+    expect(response.status).toBe(200)
   }, 120_000)
 
   test('rejects a Zone the service does not accept', async () => {

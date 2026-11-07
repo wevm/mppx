@@ -4,7 +4,7 @@ import { Mppx, tempo } from 'mppx/server'
 import { createClient, custom, defineChain } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 const merchant = '0x2222222222222222222222222222222222222222'
 const currency = '0x20c0000000000000000000000000000000000001'
@@ -120,33 +120,75 @@ describe('tempo.charge client zone selection', () => {
     ).toThrow('does not match Zone 3')
   })
 
-  test('does not withdraw again after a withdrawal with an unknown outcome', async () => {
-    const calls: string[] = []
-    const zone = createClient({
+  /** A Zone client that prepares and signs withdrawals, then fails to send them or earlier. */
+  function failingZoneClient(calls: string[], failing: 'prepare' | 'send') {
+    let sent = false
+    return createClient({
       account: payer,
       chain: defineChain({ ...tempoModerato, id: 1_424_310_003, name: 'Zone' }),
       transport: custom(
         {
           async request({ method }) {
             calls.push(method)
-            // The withdrawal fee lookup succeeds; sending the withdrawal fails.
+            if (method === 'eth_chainId') return `0x${(1_424_310_003).toString(16)}`
             if (method === 'eth_call') return `0x${'00'.repeat(32)}`
-            throw new Error('connection lost')
+            if (failing === 'prepare' || sent) throw new Error('connection lost')
+            if (method === 'eth_sendRawTransactionSync') {
+              sent = true
+              throw new Error('connection lost')
+            }
+            if (method === 'eth_getBlockByNumber')
+              return { baseFeePerGas: '0x1', number: '0x1', timestamp: '0x1' }
+            return '0x1'
           },
         },
         { retryCount: 0 },
       ),
     })
-    const method = tempo_client.charge({ getClient: () => l1, zone: { client: zone } })
+  }
+
+  test('does not withdraw again after a withdrawal with an unknown outcome', async () => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: failingZoneClient(calls, 'send') },
+    })
     const c = await challenge()
-    await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
-      'Zone withdrawal outcome is unknown',
-    )
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    try {
+      // The client looks for the receipt of the signed transaction before it gives up.
+      const first = method
+        .createCredential({ challenge: c as never, context: {} })
+        .catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(String(await first)).toMatch(/Zone withdrawal outcome is unknown: transaction 0x/)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(calls).toContain('eth_sendRawTransactionSync')
+    expect(calls).toContain('eth_getTransactionReceipt')
     const sent = calls.length
     await expect(method.createCredential({ challenge: c as never, context: {} })).rejects.toThrow(
       'Zone withdrawal outcome is unknown',
     )
     expect(calls).toHaveLength(sent)
+  })
+
+  test('retries a withdrawal that failed before it was sent', async () => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      getClient: () => l1,
+      zone: { client: failingZoneClient(calls, 'prepare') },
+    })
+    const c = await challenge()
+    const first = await method
+      .createCredential({ challenge: c as never, context: {} })
+      .catch((error: Error) => error)
+    expect(String(first)).not.toContain('outcome is unknown')
+    const sent = calls.length
+    await method.createCredential({ challenge: c as never, context: {} }).catch(() => {})
+    expect(calls.length).toBeGreaterThan(sent)
+    expect(calls).not.toContain('eth_sendRawTransactionSync')
   })
 
   test('pays on Tempo when the challenge leaves no time to send the withdrawal', async () => {

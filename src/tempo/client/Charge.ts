@@ -10,9 +10,11 @@ import {
 import {
   prepareTransactionRequest,
   sendCallsSync,
+  sendRawTransactionSync,
   sendTransactionSync,
   signTypedData,
   signTransaction,
+  waitForTransactionReceipt,
 } from 'viem/actions'
 import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
@@ -528,6 +530,9 @@ function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: n
   return Math.max(0, Math.min(timeoutMs, new Date(expires).getTime() - Date.now()))
 }
 
+/** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
+const zoneReceiptRecoveryTimeoutMs = 15_000
+
 /** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
 async function requestZoneWithdrawal(
   options: {
@@ -558,8 +563,8 @@ async function requestZoneWithdrawal(
     to: recipient,
     token: currency,
   })
-  state.sent = true
-  const receipt = await sendTransactionSync(zone.client, {
+  // Prepare and sign first: a failure there sent nothing, so the challenge may be retried.
+  const prepared = await prepareTransactionRequest(zone.client, {
     account,
     calls: [
       Actions.token.approve.call({
@@ -569,14 +574,25 @@ async function requestZoneWithdrawal(
       }),
       withdrawal,
     ],
-  } as never).catch((cause) => {
-    const error = new Error(
-      'Zone withdrawal outcome is unknown: it may have been sent. Retrying this challenge does not withdraw again.',
-    )
-    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
-    Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
-    throw error
-  })
+  } as never)
+  const serializedTransaction = await signTransaction(zone.client, prepared as never)
+  state.sent = true
+  // The signed transaction fixes its hash, so a lost send response can still be recovered from the Zone.
+  const hash = keccak256(serializedTransaction)
+  const receipt = await sendRawTransactionSync(zone.client, { serializedTransaction }).catch(
+    (cause) =>
+      waitForTransactionReceipt(zone.client, {
+        hash,
+        timeout: zoneReceiptRecoveryTimeoutMs,
+      }).catch(() => {
+        const error = new Error(
+          `Zone withdrawal outcome is unknown: transaction ${hash} may have been sent. Retrying this challenge does not withdraw again.`,
+        )
+        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+        Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+        throw error
+      }),
+  )
   const [requested] = parseEventLogs({
     abi: Abis.zoneOutbox,
     eventName: 'WithdrawalRequested',
