@@ -94,7 +94,7 @@ export function charge(parameters: charge.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
-  assertZoneId(parameters.zone)
+  assertZone(parameters.zone)
   // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
   const pendingZoneWithdrawals = new Map<string, Promise<Zone.PendingWithdrawal>>()
 
@@ -486,8 +486,15 @@ async function createZoneCredential(options: {
   })
 }
 
-/** Throws when `zone.zoneId` names a different Zone from the one `zone.client` serves. */
-function assertZoneId(zone: charge.Zone | undefined) {
+/**
+ * Throws on Zone options that would fail only after an irreversible withdrawal:
+ * a `settlementTimeoutMs` that is not a finite, non-negative number, or a
+ * `zoneId` that names a different Zone from the one `zone.client` serves.
+ */
+function assertZone(zone: charge.Zone | undefined) {
+  const timeoutMs = zone?.settlementTimeoutMs
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 0))
+    throw new Error('`zone.settlementTimeoutMs` must be a finite, non-negative number.')
   const chainId = zone?.client.chain?.id
   if (zone?.zoneId === undefined || chainId === undefined) return
   // Only chain IDs that follow a known Zone scheme name their Zone.

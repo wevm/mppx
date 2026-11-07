@@ -99,6 +99,18 @@ describe('tempo.charge client zone selection', () => {
     expect(String(error)).not.toContain('zone used')
   })
 
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'rejects zone.settlementTimeoutMs %s before any withdrawal',
+    (settlementTimeoutMs) => {
+      expect(() =>
+        tempo_client.charge({
+          getClient: () => l1,
+          zone: { client: zoneClient(1_424_310_003), settlementTimeoutMs },
+        }),
+      ).toThrow('settlementTimeoutMs')
+    },
+  )
+
   test('rejects a zoneId that does not match the Zone client chain', () => {
     expect(() =>
       tempo_client.charge({
