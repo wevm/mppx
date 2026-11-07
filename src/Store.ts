@@ -467,6 +467,9 @@ export declare namespace cloudflare {
   }
 }
 
+/** Name prefix of {@link durableObject}'s replay shard objects. */
+const replayShardPrefix = 'mppx:replay:'
+
 /**
  * Atomic store backed by Cloudflare Durable Objects.
  *
@@ -579,7 +582,7 @@ export function durableObject(
       ? undefined
       : (() => {
           const shardOf = (key: string) =>
-            `mppx:replay:v${replayShardVersion}:${fnv1a(key) % replayShards}`
+            `${replayShardPrefix}v${replayShardVersion}:${fnv1a(key) % replayShards}`
           const shard = (key: string) =>
             object(shardOf(key)) as unknown as DurableObjectStore.ReplayShard
           return transport === 'rpc'
@@ -667,7 +670,7 @@ export declare namespace durableObject {
      * running two settings side by side lets a key claimed under the old setting
      * be claimed again until that claim expires. Change it when no unexpired
      * claim matters, such as together with the secret that signs Challenges.
-     * Shards are objects of the bound class, so a subclass's `alarm` and
+     * Shards are objects of the bound class, so a subclass's `alarm`, handlers and
      * constructor run in them too: skip the subclass's own work there with
      * {@link DurableObjectStore.isReplayShard}, and never clear a shard's storage.
      */
@@ -814,9 +817,14 @@ export class DurableObjectStore {
   /**
    * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
    * object of the same class that holds only replay claims, in its own SQL table. A
-   * subclass skips its own alarm work there, and must not clear its storage.
+   * subclass skips its own work there, and must not clear its storage. It tells by the
+   * object's name (`mppx:replay:…`) where the runtime gives it (`ctx.id.name`, so it
+   * works in the constructor of a fresh shard), and otherwise by the claims table, which a
+   * shard creates on its first claim.
    */
   protected isReplayShard(): boolean {
+    const name = this.state.id?.name
+    if (typeof name === 'string') return name.startsWith(replayShardPrefix)
     const { sql } = this.state.storage
     if (!sql) return false
     try {
@@ -994,7 +1002,11 @@ function decode(raw: unknown, encoding: durableObject.Encoding): unknown {
 
 export declare namespace DurableObjectStore {
   /** The subset of `DurableObjectState` the store uses. */
-  export type State = { storage: Storage }
+  export type State = {
+    /** The object's ID; `name` is set for objects addressed with `idFromName`. */
+    id?: { readonly name?: string | undefined } | undefined
+    storage: Storage
+  }
 
   /** The subset of `DurableObjectStorage` the store uses. */
   export type Storage = {
