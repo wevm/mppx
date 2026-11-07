@@ -16,6 +16,8 @@
       "mppx/tempo": ["../src/tempo/index.ts"],
       "mppx/extensions/identity": ["../src/extensions/identity/index.ts"],
       "mppx/extensions/identity/tap": ["../src/extensions/identity/tap/index.ts"],
+      "mppx/extensions/identity/attestation": ["../src/extensions/identity/attestation/index.ts"],
+      "mppx/extensions/identity/email-otp": ["../src/extensions/identity/email-otp/index.ts"],
       "mppx/extensions/identity/web-bot-auth": ["../src/extensions/identity/web-bot-auth/index.ts"],
       "mppx/x402": ["../src/x402/index.ts"],
       "mppx/x402/express": ["../src/x402/middlewares/express.ts"],
