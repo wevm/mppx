@@ -408,7 +408,7 @@ test('replaces an attestation near expiry before paying, and keeps it on the pai
     {
       aud: 'https://api.example',
       exp: iat + 30,
-      iat,
+      iat: iat - 3_570,
       iss: issuer,
       sub: 'dana@example.com',
       type: 'email',
@@ -424,6 +424,29 @@ test('replaces an attestation near expiry before paying, and keeps it on the pai
     challenge: {} as never,
   })
   expect(paid.headers.get(Attestation.Constants.header)).toBe(token)
+})
+
+test('sends a short-lived attestation while more than half its lifetime remains', async () => {
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  const iat = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    {
+      aud: 'https://api.example',
+      exp: iat + 120,
+      iat,
+      iss: issuer,
+      sub: 'dana@example.com',
+      type: 'email',
+    },
+    { key: keys.privateKey, keyId },
+  )
+  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
+  const sent = await prover.prove(new Request('https://api.example/resource'), {
+    created: iat,
+    nonce: 'n',
+  })
+  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
 })
 
 test('requires issuers to acquire attestations', () => {

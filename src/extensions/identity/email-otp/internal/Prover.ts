@@ -25,7 +25,7 @@ import type * as Types from './Types.js'
  * ```
  */
 export function prover(config: prover.Config): Identity.Prover {
-  const stored = new Map<string, { claims: Types.Claims; token: string }>()
+  const stored = new Map<string, { added: number; claims: Types.Claims; token: string }>()
   const pending = new Map<string, Promise<boolean>>()
   const keyOf = (claims: Pick<Types.Claims, 'aud' | 'iss' | 'type'>) =>
     JSON.stringify([claims.aud, claims.iss, claims.type])
@@ -43,7 +43,7 @@ export function prover(config: prover.Config): Identity.Prover {
     return claims as Types.Claims
   }
   function add(token: string, claims: Types.Claims = decode(token)) {
-    stored.set(keyOf(claims), { claims, token })
+    stored.set(keyOf(claims), { added: Math.floor(Date.now() / 1_000), claims, token })
   }
   for (const token of config.attestations ?? []) add(token)
 
@@ -63,9 +63,19 @@ export function prover(config: prover.Config): Identity.Prover {
       // is replaced before paying. The paid retry keeps sending it within the server's clock
       // tolerance: dropping it there would reject a payment that may already be broadcast.
       const paid = context.challenge !== undefined
-      const after = paid ? now() - Constants.clockTolerance : now() + Constants.refreshMargin
+      // The margin is at most half the attestation's lifetime, so a short-lived one is still sent.
+      const margin = ({ claims, added }: { claims: Types.Claims; added: number }) =>
+        Math.min(
+          Constants.refreshMargin,
+          Math.floor((claims.exp - (typeof claims.iat === 'number' ? claims.iat : added)) / 2),
+        )
       const tokens = [...stored.values()]
-        .filter(({ claims }) => claims.aud === origin && claims.exp > after)
+        .filter(
+          (entry) =>
+            entry.claims.aud === origin &&
+            entry.claims.exp >
+              (paid ? now() - Constants.clockTolerance : now() + Math.max(0, margin(entry))),
+        )
         .map(({ token }) => token)
       if (tokens.length === 0) return request
       const headers = new Headers(request.headers)
