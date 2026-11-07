@@ -122,9 +122,6 @@ mppx sessions close --all --yes
 
 # explicitly trust a custom session escrow advertised by the server
 mppx example.com -M allowCustomEscrow=true
-
-# create a Stripe deposit address for stripe.create({ depositAddresses })
-STRIPE_SECRET_KEY=sk_... mppx stripe deposit-address --network tempo
 ```
 
 `--session auto` is the default. Pass `new` to open another channel or a channel ID to select one

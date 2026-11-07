@@ -2056,7 +2056,7 @@ const stripe = Cli.create('stripe', {
     )
     const json = (await response.json().catch(() => ({}))) as {
       address?: string
-      error?: { message?: string }
+      error?: { code?: string }
       id?: string
       livemode?: boolean
       network?: string
@@ -2065,7 +2065,8 @@ const stripe = Cli.create('stripe', {
     if (!response.ok || !json.address)
       return c.error({
         code: 'STRIPE_REQUEST_FAILED',
-        message: `Stripe could not create a deposit address: ${json.error?.message ?? `HTTP ${response.status}`}`,
+        // Stripe's error text is upstream data: report only the status and an allowlisted code.
+        message: `Stripe could not create a deposit address (HTTP ${response.status}${json.error?.code && /^[a-z_]+$/.test(json.error.code) ? `, ${json.error.code}` : ''}).`,
         exitCode: 1,
       })
 

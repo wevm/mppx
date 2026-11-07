@@ -689,7 +689,12 @@ describe('stripe deposit-address', () => {
                   },
                 ],
               }
-            : { error: { message: 'Invalid API Key provided' } },
+            : {
+                error: {
+                  code: 'api_key_invalid',
+                  message: 'Invalid API Key provided: sk_test_bad',
+                },
+              },
         ),
       )
     })
@@ -762,7 +767,8 @@ describe('stripe deposit-address', () => {
         env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_bad' },
       })
       expect(exitCode).toBe(1)
-      expect(output).toContain('Invalid API Key provided')
+      expect(output).toContain('HTTP 401, api_key_invalid')
+      expect(output).not.toContain('Invalid API Key provided')
     }, 401)
   })
 })

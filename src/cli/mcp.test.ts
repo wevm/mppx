@@ -197,6 +197,7 @@ test('tools/list exposes mppx commands with input and output schemas', async () 
     'sessions_list',
     'sessions_view',
     'sign',
+    'stripe_deposit-address',
     'validate',
   ])
   expect(tools.find((tool: { name: string }) => tool.name === 'account_list').outputSchema).toEqual(
