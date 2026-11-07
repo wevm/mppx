@@ -320,7 +320,7 @@ describe('tempo.charge zone credentials', () => {
     ).rejects.toThrow('Zone withdrawal not settled')
   })
 
-  test.each([0, -1, 1.5, 2 ** 32])('rejects Zone ID %s', async (zoneId) => {
+  test.each([0, -1, 1.5, 2 ** 32, 421_700_005])('rejects Zone ID %s', async (zoneId) => {
     const { challenge, credential, rpcMethods, server } = setup({ zones: true })
     const { challenge: c } = await challenge()
     await expect(
