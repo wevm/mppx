@@ -122,7 +122,7 @@ export const charge = Method.from({
         z.object({ signature: z.signature(), type: z.literal('transaction') }),
         z.object({ signature: z.signature(), type: z.literal('proof') }),
         z.object({
-          hash: z.optional(z.hash()),
+          hash: z.hash(),
           senderTag: z.hash(),
           type: z.literal('zone'),
           zoneId: z.number().check(z.refine(Zone.isId, 'Invalid Zone ID')),
@@ -149,10 +149,10 @@ export const charge = Method.from({
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
           supportedModes: z.optional(z.array(z.enum(chargeModes)).check(z.minLength(1))),
-          // Zone IDs the payee accepts withdrawals from, or '*' for any Zone on the challenge's chain.
+          // Zone IDs the payee accepts withdrawals from, or true for any Zone on the challenge's chain.
           zones: z.optional(
             z.union([
-              z.literal('*'),
+              z.literal(true),
               z
                 .array(z.number().check(z.refine(Zone.isId, 'Invalid Zone ID')))
                 .check(z.minLength(1)),

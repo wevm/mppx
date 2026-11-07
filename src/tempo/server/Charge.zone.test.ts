@@ -34,10 +34,6 @@ type WithdrawalFixture = {
   token?: Address
   amount?: bigint
   gasLimit?: bigint
-  // Event overrides, to model an event that disagrees with the calldata.
-  eventTo?: Address
-  eventToken?: Address
-  eventAmount?: bigint
   callbackSuccess?: boolean
   eventAddress?: Address
   inCalldata?: boolean
@@ -47,14 +43,10 @@ function setup(
   options: {
     withdrawals?: () => WithdrawalFixture[]
     status?: 'success' | 'reverted'
-    logsAvailable?: () => boolean
-    zones?: number[] | '*'
-    zoneSettlementTimeoutMs?: number
+    zones?: number[] | true
   } = {},
 ) {
   const rpcMethods: string[] = []
-  const logRanges: { fromBlock: string; toBlock: string }[] = []
-  let blockNumber = 0x20
   const withdrawals = () => options.withdrawals?.() ?? []
 
   const processedLog = (w: WithdrawalFixture, index: number) => ({
@@ -68,30 +60,20 @@ function setup(
     topics: encodeEventTopics({
       abi: Abis.zonePortal,
       eventName: 'WithdrawalProcessed',
-      args: { to: w.eventTo ?? w.to ?? merchant, senderTag: w.senderTag },
+      args: { to: w.to ?? merchant, senderTag: w.senderTag },
     }),
     data: encodeAbiParameters(
       [{ type: 'address' }, { type: 'uint128' }, { type: 'bool' }],
-      [
-        w.eventToken ?? w.token ?? currency,
-        w.eventAmount ?? w.amount ?? 1_000_000n,
-        w.callbackSuccess ?? true,
-      ],
+      [w.token ?? currency, w.amount ?? 1_000_000n, w.callbackSuccess ?? true],
     ),
   })
 
   const client = createClient({
     chain: tempoModerato,
     transport: custom({
-      async request({ method, params }) {
+      async request({ method }) {
         rpcMethods.push(method)
         if (method === 'eth_chainId') return `0x${tempoModerato.id.toString(16)}`
-        if (method === 'eth_blockNumber') return `0x${(blockNumber++).toString(16)}`
-        if (method === 'eth_getLogs') {
-          const [filter] = params as [{ fromBlock: string; toBlock: string }]
-          logRanges.push({ fromBlock: filter.fromBlock, toBlock: filter.toBlock })
-          return options.logsAvailable?.() === false ? [] : withdrawals().map(processedLog)
-        }
         if (method === 'eth_getTransactionByHash')
           return {
             hash: settlementHash,
@@ -155,9 +137,6 @@ function setup(
         getClient: () => client,
         testnet: true,
         zones: options.zones ?? [zoneId],
-        ...(options.zoneSettlementTimeoutMs !== undefined && {
-          zoneSettlementTimeoutMs: options.zoneSettlementTimeoutMs,
-        }),
       }),
     ],
   })
@@ -180,7 +159,7 @@ function setup(
       Credential.from({
         challenge,
         payload: {
-          ...(payload.hash !== undefined ? { hash: payload.hash } : {}),
+          hash: payload.hash ?? settlementHash,
           senderTag: payload.senderTag,
           type: 'zone',
           zoneId: payload.zoneId ?? zoneId,
@@ -189,7 +168,7 @@ function setup(
     )
   }
 
-  return { challenge, credential, logRanges, rpcMethods, server }
+  return { challenge, credential, rpcMethods, server }
 }
 
 const tagA = `0x${'a1'.repeat(32)}` as const
@@ -213,92 +192,17 @@ describe('tempo.charge zone credentials', () => {
     expect(receipt).toMatchObject({ method: 'tempo', reference: settlementHash, status: 'success' })
   })
 
-  test('rejects a credential without a settlement hash by default', async () => {
-    const { challenge, credential, rpcMethods, server } = setup()
+  test('rejects a credential without a settlement hash', async () => {
+    const { challenge, rpcMethods, server } = setup()
     const { challenge: c } = await challenge()
-    await expect(server.verifyCredential(credential(c, { senderTag: tagA }))).rejects.toThrow(
-      'Zone credential must include the Tempo settlement hash',
+    const hashless = Credential.serialize(
+      Credential.from({
+        challenge: c,
+        payload: { senderTag: tagA, type: 'zone', zoneId } as never,
+      }),
     )
-    expect(rpcMethods).not.toContain('eth_getLogs')
-  })
-
-  test('finds the settlement on Tempo when polling is enabled', async () => {
-    let fixture: WithdrawalFixture[] = []
-    let polls = 0
-    const { challenge, credential, logRanges, server } = setup({
-      withdrawals: () => fixture,
-      logsAvailable: () => ++polls > 2,
-      zoneSettlementTimeoutMs: 5_000,
-    })
-    const { challenge: c, memo } = await challenge()
-    fixture = [{ senderTag: tagA, memo }]
-    const receipt = await server.verifyCredential(credential(c, { senderTag: tagA }))
-    expect(receipt.reference).toBe(settlementHash)
-    // The lookback window is scanned once; later polls only cover new blocks.
-    expect(logRanges.length).toBe(3)
-    for (const [index, range] of logRanges.entries()) {
-      if (index === 0) continue
-      expect(BigInt(range.fromBlock)).toBe(BigInt(logRanges[index - 1]!.toBlock) + 1n)
-    }
-  })
-
-  test('shares one settlement poll between concurrent credentials', async () => {
-    let fixture: WithdrawalFixture[] = []
-    let polls = 0
-    const { challenge, credential, logRanges, server } = setup({
-      withdrawals: () => fixture,
-      logsAvailable: () => ++polls > 2,
-      zoneSettlementTimeoutMs: 5_000,
-    })
-    const { challenge: c, memo } = await challenge()
-    fixture = [{ senderTag: tagA, memo }]
-    const serialized = credential(c, { senderTag: tagA })
-    const results = await Promise.allSettled([
-      server.verifyCredential(serialized),
-      server.verifyCredential(serialized),
-    ])
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
-    expect(logRanges.length).toBe(3)
-  })
-
-  test('does not share a settlement poll between different recipients', async () => {
-    let fixture: WithdrawalFixture[] = []
-    let polls = 0
-    const { challenge, credential, logRanges, server } = setup({
-      withdrawals: () => fixture,
-      logsAvailable: () => ++polls > 2,
-      zoneSettlementTimeoutMs: 5_000,
-    })
-    const { challenge: c, memo } = await challenge()
-    const { challenge: other } = await challenge({
-      recipient: '0x3333333333333333333333333333333333333333',
-    })
-    fixture = [{ senderTag: tagA, memo }]
-    const [, paid] = await Promise.allSettled([
-      server.verifyCredential(credential(other, { senderTag: tagA })),
-      server.verifyCredential(credential(c, { senderTag: tagA })),
-    ])
-    expect(paid).toMatchObject({ status: 'fulfilled' })
-    // Each recipient's credential runs its own poll.
-    expect(logRanges.length).toBeGreaterThan(3)
-  })
-
-  test.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
-    'rejects zoneSettlementTimeoutMs %s',
-    (zoneSettlementTimeoutMs) => {
-      expect(() => setup({ zoneSettlementTimeoutMs })).toThrow('zoneSettlementTimeoutMs')
-    },
-  )
-
-  test('fails when the withdrawal does not settle in time', async () => {
-    const { challenge, credential, server } = setup({
-      logsAvailable: () => false,
-      zoneSettlementTimeoutMs: 100,
-    })
-    const { challenge: c } = await challenge()
-    const error = await server.verifyCredential(credential(c, { senderTag: tagA })).catch((e) => e)
-    expect(error).toBeInstanceOf(Errors.PaymentError)
-    expect(String(error)).toContain('Zone withdrawal not settled')
+    await expect(server.verifyCredential(hashless)).rejects.toThrow()
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
   })
 
   test('rejects a replayed withdrawal', async () => {
@@ -352,18 +256,13 @@ describe('tempo.charge zone credentials', () => {
   })
 
   test.each([
-    ['recipient', { eventTo: other, to: other }, 'no matching transfer found'],
-    ['amount', { eventAmount: 999_999n, amount: 999_999n }, 'no matching transfer found'],
-    ['currency', { eventToken: otherCurrency, token: otherCurrency }, 'no matching transfer found'],
+    ['recipient', { to: other }, 'Zone withdrawal not found'],
+    ['amount', { amount: 999_999n }, 'Zone withdrawal not found'],
+    ['currency', { token: otherCurrency }, 'Zone withdrawal not found'],
     ['bounced withdrawal', { callbackSuccess: false }, 'Zone withdrawal bounced'],
     ['event from another portal', { eventAddress: Zone.portalAddress(4) }, 'not settled'],
     ['withdrawal missing from calldata', { inCalldata: false }, 'Zone withdrawal not found'],
     ['callback withdrawal', { gasLimit: 100_000n }, 'Zone withdrawal not found'],
-    [
-      'calldata recipient differs from event',
-      { eventTo: merchant, to: other },
-      'Zone withdrawal not found',
-    ],
   ] as const)('rejects a mismatched %s', async (_, overrides, error) => {
     let fixture: WithdrawalFixture[] = []
     const { challenge, credential, server } = setup({ withdrawals: () => fixture })
@@ -398,21 +297,21 @@ describe('tempo.charge zone credentials', () => {
     expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
   })
 
-  test('accepts a withdrawal from any Zone when zones is *', async () => {
+  test('accepts a withdrawal from any Zone when zones is true', async () => {
     let fixture: WithdrawalFixture[] = []
-    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: '*' })
+    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: true })
     const { challenge: c, memo } = await challenge()
     fixture = [{ senderTag: tagA, memo }]
-    expect(c.request.methodDetails).toMatchObject({ zones: '*' })
+    expect(c.request.methodDetails).toMatchObject({ zones: true })
     const receipt = await server.verifyCredential(
       credential(c, { senderTag: tagA, hash: settlementHash }),
     )
     expect(receipt).toMatchObject({ method: 'tempo', status: 'success' })
   })
 
-  test('checks the portal of the Zone the credential names when zones is *', async () => {
+  test('checks the portal of the Zone the credential names when zones is true', async () => {
     let fixture: WithdrawalFixture[] = []
-    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: '*' })
+    const { challenge, credential, server } = setup({ withdrawals: () => fixture, zones: true })
     const { challenge: c, memo } = await challenge()
     fixture = [{ senderTag: tagA, memo }]
     // The settlement came from Zone 3's portal, not Zone 4's.
@@ -422,7 +321,7 @@ describe('tempo.charge zone credentials', () => {
   })
 
   test.each([0, -1, 1.5, 2 ** 32])('rejects Zone ID %s', async (zoneId) => {
-    const { challenge, credential, rpcMethods, server } = setup({ zones: '*' })
+    const { challenge, credential, rpcMethods, server } = setup({ zones: true })
     const { challenge: c } = await challenge()
     await expect(
       server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash, zoneId })),

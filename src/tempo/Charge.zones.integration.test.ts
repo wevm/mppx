@@ -86,11 +86,7 @@ async function fundedZoneAccount(amount: bigint) {
   return { account, zone }
 }
 
-function service(parameters: {
-  recipient: Address
-  zones?: number[] | '*'
-  zoneSettlementTimeoutMs?: number
-}) {
+function service(parameters: { recipient: Address; zones?: number[] | true }) {
   const server = Mppx_server.create({
     realm,
     secretKey,
@@ -101,7 +97,6 @@ function service(parameters: {
         getClient: () => l1,
         recipient: parameters.recipient,
         zones: parameters.zones ?? [context.zoneId],
-        zoneSettlementTimeoutMs: parameters.zoneSettlementTimeoutMs,
       }),
     ],
   })
@@ -146,27 +141,6 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     )
   }, 120_000)
 
-  test('waits for settlement of a credential without a hash when polling is enabled', async () => {
-    const recipient = privateKeyToAccount(generatePrivateKey()).address
-    const { handler } = service({ recipient, zoneSettlementTimeoutMs: 60_000 })
-    const challenge = Challenge.fromResponse(
-      await handler(new Request('https://zones.example.com')),
-    )
-    const { senderTag } = await withdraw(recipient, challenge)
-    const response = await handler(
-      new Request('https://zones.example.com', {
-        headers: {
-          Authorization: Credential.serialize({
-            challenge,
-            payload: { senderTag, type: 'zone', zoneId: context.zoneId },
-          }),
-        },
-      }),
-    )
-    expect(response.status).toBe(200)
-    expect(await balanceOf(l1, recipient)).toBe(parseUnits(price, 6))
-  }, 120_000)
-
   test('settles concurrent payments from two payers', async () => {
     const recipient = privateKeyToAccount(generatePrivateKey()).address
     const { handler } = service({ recipient })
@@ -209,20 +183,18 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
 
   test('rejects a withdrawal bound to another challenge', async () => {
     const recipient = privateKeyToAccount(generatePrivateKey()).address
-    // The credential below has no settlement hash, so the server waits for it.
-    const { handler } = service({ recipient, zoneSettlementTimeoutMs: 60_000 })
+    const { handler } = service({ recipient })
     const first = Challenge.fromResponse(await handler(new Request('https://zones.example.com')))
     const second = Challenge.fromResponse(await handler(new Request('https://zones.example.com')))
 
     // Pay the first challenge's memo, then present the withdrawal for the second.
-    const { receipt, senderTag } = await withdraw(recipient, first)
-    expect(receipt.status).toBe('success')
+    const { hash, senderTag } = await withdraw(recipient, first)
     const response = await handler(
       new Request('https://zones.example.com', {
         headers: {
           Authorization: Credential.serialize({
             challenge: second,
-            payload: { senderTag, type: 'zone', zoneId: context.zoneId },
+            payload: { hash, senderTag, type: 'zone', zoneId: context.zoneId },
           }),
         },
       }),
@@ -233,11 +205,11 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
 
   test('pays a service that accepts any Zone', async () => {
     const recipient = privateKeyToAccount(generatePrivateKey()).address
-    const { handler } = service({ recipient, zones: '*' })
+    const { handler } = service({ recipient, zones: true })
     const challenge = Challenge.fromResponse(
       await handler(new Request('https://zones.example.com')),
     )
-    expect(challenge.request.methodDetails).toMatchObject({ zones: '*' })
+    expect(challenge.request.methodDetails).toMatchObject({ zones: true })
 
     const client = Mppx_client.create({
       fetch: (input, init) => handler(new Request(input, init)),
@@ -292,13 +264,13 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     const challenge = Challenge.fromResponse(
       await handler(new Request('https://zones.example.com')),
     )
-    const { senderTag } = await withdraw(recipient, challenge)
+    const { hash, senderTag } = await withdraw(recipient, challenge)
     const response = await handler(
       new Request('https://zones.example.com', {
         headers: {
           Authorization: Credential.serialize({
             challenge,
-            payload: { senderTag, type: 'zone', zoneId: context.zoneId },
+            payload: { hash, senderTag, type: 'zone', zoneId: context.zoneId },
           }),
         },
       }),
@@ -307,7 +279,7 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
     expect(await response.text()).toContain('Zone is not accepted for this challenge')
   }, 120_000)
 
-  /** Requests a plain withdrawal to `recipient` carrying `challenge`'s memo. */
+  /** Withdraws to `recipient` with `challenge`'s memo and waits for it to settle on Tempo. */
   async function withdraw(recipient: Address, challenge: Challenge.Challenge) {
     const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
     const amount = parseUnits(price, 6)
@@ -340,6 +312,10 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
       sender: event!.args.sender,
       transactionHash: receipt.transactionHash,
     })
-    return { receipt, senderTag }
+    const hash = await Zone.waitForSettlement(l1, {
+      portal: Zone.portalAddress(context.zoneId),
+      senderTag,
+    })
+    return { hash, senderTag }
   }
 })

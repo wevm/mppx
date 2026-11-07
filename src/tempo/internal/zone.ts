@@ -16,8 +16,11 @@ import * as TempoAddress from './address.js'
 /** Default time a payer waits for a Zone withdrawal to settle on Tempo. */
 export const defaultSettlementTimeoutMs = 60_000
 
-/** Default number of Tempo blocks searched back for a settled Zone withdrawal. */
-export const defaultLookbackBlocks = 7_200n
+/** Number of Tempo blocks searched back for a settled Zone withdrawal. */
+const lookbackBlocks = 7_200n
+
+/** Time between polls for a settled Zone withdrawal. */
+const pollingIntervalMs = 500
 
 const withdrawalProcessed = getAbiItem({ abi: Abis.zonePortal, name: 'WithdrawalProcessed' })
 
@@ -43,8 +46,8 @@ export type ProcessedEvent = {
   callbackSuccess: boolean
 }
 
-/** Zones a challenge accepts: a list of Zone IDs, or `'*'` for any Zone. */
-export type Accepted = readonly number[] | '*'
+/** Zones a challenge accepts: a list of Zone IDs, or `true` for any Zone. */
+export type Accepted = readonly number[] | true
 
 /** Returns whether a value is a valid Zone ID: a positive 32-bit integer. */
 export function isId(zoneId: number): boolean {
@@ -54,7 +57,7 @@ export function isId(zoneId: number): boolean {
 /** Returns whether a challenge's `zones` accepts withdrawals from a Zone. */
 export function isAccepted(zones: Accepted | undefined, zoneId: number): boolean {
   if (!isId(zoneId)) return false
-  return zones === '*' || (zones?.includes(zoneId) ?? false)
+  return zones === true || (zones?.includes(zoneId) ?? false)
 }
 
 /** Returns the Tempo portal address of a Zone. */
@@ -143,14 +146,6 @@ export function findWithdrawal(
   return undefined
 }
 
-/** A Zone withdrawal the client requested that has not settled on Tempo yet. */
-export type PendingWithdrawal = {
-  /** Sender tag of the withdrawal. */
-  senderTag: Hex
-  /** ID of the Zone the withdrawal left. */
-  zoneId: number
-}
-
 /**
  * Waits until a portal emits `WithdrawalProcessed` for a sender tag and
  * returns the Tempo transaction hash that settled it.
@@ -161,22 +156,15 @@ export async function waitForSettlement(
     portal: Address
     senderTag: Hex
     to?: Address | undefined
-    fromBlock?: bigint | undefined
-    lookbackBlocks?: bigint | undefined
-    pollingIntervalMs?: number | undefined
     timeoutMs?: number | undefined
   },
 ): Promise<Hex> {
-  const {
-    lookbackBlocks = defaultLookbackBlocks,
-    pollingIntervalMs = 500,
-    timeoutMs = defaultSettlementTimeoutMs,
-  } = parameters
+  const { timeoutMs = defaultSettlementTimeoutMs } = parameters
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
     throw new Error('Zone settlement timeout must be a finite, non-negative number.')
   let latest = await getBlockNumber(client, { cacheTime: 0 })
   // Scan the lookback window once, then only blocks added since the previous poll.
-  let fromBlock = parameters.fromBlock ?? (latest > lookbackBlocks ? latest - lookbackBlocks : 0n)
+  let fromBlock = latest > lookbackBlocks ? latest - lookbackBlocks : 0n
   const deadline = Date.now() + timeoutMs
   while (true) {
     if (fromBlock <= latest) {

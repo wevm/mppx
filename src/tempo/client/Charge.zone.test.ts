@@ -40,7 +40,7 @@ function zoneClient(chainId: number, calls: string[] = []) {
   })
 }
 
-async function challenge(request: Record<string, unknown> = {}, zones: number[] | '*' = [3]) {
+async function challenge(request: Record<string, unknown> = {}, zones: number[] | true = [3]) {
   const server = Mppx.create({
     realm: 'api.example.com',
     secretKey: 'test-secret-key-test-secret-key-32',
@@ -72,7 +72,7 @@ describe('tempo.charge client zone selection', () => {
       zone: { client: zoneClient(1_424_310_003) },
     })
     await expect(
-      method.createCredential({ challenge: (await challenge({}, '*')) as never, context: {} }),
+      method.createCredential({ challenge: (await challenge({}, true)) as never, context: {} }),
     ).rejects.toThrow('zone used')
   })
 

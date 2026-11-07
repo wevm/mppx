@@ -97,7 +97,7 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
   assertZone(parameters.zone)
   // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
-  const pendingZoneWithdrawals = new Map<string, Promise<Zone.PendingWithdrawal>>()
+  const pendingZoneWithdrawals = new Map<string, Promise<Hex.Hex>>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -419,7 +419,7 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   if (!parsed.success) return undefined
   const payload = parsed.data
   if (payload.type === 'hash') return payload.hash as Hex.Hex
-  if (payload.type === 'zone') return payload.hash as Hex.Hex | undefined
+  if (payload.type === 'zone') return payload.hash as Hex.Hex
   const serialized = payload.signature as TxEnvelopeTempo.Serialized
   if (payload.type !== 'transaction' || !serialized.startsWith(TxEnvelopeTempo.serializedType))
     return undefined
@@ -439,7 +439,7 @@ async function createZoneCredential(options: {
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
-  pending: Map<string, Promise<Zone.PendingWithdrawal>>
+  pending: Map<string, Promise<Hex.Hex>>
   zone: charge.Zone
   zoneId: number
 }) {
@@ -462,12 +462,7 @@ async function createZoneCredential(options: {
       if (!state.sent) pending.delete(key)
     })
   }
-  const withdrawal = await withdrawalRequest
-  if (withdrawal.zoneId !== zoneId)
-    throw new Error(
-      `Challenge "${challenge.id}" is already paid by a Zone ${withdrawal.zoneId} withdrawal.`,
-    )
-  const { senderTag } = withdrawal
+  const senderTag = await withdrawalRequest
 
   let hash: Hex.Hex
   try {
@@ -539,11 +534,10 @@ async function requestZoneWithdrawal(
     challenge: Parameters<typeof Credential.serialize>[0]['challenge']
     clientId: string | undefined
     zone: charge.Zone
-    zoneId: number
   },
   state: { sent: boolean },
-): Promise<Zone.PendingWithdrawal> {
-  const { challenge, clientId, zone, zoneId } = options
+): Promise<Hex.Hex> {
+  const { challenge, clientId, zone } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
   if (!account) throw new Error('`zone.client` requires an account.')
@@ -589,14 +583,11 @@ async function requestZoneWithdrawal(
     logs: receipt.logs,
   })
   if (!requested) throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.')
-  return {
-    senderTag: Zone.senderTag({
-      fallbackNonce: requested.args.fallbackNonce,
-      sender: requested.args.sender,
-      transactionHash: receipt.transactionHash,
-    }),
-    zoneId,
-  }
+  return Zone.senderTag({
+    fallbackNonce: requested.args.fallbackNonce,
+    sender: requested.args.sender,
+    transactionHash: receipt.transactionHash,
+  })
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */
