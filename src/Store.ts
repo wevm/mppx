@@ -805,16 +805,23 @@ export class DurableObjectStore {
       chain.unshift(proto)
       if (proto === DurableObjectStore.prototype) break
     }
+    // Collect each name's most-derived descriptor first, then define it once: redefining a
+    // name an ancestor made non-configurable would throw, though a subclass may shadow it.
+    const methods = new Map<string, PropertyDescriptor>()
     for (const proto of chain)
       for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
-        if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
+        if (name !== 'constructor') methods.set(name, descriptor)
+    for (const [name, descriptor] of methods)
+      Object.defineProperty(RpcStore.prototype, name, descriptor)
     // And the subclasses' static members, without DurableObjectStore's own (such as `rpc`).
+    const statics = new Map<PropertyKey, PropertyDescriptor>()
     for (const proto of chain.slice(1)) {
       const ctor = (proto as { constructor: object }).constructor
       for (const name of Reflect.ownKeys(ctor))
         if (name !== 'length' && name !== 'name' && name !== 'prototype')
-          Object.defineProperty(RpcStore, name, Object.getOwnPropertyDescriptor(ctor, name)!)
+          statics.set(name, Object.getOwnPropertyDescriptor(ctor, name)!)
     }
+    for (const [name, descriptor] of statics) Object.defineProperty(RpcStore, name, descriptor)
     return RpcStore as unknown as store
   }
 
