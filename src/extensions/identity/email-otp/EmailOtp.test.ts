@@ -449,6 +449,60 @@ test('sends a short-lived attestation while more than half its lifetime remains'
   expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
 })
 
+test('sends a just-acquired short-lived attestation when the issuer clock is behind', async () => {
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  // The issuer's clock is 100 seconds behind the client's, and its attestations live 120 seconds.
+  const iat = Math.floor(Date.now() / 1_000) - 100
+  const token = await Attestation.sign(
+    {
+      aud: 'https://api.example',
+      exp: iat + 120,
+      iat,
+      iss: issuer,
+      sub: 'dana@example.com',
+      type: 'email',
+    },
+    { key: keys.privateKey, keyId },
+  )
+  const prover = Attestation.Client.prover({ acquire: () => token, issuers: [issuer], scope: '*' })
+  const response = new Response(null, {
+    status: 401,
+    headers: { [Attestation.Constants.requiredHeader]: 'email;issuer="' + issuer + '"' },
+  })
+  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
+  expect(await prover.retry!(response)).toBe(true)
+  const sent = await prover.prove(new Request('https://api.example/resource'), {
+    created: iat,
+    nonce: 'n',
+  })
+  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
+})
+
+test('sends a cached short-lived attestation within the clock tolerance', async () => {
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  // An issuer 60 seconds behind signs a 120-second attestation: it expires 60 seconds from now.
+  const iat = Math.floor(Date.now() / 1_000) - 60
+  const token = await Attestation.sign(
+    {
+      aud: 'https://api.example',
+      exp: iat + 120,
+      iat,
+      iss: issuer,
+      sub: 'dana@example.com',
+      type: 'email',
+    },
+    { key: keys.privateKey, keyId },
+  )
+  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
+  const sent = await prover.prove(new Request('https://api.example/resource'), {
+    created: iat,
+    nonce: 'n',
+  })
+  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
+})
+
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',

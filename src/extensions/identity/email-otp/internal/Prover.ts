@@ -25,7 +25,8 @@ import type * as Types from './Types.js'
  * ```
  */
 export function prover(config: prover.Config): Identity.Prover {
-  const stored = new Map<string, { added: number; claims: Types.Claims; token: string }>()
+  type Entry = { added: number; claims: Types.Claims; fresh: boolean; token: string }
+  const stored = new Map<string, Entry>()
   const pending = new Map<string, Promise<boolean>>()
   const keyOf = (claims: Pick<Types.Claims, 'aud' | 'iss' | 'type'>) =>
     JSON.stringify([claims.aud, claims.iss, claims.type])
@@ -42,8 +43,8 @@ export function prover(config: prover.Config): Identity.Prover {
       throw new TypeError('Identity attestation is malformed.')
     return claims as Types.Claims
   }
-  function add(token: string, claims: Types.Claims = decode(token)) {
-    stored.set(keyOf(claims), { added: Math.floor(Date.now() / 1_000), claims, token })
+  function add(token: string, claims: Types.Claims = decode(token), fresh = false) {
+    stored.set(keyOf(claims), { added: Math.floor(Date.now() / 1_000), claims, fresh, token })
   }
   for (const token of config.attestations ?? []) add(token)
 
@@ -63,20 +64,23 @@ export function prover(config: prover.Config): Identity.Prover {
       // is replaced before paying. The paid retry keeps sending it within the server's clock
       // tolerance: dropping it there would reject a payment that may already be broadcast.
       const paid = context.challenge !== undefined
-      // The margin is at most half the attestation's lifetime, so a short-lived one is still sent.
-      const margin = ({ claims, added }: { claims: Types.Claims; added: number }) =>
+      // The margin is at most half the attestation's lifetime, so a short-lived one is still sent,
+      // less the verifier's clock tolerance, so an issuer clock behind the client's does not
+      // withhold it.
+      const margin = ({ claims, added }: Entry) =>
         Math.min(
           Constants.refreshMargin,
           Math.floor((claims.exp - (typeof claims.iat === 'number' ? claims.iat : added)) / 2),
-        )
-      const tokens = [...stored.values()]
-        .filter(
-          (entry) =>
-            entry.claims.aud === origin &&
-            entry.claims.exp >
-              (paid ? now() - Constants.clockTolerance : now() + Math.max(0, margin(entry))),
-        )
-        .map(({ token }) => token)
+        ) - Constants.clockTolerance
+      const usable = (entry: Entry) => {
+        if (entry.claims.aud !== origin) return false
+        if (entry.claims.exp <= now() - Constants.clockTolerance) return false
+        // An attestation just acquired for this request is always sent on its resend.
+        return paid || entry.fresh || entry.claims.exp > now() + Math.max(0, margin(entry))
+      }
+      const entries = [...stored.values()].filter(usable)
+      if (!paid) for (const entry of entries) entry.fresh = false
+      const tokens = entries.map(({ token }) => token)
       if (tokens.length === 0) return request
       const headers = new Headers(request.headers)
       const existing = headers.get(Constants.header)
@@ -110,7 +114,7 @@ export function prover(config: prover.Config): Identity.Prover {
             // Store only an attestation for this requirement, so an issuer cannot plant one.
             if (claims.aud !== audience || claims.iss !== issuer || claims.type !== type)
               return false
-            add(token, claims)
+            add(token, claims, true)
             return true
           })().finally(() => pending.delete(key))
           pending.set(key, task)
