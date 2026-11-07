@@ -5,7 +5,7 @@ import { Mppx as ClientMppx } from 'mppx/client'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
-import { afterEach, expect, test } from 'vp/test'
+import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
 
@@ -504,6 +504,58 @@ test('sends a cached short-lived attestation within the clock tolerance', async 
     nonce: 'n',
   })
   expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
+})
+
+test('keeps an earlier attestation fresh while a later code takes long', async () => {
+  const other = 'https://other-issuer.example'
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  // Each attestation lives an hour and, by a skewed issuer clock, has 250 seconds left.
+  const sign = (iss: string) => {
+    const iat = Math.floor(Date.now() / 1_000) - 3_350
+    return Attestation.sign(
+      {
+        aud: 'https://api.example',
+        exp: iat + 3_600,
+        iat,
+        iss,
+        sub: 'dana@example.com',
+        type: 'email',
+      },
+      { key: keys.privateKey, keyId },
+    )
+  }
+  const tokens: string[] = []
+  const prover = Attestation.Client.prover({
+    acquire: async ({ issuer: from }) => {
+      // The second code takes the user two minutes to enter.
+      if (from === other) vi.setSystemTime(Date.now() + 120_000)
+      const token = await sign(from)
+      tokens.push(token)
+      return token
+    },
+    issuers: [issuer, other],
+    scope: '*',
+  })
+  const response = new Response(null, {
+    status: 401,
+    headers: {
+      [Attestation.Constants.requiredHeader]:
+        'email;issuer="' + issuer + '", email;issuer="' + other + '"',
+    },
+  })
+  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
+  vi.useFakeTimers({ toFake: ['Date'] })
+  try {
+    expect(await prover.retry!(response)).toBe(true)
+    const sent = await prover.prove(new Request('https://api.example/resource'), {
+      created: 0,
+      nonce: 'n',
+    })
+    expect(sent.headers.get(Attestation.Constants.header)).toBe(tokens.join(', '))
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 test('requires issuers to acquire attestations', () => {

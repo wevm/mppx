@@ -25,7 +25,7 @@ import type * as Types from './Types.js'
  * ```
  */
 export function prover(config: prover.Config): Identity.Prover {
-  type Entry = { added: number; claims: Types.Claims; fresh: boolean; token: string }
+  type Entry = { added: number; claims: Types.Claims; freshUntil: number; token: string }
   const stored = new Map<string, Entry>()
   const pending = new Map<string, Promise<boolean>>()
   const keyOf = (claims: Pick<Types.Claims, 'aud' | 'iss' | 'type'>) =>
@@ -44,7 +44,9 @@ export function prover(config: prover.Config): Identity.Prover {
     return claims as Types.Claims
   }
   function add(token: string, claims: Types.Claims = decode(token), fresh = false) {
-    stored.set(keyOf(claims), { added: Math.floor(Date.now() / 1_000), claims, fresh, token })
+    const added = Math.floor(Date.now() / 1_000)
+    const freshUntil = fresh ? added + Constants.clockTolerance : 0
+    stored.set(keyOf(claims), { added, claims, freshUntil, token })
   }
   for (const token of config.attestations ?? []) add(token)
 
@@ -77,8 +79,9 @@ export function prover(config: prover.Config): Identity.Prover {
         if (entry.claims.exp <= now() - Constants.clockTolerance) return false
         // An attestation acquired moments ago is always sent, so every request resent after
         // acquiring it carries it; the window is time-based, so concurrent requests cannot use it up.
-        const fresh = entry.fresh && now() - entry.added <= Constants.clockTolerance
-        return paid || fresh || entry.claims.exp > now() + Math.max(0, margin(entry))
+        return (
+          paid || now() <= entry.freshUntil || entry.claims.exp > now() + Math.max(0, margin(entry))
+        )
       }
       const tokens = [...stored.values()].filter(usable).map(({ token }) => token)
       if (tokens.length === 0) return request
@@ -128,6 +131,12 @@ export function prover(config: prover.Config): Identity.Prover {
         }
       }
       if (!acquired && failure) throw failure.error
+      // Every attestation this retry acquired stays fresh for the resend, even when a later
+      // code took the user longer than the window to enter.
+      for (const key of seen) {
+        const entry = stored.get(key)
+        if (entry?.freshUntil) entry.freshUntil = now() + Constants.clockTolerance
+      }
       return acquired
     },
   }
