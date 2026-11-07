@@ -172,6 +172,8 @@ export async function waitForSettlement(
     pollingIntervalMs = 500,
     timeoutMs = defaultSettlementTimeoutMs,
   } = parameters
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+    throw new Error('Zone settlement timeout must be a finite, non-negative number.')
   let latest = await getBlockNumber(client, { cacheTime: 0 })
   // Scan the lookback window once, then only blocks added since the previous poll.
   let fromBlock = parameters.fromBlock ?? (latest > lookbackBlocks ? latest - lookbackBlocks : 0n)

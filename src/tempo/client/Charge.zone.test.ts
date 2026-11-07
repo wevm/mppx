@@ -99,6 +99,15 @@ describe('tempo.charge client zone selection', () => {
     expect(String(error)).not.toContain('zone used')
   })
 
+  test('rejects a zoneId that does not match the Zone client chain', () => {
+    expect(() =>
+      tempo_client.charge({
+        getClient: () => l1,
+        zone: { client: zoneClient(1_424_310_003), zoneId: 4 },
+      }),
+    ).toThrow('does not match Zone 3')
+  })
+
   test('shares one withdrawal request between concurrent calls for a challenge', async () => {
     const calls: string[] = []
     const method = tempo_client.charge({

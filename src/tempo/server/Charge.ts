@@ -87,6 +87,9 @@ export function charge<const parameters extends charge.Parameters>(
     zones,
     zoneSettlementTimeoutMs = 0,
   } = parameters
+  // A non-finite timeout would make hashless credentials poll forever.
+  if (!Number.isFinite(zoneSettlementTimeoutMs) || zoneSettlementTimeoutMs < 0)
+    throw new Error('`zoneSettlementTimeoutMs` must be a finite, non-negative number.')
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''

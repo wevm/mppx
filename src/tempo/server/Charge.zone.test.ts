@@ -283,6 +283,13 @@ describe('tempo.charge zone credentials', () => {
     expect(logRanges.length).toBeGreaterThan(3)
   })
 
+  test.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'rejects zoneSettlementTimeoutMs %s',
+    (zoneSettlementTimeoutMs) => {
+      expect(() => setup({ zoneSettlementTimeoutMs })).toThrow('zoneSettlementTimeoutMs')
+    },
+  )
+
   test('fails when the withdrawal does not settle in time', async () => {
     const { challenge, credential, server } = setup({
       logsAvailable: () => false,
