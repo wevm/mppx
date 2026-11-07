@@ -161,7 +161,12 @@ export class ChannelStore extends Store.DurableObjectStore {
       sends: counted,
       settledAtSend: state.settledOnChain,
     } satisfies Pending)
-    await storage.setAlarm!(Date.now() + settlement.watchdogMs * 2 ** (counted - 1))
+    const watchdog = settlement.watchdogMs * 2 ** (counted - 1)
+    // Once the escrow's grace period ends, the payer can withdraw what is unsettled: resend a
+    // closing channel often enough that every attempt fits inside it.
+    await storage.setAlarm!(
+      Date.now() + (closing(state) ? Math.min(watchdog, closingWatchdogMs) : watchdog),
+    )
   }
 }
 
@@ -177,7 +182,8 @@ export declare namespace ChannelStore {
     /**
      * Sends a channel again this long after a send while it stays unsettled, doubling each time.
      * Keep the first resend well inside the escrow's close grace period (15 minutes), after which
-     * a payer who requested a close can withdraw what is unsettled. @default 300_000
+     * a payer who requested a close can withdraw what is unsettled; a closing channel is sent
+     * again after at most 2 minutes. @default 300_000
      */
     watchdogMs?: number | undefined
     /** Sends a channel at most this many times without on-chain progress. @default 6 */
@@ -192,6 +198,12 @@ export declare namespace ChannelStore {
   /** The settlement job the object sends. */
   export type Message = { channelId: Hex }
 }
+
+/**
+ * Longest wait before sending a closing channel again: its default six sends then span 10
+ * minutes, inside the escrow's 15-minute close grace period.
+ */
+const closingWatchdogMs = 2 * 60_000
 
 /** A channel object's settlement bookkeeping. */
 type Pending = {

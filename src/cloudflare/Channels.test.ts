@@ -83,7 +83,7 @@ function namespace() {
   }
 }
 
-function resolve(lookup: ReturnType<typeof channels>) {
+function resolve(lookup: ReturnType<typeof channels>, operator?: `0x${string}`) {
   return lookup.resolveChannelId({
     credential: null,
     paymentRequest: {
@@ -92,6 +92,7 @@ function resolve(lookup: ReturnType<typeof channels>) {
       decimals: 6,
       recipient: payee,
       unitType: 'request',
+      ...(operator ? { operator } : {}),
     },
     source: `did:pkh:eip155:42431:${payer}`,
     store: undefined as never,
@@ -138,6 +139,19 @@ describe('channels', () => {
     expect(await resolve(lookup)).toBe(a)
     await lookup.store.put(a, channel(a, { finalized: true }))
     expect(await resolve(lookup)).toBeUndefined()
+  })
+
+  test("skips a channel opened with another operator than the challenge's", async () => {
+    const objects = namespace()
+    const lookup = channels(objects)
+    const operator = '0x00000000000000000000000000000000000000cc'
+    await lookup.store.put(a, channel(a, { operator }))
+    await lookup.store.put(b, channel(b))
+    expect(await resolve(lookup, operator)).toBe(a)
+    expect(await resolve(lookup, '0x0000000000000000000000000000000000000000')).toBe(b)
+    expect(await resolve(lookup, '0x00000000000000000000000000000000000000dd')).toBeUndefined()
+    // A challenge without an operator accepts any channel's.
+    expect(await resolve(lookup)).toBe(b)
   })
 
   test('keeps the most recent open channels of a payer', async () => {
