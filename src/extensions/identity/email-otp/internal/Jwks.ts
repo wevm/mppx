@@ -42,12 +42,15 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
         const { crv, kid, kty, x } = jwk as Record<string, unknown>
         if (kty !== 'OKP' || crv !== 'Ed25519' || typeof x !== 'string' || typeof kid !== 'string')
           continue
-        result.set(
-          kid,
-          await crypto.subtle.importKey('jwk', { crv, kty, x }, { name: 'Ed25519' }, true, [
-            'verify',
-          ]),
-        )
+        // A malformed key is skipped, so it cannot take the issuer's other keys down.
+        try {
+          result.set(
+            kid,
+            await crypto.subtle.importKey('jwk', { crv, kty, x }, { name: 'Ed25519' }, true, [
+              'verify',
+            ]),
+          )
+        } catch {}
       }
       good.set(issuer, { fetchedAt: startedAt, keys: result })
       return result

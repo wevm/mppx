@@ -172,6 +172,23 @@ test('serves a cached key while an unknown key ID refetches the set', async () =
   expect(await Promise.race([lookup, timedOut])).not.toBe('timeout')
 })
 
+test('skips a malformed key without dropping the rest of the set', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      return Response.json({
+        keys: [
+          { crv: 'Ed25519', kid: 'bad', kty: 'OKP', x: 'AA' },
+          { ...jwk, kid: keyId },
+        ],
+      })
+    },
+  })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  expect(await keyResolver({ issuer, keyId: 'bad' })).toBeUndefined()
+})
+
 test('stops serving the last key set once it is older than maxStale', async () => {
   const { keyId, keys } = await setup()
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
