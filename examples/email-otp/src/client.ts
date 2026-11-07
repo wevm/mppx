@@ -41,7 +41,7 @@ const mppx = Mppx.create({
       email: EMAIL,
       // Asks for the code the issuer emailed.
       async code({ audience, email, error, issuer }) {
-        if (error) console.log(`  ${error.message}`)
+        if (error) console.log('  That code was not accepted. Try again.')
         return terminal.question(`  Code from ${issuer} sent to ${email} for ${audience}: `)
       },
       // Only this issuer receives the email address.

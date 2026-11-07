@@ -50,6 +50,8 @@ export function prover(config: prover.Config): Identity.Prover {
   const now = () => Math.floor(Date.now() / 1_000)
   if (config.acquire && !config.issuers)
     throw new TypeError('An attestation prover that acquires attestations must list its issuers.')
+  // Compared as the verifier names them, without a trailing slash.
+  const issuers = config.issuers?.map((issuer) => issuer.replace(/\/+$/, ''))
 
   return {
     scope: config.scope,
@@ -74,7 +76,7 @@ export function prover(config: prover.Config): Identity.Prover {
       for (const { type, issuer } of requirements(response.headers)) {
         // Only trusted issuers: a server-named one could relay a code and obtain an
         // attestation for another origin.
-        if (!issuer || !config.issuers?.includes(issuer)) continue
+        if (!issuer || !issuers?.includes(issuer)) continue
         if (config.types && !config.types.includes(type)) continue
         const key = keyOf({ aud: audience, iss: issuer, type })
         if (seen.has(key)) continue

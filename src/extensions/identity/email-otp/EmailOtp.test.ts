@@ -340,6 +340,25 @@ test('acquires a requirement listed twice once', async () => {
   expect(calls).toBe(1)
 })
 
+test('matches a trusted issuer listed with a trailing slash', async () => {
+  let calls = 0
+  const prover = Attestation.Client.prover({
+    acquire: () => {
+      calls++
+      return undefined
+    },
+    issuers: [`${issuer}/`],
+    scope: '*',
+  })
+  const response = new Response(null, {
+    status: 401,
+    headers: { [Attestation.Constants.requiredHeader]: `email;issuer="${issuer}"` },
+  })
+  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
+  await prover.retry!(response)
+  expect(calls).toBe(1)
+})
+
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',
