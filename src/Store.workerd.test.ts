@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vp/test'
 // real D1 database, and concurrent requests, instead of in-process fakes.
 
 let miniflare: Miniflare
+let worker: string
 
 beforeAll(async () => {
   const bundle = await rolldown({
@@ -17,8 +18,16 @@ beforeAll(async () => {
     platform: 'neutral',
   })
   const { output } = await bundle.generate({ format: 'esm' })
-  miniflare = new Miniflare({
+  worker = output[0].code
+  miniflare = new Miniflare(options())
+  await miniflare.ready
+})
+
+/** The Worker's Miniflare options, with `compatibilityFlags`. */
+function options(compatibilityFlags: string[] = []) {
+  return {
     compatibilityDate: '2026-07-01',
+    compatibilityFlags,
     d1Databases: ['DB'],
     // SQLite-backed, as production binds them: replay shards need SQL.
     durableObjects: {
@@ -31,10 +40,9 @@ beforeAll(async () => {
       RPC_STORE: { className: 'RpcStore', useSQLite: true },
       STORE: { className: 'MppxStore', useSQLite: true },
     },
-    modules: [{ type: 'ESModule', path: 'worker.js', contents: output[0].code }],
-  })
-  await miniflare.ready
-})
+    modules: [{ type: 'ESModule' as const, path: 'worker.js', contents: worker }],
+  }
+}
 
 afterAll(async () => {
   await miniflare?.dispose()
@@ -336,5 +344,35 @@ describe('Store.DurableObjectStore write hook failures in workerd', () => {
     await expect(run({ op: 'claim', key, expires })).rejects.toThrow()
     expect(await run({ op: 'claim', key, expires })).toBe(true)
     expect(await run({ op: 'claim', key, expires })).toBe(false)
+  })
+})
+
+describe('Store.durableObject over RPC with legacy stub get, put and delete in workerd', () => {
+  // With this flag a stub keeps HTTP `get`, `put` and `delete` methods that shadow RPC methods.
+  let legacy: Miniflare
+
+  beforeAll(async () => {
+    legacy = new Miniflare(options(['fetcher_has_get_put_delete']))
+    await legacy.ready
+  })
+
+  afterAll(async () => {
+    await legacy?.dispose()
+  })
+
+  test.each(['rpc', 'native'])('round-trips values (%s)', async (backend) => {
+    const run = async (command: Record<string, unknown>) => {
+      const response = await legacy.dispatchFetch('http://store/', {
+        body: JSON.stringify({ ...command, backend }),
+        method: 'POST',
+      })
+      if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`)
+      return response.json()
+    }
+    await run({ op: 'put', key: 'legacy-stub', value: { n: 1 } })
+    expect(await run({ op: 'get', key: 'legacy-stub' })).toEqual({ n: 1 })
+    expect(await run({ op: 'increment', key: 'legacy-counter' })).toBe(1)
+    await run({ op: 'delete', key: 'legacy-stub' })
+    expect(await run({ op: 'get', key: 'legacy-stub' })).toBeNull()
   })
 })
