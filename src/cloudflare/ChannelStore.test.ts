@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
@@ -182,6 +182,44 @@ describe('settle', () => {
     expect(leases).toEqual([expect.any(String), expect.any(String)])
   })
 
+  test('keeps its lease while a settlement outlasts it', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = Store.memory()
+      await store.put(channelId, channel())
+      let calls = 0
+      const second = message()
+      await settle(
+        { messages: [message().message] },
+        {
+          getClient: () => ({}) as never,
+          async settle() {
+            calls++
+            // The first settlement waits past the 5-minute lease for its receipt.
+            await vi.advanceTimersByTimeAsync(6 * 60_000)
+            await settle(
+              { messages: [second.message] },
+              {
+                getClient: () => ({}) as never,
+                async settle() {
+                  calls++
+                  return '0x1234'
+                },
+                store,
+              },
+            )
+            return '0x1234'
+          },
+          store,
+        },
+      )
+      expect({ calls, ...second.outcome }).toEqual({ calls: 1, delaySeconds: 60 })
+      expect(((await store.get(channelId)) as State).scheduledSettlementLease).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test("leaves a channel the server's own cooperative close captures until that close expires", async () => {
     const now = BigInt(Math.floor(Date.now() / 1000))
     expect(await run(channel({ closeRequestedAt: now, pendingCloseAt: now }))).toEqual({
@@ -277,7 +315,19 @@ describe('ChannelStore', () => {
     await channels.fire()
     expect(channels.sent).toHaveLength(5)
     await channels.write(channel({ voucher: 3_000n, closeRequestedAt: 1n }))
-    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    expect(channels.alarmIn()).toBeGreaterThan(60_000)
+    expect(channels.alarmIn()).toBeLessThanOrEqual(2 * 60_000)
+  })
+
+  test("resends a closing channel within the escrow's close grace period", async () => {
+    const channels = object({ watchdogMs: 20 * 60_000 })
+    await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 1n }))
+    // Every job fails: each of the six sends follows the last within 2 minutes.
+    for (let sends = 1; sends <= 6; sends++) {
+      await channels.fire()
+      expect(channels.sent).toHaveLength(sends)
+      expect(channels.alarmIn()).toBeLessThanOrEqual(2 * 60_000)
+    }
   })
 
   test('sends a channel below the threshold at once when its payer requests a close', async () => {
@@ -319,7 +369,7 @@ describe('ChannelStore', () => {
     await channels.fire()
     expect(channels.sent).toHaveLength(1)
     await channels.write(channel({ voucher: 2_000n }))
-    expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
+    expect(channels.alarmIn()).toBeGreaterThan(60_000)
     await channels.write(channel({ voucher: 2_000n, closeRequestedAt: 2n }))
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
     await channels.fire()

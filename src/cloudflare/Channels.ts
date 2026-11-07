@@ -6,7 +6,7 @@ import * as Store from '../Store.js'
 import { parsePkhSource } from '../tempo/internal/proof.js'
 import type { TransactionClient } from '../tempo/session/precompile/Chain.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
-import type { State } from '../tempo/session/server/ChannelStore.js'
+import { isPrecompileState, type State } from '../tempo/session/server/ChannelStore.js'
 import type { ResolveSessionChannelId } from '../tempo/session/server/RequestState.js'
 import {
   settle as settleChannel,
@@ -134,8 +134,20 @@ export function channels(
         }),
       ),
     )
+    // The challenge's operator is not in the key, so a channel opened with another one shares it:
+    // skip it, since mppx rejects its vouchers for this challenge.
+    const operator = paymentRequest.operator as Address | undefined
     // An ID a delayed write left for a channel that has since closed resumes nothing.
-    for (const id of ids) if (resumable(await base.get(id))) return id
+    for (const id of ids) {
+      const state = await base.get(id)
+      if (!resumable(state)) continue
+      if (
+        operator &&
+        !(isPrecompileState(state) && state.operator.toLowerCase() === operator.toLowerCase())
+      )
+        continue
+      return id
+    }
     return undefined
   }
 
@@ -207,9 +219,15 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
         message.retry({ delaySeconds: 60 })
         continue
       }
+      // Waiting for the receipt can outlast the lease: keep it while the settlement runs, so no
+      // other job claims the channel and broadcasts the same voucher.
+      const renewal = setInterval(() => {
+        void renew(store, channelId, leaseOwner).catch(() => undefined)
+      }, settlementLeaseMs / 2)
       try {
         await settle_(store, await getClient({ chainId: state.chainId }), channelId, options)
       } finally {
+        clearInterval(renewal)
         await release(store, channelId, leaseOwner).catch(() => undefined)
       }
       message.ack()
@@ -268,6 +286,21 @@ async function claim(store: Store.AtomicStore, channelId: string): Promise<strin
         scheduledSettlementLease: { expiresAt: now + settlementLeaseMs, owner },
       },
       result: owner,
+    }
+  })
+}
+
+/** Extends a settlement lease {@link claim} took while its owner still holds it. */
+async function renew(store: Store.AtomicStore, channelId: string, owner: string) {
+  await store.update(channelId, (current) => {
+    if (!isChannelState(current) || current.scheduledSettlementLease?.owner !== owner) return noop
+    return {
+      op: 'set',
+      value: {
+        ...current,
+        scheduledSettlementLease: { expiresAt: Date.now() + settlementLeaseMs, owner },
+      },
+      result: undefined,
     }
   })
 }
