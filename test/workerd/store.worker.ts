@@ -20,12 +20,18 @@ export class RecordingStore extends Store.DurableObjectStore {
   }
 
   override async alarm() {
+    // A subclass's alarm calls the store's, which clears expired replay claims in a shard.
+    await super.alarm()
+    // A replay shard is an object of this class too: it holds only claims, so skip the subclass's work.
+    if (this.isReplayShard()) return
     const alarms = Number((await this.storage.get('__alarms')) ?? 0)
     await this.storage.put('__alarms', String(alarms + 1))
   }
 
   override async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname !== '/log') return super.fetch(request)
+    const { pathname } = new URL(request.url)
+    if (pathname === '/shard') return Response.json(this.isReplayShard())
+    if (pathname !== '/log') return super.fetch(request)
     return Response.json({
       alarms: Number((await this.storage.get('__alarms')) ?? 0),
       writes: JSON.parse(((await this.storage.get('__writes')) as string | undefined) ?? '[]'),
@@ -48,10 +54,13 @@ export class RpcStore extends Store.DurableObjectStore.rpc(DurableObject) {
   /** The keys this object holds replay claims for, as a replay shard. */
   async replayClaimKeys() {
     const sql = this.state.storage.sql!
-    if (sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'replay_claims'").toArray().length === 0)
+    if (
+      sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'mppx_replay_claims'").toArray().length ===
+      0
+    )
       return []
     return sql
-      .exec('SELECT key FROM replay_claims ORDER BY key')
+      .exec('SELECT key FROM mppx_replay_claims ORDER BY key')
       .toArray()
       .map((row) => row.key)
   }
@@ -68,6 +77,9 @@ type Channel = {
   spent: bigint
   vouchers: { nonce: bigint }[]
 }
+
+/** {@link RecordingStore} on key-value storage, without SQL, bound as `KV_RECORDING`. */
+export class KvRecordingStore extends RecordingStore {}
 
 /** {@link RecordingStore} over Workers RPC, bound as `RECORDING_RPC`: its hooks still run. */
 export class RecordingRpcStore extends RecordingStore.rpc(DurableObject) {}
@@ -102,6 +114,7 @@ export class FailingStore extends Store.DurableObjectStore {
 
 type Env = {
   FAILING: Store.durableObject.Namespace
+  KV_RECORDING: Store.durableObject.Namespace
   NATIVE_STORE: Store.durableObject.Namespace
   RPC_STORE: Store.durableObject.Namespace
   DB: Store.d1.Database
@@ -111,7 +124,15 @@ type Env = {
 }
 
 type Command = {
-  backend?: 'd1' | 'durableObject' | 'failing' | 'native' | 'recording' | 'recording-rpc' | 'rpc'
+  backend?:
+    | 'd1'
+    | 'durableObject'
+    | 'failing'
+    | 'kv-recording'
+    | 'native'
+    | 'recording'
+    | 'recording-rpc'
+    | 'rpc'
   options?: Store.durableObject.Options
 } & (
   | { op: 'get' | 'delete'; key: string; prefix?: string }
@@ -120,7 +141,7 @@ type Command = {
   | { op: 'bigint'; key: string; amount: string }
   | { op: 'claim'; key: string; expires: number }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
-  | { op: 'log'; key: string }
+  | { op: 'log' | 'shard'; key: string }
   | { op: 'arm' | 'hooked'; key: string }
   | { op: 'legacy'; key: string; amount: string }
   | { op: 'increment-bigint'; key: string }
@@ -136,15 +157,17 @@ export default {
     const namespace =
       command.backend === 'failing'
         ? env.FAILING
-        : command.backend === 'recording'
-          ? env.RECORDING
-          : command.backend === 'recording-rpc'
-            ? env.RECORDING_RPC
-            : command.backend === 'rpc'
-              ? env.RPC_STORE
-              : command.backend === 'native'
-                ? env.NATIVE_STORE
-                : env.STORE
+        : command.backend === 'kv-recording'
+          ? env.KV_RECORDING
+          : command.backend === 'recording'
+            ? env.RECORDING
+            : command.backend === 'recording-rpc'
+              ? env.RECORDING_RPC
+              : command.backend === 'rpc'
+                ? env.RPC_STORE
+                : command.backend === 'native'
+                  ? env.NATIVE_STORE
+                  : env.STORE
     const store =
       command.backend === 'd1'
         ? Store.d1(env.DB, options)
@@ -262,6 +285,7 @@ export default {
           ),
         )
       case 'log':
+      case 'shard':
       case 'arm':
       case 'hooked':
         return namespace

@@ -209,7 +209,8 @@ function assertPrimitiveKey(key: unknown, tag: string): void {
  * fails at once instead of making later updates conflict until `maxAttempts`.
  */
 function assertComparable(value: unknown, seen = new Set<object>()): void {
-  if (typeof value !== 'object' || value === null || ArrayBuffer.isView(value)) return
+  if (typeof value !== 'object' || value === null) return
+  if (ArrayBuffer.isView(value)) return assertFixedBuffer(value)
   // Structured clone keeps cycles: check each object once.
   if (seen.has(value)) return
   seen.add(value)
@@ -226,6 +227,26 @@ function assertComparable(value: unknown, seen = new Set<object>()): void {
   else if (!comparableTags.has(tag)) throw incomparable(`${tag.slice(8, -1)} values`)
 }
 
+/**
+ * Throws for a view of a resizable `ArrayBuffer`: structured clone keeps whether it tracks the
+ * buffer's length, and telling that apart costs a resize of the whole buffer.
+ */
+function assertFixedBuffer(view: ArrayBufferView): void {
+  if ((view.buffer as ArrayBuffer & Resizable).resizable)
+    throw incomparable('views of resizable ArrayBuffers')
+}
+
+/** An `ArrayBuffer`'s resizable state, which older TypeScript libs leave out. */
+type Resizable = {
+  maxByteLength?: number
+  resizable?: boolean
+}
+
+/** `SameValueZero`, how maps and sets match keys. */
+function sameValueZero(a: unknown, b: unknown): boolean {
+  return a === b || (a !== a && b !== b)
+}
+
 /** A view's bytes. */
 function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
   return ArrayBuffer.isView(view)
@@ -235,8 +256,8 @@ function bytesOf(view: ArrayBufferView | ArrayBuffer): Uint8Array {
 
 /**
  * Structural equality of stored values, as structured clone copies them:
- * primitives (bigints by value), arrays (holes included), plain objects, maps,
- * sets, typed arrays, `DataView`s and `ArrayBuffer`s (type and bytes), dates,
+ * primitives (bigints by value), arrays (holes included) and plain objects, maps
+ * and sets, all in key or insertion order, typed arrays, `DataView`s and `ArrayBuffer`s (type, bytes and resizing; not views of resizable ones), dates,
  * regular expressions and boxed primitives. A native compare-and-swap
  * needs it, since a value read back from storage is a copy. Throws for values it
  * cannot compare, rather than reporting a conflict that never resolves.
@@ -257,24 +278,31 @@ function deepEqual(
   right.set(b, a)
   const tag = Object.prototype.toString.call(a)
   if (tag !== Object.prototype.toString.call(b)) return false
-  if (Array.isArray(a)) {
-    const other = b as unknown[]
-    if (a.length !== other.length) return false
-    for (let i = 0; i < a.length; i++)
-      if (i in a !== i in other || !deepEqual(a[i], other[i], pairs)) return false
-    // Structured clone keeps named properties on arrays too: compare them like an object's.
+  // Arrays and plain objects: own enumerable keys in order (array indexes first, so holes,
+  // sparse lengths and named properties count, and inherited indexes don't), then values.
+  // Structured clone keeps key order, so values that differ only in order are different values.
+  if (Array.isArray(a) || tag === '[object Object]') {
+    if (Array.isArray(a) && a.length !== (b as unknown[]).length) return false
     const keys = Object.keys(a)
-    if (keys.length !== Object.keys(other).length) return false
-    return keys.every(
-      (key) =>
-        (/^(?:0|[1-9]\d*)$/.test(key) && Number(key) < a.length) ||
-        (Object.prototype.hasOwnProperty.call(other, key) &&
-          deepEqual((a as never)[key], (other as never)[key], pairs)),
+    const other = Object.keys(b)
+    return (
+      keys.length === other.length &&
+      keys.every(
+        (key, i) =>
+          key === other[i] &&
+          deepEqual(
+            (a as Record<string, unknown>)[key],
+            (b as Record<string, unknown>)[key],
+            pairs,
+          ),
+      )
     )
   }
   // Structured clone keeps a view's whole backing buffer and offset, not only its visible bytes.
   if (ArrayBuffer.isView(a)) {
     const other = b as ArrayBufferView
+    assertFixedBuffer(a)
+    assertFixedBuffer(other)
     return (
       a.byteOffset === other.byteOffset &&
       a.byteLength === other.byteLength &&
@@ -282,39 +310,40 @@ function deepEqual(
     )
   }
   if (tag === '[object ArrayBuffer]') {
-    const x = bytesOf(a as ArrayBuffer)
-    const y = bytesOf(b as ArrayBuffer)
-    return x.length === y.length && x.every((byte, i) => byte === y[i])
+    const x = a as ArrayBuffer & Resizable
+    const y = b as ArrayBuffer & Resizable
+    // Structured clone keeps whether a buffer is resizable, and up to what length.
+    if (x.resizable !== y.resizable || x.maxByteLength !== y.maxByteLength) return false
+    const xs = bytesOf(x)
+    const ys = bytesOf(y)
+    return xs.length === ys.length && xs.every((byte, i) => byte === ys[i])
   }
   if (a instanceof Map) {
     const other = b as Map<unknown, unknown>
     if (a.size !== other.size) return false
+    // In insertion order, which structured clone keeps.
+    const entries = other.entries()
     for (const [key, item] of a) {
       assertPrimitiveKey(key, tag)
-      if (!other.has(key) || !deepEqual(item, other.get(key), pairs)) return false
+      const [otherKey, otherItem] = entries.next().value!
+      if (!sameValueZero(key, otherKey) || !deepEqual(item, otherItem, pairs)) return false
     }
     return true
   }
   if (a instanceof Set) {
     const other = b as Set<unknown>
     if (a.size !== other.size) return false
+    const items = other.values()
     for (const item of a) {
       assertPrimitiveKey(item, tag)
-      if (!other.has(item)) return false
+      if (!sameValueZero(item, items.next().value)) return false
     }
     return true
   }
   if (a instanceof RegExp)
     return a.source === (b as RegExp).source && a.flags === (b as RegExp).flags
   if (comparableTags.has(tag)) return Object.is(a.valueOf(), (b as object).valueOf())
-  if (tag !== '[object Object]') throw incomparable(`${tag.slice(8, -1)} values`)
-  const keys = Object.keys(a)
-  if (keys.length !== Object.keys(b).length) return false
-  return keys.every(
-    (key) =>
-      Object.prototype.hasOwnProperty.call(b, key) &&
-      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], pairs),
-  )
+  throw incomparable(`${tag.slice(8, -1)} values`)
 }
 
 /** 32-bit FNV-1a hash of a string's UTF-16 code units: cheap and stable, to pick a replay shard. */
@@ -453,10 +482,21 @@ export declare namespace cloudflare {
   }
 }
 
+/** Name prefix of {@link durableObject}'s replay shard objects. */
+const replayShardPrefix = 'mppx:replay:'
+
+/** Object name prefix of {@link durableObject}'s keys named like a replay shard or with this prefix. */
+const keyObjectPrefix = 'mppx:key:'
+
+/** A replay shard object's whole name: `mppx:replay:v<version>:<shard>`. */
+const replayShardName = /^mppx:replay:v\d+:\d+$/
+
 /**
  * Atomic store backed by Cloudflare Durable Objects.
  *
- * Each key lives in its own Durable Object instance (`idFromName(key)`), so
+ * Each key lives in its own Durable Object instance (`idFromName(key)`; a key named
+ * like a replay shard, `mppx:replay:v<version>:<shard>`, or starting with `mppx:key:`
+ * uses `mppx:key:<key>`), so
  * reads and writes of one key are linearizable across every Worker isolate and
  * location, while different keys (such as different payment channels) scale
  * out across instances. {@link AtomicStore.update} runs `fn` in the Worker and
@@ -517,10 +557,14 @@ export function durableObject(
       `Store.durableObject: \`replayShardVersion\` must be a positive integer, got ${replayShardVersion}.`,
     )
 
-  const object = (key: string) => namespace.get(namespace.idFromName(key))
+  const object = (name: string) => namespace.get(namespace.idFromName(name))
+  // A key named like a replay shard gets its own object name, so its object never passes for a
+  // shard. Keys already in that escape namespace are escaped too, so no two keys share an object.
+  const keyObject = (key: string) =>
+    replayShardName.test(key) || key.startsWith(keyObjectPrefix) ? `${keyObjectPrefix}${key}` : key
 
-  async function call<result>(key: string, body: DurableObjectStore.Request): Promise<result> {
-    const response = await object(key).fetch('https://mppx-store/', {
+  async function call<result>(name: string, body: DurableObjectStore.Request): Promise<result> {
+    const response = await object(name).fetch('https://mppx-store/', {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -533,30 +577,41 @@ export function durableObject(
   }
 
   // The object's operations on stored values: JSON text, or native values over RPC.
-  const remote: DurableObjectStore.Stub =
+  const remote: Remote =
     transport === 'rpc'
       ? {
-          get: (key) => stub(key).get(key, encoding),
-          put: (key, value) => stub(key).put(key, value, encoding),
-          delete: (key) => stub(key).delete(key, encoding),
-          swap: (key, expected, value) => stub(key).swap(key, expected, value, encoding),
-          claim: (key, expires) => stub(key).claim(key, expires, encoding),
+          get: (key) => stub(key).storeGet(key, encoding),
+          put: (key, value) => stub(key).storePut(key, value, encoding),
+          delete: (key) => stub(key).storeDelete(key, encoding),
+          swap: (key, expected, value) => stub(key).storeSwap(key, expected, value, encoding),
+          claim: (key, expires) => stub(key).storeClaim(key, expires, encoding),
         }
       : {
-          get: (key) => call(key, { op: 'get', key }),
-          put: (key, value) => call(key, { op: 'put', key, value: value as string }),
-          delete: (key) => call(key, { op: 'delete', key }),
+          get: (key) => call(keyObject(key), { op: 'get', key }),
+          put: (key, value) => call(keyObject(key), { op: 'put', key, value: value as string }),
+          delete: (key) => call(keyObject(key), { op: 'delete', key }),
           swap: (key, expected, value) =>
-            call(key, {
+            call(keyObject(key), {
               op: 'swap',
               key,
               expected: expected as string | null,
               value: value as string | null,
             }),
-          claim: (key, expires) => call(key, { op: 'claim', key, expires }),
+          claim: (key, expires) => call(keyObject(key), { op: 'claim', key, expires }),
         }
+  type Remote = {
+    get: (key: string) => Promise<unknown>
+    put: (key: string, value: unknown) => Promise<unknown>
+    delete: (key: string) => Promise<unknown>
+    swap: (
+      key: string,
+      expected: unknown,
+      value: unknown,
+    ) => Promise<DurableObjectStore.SwapResult<unknown>>
+    claim: (key: string, expires: number) => Promise<boolean>
+  }
   function stub(key: string) {
-    return object(key) as unknown as DurableObjectStore.Stub
+    return object(keyObject(key)) as unknown as DurableObjectStore.Stub
   }
 
   // Replay claims in `replayShards` SQLite-backed shard objects instead of one object per key.
@@ -565,7 +620,7 @@ export function durableObject(
       ? undefined
       : (() => {
           const shardOf = (key: string) =>
-            `mppx:replay:v${replayShardVersion}:${fnv1a(key) % replayShards}`
+            `${replayShardPrefix}v${replayShardVersion}:${fnv1a(key) % replayShards}`
           const shard = (key: string) =>
             object(shardOf(key)) as unknown as DurableObjectStore.ReplayShard
           return transport === 'rpc'
@@ -643,15 +698,19 @@ export declare namespace durableObject {
      * Spreads replay claims ({@link AtomicStore.tryClaim}) over this many shard
      * objects, named `mppx:replay:v<version>:<shard>` by an FNV-1a hash of the
      * key, instead of one object per key: each shard holds its claims in a SQLite
-     * table and clears expired ones with an alarm, so short-lived claims leave no
+     * table (`mppx_replay_claims`) and clears expired ones with an alarm, so short-lived claims leave no
      * objects behind. The class must be SQLite-backed. Claims then live only in
-     * the shards: `get` and `update` of a claimed key don't see them, and
-     * `delete` releases them. Changing the count moves keys between shards, so
+     * the shards: `get` and `update` of a claimed key don't see them, a value
+     * stored at the key doesn't block a claim (mppx stores only expiring claims
+     * at its replay keys), and `delete` releases them. Changing the count moves keys between shards, so
      * bump `replayShardVersion` with it to start from empty shards. A claim lives
      * only where it was made: enabling sharding, changing the count or version, or
      * running two settings side by side lets a key claimed under the old setting
      * be claimed again until that claim expires. Change it when no unexpired
      * claim matters, such as together with the secret that signs Challenges.
+     * Shards are objects of the bound class, so a subclass's `alarm`, handlers and
+     * constructor run in them too: skip the subclass's own work there with
+     * {@link DurableObjectStore.isReplayShard}, and never clear a shard's storage.
      */
     replayShards?: number | undefined
     /** Version in the shard objects' names, to start a fresh set of shards. @default 1 */
@@ -713,8 +772,9 @@ export class DurableObjectStore {
    * `cloudflare:workers`: Workers RPC calls only reach classes that extend it,
    * and taking it as an argument keeps this module free of that import. Called
    * on a subclass, it keeps the subclass's methods (such as `onWrite` and
-   * `alarm`), but not its constructor or field initializers: subclass the
-   * returned class, or set state up lazily.
+   * `alarm`) and static members, but not its constructor, field initializers or `#private` members,
+   * which the copied methods cannot reach: subclass the returned class, or set
+   * state up lazily in ordinary members.
    *
    * @example
    * ```ts
@@ -739,9 +799,23 @@ export class DurableObjectStore {
       chain.unshift(proto)
       if (proto === DurableObjectStore.prototype) break
     }
+    // Collect each name's most-derived descriptor first, then define it once: redefining a
+    // name an ancestor made non-configurable would throw, though a subclass may shadow it.
+    const methods = new Map<string, PropertyDescriptor>()
     for (const proto of chain)
       for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto)))
-        if (name !== 'constructor') Object.defineProperty(RpcStore.prototype, name, descriptor)
+        if (name !== 'constructor') methods.set(name, descriptor)
+    for (const [name, descriptor] of methods)
+      Object.defineProperty(RpcStore.prototype, name, descriptor)
+    // And the subclasses' static members, without DurableObjectStore's own (such as `rpc`).
+    const statics = new Map<PropertyKey, PropertyDescriptor>()
+    for (const proto of chain.slice(1)) {
+      const ctor = (proto as { constructor: object }).constructor
+      for (const name of Reflect.ownKeys(ctor))
+        if (name !== 'length' && name !== 'name' && name !== 'prototype')
+          statics.set(name, Object.getOwnPropertyDescriptor(ctor, name)!)
+    }
+    for (const [name, descriptor] of statics) Object.defineProperty(RpcStore, name, descriptor)
     return RpcStore as unknown as store
   }
 
@@ -768,26 +842,58 @@ export class DurableObjectStore {
    * Handles the object's alarm, which a subclass sets through
    * {@link DurableObjectStore.storage}. In a replay shard it clears expired claims, so
    * a subclass that overrides it must call `super.alarm()`, or expired claims stay stored.
+   * Elsewhere, including on key-value-backed objects, it does nothing. The subclass's own
+   * alarm work runs in shards too: skip it there with {@link DurableObjectStore.isReplayShard}.
+   *
+   * @example
+   * ```ts
+   * override async alarm() {
+   *   await super.alarm()
+   *   if (this.isReplayShard()) return
+   *   // The subclass's own work.
+   * }
+   * ```
    */
   async alarm(): Promise<void> {
+    // Only an object that holds claims has any to clear, whatever its name.
+    if (!this.hasReplayClaims()) return
     const { sql } = this.state.storage
     if (!sql) return
-    let shard: unknown[]
-    try {
-      shard = sql
-        .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'replay_claims'")
-        .toArray()
-    } catch {
-      // A key-value-backed object has `sql` but cannot run it, so it holds no replay shard.
-      return
-    }
-    if (shard.length === 0) return
     const now = Date.now()
-    sql.exec('DELETE FROM replay_claims WHERE expires <= ?', now)
+    sql.exec('DELETE FROM mppx_replay_claims WHERE expires <= ?', now)
     const [{ expires } = {}] = sql
-      .exec('SELECT MIN(expires) AS expires FROM replay_claims')
+      .exec('SELECT MIN(expires) AS expires FROM mppx_replay_claims')
       .toArray()
     if (typeof expires === 'number') await this.state.storage.setAlarm?.(Math.max(expires, now + 1))
+  }
+
+  /**
+   * Whether this object is a replay shard of {@link durableObject}'s `replayShards`: an
+   * object of the same class that holds only replay claims, in its own SQL table. A
+   * subclass skips its own work there, and must not clear its storage. It tells by the
+   * object's whole name (`mppx:replay:v<version>:<shard>`) where the runtime gives it (`ctx.id.name`, so it
+   * works in the constructor of a fresh shard), and otherwise by the claims table, which a
+   * shard creates on its first claim.
+   */
+  protected isReplayShard(): boolean {
+    const name = this.state.id?.name
+    return typeof name === 'string' ? replayShardName.test(name) : this.hasReplayClaims()
+  }
+
+  /** Whether this object holds the replay claims table, which a shard creates on its first claim. */
+  private hasReplayClaims(): boolean {
+    const { sql } = this.state.storage
+    if (!sql) return false
+    try {
+      return (
+        sql
+          .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mppx_replay_claims'")
+          .toArray().length > 0
+      )
+    } catch {
+      // A key-value-backed object has `sql` but cannot run it, so it holds no replay shard.
+      return false
+    }
   }
 
   /**
@@ -802,7 +908,7 @@ export class DurableObjectStore {
     const claimed =
       sql
         .exec(
-          'INSERT INTO replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE replay_claims.expires <= ? RETURNING key',
+          'INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE mppx_replay_claims.expires <= ? RETURNING key',
           key,
           expires,
           now,
@@ -816,7 +922,7 @@ export class DurableObjectStore {
           await storage.setAlarm?.(Math.max(expires, Date.now() + 1))
       } catch (error) {
         // Without the alarm that clears it the claim must not stay: release it so a retry can claim.
-        sql.exec('DELETE FROM replay_claims WHERE key = ? AND expires = ?', key, expires)
+        sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND expires = ?', key, expires)
         throw error
       }
     }
@@ -825,21 +931,30 @@ export class DurableObjectStore {
 
   /** Releases `key`'s claim in this replay shard, if it has one. */
   async releaseReplay(key: string): Promise<void> {
-    this.replayClaims().exec('DELETE FROM replay_claims WHERE key = ?', key)
+    this.replayClaims().exec('DELETE FROM mppx_replay_claims WHERE key = ?', key)
   }
 
+  // The store's operations are named `store*`, not `get`, `put` and `delete`: on a Worker
+  // with the `fetcher_has_get_put_delete` flag (or the `rpc` flag before 2024-03-26), a stub's
+  // own HTTP methods of those names shadow RPC methods, and the prefix keeps them apart
+  // from methods a subclass already has.
+
   /** Reads a key: its JSON text, or its stored value with `native` encoding. */
-  async get(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
+  async storeGet(key: string, _encoding: durableObject.Encoding = 'json'): Promise<unknown> {
     return (await this.state.storage.get(key)) ?? null
   }
 
   /** Writes a key: JSON text, or any structured-clone value with `native` encoding. */
-  async put(key: string, value: unknown, encoding: durableObject.Encoding = 'json'): Promise<void> {
+  async storePut(
+    key: string,
+    value: unknown,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<void> {
     await this.commit(key, value, encoding)
   }
 
   /** Deletes a key. */
-  async delete(key: string, encoding: durableObject.Encoding = 'json'): Promise<void> {
+  async storeDelete(key: string, encoding: durableObject.Encoding = 'json'): Promise<void> {
     await this.commit(key, null, encoding)
   }
 
@@ -849,13 +964,13 @@ export class DurableObjectStore {
    * It reads and writes without awaiting other I/O in between, so the object's
    * input gate makes it atomic.
    */
-  async swap(
+  async storeSwap(
     key: string,
     expected: unknown,
     value: unknown,
     encoding: durableObject.Encoding = 'json',
   ): Promise<DurableObjectStore.SwapResult<unknown>> {
-    const current = await this.get(key)
+    const current = await this.storeGet(key)
     if (encoding === 'native' ? !deepEqual(current, expected ?? null) : current !== expected)
       return { applied: false, current }
     await this.commit(key, value, encoding, current)
@@ -863,13 +978,13 @@ export class DurableObjectStore {
   }
 
   /** Records a replay marker until `expires` unless the key holds a value or an unexpired marker. */
-  async claim(
+  async storeClaim(
     key: string,
     expires: number,
     encoding: durableObject.Encoding = 'json',
   ): Promise<boolean> {
     if (!Number.isFinite(expires) || expires <= Date.now()) return false
-    const raw = await this.get(key)
+    const raw = await this.storeGet(key)
     const current = decode(raw, encoding)
     if (current !== null && (!isReplayMarker(current) || current.expires > Date.now())) return false
     const marker = { expires, type: 'mppx:replay' } satisfies ReplayMarker
@@ -883,17 +998,17 @@ export class DurableObjectStore {
     const body = (await request.json()) as DurableObjectStore.Request
     switch (body.op) {
       case 'get':
-        return Response.json(await this.get(body.key))
+        return Response.json(await this.storeGet(body.key))
       case 'put':
-        await this.put(body.key, body.value)
+        await this.storePut(body.key, body.value)
         return Response.json(true)
       case 'delete':
-        await this.delete(body.key)
+        await this.storeDelete(body.key)
         return Response.json(true)
       case 'swap':
-        return Response.json(await this.swap(body.key, body.expected, body.value))
+        return Response.json(await this.storeSwap(body.key, body.expected, body.value))
       case 'claim':
-        return Response.json(await this.claim(body.key, body.expires))
+        return Response.json(await this.storeClaim(body.key, body.expires))
       case 'claimReplay':
         return Response.json(await this.claimReplay(body.key, body.expires))
       case 'releaseReplay':
@@ -912,9 +1027,11 @@ export class DurableObjectStore {
         'Store.durableObject: `replayShards` needs a SQLite-backed Durable Object (a `new_sqlite_classes` migration).',
       )
     sql.exec(
-      'CREATE TABLE IF NOT EXISTS replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS mppx_replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
     )
-    sql.exec('CREATE INDEX IF NOT EXISTS replay_claims_by_expiry ON replay_claims (expires)')
+    sql.exec(
+      'CREATE INDEX IF NOT EXISTS mppx_replay_claims_by_expiry ON mppx_replay_claims (expires)',
+    )
     return sql
   }
 
@@ -951,7 +1068,11 @@ function decode(raw: unknown, encoding: durableObject.Encoding): unknown {
 
 export declare namespace DurableObjectStore {
   /** The subset of `DurableObjectState` the store uses. */
-  export type State = { storage: Storage }
+  export type State = {
+    /** The object's ID; `name` is set for objects addressed with `idFromName`. */
+    id?: { readonly name?: string | undefined } | undefined
+    storage: Storage
+  }
 
   /** The subset of `DurableObjectStorage` the store uses. */
   export type Storage = {
@@ -988,16 +1109,20 @@ export declare namespace DurableObjectStore {
 
   /** The object's methods that {@link durableObject} calls, positionally, over Workers RPC. */
   export type Stub = {
-    get: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
-    put: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>
-    delete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
-    swap: (
+    storeGet: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    storePut: (key: string, value: unknown, encoding?: durableObject.Encoding) => Promise<unknown>
+    storeDelete: (key: string, encoding?: durableObject.Encoding) => Promise<unknown>
+    storeSwap: (
       key: string,
       expected: unknown,
       value: unknown,
       encoding?: durableObject.Encoding,
     ) => Promise<SwapResult<unknown>>
-    claim: (key: string, expires: number, encoding?: durableObject.Encoding) => Promise<boolean>
+    storeClaim: (
+      key: string,
+      expires: number,
+      encoding?: durableObject.Encoding,
+    ) => Promise<boolean>
   }
 
   /** An operation sent from {@link durableObject} to the object. */

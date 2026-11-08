@@ -84,7 +84,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.17.3",
+  "version": "0.17.5",
   "main": "./dist/index.js",
   "license": "MIT",
   "homepage": "https://github.com/wevm/mppx#readme",
@@ -121,6 +121,11 @@
       "src": "./src/client/node.ts",
       "types": "./dist/client/node.d.ts",
       "default": "./dist/client/node.js"
+    },
+    "./cloudflare": {
+      "src": "./src/cloudflare/index.ts",
+      "types": "./dist/cloudflare/index.d.ts",
+      "default": "./dist/cloudflare/index.js"
     },
     "./identity": {
       "src": "./src/identity/index.ts",

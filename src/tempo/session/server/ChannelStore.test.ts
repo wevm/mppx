@@ -370,6 +370,7 @@ describe('ChannelStore state updates', () => {
 
     expect(next.captureAmount).toBe(30n)
     expect(next.state?.closeRequestedAt).toBe(11n)
+    expect(next.state?.pendingCloseAt).toBe(11n)
   })
 
   test('markPendingClose rejects close voucher below capture amount', () => {

@@ -109,7 +109,7 @@ function fakeDurableObjectNamespace() {
       }
       // RPC arguments and results are structured clones.
       const rpc =
-        (method: 'get' | 'put' | 'delete' | 'swap' | 'claim') =>
+        (method: 'storeGet' | 'storePut' | 'storeDelete' | 'storeSwap' | 'storeClaim') =>
         (...args: unknown[]) =>
           queue(async () =>
             structuredClone(
@@ -120,11 +120,11 @@ function fakeDurableObjectNamespace() {
         fetch(input: string, init: RequestInit) {
           return queue(() => target.fetch(new Request(input, init)))
         },
-        get: rpc('get'),
-        put: rpc('put'),
-        delete: rpc('delete'),
-        swap: rpc('swap'),
-        claim: rpc('claim'),
+        storeGet: rpc('storeGet'),
+        storePut: rpc('storePut'),
+        storeDelete: rpc('storeDelete'),
+        storeSwap: rpc('storeSwap'),
+        storeClaim: rpc('storeClaim'),
       }
     },
   }
@@ -699,9 +699,11 @@ function richValue() {
 }
 
 /** A DurableObjectStore on an in-memory storage that copies values as Durable Object storage does. */
-function objectStore() {
+function objectStore<store extends Store.DurableObjectStore = Store.DurableObjectStore>(
+  Class: new (state: Store.DurableObjectStore.State) => store = Store.DurableObjectStore as never,
+) {
   const map = new Map<string, unknown>()
-  return new Store.DurableObjectStore({
+  return new Class({
     storage: {
       async get(key: string) {
         return structuredClone(map.get(key))
@@ -756,13 +758,46 @@ describe('durableObject', () => {
       [/a/g, /a/i],
       [new Date(0), new Date(1)],
       [{ a: 1n }, { a: 1 }],
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
+      [
+        new Map([
+          [1, 'a'],
+          [2, 'b'],
+        ]),
+        new Map([
+          [2, 'b'],
+          [1, 'a'],
+        ]),
+      ],
+      [new Set([1, 2]), new Set([2, 1])],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1)],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1, { maxByteLength: 4 })],
     ]
     for (const [stored, other] of pairs) {
       const object = objectStore()
-      await object.put('k', stored, 'native')
-      expect((await object.swap('k', other, 'next', 'native')).applied).toBe(false)
-      expect((await object.swap('k', structuredClone(stored), 'next', 'native')).applied).toBe(true)
+      await object.storePut('k', stored, 'native')
+      expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+      expect((await object.storeSwap('k', structuredClone(stored), 'next', 'native')).applied).toBe(
+        true,
+      )
     }
+  })
+
+  test('native compare-and-swap compares sparse arrays by their elements, not their length', async () => {
+    const sparse: number[] = []
+    sparse.length = 2 ** 32 - 1
+    sparse[5] = 1
+    const object = objectStore()
+    await object.storePut('k', sparse, 'native')
+    const other = structuredClone(sparse)
+    other[6] = 1
+    expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+    expect((await object.storeSwap('k', structuredClone(sparse), 'next', 'native')).applied).toBe(
+      true,
+    )
   })
 
   test('native update handles cyclic values', async () => {
@@ -784,6 +819,22 @@ describe('durableObject', () => {
     const stored = (await store.get('cycle')) as typeof value
     expect(stored.n).toBe(1)
     expect(stored.self).toBe(stored)
+  })
+
+  test('native encoding rejects views of resizable buffers, whose length tracking it would have to probe', async () => {
+    const view = new Uint8Array(new ArrayBuffer(4, { maxByteLength: 8 }))
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { view })).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
+    const object = objectStore()
+    await object.storePut('k', new Uint8Array(4), 'native')
+    await expect(object.storeSwap('k', view, null, 'native')).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
   })
 
   test('native encoding rejects errors, whose cause and stack it cannot compare', async () => {
@@ -809,8 +860,8 @@ describe('durableObject', () => {
     ).rejects.toThrow('cannot compare a Set with object keys')
     // A value written directly to storage fails the swap instead of conflicting.
     const object = objectStore()
-    await object.put('k', new Map([[{}, 1]]), 'native')
-    await expect(object.swap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
+    await object.storePut('k', new Map([[{}, 1]]), 'native')
+    await expect(object.storeSwap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
       'cannot compare',
     )
   })
@@ -828,6 +879,129 @@ describe('durableObject', () => {
   test('replay shards need a SQLite-backed object', async () => {
     const store = Store.durableObject(fakeDurableObjectNamespace(), { replayShards: 2 })
     await expect(store.tryClaim!('nonce', Date.now() + 60_000)).rejects.toThrow('SQLite-backed')
+  })
+
+  test('a replay shard releases a claim whose cleanup alarm it could not schedule', async () => {
+    const db = new DatabaseSync(':memory:')
+    let alarm: number | null = null
+    let failAlarm = true
+    const object = new Store.DurableObjectStore({
+      storage: {
+        get: async () => undefined,
+        put: async () => {},
+        delete: async () => false,
+        getAlarm: async () => alarm,
+        async setAlarm(time) {
+          if (failAlarm) throw new Error('alarm unavailable')
+          alarm = Number(time)
+        },
+        sql: {
+          exec(query, ...bindings) {
+            const rows = db.prepare(query).all(...(bindings as never[]))
+            return { toArray: () => rows as Record<string, unknown>[] }
+          },
+        },
+      },
+    })
+    const expires = Date.now() + 60_000
+    await expect(object.claimReplay('nonce', expires)).rejects.toThrow('alarm unavailable')
+    // The failed claim left nothing behind, so a retry claims the key.
+    failAlarm = false
+    expect(await object.claimReplay('nonce', expires)).toBe(true)
+    expect(alarm).toBe(expires)
+    expect(await object.claimReplay('nonce', expires)).toBe(false)
+  })
+
+  test('fetch keeps to the store operations when a subclass has its own get, put and delete', async () => {
+    class Legacy extends Store.DurableObjectStore {
+      // A subclass's own methods, which the store must not call.
+      async get() {
+        throw new Error('subclass get')
+      }
+      async put() {
+        throw new Error('subclass put')
+      }
+      async delete() {
+        throw new Error('subclass delete')
+      }
+    }
+    const object = objectStore(Legacy)
+    const store = Store.durableObject({
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (input, init) => object.fetch(new Request(input, init)) }),
+    })
+    await store.put('k', { n: 1 })
+    expect(await store.get('k')).toEqual({ n: 1 })
+    expect(await store.update('k', () => ({ op: 'set', value: 2, result: 'ok' }))).toBe('ok')
+    await store.delete('k')
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('rpc keeps a subclass static members', () => {
+    class Base {
+      base = true
+    }
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      static describe() {
+        return this.label
+      }
+    }
+    class Child extends Parent {
+      static override label = 'child'
+    }
+    const Rpc = Child.rpc(Base)
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.describe()).toBe('child')
+    expect(Object.hasOwn(Rpc, 'rpc')).toBe(false)
+  })
+
+  test('rpc keeps the most-derived static and method when an ancestor made them non-configurable', () => {
+    class Base {}
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      describe() {
+        return 'parent'
+      }
+    }
+    Object.defineProperty(Parent, 'label', { configurable: false })
+    Object.defineProperty(Parent.prototype, 'describe', { configurable: false })
+    class Child extends Parent {
+      static override label = 'child'
+      override describe() {
+        return 'child'
+      }
+    }
+    const Rpc = Child.rpc(Base) as unknown as { label: string; prototype: { describe(): string } }
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.prototype.describe()).toBe('child')
+  })
+
+  test('keeps keys named like replay shards out of shard objects', async () => {
+    for (const transport of ['fetch', 'rpc'] as const) {
+      const names: string[] = []
+      const namespace = fakeDurableObjectNamespace()
+      const store = Store.durableObject(
+        {
+          ...namespace,
+          idFromName: (name: string) => {
+            names.push(name)
+            return namespace.idFromName(name)
+          },
+        },
+        { transport },
+      )
+      await store.put('mppx:replay:v1:0', 1)
+      expect(await store.get('mppx:replay:v1:0')).toBe(1)
+      await store.put('mppx:replay:v1:x', 2)
+      await store.put('mppx:key:mppx:replay:v1:0', 3)
+      expect(names).toEqual([
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:replay:v1:x',
+        'mppx:key:mppx:key:mppx:replay:v1:0',
+      ])
+    }
   })
 
   test('rejects native encoding over fetch', () => {

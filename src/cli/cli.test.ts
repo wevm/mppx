@@ -657,6 +657,215 @@ describe('agent attribution', () => {
   })
 })
 
+describe('stripe address', () => {
+  type Request = { body: string; headers: Record<string, unknown>; url?: string | undefined }
+
+  async function withStripe<T>(
+    fn: (url: string, requests: Request[]) => Promise<T>,
+    status = 200,
+    error: { code: string; message: string } = {
+      code: 'api_key_invalid',
+      message: 'Invalid API Key provided: sk_test_bad',
+    },
+  ) {
+    const requests: Request[] = []
+    const server = await Http.createServer(async (req, res) => {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      requests.push({ body, headers: req.headers, url: req.url })
+      res.statusCode = status
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify(
+          status === 200
+            ? {
+                id: 'cda_test',
+                object: 'crypto.deposit_address',
+                livemode: false,
+                network: 'tempo',
+                address: '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c',
+                supported_tokens: [
+                  {
+                    token_currency: 'usdc',
+                    token_contract_address: '0x20c0000000000000000000009e8d7eb59b783726',
+                  },
+                ],
+              }
+            : { error },
+        ),
+      )
+    })
+    try {
+      return await fn(server.url, requests)
+    } finally {
+      server.close()
+    }
+  }
+
+  const address = '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c'
+
+  test('creates a deposit address and prints only the address', async () => {
+    await withStripe(async (url, requests) => {
+      const { output, exitCode } = await serve(['stripe', 'address'], {
+        env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output.trim()).toBe(address)
+      expect(requests).toHaveLength(1)
+      expect(requests[0]!.url).toBe('/v1/crypto/deposit_addresses')
+      expect(requests[0]!.body).toBe('network=tempo')
+      expect(requests[0]!.headers.authorization).toBe('Bearer sk_test_123')
+      expect(requests[0]!.headers['stripe-version']).toBe(stripePreviewVersion)
+    })
+  })
+
+  test('returns the full object with --json and passes network, customer and connected account', async () => {
+    await withStripe(async (url, requests) => {
+      const { output, exitCode } = await serve(
+        [
+          'stripe',
+          'address',
+          '--network',
+          'base',
+          '--customer',
+          'cus_123',
+          '--stripe-account',
+          'acct_123',
+          '--json',
+        ],
+        { env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' } },
+      )
+
+      expect(exitCode).toBeUndefined()
+      expect(JSON.parse(output)).toMatchObject({
+        address,
+        id: 'cda_test',
+        livemode: false,
+        supportedTokens: [
+          { contractAddress: '0x20c0000000000000000000009e8d7eb59b783726', currency: 'usdc' },
+        ],
+      })
+      expect(requests[0]!.body).toBe('network=base&customer=cus_123')
+      expect(requests[0]!.headers['stripe-account']).toBe('acct_123')
+    })
+  })
+
+  test('--env writes the address into the env file instead of printing it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-env-'))
+    const file = path.join(dir, '.env')
+    fs.writeFileSync(file, 'FOO=1\nTEMPO_DEPOSIT_ADDRESS=0xold\nBAR=2')
+    try {
+      await withStripe(async (url) => {
+        const { output, exitCode } = await serve(['stripe', 'address', '--env', file], {
+          env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' },
+        })
+        expect(exitCode).toBeUndefined()
+        expect(output.trim()).toBe('')
+        expect(fs.readFileSync(file, 'utf8')).toBe(`FOO=1\nTEMPO_DEPOSIT_ADDRESS=${address}\nBAR=2`)
+      })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('--env refuses a customer-scoped address', async () => {
+    const { output, exitCode } = await serve(
+      ['stripe', 'address', '--env', '--customer', 'cus_123'],
+      { env: { STRIPE_SECRET_KEY: 'sk_test_123' } },
+    )
+    expect(exitCode).toBe(2)
+    expect(output).toContain('INVALID_OPTIONS')
+  })
+
+  test('resolves the key from --secret-key, then STRIPE_SECRET_KEY, then the Stripe CLI login', async () => {
+    const config = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-cli-'))
+    fs.mkdirSync(path.join(config, 'stripe'))
+    fs.writeFileSync(
+      path.join(config, 'stripe', 'config.toml'),
+      '[default]\n  test_mode_api_key = "sk_test_cli"\n',
+    )
+    try {
+      await withStripe(async (url, requests) => {
+        const env = { MPPX_STRIPE_API_URL: url, XDG_CONFIG_HOME: config }
+        await serve(['stripe', 'address', '--secret-key', 'sk_test_flag'], {
+          env: { ...env, STRIPE_SECRET_KEY: 'sk_test_env' },
+        })
+        await serve(['stripe', 'address'], { env: { ...env, STRIPE_SECRET_KEY: 'sk_test_env' } })
+        await serve(['stripe', 'address'], { env: { ...env, STRIPE_SECRET_KEY: undefined } })
+        expect(requests.map((request) => request.headers.authorization)).toEqual([
+          'Bearer sk_test_flag',
+          'Bearer sk_test_env',
+          'Bearer sk_test_cli',
+        ])
+      })
+    } finally {
+      fs.rmSync(config, { recursive: true, force: true })
+    }
+  })
+
+  test('names every key option when none is found', async () => {
+    const { output, exitCode } = await serve(['stripe', 'address'], {
+      env: { STRIPE_SECRET_KEY: undefined, STRIPE_PROJECT_NAME: undefined },
+    })
+    expect(exitCode).toBe(2)
+    expect(output).toContain('MISSING_STRIPE_SECRET_KEY')
+    expect(output).toContain('--secret-key')
+    expect(output).toContain('STRIPE_SECRET_KEY')
+    expect(output).toContain('stripe login')
+  })
+
+  test('explains when Stripe refuses a restricted key', async () => {
+    await withStripe(
+      async (url) => {
+        const { output, exitCode } = await serve(['stripe', 'address'], {
+          env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'rk_test_123' },
+        })
+        expect(exitCode).toBe(1)
+        expect(output).toContain('restricted key (rk_...)')
+        expect(output).toContain('--secret-key')
+        expect(output).not.toContain('does not have the required permissions')
+      },
+      403,
+      { code: 'secret_key_required', message: 'This key does not have the required permissions' },
+    )
+  })
+
+  test('rejects a deposit address that is not a valid address for the network', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-env-'))
+    const file = path.join(dir, '.env')
+    const server = await Http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify({ address: '0xabc\nNODE_OPTIONS=--require /tmp/x.js', id: 'cda_test' }),
+      )
+    })
+    try {
+      const { output, exitCode } = await serve(['stripe', 'address', '--env', file], {
+        env: { MPPX_STRIPE_API_URL: server.url, STRIPE_SECRET_KEY: 'sk_test_123' },
+      })
+      expect(exitCode).toBe(1)
+      expect(output).toContain('STRIPE_INVALID_ADDRESS')
+      expect(output).not.toContain('NODE_OPTIONS')
+      expect(fs.existsSync(file)).toBe(false)
+    } finally {
+      server.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('reports Stripe errors without their message', async () => {
+    await withStripe(async (url) => {
+      const { output, exitCode } = await serve(['stripe', 'address'], {
+        env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_bad' },
+      })
+      expect(exitCode).toBe(1)
+      expect(output).toContain('HTTP 401, api_key_invalid')
+      expect(output).not.toContain('Invalid API Key provided')
+    }, 401)
+  })
+})
+
 async function serve(
   argv: string[],
   options?: { env?: Record<string, string | undefined>; onOutput?: (chunk: string) => void },

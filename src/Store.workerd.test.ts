@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vp/test'
 // real D1 database, and concurrent requests, instead of in-process fakes.
 
 let miniflare: Miniflare
+let worker: string
 
 beforeAll(async () => {
   const bundle = await rolldown({
@@ -17,22 +18,31 @@ beforeAll(async () => {
     platform: 'neutral',
   })
   const { output } = await bundle.generate({ format: 'esm' })
-  miniflare = new Miniflare({
+  worker = output[0].code
+  miniflare = new Miniflare(options())
+  await miniflare.ready
+})
+
+/** The Worker's Miniflare options, with `compatibilityFlags`. */
+function options(compatibilityFlags: string[] = []) {
+  return {
     compatibilityDate: '2026-07-01',
+    compatibilityFlags,
     d1Databases: ['DB'],
     // SQLite-backed, as production binds them: replay shards need SQL.
     durableObjects: {
       FAILING: { className: 'FailingStore', useSQLite: true },
+      // Key-value-backed, as classes bound with `new_classes` are.
+      KV_RECORDING: { className: 'KvRecordingStore', useSQLite: false },
       NATIVE_STORE: { className: 'NativeStore', useSQLite: true },
       RECORDING: { className: 'RecordingStore', useSQLite: true },
       RECORDING_RPC: { className: 'RecordingRpcStore', useSQLite: true },
       RPC_STORE: { className: 'RpcStore', useSQLite: true },
       STORE: { className: 'MppxStore', useSQLite: true },
     },
-    modules: [{ type: 'ESModule', path: 'worker.js', contents: output[0].code }],
-  })
-  await miniflare.ready
-})
+    modules: [{ type: 'ESModule' as const, path: 'worker.js', contents: worker }],
+  }
+}
 
 afterAll(async () => {
   await miniflare?.dispose()
@@ -249,6 +259,46 @@ describe('Store.DurableObjectStore hooks in workerd', () => {
   })
 })
 
+describe('Store.DurableObjectStore replay shards of a subclass in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'recording', options: { replayShards: 1 } })
+
+  test('tells a replay shard apart, so the subclass skips its own alarm work there', async () => {
+    // A shard that never held a claim, such as in its constructor, is told apart by its name.
+    expect(await run({ op: 'shard', key: 'mppx:replay:v1:3' })).toBe(true)
+    // An ordinary key that only starts like a shard's name is not one.
+    expect(await run({ op: 'shard', key: 'mppx:replay:other' })).toBe(false)
+    const shard = 'mppx:replay:v1:0'
+    expect(await run({ op: 'claim', key: 'sharded', expires: Date.now() + 200 })).toBe(true)
+    expect(await run({ op: 'shard', key: shard })).toBe(true)
+    await run({ op: 'put', key: 'unsharded', value: 1 })
+    expect(await run({ op: 'shard', key: 'unsharded' })).toBe(false)
+    // The shard's alarm clears the expired claim without running the subclass's work.
+    await expect
+      .poll(async () => run({ op: 'claim', key: 'sharded', expires: Date.now() + 60_000 }), {
+        timeout: 5_000,
+        interval: 100,
+      })
+      .toBe(true)
+    expect((await run<{ alarms: number }>({ op: 'log', key: shard })).alarms).toBe(0)
+  })
+})
+
+describe('Store.DurableObjectStore on key-value storage in workerd', () => {
+  const run = <result>(command: Record<string, unknown>) =>
+    request<result>({ ...command, backend: 'kv-recording' })
+
+  test("runs a subclass's alarm that calls super.alarm()", async () => {
+    const key = 'kv-hooked'
+    await run({ op: 'put', key, value: { a: 1 } })
+    await expect
+      .poll(async () => (await run<{ alarms: number }>({ op: 'log', key })).alarms, {
+        timeout: 5_000,
+      })
+      .toBeGreaterThan(0)
+  })
+})
+
 describe('Store.DurableObjectStore.rpc on a subclass in workerd', () => {
   const run = <result>(command: Record<string, unknown>) =>
     request<result>({ ...command, backend: 'recording-rpc' })
@@ -296,5 +346,35 @@ describe('Store.DurableObjectStore write hook failures in workerd', () => {
     await expect(run({ op: 'claim', key, expires })).rejects.toThrow()
     expect(await run({ op: 'claim', key, expires })).toBe(true)
     expect(await run({ op: 'claim', key, expires })).toBe(false)
+  })
+})
+
+describe('Store.durableObject over RPC with legacy stub get, put and delete in workerd', () => {
+  // With this flag a stub keeps HTTP `get`, `put` and `delete` methods that shadow RPC methods.
+  let legacy: Miniflare
+
+  beforeAll(async () => {
+    legacy = new Miniflare(options(['fetcher_has_get_put_delete']))
+    await legacy.ready
+  })
+
+  afterAll(async () => {
+    await legacy?.dispose()
+  })
+
+  test.each(['rpc', 'native'])('round-trips values (%s)', async (backend) => {
+    const run = async (command: Record<string, unknown>) => {
+      const response = await legacy.dispatchFetch('http://store/', {
+        body: JSON.stringify({ ...command, backend }),
+        method: 'POST',
+      })
+      if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`)
+      return response.json()
+    }
+    await run({ op: 'put', key: 'legacy-stub', value: { n: 1 } })
+    expect(await run({ op: 'get', key: 'legacy-stub' })).toEqual({ n: 1 })
+    expect(await run({ op: 'increment', key: 'legacy-counter' })).toBe(1)
+    await run({ op: 'delete', key: 'legacy-stub' })
+    expect(await run({ op: 'get', key: 'legacy-stub' })).toBeNull()
   })
 })

@@ -1,5 +1,48 @@
 # mppx
 
+## 0.17.5
+
+### Patch Changes
+
+- b1d85f0: Added `mppx stripe address`, which creates a Stripe crypto deposit address for machine payments and prints it, or writes it to an env file with `--env`. The Stripe key comes from `--secret-key`, `STRIPE_SECRET_KEY` or the Stripe CLI's login.
+
+## 0.17.4
+
+### Patch Changes
+
+- fa22d95: Fixed `ChannelStore` replacing the immediate send that a close request written during a failed queue send scheduled with the 60-second retry, and resending failed settlements forever when `minUnsettledAmount` is `0n` and the deposit is under 10 raw units: the threshold is now at least 1.
+- 3e44f83: Fixed `ChannelStore` giving up on a channel during the server's cooperative-close marker, which left a payer close request merged into it unsent, and spending watchdog attempts on alarms set for a close marker that a failed close then cleared. `ChannelStore` now rejects non-finite or negative `retryMs`, `staleAfterMs` and `watchdogMs` and a `maxAttempts` that is not a positive integer.
+- d11a756: Added `mppx/cloudflare`: a `ChannelStore` Durable Object that stores Tempo session channels and sends them to a settlement queue by amount or staleness, with a watchdog; `channels()`, the store and reusable-channel lookup for `tempo.session()`; and `settle()`, the queue consumer that settles them on-chain.
+- 48d97fa: Fixed `mppx/cloudflare` settlement and channel lookup: a payer close request stamped at or before the server's own cooperative-close marker is now sent to the settlement queue once that marker can no longer land, with an alarm at the marker's end; and a lookup add skips a channel that no longer resumes, while a full lookup entry drops closed channels before an open one.
+- b964dc4: Fixed `mppx/cloudflare` settlement and channel lookup: the server's own cooperative-close marker (recorded in the new `pendingCloseAt` channel field) no longer queues an immediate settlement, and `settle()` waits while that close may still land; a new payer close request after an earlier one cleared is sent at once; and each lookup entry keeps up to 8 of the payer's open channels, so closing one leaves the others findable.
+- 8e812d3: Fixed `mppx/cloudflare`'s `channels()` lookup returning a channel opened with another operator for a challenge without one, which mppx verifies against the zero operator, and losing a matching channel behind eight newer ones with other operators: lookup entries are now keyed by operator too (`mppx:session-lookup:v3`), so channels written before resume again after their next write. Fixed `ChannelStore` replacing the immediate send that a close request written during a queue send scheduled with a later watchdog alarm.
+- 7255375: Fixed `mppx/cloudflare` so `channels()` skips a channel opened with another operator than the challenge's, `settle()` renews its settlement lease while a settlement runs, and `ChannelStore` resends a closing channel within 2 minutes so every attempt fits in the escrow's close grace period.
+- 4adc283: Fixed follow-ups in `Store.durableObject` replay shards and `mppx/cloudflare`. Replay shards kept their claims in a table named `mppx_replay_claims`, so the shard alarm no longer clears a subclass's own `replay_claims` table. `ChannelStore` sent a channel to the settlement queue at once on a close request or a threshold's worth of new vouchers, instead of waiting for the watchdog after a failed job. `channels()` no longer let a delayed lookup write for a closed channel replace the entry of a channel the payer can still resume, and its lookup skipped entries whose channel had closed.
+- a9b2cbc: Added `onWrite` and `alarm` hooks to `Store.DurableObjectStore`: a subclass sees every applied write with its previous and next values in one storage transaction with the write (so the hook's own writes commit with it, and a hook that throws rolls it back), and can schedule and handle alarms through the protected `storage`, `state` and `env`.
+- 0968d3f: Renamed `Store.DurableObjectStore`'s store operations to `storeGet`, `storePut`, `storeDelete`, `storeSwap` and `storeClaim`, so Workers RPC reaches them on Workers whose Durable Object stubs keep the legacy `get`, `put` and `delete` methods, and `fetch` no longer calls a subclass's own methods of those names. `Store.DurableObjectStore.rpc()` now keeps a subclass's static members.
+
+  Fixed `DurableObjectStore.isReplayShard()` to match a replay shard's whole object name, so an ordinary key that starts with `mppx:replay:` is not taken for a shard, and the base `alarm()` clears claims only in an object that holds them.
+
+- 5ebce56: Added `DurableObjectStore.isReplayShard()`, so a subclass skips its own work (in `alarm`, handlers or its constructor, by the object's name) in the replay shards of `Store.durableObject`'s `replayShards`, which are objects of the same class, and documented that values stored at a key don't block its sharded replay claims.
+- 56e0c8c: Added `replayShards` and `replayShardVersion` options to `Store.durableObject`: replay claims spread over a fixed number of SQLite-backed shard objects, each claimed with one SQL statement and cleared by an alarm once expired, instead of one Durable Object per claimed key.
+- c776057: Added `transport: 'rpc'` and `encoding: 'native'` options to `Store.durableObject`: the store calls the object's methods over Workers RPC (with a class from `Store.DurableObjectStore.rpc(DurableObject)`), and native encoding stores structured-clone values, so bigints stay intact and values a Durable Object wrote with `storage.put` read back.
+- 2f96b5b: Improved the internal SSE parser's throughput on line-dense `text/event-stream` bodies by scanning with `indexOf` instead of a global RegExp.
+- 94d1e36: Fixed `Store.DurableObjectStore`'s native compare-and-swap treating a length-tracking view of a resizable `ArrayBuffer` as equal to a fixed-length one.
+- 5ba7bf5: Fixed `Store.durableObject` native compare-and-swap to compare object keys, map entries and set members in order, compare sparse arrays by their own elements instead of scanning to their length, and tell resizable `ArrayBuffer`s apart.
+- fa22d95: Changed `Store.DurableObjectStore`'s native encoding to reject views of resizable `ArrayBuffer`s, as it rejects other values it cannot compare, instead of probing their length tracking with a copy of the whole buffer resized to its maximum on every compare-and-swap.
+- 8e2f7fe: Fixed `tempo.charge` with `waitForConfirmation: false` to throw `Errors.BroadcastOutcomeUnknownError` with the transaction hash after an ambiguous broadcast failure, instead of the raw RPC error. `stripe.recordPayment` now returns the PaymentIntent's Stripe status as `paymentIntentStatus`.
+- ca6cc56: Fixed `Store.durableObject` storing a key named like a replay shard (`mppx:replay:v<version>:<shard>`) in that shard's object, where `DurableObjectStore.isReplayShard()` then reported it as a shard. Such keys, and keys starting with `mppx:key:`, now live in an object named `mppx:key:<key>`, so values stored at them before are no longer found.
+- d631e07: Fixed `Store.DurableObjectStore.rpc()` throwing when a subclass shadows a static member or method that an ancestor made non-configurable.
+- ed12b58: Added `Errors.BroadcastOutcomeUnknownError`, which `tempo.charge` now throws with the transaction hash and `validBefore` when an ambiguous broadcast leaves no receipt, instead of rethrowing the RPC error (still its `cause`). Added `stripe.recordPayment` to record a settled payment as a Stripe PaymentIntent, idempotent per transaction hash.
+- f54a1c9: Added `Errors.PaymentSimulationError`, which wraps a failed fee-sponsored preflight simulation with its `phase` (`sender` or `sponsored`), `sender`, `feePayer` and `paymentToken`, so callers can tell a payer's insufficient balance from a sponsor's. Fixed the sponsored simulation dropping a zero `maxPriorityFeePerGas`, which broke a hosted fee payer's signature.
+- a89d5f5: Added Zone payments to the `tempo` charge method. A server lists the Zones it accepts with `zones: [3, 7]`, or accepts any Zone with `zones: true`. A client pays from a Zone balance with `zone`: it withdraws to the recipient with a challenge-bound memo, waits for the withdrawal to settle on Tempo, and sends a `zone` credential with the settlement transaction hash, which the server verifies.
+
+  If the wait fails, the client throws `Errors.ZoneSettlementPendingError` and resumes the same withdrawal when the challenge is retried.
+
+- 3f60dcc: Fixed `mppx validate` and paid CLI retries rejecting every mppx server's retry Challenge as changed: the comparison now ignores the per-issuance `_mppx_nonce` and `_mppx_identity` in `opaque`. The malformed-Credential probe now sends the `-H` headers and puts the Credential in the header the server's Challenge names.
+- 64d852c: Fixed `mppx validate` error-handling hints to name the Credential header the server's Challenge uses instead of always `Authorization`.
+- 9ba2807: Fixed Zone ID validation to reject IDs that alias another Zone's portal address.
+
 ## 0.17.3
 
 ### Patch Changes

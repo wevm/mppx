@@ -354,6 +354,11 @@ export interface BaseState {
     | undefined
   /** First block at which the close supervisor read this channel open on-chain. */
   closeSupervisedFromBlock?: bigint | undefined
+  /**
+   * The `closeRequestedAt` this server wrote as its own cooperative-close marker before
+   * broadcasting a close, to tell that marker from a payer's close request on-chain.
+   */
+  pendingCloseAt?: bigint | undefined
 }
 
 /** Expiring ownership claim for one server-scheduled settlement attempt. */
@@ -677,7 +682,7 @@ export function reconcileExpiredPendingClose(parameters: {
   if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n) return current
   const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds)
   if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds)) return current
-  return { ...current, closeRequestedAt: 0n }
+  return { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
 }
 
 /** Marks local channel state as pending close and returns the bounded capture amount. */
@@ -696,7 +701,7 @@ export function markPendingClose(parameters: MarkPendingCloseParameters): Pendin
 
   return {
     captureAmount,
-    state: { ...current, closeRequestedAt },
+    state: { ...current, closeRequestedAt, pendingCloseAt: closeRequestedAt },
   }
 }
 

@@ -29,21 +29,27 @@
 //
 // The server runs as a Cloudflare Worker (locally in workerd through
 // `pnpm dev`). Channel state lives in Durable Objects through
-// `Store.durableObject()`, so every request and the close see the same
-// channel from any isolate.
-import { Mppx, Store, tempo } from 'mppx/server'
+// `channels()` from `mppx/cloudflare`, so every request and the close see the
+// same channel from any isolate. Each channel's object also sends it to the
+// settlement queue once enough is unsettled, or once it goes idle, and the
+// Worker's `queue()` handler settles it on-chain.
+import { ChannelStore, channels, settle } from 'mppx/cloudflare'
+import { Mppx, tempo } from 'mppx/server'
 import { createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Chain } from 'viem/tempo'
 
-// The Durable Object class that stores channel state, bound as `MPPX_STORE`.
-export class MppxStore extends Store.DurableObjectStore {}
+// The Durable Object class that stores channel state and schedules its
+// settlement, bound as `MPPX_STORE`.
+export class MppxStore extends ChannelStore {}
 
 // Worker bindings and secrets. `pnpm keygen` writes the secrets to
 // `.dev.vars` for local development; deploy them with `wrangler secret put`.
 type Env = {
   /** Durable Object namespace of {@link MppxStore}. */
-  MPPX_STORE: Store.durableObject.Namespace
+  MPPX_STORE: channels.Namespace
+  /** Queue the channel objects send channels to settle to. */
+  MPPX_SETTLEMENT_QUEUE: ChannelStore.Queue
   /**
    * Server account key. This account serves two purposes:
    *   1. It's the `recipient` — the address that receives payment channel funds
@@ -106,13 +112,7 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // from `env` on the first request and reused afterwards.
 let mppx: ReturnType<typeof createMppx> | undefined
 function createMppx(env: Env) {
-  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
-  const client = createClient({
-    account,
-    chain: Chain.testnet,
-    pollingInterval: 1_000,
-    transport: http(env.TEMPO_RPC_URL),
-  })
+  const { account, client } = connect(env)
   return Mppx.create({
     secretKey: env.MPP_SECRET_KEY,
     methods: [
@@ -122,10 +122,25 @@ function createMppx(env: Env) {
         currency,
         feePayer: true,
         getClient: () => client,
-        store: Store.durableObject(env.MPPX_STORE),
+        // `store` for channel state, and `resolveChannelId` to resume a payer's open channel.
+        // `resolveChannelId` needs the payer identity a HEAD bootstrap proves, so enable it.
+        bootstrap: true,
+        ...channels(env.MPPX_STORE),
       }),
     ],
   })
+}
+
+/** The server account and an account-bearing client for Tempo testnet. */
+function connect(env: Env) {
+  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
+  const client = createClient({
+    account,
+    chain: Chain.testnet,
+    pollingInterval: 1_000,
+    transport: http(env.TEMPO_RPC_URL),
+  })
+  return { account, client }
 }
 
 // Request handler
@@ -137,6 +152,12 @@ function createMppx(env: Env) {
 // query parameter: the client posts its close voucher back to the last URL it
 // fetched, and mppx treats a POST with a query string as a paid content request.
 export default {
+  // Settles the channels the channel objects sent to the settlement queue.
+  async queue(batch: settle.Batch, env: Env): Promise<void> {
+    const { account, client } = connect(env)
+    await settle(batch, { account, getClient: () => client, store: channels(env.MPPX_STORE).store })
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
