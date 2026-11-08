@@ -236,6 +236,20 @@ describe('writeEnvValue safety', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nDIR="C:\\dir\\"\n')
   })
 
+  test('drops a multiline assignment of the key whole', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(file, 'TEMPO_DEPOSIT_ADDRESS="0xa\nTEMPO_DEPOSIT_ADDRESS=0xb\n"\nB=2\n')
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nB=2\n')
+  })
+
+  test('treats a quote never closed as a one-line value', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(file, 'TEMPO_DEPOSIT_ADDRESS="0xa\nB=2\nTEMPO_DEPOSIT_ADDRESS=0xb\n')
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nB=2\n')
+  })
+
   test('refuses values with line breaks', () => {
     const file = path.join(tempDir(), '.env')
     expect(() => writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xa\nNODE_OPTIONS=x')).toThrow(

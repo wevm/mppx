@@ -178,35 +178,39 @@ export function writeEnvValue(file: string, key: string, value: string) {
   if (!fs.existsSync(file)) return fs.writeFileSync(file, `${line}\n`, { mode: 0o600 })
   const existing = fs.readFileSync(file, 'utf8')
   const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`)
-  const lines = existing.split('\n')
-  const assignments = assignmentLines(lines, pattern)
-  const first = assignments[0]
-  if (first !== undefined) {
-    const kept = lines.filter((_, index) => index === first || !assignments.includes(index))
-    kept[first] = line
-    return fs.writeFileSync(file, kept.join('\n'))
-  }
+  const { lines: kept, found } = replaceAssignments(existing.split('\n'), pattern, line)
+  if (found) return fs.writeFileSync(file, kept.join('\n'))
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
   fs.writeFileSync(file, `${existing}${separator}${line}\n`)
 }
 
 /**
- * Indexes of the lines that assign a key matching `pattern`, skipping lines inside a quoted
- * multiline value, which only look like assignments.
+ * Replaces the first assignment matching `pattern` with `line` and drops the rest. Each
+ * assignment is taken whole, quoted multiline value included, and lines inside another key's
+ * multiline value are kept, since they only look like assignments.
  */
-function assignmentLines(lines: readonly string[], pattern: RegExp): number[] {
-  const indexes: number[] = []
-  let quote: string | undefined
-  for (const [index, entry] of lines.entries()) {
-    if (quote) {
-      if (closes(entry, quote)) quote = undefined
-      continue
+function replaceAssignments(
+  lines: readonly string[],
+  pattern: RegExp,
+  line: string,
+): { lines: string[]; found: boolean } {
+  const kept: string[] = []
+  let found = false
+  for (let index = 0; index < lines.length; index++) {
+    let end = index
+    const opening = /^\s*(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(["'`])(.*)$/.exec(lines[index]!)
+    // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
+    if (opening && !closes(opening[2]!, opening[1]!)) {
+      const close = lines.findIndex((entry, i) => i > index && closes(entry, opening[1]!))
+      if (close !== -1) end = close
     }
-    if (pattern.test(entry)) indexes.push(index)
-    const opening = /^\s*(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(["'`])(.*)$/.exec(entry)
-    if (opening && !closes(opening[2]!, opening[1]!)) quote = opening[1]
+    if (pattern.test(lines[index]!)) {
+      if (!found) kept.push(line)
+      found = true
+    } else kept.push(...lines.slice(index, end + 1))
+    index = end
   }
-  return indexes
+  return { lines: kept, found }
 }
 
 /** Whether a line holds the closing `quote`. Like Node's --env-file, a backslash doesn't escape it. */
