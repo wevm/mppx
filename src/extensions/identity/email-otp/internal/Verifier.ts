@@ -51,9 +51,12 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const audience = origin(
         typeof config.audience === 'function' ? config.audience(request) : config.audience,
       )
-      // Only one token is verified, so repeated or forged tokens cost one
-      // signature check: the unexpired one for this audience that expires last,
-      // or else the first, whose rejection says why.
+      // At most `maxCandidates` distinct tokens are verified, latest expiry first,
+      // so repeated or forged tokens cost a bounded number of signature checks.
+      // A stray forged token does not hide a valid one, but whoever controls the
+      // header can always withhold a valid token, so the bound is not a guarantee
+      // against that sender. Without a usable one, the first is verified so its
+      // rejection says why.
       const now = Math.floor(Date.now() / 1_000)
       const tolerance = config.clockTolerance ?? Constants.clockTolerance
       const candidates = Attestation.parseHeader(request.headers.get(Constants.header))
@@ -62,7 +65,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const usable = candidates
         .filter(({ claims }) => claims?.aud === audience && (claims.exp ?? 0) > now - tolerance)
         .sort((a, b) => (b.claims?.exp ?? 0) - (a.claims?.exp ?? 0))
-      const tokens = (usable.length > 0 ? usable : candidates).slice(0, 1).map(({ token }) => token)
+      const tokens = [
+        ...new Set((usable.length > 0 ? usable : candidates).map(({ token }) => token)),
+      ].slice(0, usable.length > 0 ? maxCandidates : 1)
       if (tokens.length === 0)
         return {
           status: 'missing',
@@ -71,6 +76,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           reason: `An identity attestation of type "${config.type}" is required.`,
         }
       let reason = 'The identity attestation is invalid.'
+      let unavailable: string | undefined
       for (const token of tokens) {
         const result = await Attestation.verify(token, {
           audience,
@@ -82,8 +88,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         })
         // 503 rather than 401, so a client keeps its attestation instead of
         // discarding it and asking for a new code while the issuer is down.
-        if (result.status === 'invalid' && result.unavailable)
-          return { status: 'invalid', code: 503, reason: result.reason }
+        // A later token may still verify, so an outage is answered only if none does.
+        if (result.status === 'invalid' && result.unavailable) {
+          unavailable ??= result.reason
+          continue
+        }
         if (result.status === 'invalid') {
           reason = result.reason
           continue
@@ -92,6 +101,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         if (rejected) return { status: 'invalid', code: 403, reason: rejected }
         return { status: 'valid', value: { claims: result.claims } }
       }
+      if (unavailable) return { status: 'invalid', code: 503, reason: unavailable }
       // The client may obtain a fresh attestation and retry.
       return { status: 'invalid', code: 401, headers: required, reason }
     },
@@ -130,6 +140,9 @@ export declare namespace verifier {
       | undefined
   }
 }
+
+/** Most distinct attestations of one type and issuer verified per request. */
+const maxCandidates = 3
 
 /** An audience as the origin attestations carry, so `https://api.example/` matches. */
 function origin(audience: string): string {
