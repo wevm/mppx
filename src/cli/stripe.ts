@@ -194,6 +194,16 @@ function replaceAssignments(
   pattern: RegExp,
   line: string,
 ): { lines: string[]; found: boolean } {
+  // For each quote, the first line at or after each index that holds it: one backward pass, so
+  // finding where a multiline value closes never rescans the file.
+  const next: Record<string, number[]> = {}
+  for (const quote of ['"', "'", '`']) {
+    const indexes = new Array<number>(lines.length + 1)
+    indexes[lines.length] = -1
+    for (let i = lines.length - 1; i >= 0; i--)
+      indexes[i] = closes(lines[i]!, quote) ? i : indexes[i + 1]!
+    next[quote] = indexes
+  }
   const kept: string[] = []
   let found = false
   for (let index = 0; index < lines.length; index++) {
@@ -201,13 +211,13 @@ function replaceAssignments(
     const opening = /^\s*(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(["'`])(.*)$/.exec(lines[index]!)
     // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
     if (opening && !closes(opening[2]!, opening[1]!)) {
-      const close = lines.findIndex((entry, i) => i > index && closes(entry, opening[1]!))
+      const close = next[opening[1]!]![index + 1]!
       if (close !== -1) end = close
     }
-    if (pattern.test(lines[index]!)) {
-      if (!found) kept.push(line)
-      found = true
-    } else kept.push(...lines.slice(index, end + 1))
+    const target = pattern.test(lines[index]!)
+    if (target && !found) kept.push(line)
+    found ||= target
+    if (!target) for (let i = index; i <= end; i++) kept.push(lines[i]!)
     index = end
   }
   return { lines: kept, found }
