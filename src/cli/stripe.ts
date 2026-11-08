@@ -146,10 +146,22 @@ function readProfile(file: string, project: string): Record<string, string> {
   return values
 }
 
-/** Whether a deposit address has its network's format: 0x hex for Tempo and Base, base58 for Solana. */
+/** Whether a deposit address has its network's format: 0x hex for Tempo and Base, a 32-byte base58 key for Solana. */
 export function isAddress(network: string, value: string): boolean {
-  if (network === 'solana') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)
+  if (network === 'solana') return base58Length(value) === 32
   return /^0x[0-9a-fA-F]{40}$/.test(value)
+}
+
+const base58Alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+/** How many bytes a base58 string decodes to, or `undefined` when it isn't base58. */
+function base58Length(value: string): number | undefined {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{1,64}$/.test(value)) return undefined
+  let number = 0n
+  for (const char of value) number = number * 58n + BigInt(base58Alphabet.indexOf(char))
+  const zeros = /^1*/.exec(value)![0].length
+  const hex = number === 0n ? '' : number.toString(16)
+  return zeros + Math.ceil(hex.length / 2)
 }
 
 /**
