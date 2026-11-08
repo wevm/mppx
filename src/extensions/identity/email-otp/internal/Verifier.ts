@@ -51,9 +51,10 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const audience = origin(
         typeof config.audience === 'function' ? config.audience(request) : config.audience,
       )
-      // Only one token is verified, so repeated or forged tokens cost one
-      // signature check: the unexpired one for this audience that expires last,
-      // or else the first, whose rejection says why.
+      // At most `maxCandidates` distinct tokens are verified, latest expiry first,
+      // so repeated or forged tokens cost a bounded number of signature checks,
+      // and a forged token with a later `exp` cannot hide a valid one behind it.
+      // Without a usable one, the first is verified so its rejection says why.
       const now = Math.floor(Date.now() / 1_000)
       const tolerance = config.clockTolerance ?? Constants.clockTolerance
       const candidates = Attestation.parseHeader(request.headers.get(Constants.header))
@@ -62,7 +63,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const usable = candidates
         .filter(({ claims }) => claims?.aud === audience && (claims.exp ?? 0) > now - tolerance)
         .sort((a, b) => (b.claims?.exp ?? 0) - (a.claims?.exp ?? 0))
-      const tokens = (usable.length > 0 ? usable : candidates).slice(0, 1).map(({ token }) => token)
+      const tokens = [
+        ...new Set((usable.length > 0 ? usable : candidates).map(({ token }) => token)),
+      ].slice(0, usable.length > 0 ? maxCandidates : 1)
       if (tokens.length === 0)
         return {
           status: 'missing',
@@ -130,6 +133,9 @@ export declare namespace verifier {
       | undefined
   }
 }
+
+/** Most distinct attestations of one type and issuer verified per request. */
+const maxCandidates = 3
 
 /** An audience as the origin attestations carry, so `https://api.example/` matches. */
 function origin(audience: string): string {

@@ -277,6 +277,52 @@ test('verifies one token however many the header repeats', async () => {
   expect(lookups).toBe(1)
 })
 
+test('accepts a valid token behind a forged one with a later expiry', async () => {
+  const { claims, keyId, keys } = await setup()
+  const forger = await keyPair()
+  const current = Math.floor(Date.now() / 1_000)
+  const valid = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const forged = await Attestation.sign(
+    { ...claims, exp: current + 3_000, iat: current, sub: 'mallory@example.com' },
+    { key: forger.privateKey, keyId },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+    type: 'email',
+  })
+  const request = new Request(audience, {
+    headers: { [Attestation.Constants.header]: forged + ', ' + valid },
+  })
+  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
+    { status: 'valid', value: { claims: { sub: 'dana@example.com' } } },
+  )
+})
+
+test('reports an outage for a rotated-in key while the issuer is down', async () => {
+  const { keyId, keys } = await setup()
+  const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
+  let up = true
+  const keyResolver = Attestation.Jwks.resolver({
+    async fetch() {
+      if (!up) throw new Error('down')
+      return Response.json({ keys: [{ ...jwk, kid: keyId }] })
+    },
+    refreshInterval: 0,
+    ttl: 0,
+  })
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  up = false
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  // The known key keeps working from the last good set; a new one is an outage, not unknown.
+  expect(await keyResolver({ issuer, keyId })).toBeDefined()
+  await expect(keyResolver({ issuer, keyId: 'rotated' })).rejects.toThrow('down')
+})
+
 test('rejects a plaintext http issuer except on localhost', () => {
   const config = { audience, keyResolver: () => undefined, type: 'email' }
   expect(() => Attestation.Server.verifier({ ...config, issuer: 'http://issuer.example' })).toThrow(

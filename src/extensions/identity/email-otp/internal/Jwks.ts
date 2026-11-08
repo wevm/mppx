@@ -100,8 +100,17 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
     const keys = await keysOf(issuer, current(issuer, ttl))
     if (keys.has(keyId)) return keys.get(keyId)
     // An unknown key ID: join the newest fetch, or start one if it is old enough.
-    const refreshed = await keysOf(issuer, current(issuer, refreshInterval))
-    return refreshed.get(keyId)
+    // If that fetch fails, a stale set cannot say the key is unknown (it may be
+    // newly rotated in), so the outage is thrown and answered with 503.
+    const entry = current(issuer, refreshInterval)
+    try {
+      return (await entry.keys).get(keyId)
+    } catch (error) {
+      const stale = good.get(issuer)
+      if (stale && Date.now() - stale.fetchedAt <= maxStale && stale.keys.has(keyId))
+        return stale.keys.get(keyId)
+      throw error
+    }
   }
 }
 
