@@ -657,16 +657,18 @@ describe('agent attribution', () => {
   })
 })
 
-describe('stripe deposit-address', () => {
+describe('stripe address', () => {
+  type Request = { body: string; headers: Record<string, unknown>; url?: string | undefined }
+
   async function withStripe<T>(
-    fn: (
-      url: string,
-      requests: { body: string; headers: Record<string, unknown>; url?: string | undefined }[],
-    ) => Promise<T>,
+    fn: (url: string, requests: Request[]) => Promise<T>,
     status = 200,
+    error: { code: string; message: string } = {
+      code: 'api_key_invalid',
+      message: 'Invalid API Key provided: sk_test_bad',
+    },
   ) {
-    const requests: { body: string; headers: Record<string, unknown>; url?: string | undefined }[] =
-      []
+    const requests: Request[] = []
     const server = await Http.createServer(async (req, res) => {
       let body = ''
       for await (const chunk of req) body += chunk
@@ -689,12 +691,7 @@ describe('stripe deposit-address', () => {
                   },
                 ],
               }
-            : {
-                error: {
-                  code: 'api_key_invalid',
-                  message: 'Invalid API Key provided: sk_test_bad',
-                },
-              },
+            : { error },
         ),
       )
     })
@@ -705,15 +702,16 @@ describe('stripe deposit-address', () => {
     }
   }
 
-  test('creates a deposit address and prints it', async () => {
+  const address = '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c'
+
+  test('creates a deposit address and prints only the address', async () => {
     await withStripe(async (url, requests) => {
-      const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
+      const { output, exitCode } = await serve(['stripe', 'address'], {
         env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' },
       })
 
       expect(exitCode).toBeUndefined()
-      expect(output.split('\n')[0]).toBe('0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')
-      expect(output).toContain('TEMPO_DEPOSIT_ADDRESS=0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')
+      expect(output.trim()).toBe(address)
       expect(requests).toHaveLength(1)
       expect(requests[0]!.url).toBe('/v1/crypto/deposit_addresses')
       expect(requests[0]!.body).toBe('network=tempo')
@@ -722,12 +720,12 @@ describe('stripe deposit-address', () => {
     })
   })
 
-  test('passes network, customer and connected account', async () => {
+  test('returns the full object with --json and passes network, customer and connected account', async () => {
     await withStripe(async (url, requests) => {
       const { output, exitCode } = await serve(
         [
           'stripe',
-          'deposit-address',
+          'address',
           '--network',
           'base',
           '--customer',
@@ -741,7 +739,7 @@ describe('stripe deposit-address', () => {
 
       expect(exitCode).toBeUndefined()
       expect(JSON.parse(output)).toMatchObject({
-        address: '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c',
+        address,
         id: 'cda_test',
         livemode: false,
         supportedTokens: [
@@ -753,31 +751,89 @@ describe('stripe deposit-address', () => {
     })
   })
 
-  test('hints connect routing for a connected account and no hint for a customer address', async () => {
-    await withStripe(async (url) => {
-      const env = { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' }
-      const connected = await serve(['stripe', 'deposit-address', '--stripe-account', 'acct_123'], {
-        env,
+  test('--env writes the address into the env file instead of printing it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-env-'))
+    const file = path.join(dir, '.env')
+    fs.writeFileSync(file, 'FOO=1\nTEMPO_DEPOSIT_ADDRESS=0xold\nBAR=2')
+    try {
+      await withStripe(async (url) => {
+        const { output, exitCode } = await serve(['stripe', 'address', '--env', file], {
+          env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_123' },
+        })
+        expect(exitCode).toBeUndefined()
+        expect(output.trim()).toBe('')
+        expect(fs.readFileSync(file, 'utf8')).toBe(`FOO=1\nTEMPO_DEPOSIT_ADDRESS=${address}\nBAR=2`)
       })
-      expect(connected.output).toContain("connect: { stripeAccount: 'acct_123' }, depositAddresses")
-
-      const scoped = await serve(['stripe', 'deposit-address', '--customer', 'cus_123'], { env })
-      expect(scoped.output).not.toContain('TEMPO_DEPOSIT_ADDRESS=')
-      expect(scoped.output).toContain('only accepts funds from cus_123')
-    })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
-  test('errors without STRIPE_SECRET_KEY', async () => {
-    const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
-      env: { STRIPE_SECRET_KEY: undefined },
+  test('--env refuses a customer-scoped address', async () => {
+    const { output, exitCode } = await serve(
+      ['stripe', 'address', '--env', '--customer', 'cus_123'],
+      { env: { STRIPE_SECRET_KEY: 'sk_test_123' } },
+    )
+    expect(exitCode).toBe(2)
+    expect(output).toContain('INVALID_OPTIONS')
+  })
+
+  test('resolves the key from --secret-key, then STRIPE_SECRET_KEY, then the Stripe CLI login', async () => {
+    const config = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-cli-'))
+    fs.mkdirSync(path.join(config, 'stripe'))
+    fs.writeFileSync(
+      path.join(config, 'stripe', 'config.toml'),
+      '[default]\n  test_mode_api_key = "sk_test_cli"\n',
+    )
+    try {
+      await withStripe(async (url, requests) => {
+        const env = { MPPX_STRIPE_API_URL: url, XDG_CONFIG_HOME: config }
+        await serve(['stripe', 'address', '--secret-key', 'sk_test_flag'], {
+          env: { ...env, STRIPE_SECRET_KEY: 'sk_test_env' },
+        })
+        await serve(['stripe', 'address'], { env: { ...env, STRIPE_SECRET_KEY: 'sk_test_env' } })
+        await serve(['stripe', 'address'], { env: { ...env, STRIPE_SECRET_KEY: undefined } })
+        expect(requests.map((request) => request.headers.authorization)).toEqual([
+          'Bearer sk_test_flag',
+          'Bearer sk_test_env',
+          'Bearer sk_test_cli',
+        ])
+      })
+    } finally {
+      fs.rmSync(config, { recursive: true, force: true })
+    }
+  })
+
+  test('names every key option when none is found', async () => {
+    const { output, exitCode } = await serve(['stripe', 'address'], {
+      env: { STRIPE_SECRET_KEY: undefined, STRIPE_PROJECT_NAME: undefined },
     })
     expect(exitCode).toBe(2)
     expect(output).toContain('MISSING_STRIPE_SECRET_KEY')
+    expect(output).toContain('--secret-key')
+    expect(output).toContain('STRIPE_SECRET_KEY')
+    expect(output).toContain('stripe login')
   })
 
-  test('reports Stripe errors', async () => {
+  test('explains when Stripe refuses a restricted key', async () => {
+    await withStripe(
+      async (url) => {
+        const { output, exitCode } = await serve(['stripe', 'address'], {
+          env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'rk_test_123' },
+        })
+        expect(exitCode).toBe(1)
+        expect(output).toContain('restricted key (rk_...)')
+        expect(output).toContain('--secret-key')
+        expect(output).not.toContain('does not have the required permissions')
+      },
+      403,
+      { code: 'secret_key_required', message: 'This key does not have the required permissions' },
+    )
+  })
+
+  test('reports Stripe errors without their message', async () => {
     await withStripe(async (url) => {
-      const { output, exitCode } = await serve(['stripe', 'deposit-address'], {
+      const { output, exitCode } = await serve(['stripe', 'address'], {
         env: { MPPX_STRIPE_API_URL: url, STRIPE_SECRET_KEY: 'sk_test_bad' },
       })
       expect(exitCode).toBe(1)

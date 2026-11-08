@@ -42,6 +42,7 @@ import {
 import sessions, { sessionCommandError } from './sessions/commands.js'
 import { runPersistentSessionRequest } from './sessions/request.js'
 import { createSessionRegistry } from './sessions/store.js'
+import * as StripeCli from './stripe.js'
 import {
   chainName,
   confirm,
@@ -2008,9 +2009,11 @@ const stripeDepositAddressSchema = z.object({
 
 const stripe = Cli.create('stripe', {
   description: 'Stripe machine payments tooling',
-}).command('deposit-address', {
+}).command('address', {
   description: 'Create a Stripe crypto deposit address and print its public address',
-  usage: [{ suffix: '[--network tempo|base|solana] [options]' }],
+  usage: [
+    { suffix: '[--network tempo|base|solana] [--env [path]] [--secret-key <key>] [options]' },
+  ],
   options: z.object({
     customer: z
       .string()
@@ -2018,10 +2021,30 @@ const stripe = Cli.create('stripe', {
       .describe(
         'Scope the address to a Stripe customer (cus_...); it then only accepts their funds',
       ),
+    env: z
+      .string()
+      .optional()
+      .describe(
+        'Write <NETWORK>_DEPOSIT_ADDRESS to this env file instead of printing (default path: .env)',
+      ),
+    live: z
+      .boolean()
+      .optional()
+      .describe("Use the Stripe CLI's live mode key instead of its test mode key"),
     network: z
       .enum(['tempo', 'base', 'solana'])
       .default('tempo')
       .describe('Network to create the address on'),
+    projectName: z
+      .string()
+      .optional()
+      .describe(
+        'Stripe CLI project to read the key from (env: STRIPE_PROJECT_NAME, default: default)',
+      ),
+    secretKey: z
+      .string()
+      .optional()
+      .describe("Stripe secret key (sk_...); else STRIPE_SECRET_KEY, else the Stripe CLI's login"),
     stripeAccount: z
       .string()
       .optional()
@@ -2030,26 +2053,43 @@ const stripe = Cli.create('stripe', {
   output: stripeDepositAddressSchema,
   alias: { network: 'n' },
   async run(c) {
-    const secretKey = process.env.STRIPE_SECRET_KEY?.trim()
-    if (!secretKey)
+    const {
+      customer,
+      env: envFile,
+      live,
+      network,
+      projectName,
+      secretKey,
+      stripeAccount,
+    } = c.options
+    // A customer-scoped address only accepts that customer's funds, so it can't be the
+    // server-wide recipient that stripe.create({ depositAddresses }) reads from .env.
+    if (envFile && customer)
+      return c.error({
+        code: 'INVALID_OPTIONS',
+        message:
+          "--env can't be combined with --customer: that address only accepts the customer's funds.",
+        exitCode: 2,
+      })
+    const resolved = StripeCli.resolveKey({ live, projectName, secretKey })
+    if (!resolved)
       return c.error({
         code: 'MISSING_STRIPE_SECRET_KEY',
-        message:
-          'Set STRIPE_SECRET_KEY to your Stripe secret key (sk_...) or restricted key (rk_...).',
+        message: `No Stripe key found. Pass --secret-key <sk_...>, set STRIPE_SECRET_KEY, or run \`stripe login\` so mppx can read the Stripe CLI's ${live ? 'live' : 'test'} mode key.`,
         exitCode: 2,
       })
 
-    const body = new URLSearchParams({ network: c.options.network })
-    if (c.options.customer) body.set('customer', c.options.customer)
+    const body = new URLSearchParams({ network })
+    if (customer) body.set('customer', customer)
     const response = await globalThis.fetch(
       new URL('/v1/crypto/deposit_addresses', process.env.MPPX_STRIPE_API_URL ?? stripeApiUrl),
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${secretKey}`,
+          Authorization: `Bearer ${resolved.key}`,
           'Content-Type': 'application/x-www-form-urlencoded',
           'Stripe-Version': stripePreviewVersion,
-          ...(c.options.stripeAccount ? { 'Stripe-Account': c.options.stripeAccount } : {}),
+          ...(stripeAccount ? { 'Stripe-Account': stripeAccount } : {}),
         },
         body,
       },
@@ -2062,48 +2102,46 @@ const stripe = Cli.create('stripe', {
       network?: string
       supported_tokens?: { token_contract_address: string; token_currency: string }[]
     }
-    if (!response.ok || !json.address)
-      return c.error({
-        code: 'STRIPE_REQUEST_FAILED',
-        // Stripe's error text is upstream data: report only the status and an allowlisted code.
-        message: `Stripe could not create a deposit address (HTTP ${response.status}${json.error?.code && /^[a-z_]+$/.test(json.error.code) ? `, ${json.error.code}` : ''}).`,
-        exitCode: 1,
-      })
+    if (!response.ok || !json.address) {
+      // Stripe's error text is upstream data: report only the status and an allowlisted code.
+      const code =
+        json.error?.code && /^[a-z_]+$/.test(json.error.code) ? `, ${json.error.code}` : ''
+      const detail = `HTTP ${response.status}${code}`
+      const refused = response.status === 401 || response.status === 403
+      const source =
+        resolved.source === 'stripe-cli'
+          ? "the Stripe CLI's login"
+          : resolved.source === 'flag'
+            ? '--secret-key'
+            : 'STRIPE_SECRET_KEY'
+      const message = (() => {
+        // The Stripe CLI logs in with a restricted key, which may lack crypto deposit address access.
+        if (refused && resolved.key.startsWith('rk_'))
+          return `Stripe refused the restricted key (rk_...) from ${source} for crypto deposit addresses (${detail}). Pass a secret key with --secret-key <sk_...> or STRIPE_SECRET_KEY.`
+        if (refused && resolved.source === 'stripe-cli')
+          return `Stripe refused the key from the Stripe CLI's login (${detail}). Run \`stripe login\` again, or pass --secret-key <sk_...>.`
+        return `Stripe could not create a deposit address (${detail}).`
+      })()
+      return c.error({ code: 'STRIPE_REQUEST_FAILED', message, exitCode: 1 })
+    }
 
     const result = {
       address: json.address,
       id: json.id ?? '',
       livemode: json.livemode ?? false,
-      network: json.network ?? c.options.network,
+      network: json.network ?? network,
       supportedTokens: (json.supported_tokens ?? []).map((token) => ({
         contractAddress: token.token_contract_address,
         currency: token.token_currency,
       })),
     }
-    return outputResult(c, result, () => {
-      console.log(result.address)
-      console.log(
-        `${pc.dim('Network')}  ${result.network} (${result.livemode ? 'live' : 'test'} mode)`,
-      )
-      console.log(`${pc.dim('ID')}       ${result.id}`)
-      for (const token of result.supportedTokens)
-        console.log(`${pc.dim('Token')}    ${token.currency} ${token.contractAddress}`)
-      const { customer, stripeAccount } = c.options
-      // A customer-scoped address only accepts that customer's funds, so it can't be a
-      // server-wide recipient; a connected account's address also needs `connect` routing.
-      if (customer)
-        console.log(
-          pc.dim(
-            `\nThis address only accepts funds from ${customer}; don't use it in stripe.create({ depositAddresses }).`,
-          ),
-        )
-      else
-        console.log(
-          pc.dim(
-            `\nSet ${result.network.toUpperCase()}_DEPOSIT_ADDRESS=${result.address} for stripe.create({ ${stripeAccount ? `connect: { stripeAccount: '${stripeAccount}' }, ` : ''}depositAddresses }).`,
-          ),
-        )
-    })
+    if (envFile) {
+      const key = `${network.toUpperCase()}_DEPOSIT_ADDRESS`
+      StripeCli.writeEnvValue(envFile, key, result.address)
+      console.error(`Wrote ${key} to ${envFile}`)
+      return outputResult(c, result, () => {})
+    }
+    return outputResult(c, result, () => console.log(result.address))
   },
 })
 
@@ -2115,5 +2153,9 @@ cli.command(sessions)
 cli.command(sign)
 cli.command(stripe)
 cli.command(validate)
+
+// `mppx stripe address --env` takes an optional path, which incur flags can't express.
+const serve = cli.serve.bind(cli)
+cli.serve = (argv = process.argv.slice(2), options) => serve(StripeCli.normalizeArgv(argv), options)
 
 export default cli
