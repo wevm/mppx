@@ -2,6 +2,7 @@ import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import { Constants } from '../Constants.js'
+import { isIssuer } from '../internal/Attestation.js'
 import * as Attestation from '../internal/Prover.js'
 
 /**
@@ -179,6 +180,9 @@ async function post(
   fetch: typeof globalThis.fetch | undefined,
   body: Record<string, string>,
 ): Promise<Record<string, unknown>> {
+  // The address and code never go over plaintext HTTP, except to localhost.
+  if (!isIssuer(issuer))
+    throw new EmailOtpError('The issuer must be an https URL (http only on localhost).')
   // The unwrapped fetch, so an issuer's 402 is never paid automatically.
   const response = await unwrapFetch(fetch ?? globalThis.fetch)(
     `${issuer.replace(/\/+$/, '')}${path}`,
