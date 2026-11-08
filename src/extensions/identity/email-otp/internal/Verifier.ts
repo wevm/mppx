@@ -76,6 +76,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           reason: `An identity attestation of type "${config.type}" is required.`,
         }
       let reason = 'The identity attestation is invalid.'
+      let unavailable: string | undefined
       for (const token of tokens) {
         const result = await Attestation.verify(token, {
           audience,
@@ -87,8 +88,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         })
         // 503 rather than 401, so a client keeps its attestation instead of
         // discarding it and asking for a new code while the issuer is down.
-        if (result.status === 'invalid' && result.unavailable)
-          return { status: 'invalid', code: 503, reason: result.reason }
+        // A later token may still verify, so an outage is answered only if none does.
+        if (result.status === 'invalid' && result.unavailable) {
+          unavailable ??= result.reason
+          continue
+        }
         if (result.status === 'invalid') {
           reason = result.reason
           continue
@@ -97,6 +101,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         if (rejected) return { status: 'invalid', code: 403, reason: rejected }
         return { status: 'valid', value: { claims: result.claims } }
       }
+      if (unavailable) return { status: 'invalid', code: 503, reason: unavailable }
       // The client may obtain a fresh attestation and retry.
       return { status: 'invalid', code: 401, headers: required, reason }
     },

@@ -303,6 +303,35 @@ test('accepts a valid token behind a forged one with a later expiry', async () =
   )
 })
 
+test('accepts a valid token behind one whose key cannot be resolved', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const valid = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const forged = await Attestation.sign(
+    { ...claims, exp: current + 3_000, iat: current, sub: 'mallory@example.com' },
+    { key: (await keyPair()).privateKey, keyId: 'unknown' },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: ({ keyId: kid }) => {
+      if (kid !== keyId) throw new Error('down')
+      return keys.publicKey
+    },
+    type: 'email',
+  })
+  const verify = (header: string) =>
+    verifier.verify(
+      new Request(audience, { headers: { [Attestation.Constants.header]: header } }),
+      {} as Parameters<typeof verifier.verify>[1],
+    )
+  expect(await verify(forged + ', ' + valid)).toMatchObject({ status: 'valid' })
+  expect(await verify(forged)).toMatchObject({ status: 'invalid', code: 503 })
+})
+
 test('reports an outage for a rotated-in key while the issuer is down', async () => {
   const { keyId, keys } = await setup()
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
