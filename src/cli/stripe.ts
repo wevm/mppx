@@ -147,7 +147,9 @@ function readProfile(file: string, project: string): Record<string, string> {
 }
 
 /** Whether a deposit address has its network's format: 0x hex for Tempo and Base, a 32-byte base58 key for Solana. */
-export function isAddress(network: string, value: string): boolean {
+export function isAddress(network: string, value: unknown): value is string {
+  // The response is only type-cast, so a non-string (such as a one-element array) must not pass.
+  if (typeof value !== 'string') return false
   if (network === 'solana') return base58Length(value) === 32
   return /^0x[0-9a-fA-F]{40}$/.test(value)
 }

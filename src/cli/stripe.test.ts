@@ -202,6 +202,8 @@ describe('isAddress', () => {
     // Base58 strings of 31 and 23 bytes, within the old 32 to 44 character range.
     expect(isAddress('solana', '4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofL')).toBe(false)
     expect(isAddress('solana', '6HgC8KRBEhXYbF4riJyJFLSHt32XBnGv')).toBe(false)
+    expect(isAddress('solana', ['1'.repeat(31) + 'zzzzzzzzzz'])).toBe(false)
+    expect(isAddress('tempo', ['0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c'])).toBe(false)
   })
 })
 
