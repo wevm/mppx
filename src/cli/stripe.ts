@@ -146,19 +146,86 @@ function readProfile(file: string, project: string): Record<string, string> {
   return values
 }
 
-/** Sets `key=value` in a dotenv file, replacing an existing assignment or appending one. */
+/** Whether a deposit address has its network's format: 0x hex for Tempo and Base, a 32-byte base58 key for Solana. */
+export function isAddress(network: string, value: unknown): value is string {
+  // The response is only type-cast, so a non-string (such as a one-element array) must not pass.
+  if (typeof value !== 'string') return false
+  if (network === 'solana') return base58Length(value) === 32
+  return /^0x[0-9a-fA-F]{40}$/.test(value)
+}
+
+const base58Alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+/** How many bytes a base58 string decodes to, or `undefined` when it isn't base58. */
+function base58Length(value: string): number | undefined {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{1,64}$/.test(value)) return undefined
+  let number = 0n
+  for (const char of value) number = number * 58n + BigInt(base58Alphabet.indexOf(char))
+  const zeros = /^1*/.exec(value)![0].length
+  const hex = number === 0n ? '' : number.toString(16)
+  return zeros + Math.ceil(hex.length / 2)
+}
+
+/**
+ * Sets `key=value` in a dotenv file as its only assignment of `key`: the first existing one is
+ * replaced and any later ones are removed, since loaders that take the last would keep them.
+ */
 export function writeEnvValue(file: string, key: string, value: string) {
+  // A line break would let the value add assignments of its own.
+  if (/[\r\n]/.test(key) || /[\r\n]/.test(value))
+    throw new Error('env values cannot contain line breaks')
   const line = `${key}=${value}`
   if (!fs.existsSync(file)) return fs.writeFileSync(file, `${line}\n`, { mode: 0o600 })
   const existing = fs.readFileSync(file, 'utf8')
-  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=.*$`, 'm')
-  if (pattern.test(existing))
-    return fs.writeFileSync(
-      file,
-      existing.replace(pattern, () => line),
-    )
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`)
+  const { lines: kept, found } = replaceAssignments(existing.split('\n'), pattern, line)
+  if (found) return fs.writeFileSync(file, kept.join('\n'))
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
   fs.writeFileSync(file, `${existing}${separator}${line}\n`)
+}
+
+/**
+ * Replaces the first assignment matching `pattern` with `line` and drops the rest. Each
+ * assignment is taken whole, quoted multiline value included, and lines inside another key's
+ * multiline value are kept, since they only look like assignments.
+ */
+function replaceAssignments(
+  lines: readonly string[],
+  pattern: RegExp,
+  line: string,
+): { lines: string[]; found: boolean } {
+  // For each quote, the first line at or after each index that holds it: one backward pass, so
+  // finding where a multiline value closes never rescans the file.
+  const next: Record<string, number[]> = {}
+  for (const quote of ['"', "'", '`']) {
+    const indexes = new Array<number>(lines.length + 1)
+    indexes[lines.length] = -1
+    for (let i = lines.length - 1; i >= 0; i--)
+      indexes[i] = closes(lines[i]!, quote) ? i : indexes[i + 1]!
+    next[quote] = indexes
+  }
+  const kept: string[] = []
+  let found = false
+  for (let index = 0; index < lines.length; index++) {
+    let end = index
+    const opening = /^\s*(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(["'`])(.*)$/.exec(lines[index]!)
+    // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
+    if (opening && !closes(opening[2]!, opening[1]!)) {
+      const close = next[opening[1]!]![index + 1]!
+      if (close !== -1) end = close
+    }
+    const target = pattern.test(lines[index]!)
+    if (target && !found) kept.push(line)
+    found ||= target
+    if (!target) for (let i = index; i <= end; i++) kept.push(lines[i]!)
+    index = end
+  }
+  return { lines: kept, found }
+}
+
+/** Whether a line holds the closing `quote`. Like Node's --env-file, a backslash doesn't escape it. */
+function closes(text: string, quote: string): boolean {
+  return text.includes(quote)
 }
 
 /**

@@ -831,6 +831,29 @@ describe('stripe address', () => {
     )
   })
 
+  test('rejects a deposit address that is not a valid address for the network', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-stripe-env-'))
+    const file = path.join(dir, '.env')
+    const server = await Http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify({ address: '0xabc\nNODE_OPTIONS=--require /tmp/x.js', id: 'cda_test' }),
+      )
+    })
+    try {
+      const { output, exitCode } = await serve(['stripe', 'address', '--env', file], {
+        env: { MPPX_STRIPE_API_URL: server.url, STRIPE_SECRET_KEY: 'sk_test_123' },
+      })
+      expect(exitCode).toBe(1)
+      expect(output).toContain('STRIPE_INVALID_ADDRESS')
+      expect(output).not.toContain('NODE_OPTIONS')
+      expect(fs.existsSync(file)).toBe(false)
+    } finally {
+      server.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('reports Stripe errors without their message', async () => {
     await withStripe(async (url) => {
       const { output, exitCode } = await serve(['stripe', 'address'], {

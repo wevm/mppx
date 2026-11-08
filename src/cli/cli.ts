@@ -2125,6 +2125,15 @@ const stripe = Cli.create('stripe', {
       return c.error({ code: 'STRIPE_REQUEST_FAILED', message, exitCode: 1 })
     }
 
+    // The address may be written to a dotenv file or used as a payment recipient: accept only
+    // its network's address format, and don't echo an unexpected value.
+    if (!StripeCli.isAddress(network, json.address))
+      return c.error({
+        code: 'STRIPE_INVALID_ADDRESS',
+        message: `Stripe returned a deposit address that isn't a valid ${network} address.`,
+        exitCode: 1,
+      })
+
     const result = {
       address: json.address,
       id: json.id ?? '',
