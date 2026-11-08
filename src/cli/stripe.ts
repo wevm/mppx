@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import * as util from 'node:util'
 
 /** Where a Stripe secret key came from, in resolution order. */
 export type KeySource = 'flag' | 'env' | 'stripe-cli'
@@ -179,9 +180,14 @@ export function writeEnvValue(file: string, key: string, value: string) {
   const existing = fs.readFileSync(file, 'utf8')
   const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`)
   const { lines: kept, found } = replaceAssignments(existing.split('\n'), pattern, line)
-  if (found) return fs.writeFileSync(file, kept.join('\n'))
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
-  fs.writeFileSync(file, `${existing}${separator}${line}\n`)
+  const output = found ? kept.join('\n') : `${existing}${separator}${line}\n`
+  // Node's own parser must read back exactly this value, so a dotenv form the line logic
+  // misreads fails here instead of leaving a stale or missing address.
+  const parseEnv = (util as { parseEnv?: (content: string) => Record<string, string> }).parseEnv
+  if (parseEnv && parseEnv(output)[key] !== value)
+    throw new Error(`could not update ${key} in ${file} safely: edit it by hand`)
+  fs.writeFileSync(file, output)
 }
 
 /**
@@ -210,7 +216,7 @@ function replaceAssignments(
     let end = index
     // Like Node's --env-file, any text before the first = is a key, unless the line is a comment.
     // `s` lets the value run over a CRLF file's trailing \r.
-    const opening = /^\s*[^#=\s][^=]*=\s*(["'`])(.*)$/s.exec(lines[index]!)
+    const opening = /^[ \t]*[^#=\s][^=]*=[ \t]*(["'`])(.*)$/s.exec(lines[index]!)
     // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
     if (opening && !closes(opening[2]!, opening[1]!)) {
       const close = next[opening[1]!]![index + 1]!
