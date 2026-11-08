@@ -175,7 +175,7 @@ export function writeEnvValue(file: string, key: string, value: string) {
   const line = `${key}=${value}`
   if (!fs.existsSync(file)) return fs.writeFileSync(file, `${line}\n`, { mode: 0o600 })
   const existing = fs.readFileSync(file, 'utf8')
-  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=`)
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`)
   const lines = existing.split('\n')
   const first = lines.findIndex((entry) => pattern.test(entry))
   if (first !== -1) {

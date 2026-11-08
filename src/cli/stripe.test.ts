@@ -210,7 +210,7 @@ describe('writeEnvValue safety', () => {
     const file = path.join(tempDir(), '.env')
     fs.writeFileSync(
       file,
-      'TEMPO_DEPOSIT_ADDRESS=0xa\nA=1\nexport TEMPO_DEPOSIT_ADDRESS=0xb\nB=2\n',
+      'TEMPO_DEPOSIT_ADDRESS=0xa\nA=1\nexport TEMPO_DEPOSIT_ADDRESS=0xb\n  TEMPO_DEPOSIT_ADDRESS=0xd\n\tTEMPO_DEPOSIT_ADDRESS=0xe\nB=2\n',
     )
     writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
     expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nA=1\nB=2\n')
