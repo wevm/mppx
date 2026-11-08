@@ -294,6 +294,27 @@ describe('writeEnvValue safety', () => {
     ).toBe('0xc')
   })
 
+  test.each([
+    ['a quote opening below a blank value', 'A=  \n"x\nTEMPO_DEPOSIT_ADDRESS=inside\n"\n'],
+    ['a carriage return before a quote', 'A=\r"x\nTEMPO_DEPOSIT_ADDRESS=inside\n"\n'],
+  ])('never changes another key: %s', (_, rest) => {
+    if (!(util as { parseEnv?: unknown }).parseEnv) return
+    const file = path.join(tempDir(), '.env')
+    const existing = `TEMPO_DEPOSIT_ADDRESS=old\n${rest}`
+    fs.writeFileSync(file, existing)
+    const parse = (util as unknown as { parseEnv: (s: string) => Record<string, string> }).parseEnv
+    try {
+      writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    } catch (error) {
+      expect((error as Error).message).toContain('safely')
+      expect(fs.readFileSync(file, 'utf8')).toBe(existing)
+      return
+    }
+    const after = parse(fs.readFileSync(file, 'utf8'))
+    expect(after.TEMPO_DEPOSIT_ADDRESS).toBe('0xc')
+    expect(after.A).toBe(parse(existing).A)
+  })
+
   test('ignores quotes on comment lines', () => {
     const file = path.join(tempDir(), '.env')
     fs.writeFileSync(file, '# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xa\n')

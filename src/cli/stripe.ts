@@ -185,8 +185,15 @@ export function writeEnvValue(file: string, key: string, value: string) {
   // Node's own parser must read back exactly this value, so a dotenv form the line logic
   // misreads fails here instead of leaving a stale or missing address.
   const parseEnv = (util as { parseEnv?: (content: string) => Record<string, string> }).parseEnv
-  if (parseEnv && parseEnv(output)[key] !== value)
-    throw new Error(`could not update ${key} in ${file} safely: edit it by hand`)
+  if (parseEnv) {
+    // Every other key must keep its value too, so no other entry is cut or merged.
+    const before = parseEnv(existing)
+    const after = parseEnv(output)
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+    keys.delete(key)
+    if (after[key] !== value || [...keys].some((name) => before[name] !== after[name]))
+      throw new Error(`could not update ${key} in ${file} safely: edit it by hand`)
+  }
   fs.writeFileSync(file, output)
 }
 
