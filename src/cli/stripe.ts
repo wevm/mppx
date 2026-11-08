@@ -177,14 +177,43 @@ export function writeEnvValue(file: string, key: string, value: string) {
   const existing = fs.readFileSync(file, 'utf8')
   const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`)
   const lines = existing.split('\n')
-  const first = lines.findIndex((entry) => pattern.test(entry))
-  if (first !== -1) {
-    const kept = lines.filter((entry, index) => index <= first || !pattern.test(entry))
+  const assignments = assignmentLines(lines, pattern)
+  const first = assignments[0]
+  if (first !== undefined) {
+    const kept = lines.filter((_, index) => index === first || !assignments.includes(index))
     kept[first] = line
     return fs.writeFileSync(file, kept.join('\n'))
   }
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
   fs.writeFileSync(file, `${existing}${separator}${line}\n`)
+}
+
+/**
+ * Indexes of the lines that assign a key matching `pattern`, skipping lines inside a quoted
+ * multiline value, which only look like assignments.
+ */
+function assignmentLines(lines: readonly string[], pattern: RegExp): number[] {
+  const indexes: number[] = []
+  let quote: string | undefined
+  for (const [index, entry] of lines.entries()) {
+    if (quote) {
+      if (closes(entry, quote)) quote = undefined
+      continue
+    }
+    if (pattern.test(entry)) indexes.push(index)
+    const opening = /^\s*(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(["'`])(.*)$/.exec(entry)
+    if (opening && !closes(opening[2]!, opening[1]!)) quote = opening[1]
+  }
+  return indexes
+}
+
+/** Whether a line holds an unescaped closing `quote`. */
+function closes(text: string, quote: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\' && quote === '"') i++
+    else if (text[i] === quote) return true
+  }
+  return false
 }
 
 /**
