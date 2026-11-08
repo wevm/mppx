@@ -209,13 +209,9 @@ function assignmentLines(lines: readonly string[], pattern: RegExp): number[] {
   return indexes
 }
 
-/** Whether a line holds an unescaped closing `quote`. */
+/** Whether a line holds the closing `quote`. Like Node's --env-file, a backslash doesn't escape it. */
 function closes(text: string, quote: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '\\' && quote === '"') i++
-    else if (text[i] === quote) return true
-  }
-  return false
+  return text.includes(quote)
 }
 
 /**

@@ -226,6 +226,16 @@ describe('writeEnvValue safety', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(`TEMPO_DEPOSIT_ADDRESS=0xc\n${pem}B=2\n`)
   })
 
+  test('removes duplicates after a value ending in a backslash', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(
+      file,
+      'TEMPO_DEPOSIT_ADDRESS=0xa\nDIR="C:\\dir\\"\nTEMPO_DEPOSIT_ADDRESS=0xb\n',
+    )
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nDIR="C:\\dir\\"\n')
+  })
+
   test('refuses values with line breaks', () => {
     const file = path.join(tempDir(), '.env')
     expect(() => writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xa\nNODE_OPTIONS=x')).toThrow(
