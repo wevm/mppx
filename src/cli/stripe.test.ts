@@ -258,6 +258,14 @@ describe('writeEnvValue safety', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\n`)
   })
 
+  test('keeps multiline values in a CRLF file', () => {
+    const file = path.join(tempDir(), '.env')
+    const value = 'A="x\r\nTEMPO_DEPOSIT_ADDRESS=0xb\r\n"\r\n'
+    fs.writeFileSync(file, `${value}TEMPO_DEPOSIT_ADDRESS=0xa\r\nB=2\r\n`)
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\r\nB=2\r\n`)
+  })
+
   test('ignores quotes on comment lines', () => {
     const file = path.join(tempDir(), '.env')
     fs.writeFileSync(file, '# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xa\n')

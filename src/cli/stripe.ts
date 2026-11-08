@@ -209,14 +209,15 @@ function replaceAssignments(
   for (let index = 0; index < lines.length; index++) {
     let end = index
     // Like Node's --env-file, any text before the first = is a key, unless the line is a comment.
-    const opening = /^\s*[^#=\s][^=]*=\s*(["'`])(.*)$/.exec(lines[index]!)
+    // `s` lets the value run over a CRLF file's trailing \r.
+    const opening = /^\s*[^#=\s][^=]*=\s*(["'`])(.*)$/s.exec(lines[index]!)
     // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
     if (opening && !closes(opening[2]!, opening[1]!)) {
       const close = next[opening[1]!]![index + 1]!
       if (close !== -1) end = close
     }
     const target = pattern.test(lines[index]!)
-    if (target && !found) kept.push(line)
+    if (target && !found) kept.push(lines[index]!.endsWith('\r') ? `${line}\r` : line)
     found ||= target
     if (!target) for (let i = index; i <= end; i++) kept.push(lines[i]!)
     index = end
