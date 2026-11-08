@@ -52,9 +52,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         typeof config.audience === 'function' ? config.audience(request) : config.audience,
       )
       // At most `maxCandidates` distinct tokens are verified, latest expiry first,
-      // so repeated or forged tokens cost a bounded number of signature checks,
-      // and a forged token with a later `exp` cannot hide a valid one behind it.
-      // Without a usable one, the first is verified so its rejection says why.
+      // so repeated or forged tokens cost a bounded number of signature checks.
+      // A stray forged token does not hide a valid one, but whoever controls the
+      // header can always withhold a valid token, so the bound is not a guarantee
+      // against that sender. Without a usable one, the first is verified so its
+      // rejection says why.
       const now = Math.floor(Date.now() / 1_000)
       const tolerance = config.clockTolerance ?? Constants.clockTolerance
       const candidates = Attestation.parseHeader(request.headers.get(Constants.header))
