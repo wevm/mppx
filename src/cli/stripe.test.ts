@@ -250,12 +250,19 @@ describe('writeEnvValue safety', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nB=2\n')
   })
 
-  test('keeps a multiline value whose key starts with a digit', () => {
+  test.each(['1A', 'A B', 'A$B', 'A:B', 'É'])('keeps a multiline value keyed %s', (key) => {
     const file = path.join(tempDir(), '.env')
-    const value = '1A="x\nTEMPO_DEPOSIT_ADDRESS=0xb\n"\n'
+    const value = `${key}="x\nTEMPO_DEPOSIT_ADDRESS=0xb\n"\n`
     fs.writeFileSync(file, `${value}TEMPO_DEPOSIT_ADDRESS=0xa\n`)
     writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
     expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\n`)
+  })
+
+  test('ignores quotes on comment lines', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(file, '# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xa\n')
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xc\n')
   })
 
   test('refuses values with line breaks', () => {

@@ -208,8 +208,8 @@ function replaceAssignments(
   let found = false
   for (let index = 0; index < lines.length; index++) {
     let end = index
-    // Keys take Node's --env-file characters, digits first included.
-    const opening = /^\s*(?:export\s+)?[\w.-]+\s*=\s*(["'`])(.*)$/.exec(lines[index]!)
+    // Like Node's --env-file, any text before the first = is a key, unless the line is a comment.
+    const opening = /^\s*[^#=\s][^=]*=\s*(["'`])(.*)$/.exec(lines[index]!)
     // A quote closed on a later line spans to it; one never closed is a one-line value, as in Node.
     if (opening && !closes(opening[2]!, opening[1]!)) {
       const close = next[opening[1]!]![index + 1]!
