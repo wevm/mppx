@@ -4,7 +4,7 @@ import * as path from 'node:path'
 
 import { afterEach, describe, expect, test } from 'vp/test'
 
-import { normalizeArgv, readStripeCliKey, resolveKey, writeEnvValue } from './stripe.js'
+import { isAddress, normalizeArgv, readStripeCliKey, resolveKey, writeEnvValue } from './stripe.js'
 
 const dirs: string[] = []
 
@@ -186,5 +186,37 @@ describe('normalizeArgv', () => {
       'app.env',
     ])
     expect(normalizeArgv(['example.com', '--env'])).toEqual(['example.com', '--env'])
+  })
+})
+
+describe('isAddress', () => {
+  test('accepts only the network address format', () => {
+    expect(isAddress('tempo', '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')).toBe(true)
+    expect(isAddress('base', '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c\nNODE_OPTIONS=x')).toBe(
+      false,
+    )
+    expect(isAddress('tempo', 'not-an-address')).toBe(false)
+    expect(isAddress('solana', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')).toBe(true)
+    expect(isAddress('solana', '0x5ff8d73e8bccd3701c9aef78389f3b9771172b5c')).toBe(false)
+  })
+})
+
+describe('writeEnvValue safety', () => {
+  test('leaves exactly one assignment of the key', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(
+      file,
+      'TEMPO_DEPOSIT_ADDRESS=0xa\nA=1\nexport TEMPO_DEPOSIT_ADDRESS=0xb\nB=2\n',
+    )
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nA=1\nB=2\n')
+  })
+
+  test('refuses values with line breaks', () => {
+    const file = path.join(tempDir(), '.env')
+    expect(() => writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xa\nNODE_OPTIONS=x')).toThrow(
+      'line breaks',
+    )
+    expect(fs.existsSync(file)).toBe(false)
   })
 })

@@ -146,17 +146,31 @@ function readProfile(file: string, project: string): Record<string, string> {
   return values
 }
 
-/** Sets `key=value` in a dotenv file, replacing an existing assignment or appending one. */
+/** Whether a deposit address has its network's format: 0x hex for Tempo and Base, base58 for Solana. */
+export function isAddress(network: string, value: string): boolean {
+  if (network === 'solana') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)
+  return /^0x[0-9a-fA-F]{40}$/.test(value)
+}
+
+/**
+ * Sets `key=value` in a dotenv file as its only assignment of `key`: the first existing one is
+ * replaced and any later ones are removed, since loaders that take the last would keep them.
+ */
 export function writeEnvValue(file: string, key: string, value: string) {
+  // A line break would let the value add assignments of its own.
+  if (/[\r\n]/.test(key) || /[\r\n]/.test(value))
+    throw new Error('env values cannot contain line breaks')
   const line = `${key}=${value}`
   if (!fs.existsSync(file)) return fs.writeFileSync(file, `${line}\n`, { mode: 0o600 })
   const existing = fs.readFileSync(file, 'utf8')
-  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=.*$`, 'm')
-  if (pattern.test(existing))
-    return fs.writeFileSync(
-      file,
-      existing.replace(pattern, () => line),
-    )
+  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=`)
+  const lines = existing.split('\n')
+  const first = lines.findIndex((entry) => pattern.test(entry))
+  if (first !== -1) {
+    const kept = lines.filter((entry, index) => index <= first || !pattern.test(entry))
+    kept[first] = line
+    return fs.writeFileSync(file, kept.join('\n'))
+  }
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
   fs.writeFileSync(file, `${existing}${separator}${line}\n`)
 }
