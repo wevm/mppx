@@ -35,6 +35,13 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
+  test('behavior: strips identity attestation header', () => {
+    const headers = new globalThis.Headers({ 'Identity-Attestation': 'token', 'X-Public': 'value' })
+    const result = Headers.scrub(headers)
+    expect(result.get('identity-attestation')).toBeNull()
+    expect(result.get('x-public')).toBe('value')
+  })
+
   test('behavior: strips cookie header', () => {
     const headers = new globalThis.Headers({
       Cookie: 'session=abc123',
@@ -99,6 +106,14 @@ describe('scrub', () => {
 })
 
 describe('scrubResponse', () => {
+  test('behavior: strips an upstream identity attestation requirement', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: { 'Identity-Attestation-Required': 'email;issuer="https://issuer.example"' },
+    })
+    expect(Headers.scrubResponse(response).headers.has('identity-attestation-required')).toBe(false)
+  })
+
   test('behavior: strips upstream payment protocol headers', () => {
     const response = new Response('body', {
       headers: {

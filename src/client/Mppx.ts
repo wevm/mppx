@@ -659,6 +659,7 @@ const crossOriginHeaders = [
   'cookie',
   'cookie2',
   'host',
+  'identity-attestation',
   'payment-authorization',
   'payment-signature',
   'proxy-authorization',
