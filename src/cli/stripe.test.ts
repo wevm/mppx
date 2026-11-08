@@ -250,6 +250,14 @@ describe('writeEnvValue safety', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nB=2\n')
   })
 
+  test('keeps a multiline value whose key starts with a digit', () => {
+    const file = path.join(tempDir(), '.env')
+    const value = '1A="x\nTEMPO_DEPOSIT_ADDRESS=0xb\n"\n'
+    fs.writeFileSync(file, `${value}TEMPO_DEPOSIT_ADDRESS=0xa\n`)
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\n`)
+  })
+
   test('refuses values with line breaks', () => {
     const file = path.join(tempDir(), '.env')
     expect(() => writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xa\nNODE_OPTIONS=x')).toThrow(
