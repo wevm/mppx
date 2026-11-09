@@ -504,6 +504,27 @@ test('lists the shared payment check once across composed offers, and rejects di
   ).toThrow('Offers in a composed route must use the same identity payment check.')
 })
 
+test('a Credential matching an unchecked and a checked offer with the same terms is checked', async () => {
+  const kyc = kycCheck()
+  const handler = createPayments().compose(
+    [serverMethod, { ...charge, amount: '1' }],
+    [serverMethod, { ...charge, amount: '1', identity: { payment: kyc } }],
+  )
+  const first = await handler(new Request('https://x.test'))
+  if (first.status !== 402) throw new Error()
+  const [challenge] = Challenge.fromResponseList(first.challenge as Response)
+  const credential = Credential.serialize({ challenge: challenge!, payload: { token: 'paid' } })
+  const before = settlements
+  const paid = await handler(
+    new Request('https://x.test', {
+      headers: { [MppConstants.Headers.authorization]: credential },
+    }),
+  )
+  expect(paid.status).toBe(402)
+  expect(paid.status === 402 && paid.rejection?.status).toBe('missing')
+  expect(settlements).toBe(before)
+})
+
 test('never reports a rejected identity as a successful payment', async () => {
   const mppx = createPayments()
   const keys = await signatureKeys()

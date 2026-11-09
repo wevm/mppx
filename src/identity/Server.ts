@@ -157,6 +157,11 @@ function toVerification(decision: Decision): Rejected {
 export class Context {
   /** Verification promises by verifier. Internal and mutable; outcomes are frozen. */
   readonly verifications = new Map<Types.Verifier, Promise<Types.Verification>>()
+  /**
+   * Payment check promises by check, then by Challenge id and attempt (`paid` or `unpaid`), so
+   * a check runs once per attempt even when `compose` calls the matched offer again.
+   */
+  readonly checks = new Map<Types.PaymentCheck, Map<string, Promise<Outcome>>>()
 }
 
 /** Creates the identity context of one request. @internal */
@@ -224,14 +229,27 @@ export async function verify(
   return Object.freeze({ status: 'valid', values })
 }
 
-/** Runs a payment check once and returns its outcome. @internal */
-export async function check(
+/**
+ * Runs a payment check at most once per context, Challenge and attempt, and returns its
+ * outcome. @internal
+ */
+export function check(
+  context: Context,
   paymentCheck: Types.PaymentCheck,
   parameters: Parameters<Types.PaymentCheck['verify']>[0],
 ): Promise<Outcome> {
-  const outcome = await paymentCheck.verify(Object.freeze({ ...parameters }))
-  if (outcome.status !== 'valid') return decide([outcome])
-  return Object.freeze({ status: 'valid', values: new Map([[paymentCheck, outcome.value]]) })
+  const key = `${parameters.challenge.id}:${parameters.credential ? 'paid' : 'unpaid'}`
+  const outcomes = context.checks.get(paymentCheck) ?? new Map<string, Promise<Outcome>>()
+  context.checks.set(paymentCheck, outcomes)
+  let outcome = outcomes.get(key)
+  if (outcome) return outcome
+  outcome = (async () => {
+    const result = await paymentCheck.verify(Object.freeze({ ...parameters }))
+    if (result.status !== 'valid') return decide([result])
+    return Object.freeze({ status: 'valid', values: new Map([[paymentCheck, result.value]]) })
+  })()
+  outcomes.set(key, outcome)
+  return outcome
 }
 
 /**

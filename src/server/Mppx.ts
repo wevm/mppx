@@ -1214,7 +1214,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         identityState = IdentityServer.transition(identityState, {
           type: 'checked',
           outcome: paymentCheck
-            ? await IdentityServer.check(paymentCheck, {
+            ? await IdentityServer.check(identityContext, paymentCheck, {
                 challenge,
                 credential,
                 request: input as globalThis.Request,
@@ -2972,7 +2972,12 @@ function composeHandlers(
           }),
         )
 
+        // Offers with the same terms are indistinguishable, so one with a payment check (all
+        // share the same one) is preferred and an unchecked twin cannot skip it.
         const match =
+          candidates.find((handler) =>
+            getConfiguredOffers(handler).some((internal) => internal._paymentCheck !== undefined),
+          ) ??
           candidates[0] ??
           handlers.find((handler) =>
             getConfiguredOffers(handler).some(
