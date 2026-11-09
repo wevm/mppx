@@ -564,6 +564,8 @@ export function session(parameters: session.Parameters = {}) {
           topUpAmount,
         })
       } else if (plan.type === 'recover') {
+        // Recovering from a snapshot alone needs a pinned origin, as createCredential enforces.
+        if (!configuredOrigin && !context?.descriptor) return false
         const reusable = await resolveReusableChannel({
           channelId: plan.context.channelId,
           client: resolved.client,
@@ -603,7 +605,18 @@ export function session(parameters: session.Parameters = {}) {
         account: null,
       } as never)) as bigint
       if (balance < deposit) return false
-      return await canAccessKeySpend(resolved.client, account, resolved.token, deposit)
+      if (!(await canAccessKeySpend(resolved.client, account, resolved.token, deposit)))
+        return false
+      // MACH cannot pay fees: an unsponsored open or top-up needs the separate fee token.
+      if (resolved.feePayer || !resolved.feeToken) return true
+      const feeBalance = (await readContract(resolved.client, {
+        ...Actions.token.getBalance.call(resolved.client, {
+          account: account.address,
+          token: resolved.feeToken,
+        }),
+        account: null,
+      } as never)) as bigint
+      return feeBalance > 0n
     } catch {
       return false
     }

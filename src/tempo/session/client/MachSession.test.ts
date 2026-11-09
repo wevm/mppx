@@ -59,6 +59,7 @@ function makeClient(
     deposit: 1_000n,
     closeRequestedAt: 0,
   },
+  feeBalance = 1_000_000n,
 ) {
   return createClient({
     account,
@@ -81,6 +82,12 @@ function makeClient(
                 typeof machBalance === 'function' ? machBalance(decoded.args[0]) : machBalance
               return encodeFunctionResult({ abi: erc20Abi, functionName: 'balanceOf', result })
             }
+            if (call.to.toLowerCase() !== tip20ChannelEscrow.toLowerCase())
+              return encodeFunctionResult({
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                result: feeBalance,
+              })
             return encodeFunctionResult({
               abi: escrowAbi,
               functionName: 'getChannelState',
@@ -325,14 +332,18 @@ describe('MACH session preference', () => {
       spent: '0',
     }
     const client = makeClient(0n, state)
-    const mppx = Mppx.create({
-      methods: [session({ account, decimals: 0, getClient: () => client })],
-      polyfill: false,
-    })
-    const prepared = await mppx.preparePayment(
-      paymentRequired([offer(stablecoin), offer(mach, { sessionSnapshot: snapshot })]),
-    )
-    expect(prepared.challenge.request.currency).toBe(pick)
+    const prefer = (origin?: string) =>
+      Mppx.create({
+        methods: [session({ account, decimals: 0, getClient: () => client, origin })],
+        polyfill: false,
+      }).createCredential(
+        paymentRequired([offer(stablecoin), offer(mach, { sessionSnapshot: snapshot })]),
+      )
+    const credential = Credential.deserialize(await prefer('https://example.com'))
+    expect(credential.challenge.request.currency).toBe(pick)
+    // Without a pinned origin, createCredential refuses to recover from a snapshot alone.
+    const unpinned = Credential.deserialize(await prefer())
+    expect(unpinned.challenge.request.currency).toBe(stablecoin)
   })
 
   test("checks the caller's account override", async () => {
@@ -364,14 +375,36 @@ describe('MACH session preference', () => {
     expect(credential.challenge.request.suggestedDeposit).toBe('1000')
   })
 
-  test('prefers MACH in preparePayment', async () => {
+  test('prefers MACH in createCredential but not before preparePayment knows the context', async () => {
     const client = makeClient(1_000n)
     const mppx = Mppx.create({
       methods: [session({ account, decimals: 0, getClient: () => client })],
       polyfill: false,
     })
-    const prepared = await mppx.preparePayment(paymentRequired([offer(stablecoin), offer(mach)]))
-    expect(prepared.challenge.request.currency).toBe(mach)
+    const offers = [offer(stablecoin), offer(mach)]
+    const credential = Credential.deserialize(await mppx.createCredential(paymentRequired(offers)))
+    expect(credential.challenge.request.currency).toBe(mach)
+    // The context arrives later through prepared.createCredential(context), so the server's
+    // order stands.
+    const prepared = await mppx.preparePayment(paymentRequired(offers))
+    expect(prepared.challenge.request.currency).toBe(stablecoin)
+  })
+
+  test('falls back when the wallet cannot pay MACH transaction fees', async () => {
+    const offers = [offer(stablecoin), offer(mach)]
+    const client = makeClient(1_000n, undefined, 0n)
+    const pick = (feePayer?: boolean) =>
+      Mppx.create({
+        methods: [session({ account, decimals: 0, getClient: () => client })],
+        polyfill: false,
+      }).createCredential(
+        paymentRequired(
+          feePayer ? offers.map((o) => offer(o.request.currency as Address, { feePayer })) : offers,
+        ),
+      )
+    expect(Credential.deserialize(await pick()).challenge.request.currency).toBe(stablecoin)
+    // A sponsored open needs no fee-token balance.
+    expect(Credential.deserialize(await pick(true)).challenge.request.currency).toBe(mach)
   })
 })
 

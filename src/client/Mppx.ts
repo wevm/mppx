@@ -297,6 +297,10 @@ export function create<
     // Credential context known before selection, such as an explicit session close passed to
     // `createCredential`, so methods can accept offers they would otherwise skip.
     selectionContext?: unknown,
+    // Whether the caller's credential context is final. Method ordering (such as a funding check
+    // against the paying account) runs only then, so a context passed later to
+    // `createCredential(context)` never meets an offer chosen for another account or channel.
+    contextKnown = false,
   ): Promise<PreparedPayment<FlattenMethods<methods>, transport>> {
     const eventResponse = snapshotResponse(response)
     const challenges = await transport.getChallenges(response as never, options?.request as never)
@@ -325,7 +329,7 @@ export function create<
           AcceptPayment.deferredContext,
         )
       const orderedCandidates = await resolveChallengeOrder(
-        await MethodOrder.apply(candidates, selectionContext),
+        contextKnown ? await MethodOrder.apply(candidates, selectionContext) : candidates,
         options?.orderChallenges ?? orderChallenges,
       )
       const selected = orderedCandidates[0]
@@ -539,7 +543,7 @@ export function create<
       context?: AnyContextFor<FlattenMethods<methods>>,
       options?: createCredential.Options<FlattenMethods<methods>, transport>,
     ) {
-      const prepared = await preparePayment(response, options, context)
+      const prepared = await preparePayment(response, options, context, true)
       return prepared.createCredential(context)
     },
   }
