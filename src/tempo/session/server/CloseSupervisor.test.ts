@@ -410,6 +410,49 @@ describe('superviseCloses', () => {
     })
   })
 
+  test.each([0, 1_700])(
+    'notifies a confirmed close despite checkpoint failure (request %s)',
+    async (closeRequestedAt) => {
+      const store = await seed()
+      mockStates({ closeRequestedAt, deposit: 1_000n, settled: 100n })
+      const close = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+      vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+        logs: [closedLog(channelId, 350n, 650n)],
+      } as never)
+      const update = store.updateChannel.bind(store)
+      const write = vi.spyOn(store, 'updateChannel').mockImplementation((id, transform) =>
+        update(id, (current) => {
+          const next = transform(current)
+          if (next?.finalized) throw new Error('checkpoint unavailable')
+          return next
+        }),
+      )
+      const onSessionSettlement = vi.fn()
+      const parameters = {
+        channelIds: [channelId],
+        client: createSupervisorClient({
+          logs: () => [rpcLog(closedLog(channelId, 350n, 650n), 1_000n)],
+        }),
+        store,
+        closeUnsettled: true,
+        onSessionSettlement,
+      }
+      expect((await superviseCloses(parameters)).failed).toBe(1)
+      expect(onSessionSettlement).toHaveBeenCalledExactlyOnceWith({
+        amount: 350n,
+        channelId,
+        delta: 250n,
+        trigger: 'close',
+        txHash,
+      })
+      write.mockRestore()
+      mockStates({ closeRequestedAt: 0, deposit: 0n, settled: 350n })
+      expect((await superviseCloses(parameters)).closed).toBe(1)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(onSessionSettlement).toHaveBeenCalledTimes(1)
+    },
+  )
+
   test('marks a close request without sending a close when nothing is left to capture', async () => {
     const store = await seed({ settledOnChain: 350n })
     mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 350n })

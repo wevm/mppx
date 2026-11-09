@@ -14,6 +14,7 @@ import {
   type ResolvedSettlementSchedule,
   resolveChannelStore,
   type SessionStoreInput,
+  SettlementCheckpointError,
   type SettlementTransactionOptions,
   trackSendAttempts,
 } from './Settlement.js'
@@ -462,15 +463,20 @@ async function closeAtSpend(
     )
     if (settledToPayee > capture || settledToPayee + refundedToPayer > state.deposit)
       throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
-    await store.updateChannel(channelId, (current) =>
-      ChannelStore.finalizeClosedChannelState({
-        captureAmount: settledToPayee,
-        channelId,
-        cumulativeAmount: voucher.cumulativeAmount,
-        current,
-        signature: voucher.signature,
-      }),
-    )
+    let checkpointError: { cause: unknown } | undefined
+    await store
+      .updateChannel(channelId, (current) =>
+        ChannelStore.finalizeClosedChannelState({
+          captureAmount: settledToPayee,
+          channelId,
+          cumulativeAmount: voucher.cumulativeAmount,
+          current,
+          signature: voucher.signature,
+        }),
+      )
+      .catch((cause) => {
+        checkpointError = { cause }
+      })
     if (parameters.onSessionSettlement) {
       try {
         await parameters.onSessionSettlement(
@@ -486,6 +492,8 @@ async function closeAtSpend(
         // Errors are isolated: observers cannot break the close.
       }
     }
+    if (checkpointError)
+      throw new SettlementCheckpointError({ cause: checkpointError.cause, txHash })
     return { outcome: 'closed', txHash }
   } catch (error) {
     if (
