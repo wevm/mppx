@@ -264,6 +264,9 @@ export function wrapFetch(
 ): typeof globalThis.fetch {
   return async (input, init) => {
     const request = new Request(input, init)
+    // A request carrying a Payment Credential is a paid attempt for that Credential's Challenge,
+    // which provers bind their proofs to; otherwise the wrapper's context applies.
+    const challenge = credentialChallenge(request.headers) ?? context.challenge
     const { response } = await client.send(
       (input, options) =>
         fetch(input, {
@@ -273,9 +276,8 @@ export function wrapFetch(
             : {}),
         }),
       request,
-      context,
+      { ...context, challenge },
     )
-    const { challenge } = context
     if (response.status === 402 && challenge)
       // Provers prepare for a refreshed 402 of the same method and intent. A 402 without a
       // parseable Payment challenge is returned as is: the caller decides.
@@ -284,6 +286,18 @@ export function wrapFetch(
           await client.challenge(response, { challenge: next }, request.url)
     return response
   }
+}
+
+/** Returns the Challenge of a Payment Credential in `headers`, if any. */
+function credentialChallenge(headers: Headers): Challenge.Challenge | undefined {
+  for (const [, value] of headers) {
+    const payment = Credential.extractPaymentScheme(value)
+    if (!payment) continue
+    try {
+      return Credential.deserialize(payment).challenge
+    } catch {}
+  }
+  return undefined
 }
 
 /** Returns the Payment challenges of a 402, or none when it carries none that parse. */

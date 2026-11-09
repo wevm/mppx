@@ -485,23 +485,23 @@ test('drops requirements of offers a nested composer negotiated away', async () 
   expect(response.headers.has('Identity-Required')).toBe(false)
 })
 
-test('merges the distinct requirements of composed offers into one header', async () => {
+test('lists the shared payment check once across composed offers, and rejects different checks', async () => {
+  const check = kycCheck([{ type: 'kyc', issuer: kycIssuer }, { type: 'email' }])
   const result = await createPayments().compose(
-    [serverMethod, { ...charge, amount: '1', identity: { payment: kycCheck() } }],
-    [
-      serverMethod,
-      {
-        ...charge,
-        amount: '2',
-        identity: { payment: kycCheck([{ type: 'kyc', issuer: kycIssuer }, { type: 'email' }]) },
-      },
-    ],
+    [serverMethod, { ...charge, amount: '1', identity: { payment: check } }],
+    [serverMethod, { ...charge, amount: '2', identity: { payment: check } }],
     [serverMethod, { ...charge, amount: '3' }],
   )(new Request('https://x.test'))
   if (result.status !== 402) throw new Error()
   const response = result.challenge as Response
   expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['1', '2', '3'])
   expect(response.headers.get('Identity-Required')).toBe(`kyc;issuer="${kycIssuer}", email`)
+  expect(() =>
+    createPayments().compose(
+      [serverMethod, { ...charge, identity: { payment: kycCheck() } }],
+      [serverMethod, { ...charge, identity: { payment: kycCheck() } }],
+    ),
+  ).toThrow('Offers in a composed route must use the same identity payment check.')
 })
 
 test('never reports a rejected identity as a successful payment', async () => {
@@ -589,6 +589,23 @@ test('a verifier runs once per request across composed offers and anyOf members'
   expect(runs).toBe(3)
   if (direct.status !== 402) throw new Error()
   expect(direct.rejection).toBeUndefined()
+})
+
+test('fails closed on an unknown status or a non-error code', async () => {
+  const mppx = createPayments()
+  const unknown: Identity.Verifier = { verify: () => ({ status: 'approved' }) as never }
+  const result = await mppx.charge({ ...charge, identity: [unknown] })(
+    new Request('https://x.test'),
+  )
+  if (result.status !== 402) throw new Error()
+  expect((result.challenge as Response).status).toBe(401)
+  expect(result.rejection?.status).toBe('invalid')
+  const success: Identity.Verifier = {
+    verify: () => ({ status: 'invalid', code: 200, reason: 'nope' }),
+  }
+  const coded = await mppx.charge({ ...charge, identity: [success] })(new Request('https://x.test'))
+  if (coded.status !== 402) throw new Error()
+  expect((coded.challenge as Response).status).toBe(401)
 })
 
 test('rejects identity shapes that would skip the checks', async () => {

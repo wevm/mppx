@@ -105,11 +105,17 @@ export function decide(outcomes: readonly Rejected[]): Decision {
   })
 }
 
-/** Maps a rejected outcome to its fixed status, honoring the deprecated `code`. */
+/**
+ * Maps a rejected outcome to its fixed status, honoring the deprecated `code`. Fails closed: an
+ * unknown status is `invalid`, and a deprecated `code` that is not an HTTP error status is ignored.
+ */
 function normalize(outcome: Rejected): Decision {
-  const code = 'code' in outcome ? outcome.code : undefined
-  const status: Types.RejectionStatus =
-    code === Status.codes.forbidden
+  const known = Object.hasOwn(Status.codes, outcome.status)
+  const raw = known && 'code' in outcome ? outcome.code : undefined
+  const code = Number.isInteger(raw) && raw! >= 400 && raw! <= 599 ? raw : undefined
+  const status: Types.RejectionStatus = !known
+    ? 'invalid'
+    : code === Status.codes.forbidden
       ? 'forbidden'
       : code === Status.codes.unavailable
         ? 'unavailable'
@@ -122,7 +128,9 @@ function normalize(outcome: Rejected): Decision {
         Object.freeze([name, value] as const),
       ),
     ),
-    reason: outcome.reason ?? defaultReasons[status],
+    reason: known
+      ? (outcome.reason ?? defaultReasons[status])
+      : 'The identity verifier returned an unknown status.',
   }
 }
 

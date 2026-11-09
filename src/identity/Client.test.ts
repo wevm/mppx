@@ -200,7 +200,7 @@ test('sends the request itself when it can never be resent', async () => {
   expect(outcome.request).toBe(out)
 })
 
-test('wrapFetch binds proofs to the context challenge, not a credential it re-parses', async () => {
+test("wrapFetch binds proofs to an attached Credential's Challenge, else to the context's", async () => {
   const seen: (string | undefined)[] = []
   const client = Identity.Client.from([
     {
@@ -221,7 +221,7 @@ test('wrapFetch binds proofs to the context challenge, not a credential it re-pa
     method: 'POST',
   })
   await fetch('https://merchant.example', { method: 'POST' })
-  expect(seen).toEqual(['first', 'first'])
+  expect(seen).toEqual(['second', 'first'])
 })
 
 test('challenge releases each unread copy after its prepare callback', async () => {

@@ -1173,6 +1173,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _identity: hasIdentity,
+      _paymentCheck: paymentCheck,
       _stableBinding: stableBinding as never,
       _transport: transport,
     } as unknown as ConfiguredHandler['_internal']
@@ -2709,6 +2710,8 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
     /** Whether the route requires identity (request-stage verifiers or a payment check). */
     _identity?: boolean | undefined
+    /** The route's payment check, compared across composed offers. */
+    _paymentCheck?: Identity.PaymentCheck | undefined
     _transport: Transport.AnyTransport
   }
 }
@@ -2874,6 +2877,15 @@ function composeHandlers(
     return internal?.selectOffers === selectOffers ? (internal?.handlers ?? [handler]) : [handler]
   })
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
+  // A Credential names no offer, so dispatch may send it to any offer with the same terms: every
+  // offer with a payment check must use the same one, or a stricter check could be skipped.
+  const paymentChecks = new Set(
+    handlers
+      .flatMap((handler) => getConfiguredOffers(handler as ConfiguredHandler))
+      .flatMap((offer) => offer._paymentCheck ?? []),
+  )
+  if (paymentChecks.size > 1)
+    throw new TypeError('Offers in a composed route must use the same identity payment check.')
 
   const offerSelector = selectOffers
   const offerEntries = handlers.map((handler) => {
