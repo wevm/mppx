@@ -176,6 +176,29 @@ describe('registry', () => {
     expect(settlements).toEqual([])
   })
 
+  test.each([
+    ['a Stripe charge', 'stripe', { spt: 'spt_x' }],
+    ['a Tempo Zone withdrawal', 'tempo', { type: 'zone', zoneId: 1, hash: '0x00' }],
+    ['a Tempo push payment, already broadcast', 'tempo', { type: 'hash', hash: '0x00' }],
+  ] as const)('rejects %s, which does not bind the payer address', async (_, method, payload) => {
+    const { calls, client } = allowlist([account.address])
+    const check = Onchain.Server.registry({ client, registry: registryAddress })
+    const challenge = Challenge.from({
+      id: 'x',
+      intent: 'charge',
+      method,
+      realm: 'example.test',
+      request: {},
+    } as never)
+    const result = await check.verify({
+      challenge,
+      credential: { challenge, payload, source: `did:pkh:eip155:8453:${account.address}` },
+      request: new Request('https://example.test'),
+    })
+    expect(result).toMatchObject({ status: 'invalid' })
+    expect(calls).toEqual([])
+  })
+
   test('rejects with 503 when the registry cannot be read, without leaking the error', async () => {
     const { client } = mockClient(tempo, () => {
       throw new Error('upstream secret detail')

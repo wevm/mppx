@@ -24,7 +24,10 @@ const registryAbi = parseAbi(['function isVerified(address account) view returns
  * Every 402 of the route carries `Identity-Required: kyc;issuer="eip155:<chainId>:<registry>"`.
  * On the paid retry, before settlement, the check reads the registry for the address in the
  * Credential's `source`: allowed continues to settlement, not allowed rejects with 403, and a
- * failed read rejects with 503. By default it calls `isVerified(address) returns (bool)`; pass
+ * failed read rejects with 503. Only Credentials that bind `source` to the payer and settle after
+ * the check are accepted (401 otherwise): EVM charge, and Tempo charge paid by transaction or proof.
+ * Offer Tempo with `supportedModes: ['pull']` so a client never broadcasts a payment (push mode, a
+ * Zone withdrawal) the check would then reject. By default it calls `isVerified(address) returns (bool)`; pass
  * `read` for any other contract.
  *
  * @example
@@ -167,6 +170,13 @@ function check(parameters: {
     async verify({ credential }): Promise<Identity.Verification<Types.Payer>> {
       // Without a Credential (a route's `authorize` hook) there is no payer to check yet.
       if (!credential) return { status: 'missing', reason: 'A registered payer is required.' }
+      // On a method that does not bind `source` (such as Stripe or a Tempo Zone withdrawal), a
+      // payer could name an allowed address it does not control.
+      if (!bindsSource(credential))
+        return {
+          status: 'invalid',
+          reason: 'The payment method does not bind the payer address this route checks.',
+        }
       const payer = payerOf(credential)
       if (!payer)
         return { status: 'invalid', reason: 'The Credential does not name a payer address.' }
@@ -184,6 +194,21 @@ function check(parameters: {
       }
     },
   })
+}
+
+/**
+ * Returns whether the Credential's method rejects a `source` that is not the account that signed
+ * or sent the payment, and that the server settles only after this check: EVM charge, and Tempo
+ * charge paid by transaction or proof. A Tempo hash Credential is already broadcast when the check
+ * runs, and Tempo Zone withdrawals and other methods (such as Stripe) leave `source` unchecked.
+ */
+function bindsSource(credential: Credential.Credential): boolean {
+  const { intent, method } = credential.challenge
+  if (intent !== 'charge') return false
+  if (method === 'evm') return true
+  if (method !== 'tempo') return false
+  const type = (credential.payload as { type?: unknown } | undefined)?.type
+  return type === 'transaction' || type === 'proof'
 }
 
 /** Returns the address in a Credential's `did:pkh:eip155:<chainId>:<address>` source. */

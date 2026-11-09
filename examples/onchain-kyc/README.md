@@ -1,6 +1,6 @@
 # Onchain KYC registry with MPP
 
-A paid API on Cloudflare Workers that only KYC'd payers may use. The operator keeps the list of verified addresses in a contract, [`contracts/KycRegistry.sol`](./contracts/KycRegistry.sol). Before a payment settles, the server reads the registry for the payer's address: a listed payer pays and gets the report, any other payer gets `403` and its payment is never broadcast.
+A paid API on Cloudflare Workers that only KYC'd payers may use. The operator keeps the list of verified addresses in a contract, [`contracts/KycRegistry.sol`](./contracts/KycRegistry.sol). Before a payment settles, the server reads the registry for the payer's address: a listed payer pays and gets the report, any other payer gets `403` and its payment is never broadcast, because the route offers Tempo in pull mode only: the client signs, and the server broadcasts after the check.
 
 The client is a regular Mppx client. The registry is the proof, so there is nothing to prove on the client.
 
@@ -58,7 +58,7 @@ The payer must pay from the address it verified with Coinbase.
 
 ## How it works
 
-[`src/server.ts`](./src/server.ts) creates `Onchain.Server.registry({ client, registry })` and requires it as the route's payment check: `mppx.charge({ amount, identity: { payment: kyc } })`. Every `402` carries `Identity-Required: kyc;issuer="eip155:42431:<registry>"`, so clients can tell which list applies. On the paid retry the check reads the payer's address from the Credential's `source` and calls `isVerified(address)` on the registry:
+[`src/server.ts`](./src/server.ts) creates `Onchain.Server.registry({ client, registry })` and requires it as the route's payment check: `mppx.charge({ amount, identity: { payment: kyc }, supportedModes: ['pull'] })`. Pull mode matters: in push mode the client broadcasts the transfer before the server can check it, so the check accepts only pull (and proof) Tempo Credentials and EVM charge. Every `402` carries `Identity-Required: kyc;issuer="eip155:42431:<registry>"`, so clients can tell which list applies. On the paid retry the check reads the payer's address from the Credential's `source` and calls `isVerified(address)` on the registry:
 
 | Registry answer  | Response                               |
 | ---------------- | -------------------------------------- |

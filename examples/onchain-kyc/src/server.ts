@@ -5,7 +5,8 @@
 // /api/report carries `Identity-Required: kyc;issuer="eip155:<chainId>:<registry>"`.
 // On the paid retry, before the payment settles, the server reads the registry
 // for the payer's address: a listed payer pays and gets the report, any other
-// payer gets 403 and its payment is never broadcast.
+// payer gets 403. The route offers pull mode only, so the client signs and the
+// server broadcasts the payment after the check: a rejected payment is never sent.
 //
 // Set COINBASE_VERIFIED=true to require a Coinbase Verified Account attestation
 // on Base instead of your own registry.
@@ -77,7 +78,12 @@ export default {
 
     server ??= createServer(env)
     const { kyc, mppx } = server
-    const result = await mppx.charge({ amount: '0.01', identity: { payment: kyc } })(request)
+    const result = await mppx.charge({
+      amount: '0.01',
+      identity: { payment: kyc },
+      // Pull mode: the server broadcasts only after the check passes.
+      supportedModes: ['pull'],
+    })(request)
 
     // An unpaid request gets the 402. A payer the registry does not list gets
     // 403, and an unreadable registry 503, before the payment settles.
