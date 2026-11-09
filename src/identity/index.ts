@@ -1,4 +1,5 @@
 export * as Client from './Client.js'
+export * as Headers from './Headers.js'
 export * as Server from './Server.js'
 export * as Status from './Status.js'
 export { anyOf } from './Server.js'

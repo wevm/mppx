@@ -1,9 +1,11 @@
-/** Email OTP attestation values. */
+import { Constants as AttestationConstants } from '../attestation/Constants.js'
+
+/** Email OTP attestation values. Values every attestation shares are in `Attestation.Constants`. */
 export const Constants = {
-  /** Request header carrying the email attestation. */
-  header: 'Identity-Attestation',
-  /** Response header naming the issuer to get an attestation from. */
-  requiredHeader: 'Identity-Attestation-Required',
+  /** @deprecated Use `Attestation.Constants.header`. */
+  header: AttestationConstants.header,
+  /** @deprecated Use `Attestation.Constants.requiredHeader`. */
+  requiredHeader: AttestationConstants.requiredHeader,
   /** Attestation type for a verified email address. */
   type: 'email',
   /** Issuer path that emails a one-time code. */

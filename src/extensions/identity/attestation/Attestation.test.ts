@@ -101,10 +101,26 @@ test('parses requirements and ignores malformed members', () => {
       'email;issuer="https://a.example", phone;issuer=1, "x", sms;issuer="http://evil.example", kyc;issuer="https://b.example", dev;issuer="http://localhost:8787"',
   })
   expect(Attestation.Client.requirements(headers)).toEqual([
-    { issuer: 'https://a.example', type: 'email' },
-    { issuer: 'https://b.example', type: 'kyc' },
-    { issuer: 'http://localhost:8787', type: 'dev' },
+    [{ issuer: 'https://a.example', type: 'email' }],
+    [{ issuer: 'https://b.example', type: 'kyc' }],
+    [{ issuer: 'http://localhost:8787', type: 'dev' }],
   ])
+})
+
+test('parses an inner list as a group of alternatives', () => {
+  const headers = new Headers({
+    [Attestation.Constants.requiredHeader]:
+      'phone;issuer="https://a.example", (email;issuer="https://a.example" "x" email;issuer="https://b.example"), ("y")',
+  })
+  const groups = Attestation.Client.requirements(headers)
+  expect(groups).toEqual([
+    [{ issuer: 'https://a.example', type: 'phone' }],
+    [
+      { issuer: 'https://a.example', type: 'email' },
+      { issuer: 'https://b.example', type: 'email' },
+    ],
+  ])
+  expect(Object.isFrozen(groups) && groups.every(Object.isFrozen)).toBe(true)
 })
 
 test('keeps the last key set when a refresh has no keys list', async () => {
@@ -271,7 +287,9 @@ test('verifies one token however many the header repeats', async () => {
   const request = new Request(audience, {
     headers: { [Attestation.Constants.header]: Array(50).fill(forged).join(', ') },
   })
-  expect(await verifier.verify(request)).toMatchObject({ status: 'invalid', code: 401 })
+  const result = await verifier.verify(request)
+  expect(result).toMatchObject({ status: 'invalid' })
+  expect(result).not.toHaveProperty('code')
   expect(lookups).toBe(1)
 })
 
@@ -325,7 +343,7 @@ test('accepts a valid token behind one whose key cannot be resolved', async () =
   const verify = (header: string) =>
     verifier.verify(new Request(audience, { headers: { [Attestation.Constants.header]: header } }))
   expect(await verify(forged + ', ' + valid)).toMatchObject({ status: 'valid' })
-  expect(await verify(forged)).toMatchObject({ status: 'invalid', code: 503 })
+  expect(await verify(forged)).toMatchObject({ status: 'unavailable' })
 })
 
 test('accepts an allowed attestation behind one the policy rejects', async () => {
@@ -348,7 +366,28 @@ test('accepts an allowed attestation behind one the policy rejects', async () =>
     status: 'valid',
     value: { claims: { sub: 'dana@example.com' } },
   })
-  expect(await verify(blocked)).toMatchObject({ status: 'invalid', code: 403 })
+  expect(await verify(blocked)).toEqual({ status: 'forbidden', reason: 'Not allowed.' })
+})
+
+test('rejects an attestation whose policy returns an empty reason', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+    type: 'email',
+    validate: () => '',
+  })
+  expect(
+    await verifier.verify(
+      new Request(audience, { headers: { [Attestation.Constants.header]: token } }),
+    ),
+  ).toEqual({ status: 'forbidden', reason: 'This identity attestation is not allowed.' })
 })
 
 test('reports an outage for a rotated-in key while the issuer is down', async () => {
@@ -392,7 +431,7 @@ test('rejects a non-finite clock tolerance or max age', () => {
   )
 })
 
-test('answers 503 while the issuer keys are unreachable', async () => {
+test('reports unavailable (503) while the issuer keys are unreachable', async () => {
   const { claims, keyId, keys } = await setup()
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
@@ -409,7 +448,10 @@ test('answers 503 while the issuer keys are unreachable', async () => {
   })
   const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
   const result = await verifier.verify(request)
-  expect(result).toMatchObject({ status: 'invalid', code: 503 })
+  expect(result).toEqual({
+    reason: 'The attestation key could not be resolved.',
+    status: 'unavailable',
+  })
   expect(result).not.toHaveProperty('headers')
 })
 
@@ -483,4 +525,20 @@ test('never attaches an attestation over plaintext http', async () => {
     {} as Parameters<typeof prover.prove>[1],
   )
   expect(request.headers.get(Attestation.Constants.header)).toBeNull()
+})
+
+test('verify throws on a non-finite or negative time option', async () => {
+  const { claims, keyId, keys, options } = await setup()
+  const token = await Attestation.sign(
+    { ...claims, exp: now - 3_600 },
+    { key: keys.privateKey, keyId },
+  )
+  for (const extra of [
+    { clockTolerance: Number.POSITIVE_INFINITY },
+    { clockTolerance: Number.NaN },
+    { maxAge: Number.NaN },
+    { maxAge: -1 },
+    { now: Number.NaN },
+  ])
+    await expect(Attestation.verify(token, { ...options, ...extra })).rejects.toThrow(TypeError)
 })

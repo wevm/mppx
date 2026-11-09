@@ -1,11 +1,11 @@
 /** A verified email address. */
 export type VerifiedEmail = {
   /** The email address the issuer sent a one-time code to, lowercased. */
-  email: string
+  readonly email: string
   /** Issuer URL. */
-  issuer: string
+  readonly issuer: string
   /** When the attestation expires. */
-  expiresAt: Date
+  readonly expiresAt: Date
   /** Attestation identifier (`jti`), if the issuer set one. */
-  id?: string | undefined
+  readonly id?: string | undefined
 }

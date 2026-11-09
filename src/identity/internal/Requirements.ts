@@ -1,4 +1,4 @@
-import { isInnerList, parseList, serializeList, Token } from 'structured-headers'
+import { isInnerList, parseList, serializeItem, serializeList, Token } from 'structured-headers'
 import type { Item } from 'structured-headers'
 
 import type * as Types from '../Types.js'
@@ -40,6 +40,40 @@ export function parse(value: string | null): readonly Types.Requirement[] {
     )
   }
   return Object.freeze(requirements)
+}
+
+/**
+ * Headers that list requirements as a structured-field list, whose values `anyOf` groups into
+ * one inner list of alternatives. Lowercase, as `Headers` yields names.
+ */
+export const alternativeHeaders: readonly string[] = Object.freeze([
+  'identity-attestation-required',
+])
+
+/**
+ * Combines the values the rejected members of an `anyOf` sent in one requirements header:
+ *
+ * - Each value is one item or one inner list: their items, deduplicated, become one inner list
+ *   of alternatives, any one of which meets it (a single item stays bare).
+ * - Otherwise (a member lists several requirements, or a value is malformed): the values are
+ *   kept as they are. Inner lists do not nest, so "a and b, or c" is sent as all three, and a
+ *   client asks for more than the route needs, never less.
+ */
+export function alternatives(values: readonly string[]): string {
+  const items: Item[] = []
+  for (const value of values) {
+    let list: ReturnType<typeof parseList>
+    try {
+      list = parseList(value)
+    } catch {
+      return values.join(', ')
+    }
+    const [member] = list
+    if (list.length !== 1 || !member) return values.join(', ')
+    items.push(...(isInnerList(member) ? member[0] : [member]))
+  }
+  const unique = [...new Map(items.map((item) => [serializeItem(item), item])).values()]
+  return serializeList(unique.length === 1 ? unique : [[unique, new Map()]])
 }
 
 /** Returns the distinct requirements of several lists, in first-seen order. */

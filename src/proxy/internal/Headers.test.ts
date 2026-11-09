@@ -1,3 +1,4 @@
+import * as Identity from 'mppx/identity'
 import { describe, expect, test } from 'vp/test'
 
 import * as Headers from './Headers.js'
@@ -40,6 +41,15 @@ describe('scrub', () => {
     const result = Headers.scrub(headers)
     expect(result.get('identity-attestation')).toBeNull()
     expect(result.get('x-public')).toBe('value')
+  })
+
+  test('behavior: strips every Identity.Headers request header', () => {
+    const headers = new globalThis.Headers({
+      ...Object.fromEntries(Identity.Headers.request.map((name) => [name, 'token'])),
+      'X-Public': 'value',
+    })
+    const result = Headers.scrub(headers)
+    expect([...result.keys()]).toEqual(['x-public'])
   })
 
   test('behavior: strips cookie header', () => {
@@ -112,6 +122,20 @@ describe('scrubResponse', () => {
       headers: { 'Identity-Attestation-Required': 'email;issuer="https://issuer.example"' },
     })
     expect(Headers.scrubResponse(response).headers.has('identity-attestation-required')).toBe(false)
+  })
+
+  test('behavior: strips every upstream Identity.Headers response header', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        ...Object.fromEntries(Identity.Headers.response.map((name) => [name, 'kyc'])),
+        'Content-Type': 'text/plain',
+      },
+    })
+    const result = Headers.scrubResponse(response)
+    expect(Identity.Headers.response).toContain('identity-required')
+    for (const name of Identity.Headers.response) expect(result.headers.has(name)).toBe(false)
+    expect(result.headers.get('content-type')).toBe('text/plain')
   })
 
   test('behavior: strips upstream payment protocol headers', () => {
