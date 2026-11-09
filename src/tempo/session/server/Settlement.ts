@@ -853,7 +853,10 @@ const sendMethods = new Set([
 ])
 
 /** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
-export function trackSendAttempts(client: Chain.TransactionClient) {
+export function trackSendAttempts(client: Chain.TransactionClient): {
+  client: Chain.TransactionClient
+  tracked: { attempted: boolean }
+} {
   const tracked = { attempted: false }
   const trackedClient = createClient({
     account: client.account,
