@@ -33,7 +33,9 @@ export function from<value>(config: from.Config<value>): Types.Verifier<value> {
         value = await config.verify(request)
       } catch (error) {
         if (!(error instanceof Rejection)) throw error
-        const { code, message: reason, status } = error
+        const { code, message: reason } = error
+        // Fails closed: a status set at runtime outside the fixed rejections is `invalid`.
+        const status = isRejectionStatus(error.status) ? error.status : 'invalid'
         if (status !== 'invalid') return { status, headers: config.challenge, reason }
         return {
           status,
@@ -67,6 +69,12 @@ export declare namespace from {
   }
 }
 
+const rejectionStatuses = ['invalid', 'forbidden', 'unavailable'] as const
+
+function isRejectionStatus(status: unknown): status is Rejection.Status {
+  return (rejectionStatuses as readonly unknown[]).includes(status)
+}
+
 /** Rejects an identity a {@link from} verifier was given. */
 export class Rejection extends Error {
   override readonly name = 'Rejection'
@@ -80,6 +88,10 @@ export class Rejection extends Error {
   readonly code: number
   constructor(message: string, options: Rejection.Options = {}) {
     super(message)
+    if (options.status !== undefined && !isRejectionStatus(options.status))
+      throw new TypeError(
+        `Identity rejection status must be one of ${rejectionStatuses.join(', ')}.`,
+      )
     this.status =
       options.status ??
       (options.code === Status.codes.forbidden
