@@ -136,7 +136,11 @@ function createSupervisorClient(
               timestamp: numberToHex(block.timestamp),
               transactions: [],
             }
-          if (args.method === 'eth_sendRawTransaction') return txHash
+          if (
+            args.method === 'eth_sendRawTransaction' ||
+            args.method === 'eth_sendRawTransactionSync'
+          )
+            return txHash
           if (args.method === 'eth_getLogs') {
             const [filter] = args.params as [{ fromBlock: Hex; toBlock: Hex }]
             return (
@@ -291,14 +295,19 @@ describe('superviseCloses', () => {
     ).toMatchObject({ status: 'declined' })
   })
 
-  test.each([false, true])(
-    'clears a definitively failed close (submitted: %s)',
-    async (submitted) => {
+  test.each(['preparation', 'receipt', 'synchronous'] as const)(
+    'clears a definitively failed close (%s)',
+    async (phase) => {
       const store = await seed()
       mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
       vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
-        if (!submitted) throw new Error('fee policy rejected')
-        await client.request({ method: 'eth_sendRawTransaction', params: ['0x1234'] })
+        if (phase === 'preparation') throw new Error('fee policy rejected')
+        await client.request({
+          method: phase === 'synchronous' ? 'eth_sendRawTransactionSync' : 'eth_sendRawTransaction',
+          params: ['0x1234'],
+        })
+        if (phase === 'synchronous')
+          throw new VerificationFailedError({ reason: 'close precompile transaction reverted' })
         return txHash
       })
       vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockRejectedValue(

@@ -449,7 +449,10 @@ async function closeAtSpend(
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
           }
         : validity,
-    )
+    ).catch((error) => {
+      reverted = error instanceof VerificationFailedError
+      throw error
+    })
     const receipt = await Chain.waitForSuccessfulReceipt(client, txHash).catch((error) => {
       reverted = error instanceof VerificationFailedError
       throw error
