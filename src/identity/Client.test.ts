@@ -359,6 +359,20 @@ test('a retry returning headers resends once with them set before the provers pr
   expect(signed).toEqual([null, 'from-retry'])
 })
 
+test('combines same-named retry headers from several provers', async () => {
+  const client = Identity.Client.from([
+    { scope: '*', prove: (request) => request, retry: () => ({ 'X-Token': 'a' }) },
+    { scope: '*', prove: (request) => request, retry: () => ({ 'X-Token': 'b' }) },
+  ])
+  const seen: (string | null)[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    seen.push(request.headers.get('X-Token'))
+    return seen.length === 1 ? new Response(null, { status: 401 }) : new Response('ok')
+  })
+  await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(seen).toEqual([null, 'a, b'])
+})
+
 test('a retry returning headers never resends a paid attempt, and resends at most once', async () => {
   const retry = vi.fn(() => ({ 'X-Token': 't' }))
   const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])

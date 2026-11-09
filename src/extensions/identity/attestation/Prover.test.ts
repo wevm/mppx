@@ -221,6 +221,31 @@ test('shares one pending acquisition between concurrent retries', async () => {
   ])
 })
 
+test('a retry that joined a failed acquisition falls back to the next issuer', async () => {
+  const token = await sign({ iss: other })
+  const asked: string[] = []
+  const prover = Attestation.Client.prover({
+    acquire: async ({ issuer: from }) => {
+      asked.push(from)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      if (from === issuer) throw new Error('issuer down')
+      return token
+    },
+    issuers: [issuer, other],
+    scope: '*',
+  })
+  const required = `email;issuer="${issuer}", email;issuer="${other}"`
+  const results = await Promise.all([
+    prover.retry!(rejected(required), sent()),
+    prover.retry!(rejected(required), sent()),
+  ])
+  expect(results).toEqual([
+    { [Attestation.Constants.header]: token },
+    { [Attestation.Constants.header]: token },
+  ])
+  expect(asked).toEqual([issuer, other])
+})
+
 test('does not acquire again when the server forbids a presented attestation', async () => {
   const token = await sign()
   let calls = 0

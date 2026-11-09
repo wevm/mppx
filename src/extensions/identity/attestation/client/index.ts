@@ -121,10 +121,10 @@ export function prover(config: prover.Config): Identity.Prover {
         try {
           const entry = await (async () => {
             if (decision.action === 'reuse') return decision.entry
-            if (decision.action === 'join') return decision.pending
             if (decision.action === 'skip' || !config.acquire) return undefined
             // A route may accept any one of the listed issuers, so one that fails does not stop
-            // the next; a decline does, so the user is asked once.
+            // the next, whether this retry started it or joined another's; a decline does, so
+            // the user is asked once.
             let error: { error: unknown } | undefined
             for (const { key, requirement } of alternatives) {
               // Decided again, since an earlier alternative's failure took time.

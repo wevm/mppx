@@ -252,7 +252,8 @@ async function resendHeaders(
       if (decision === true) resend = true
       else if (typeof decision === 'object' && decision !== null) {
         resend = true
-        for (const [name, value] of new Headers(decision)) headers.set(name, value)
+        // Same-named headers from several provers are combined, so each one's values resend.
+        for (const [name, value] of new Headers(decision)) headers.append(name, value)
       }
     }
   } finally {

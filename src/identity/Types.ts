@@ -212,7 +212,7 @@ export type Prover = {
    *
    * `context.request` is the request that got the response, so a prover can tell which of its
    * proofs the server rejected. Return headers to resend the request with: they are set on the
-   * request before every in-scope prover proves it again, so signing provers cover them. Return
+   * request before every in-scope prover proves it again, so signing provers cover them. Same-named headers returned by several provers are combined, comma-separated. Return
    * `false` or `undefined` not to resend. Paid attempts are never resent. `true` resends with no
    * extra headers and is deprecated: return `{}` instead.
    */
