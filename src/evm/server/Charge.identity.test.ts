@@ -101,7 +101,7 @@ test('a route with a payment check rejects x402 Credentials before settlement', 
   expect(settlements).toEqual([])
 })
 
-test('a composed route never settles an x402 Credential through an unchecked twin', async () => {
+function setup() {
   const settlements: unknown[] = []
   const method = evm.charge({
     currency: evm.assets.base.USDC,
@@ -120,70 +120,88 @@ test('a composed route never settles an x402 Credential through an unchecked twi
     requires: [],
     verify: () => ({ status: 'valid', value: true }),
   }
-  const server = Mppx.create({
-    methods: [method],
-    realm: 'example.test',
-    secretKey: 'test-secret-key-test-secret-key-32',
-  })
-  const route = server.compose(
-    [method, { amount: '0.25' }],
-    [method, { amount: '0.25', identity: { payment: check } }],
-  )
+  const create = (
+    options: { selectOffers?: (offers: readonly unknown[]) => readonly unknown[] } = {},
+  ) =>
+    Mppx.create({
+      methods: [method],
+      realm: 'example.test',
+      secretKey: 'test-secret-key-test-secret-key-32',
+      ...(options.selectOffers && { selectOffers: options.selectOffers as never }),
+    })
+  const server = create()
   const request = new Request('https://example.test/paid')
-  const offered = await route(request)
-  if (offered.status !== 402) throw new Error()
   const client = ClientMppx.create({
     methods: [
       clientEvm.charge({ account, currencies: [clientEvm.assets.base.USDC], networks: [8453] }),
     ],
     polyfill: false,
   })
-  const prepared = await client.preparePayment(
-    new Response(null, {
-      status: 402,
-      headers: {
-        [Types.paymentRequiredHeader]: offered.challenge.headers.get(Types.paymentRequiredHeader)!,
-      },
-    }),
+  /** Pays an x402 offer and returns the PAYMENT-SIGNATURE request. */
+  async function payX402(offer: Response) {
+    const prepared = await client.preparePayment(
+      new Response(null, {
+        status: 402,
+        headers: { [Types.paymentRequiredHeader]: offer.headers.get(Types.paymentRequiredHeader)! },
+      }),
+    )
+    const credential = await prepared.createCredential()
+    return new Request(request, { headers: { [Types.paymentSignatureHeader]: credential } })
+  }
+  /** An x402 offer for the given amount, from a route without a payment check. */
+  async function x402Offer(amount: string) {
+    const offered = await server.charge({ amount })(request)
+    if (offered.status !== 402) throw new Error()
+    return offered.challenge
+  }
+  function amounts(response: Response) {
+    const value = response.headers.get(Types.paymentRequiredHeader)
+    if (!value) return []
+    const paymentRequired = JSON.parse(atob(value)) as { accepts: { amount: string }[] }
+    return paymentRequired.accepts.map((accept) => accept.amount)
+  }
+  return { amounts, check, create, method, payX402, request, server, settlements, x402Offer }
+}
+
+test('a composed route does not advertise x402 for terms a checked offer shares', async () => {
+  const { check, method, request, server } = setup()
+  const route = server.compose(
+    [method, { amount: '0.25' }],
+    [method, { amount: '0.25', identity: { payment: check } }],
   )
-  const credential = await prepared.createCredential()
-  const result = await route(
-    new Request(request, { headers: { [Types.paymentSignatureHeader]: credential } }),
+  const offered = await route(request)
+  if (offered.status !== 402) throw new Error()
+  expect(offered.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
+})
+
+test('a composed route still advertises and settles x402 for terms no checked offer shares', async () => {
+  const { amounts, check, method, payX402, request, server, settlements } = setup()
+  const route = server.compose(
+    [method, { amount: '0.5' }],
+    [method, { amount: '0.25', identity: { payment: check } }],
   )
+  const offered = await route(request)
+  if (offered.status !== 402) throw new Error()
+  expect(amounts(offered.challenge)).toEqual(['500000'])
+  const result = await route(await payX402(offered.challenge))
+  expect(result.status).toBe(200)
+  expect(settlements).toHaveLength(1)
+})
+
+test('a composed route never settles an x402 Credential through an unchecked twin', async () => {
+  const { check, method, payX402, server, settlements, x402Offer } = setup()
+  const route = server.compose(
+    [method, { amount: '0.25' }],
+    [method, { amount: '0.25', identity: { payment: check } }],
+  )
+  const result = await route(await payX402(await x402Offer('0.25')))
   expect(result.status === 402 && result.rejection?.status).toBe('invalid')
   expect(settlements).toEqual([])
 })
 
 test('a nested composer cannot settle an x402 Credential through an unchecked twin', async () => {
-  const settlements: unknown[] = []
-  const method = evm.charge({
-    currency: evm.assets.base.USDC,
-    recipient,
-    x402: {
-      facilitator: {
-        verify: async () => ({ isValid: true }),
-        async settle(paymentPayload) {
-          settlements.push(paymentPayload)
-          return { success: true, transaction: reference, network: 'eip155:8453' }
-        },
-      },
-    },
-  })
-  const check: Identity.PaymentCheck = {
-    requires: [],
-    verify: () => ({ status: 'valid', value: true }),
-  }
-  const server = Mppx.create({
-    methods: [method],
-    realm: 'example.test',
-    secretKey: 'test-secret-key-test-secret-key-32',
-  })
-  const inner = Mppx.create({
-    methods: [method],
-    realm: 'example.test',
-    secretKey: 'test-secret-key-test-secret-key-32',
-    selectOffers: (offers) => offers,
-  })
+  const { check, create, method, payX402, request, server, settlements, x402Offer } = setup()
+  const inner = create({ selectOffers: (offers) => offers })
   const route = Mppx.compose(
     inner.compose(
       [method, { amount: '0.25' }],
@@ -191,27 +209,25 @@ test('a nested composer cannot settle an x402 Credential through an unchecked tw
     ),
     server.charge({ amount: '0.25', identity: { payment: check } }),
   )
-  const request = new Request('https://example.test/paid')
   const offered = await route(request)
   if (offered.status !== 402) throw new Error()
-  const client = ClientMppx.create({
-    methods: [
-      clientEvm.charge({ account, currencies: [clientEvm.assets.base.USDC], networks: [8453] }),
-    ],
-    polyfill: false,
-  })
-  const prepared = await client.preparePayment(
-    new Response(null, {
-      status: 402,
-      headers: {
-        [Types.paymentRequiredHeader]: offered.challenge.headers.get(Types.paymentRequiredHeader)!,
-      },
-    }),
-  )
-  const credential = await prepared.createCredential()
-  const result = await route(
-    new Request(request, { headers: { [Types.paymentSignatureHeader]: credential } }),
-  )
+  expect(offered.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
+  const result = await route(await payX402(await x402Offer('0.25')))
   expect(result.status === 402 && result.rejection?.status).toBe('invalid')
   expect(settlements).toEqual([])
+})
+
+test('an outer composer withholds x402 terms a nested checked offer shares', async () => {
+  const { amounts, check, create, method, request, server } = setup()
+  const inner = create({ selectOffers: (offers) => offers })
+  const route = Mppx.compose(
+    inner.compose(
+      [method, { amount: '0.5' }],
+      [method, { amount: '0.25', identity: { payment: check } }],
+    ),
+    server.charge({ amount: '0.25' }),
+  )
+  const offered = await route(request)
+  if (offered.status !== 402) throw new Error()
+  expect(amounts(offered.challenge)).toEqual(['500000'])
 })

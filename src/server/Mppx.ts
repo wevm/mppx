@@ -1301,7 +1301,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           response instanceof globalThis.Response &&
           response.headers.has(x402_Types.paymentRequiredHeader)
         )
-          response = withoutHeader(response, x402_Types.paymentRequiredHeader) as typeof response
+          response = withoutX402Offer(response) as typeof response
         // Every 402 of a route with a payment check lists the identities it requires.
         const challenged = IdentityServer.transition(identityState, {
           type: 'challenge',
@@ -2789,14 +2789,51 @@ function withIdentityRequirements(
   })
 }
 
-function withoutHeader(response: Response, name: string): Response {
+/**
+ * The x402 requirements a 402 withholds because its route has a payment check. A composer drops
+ * the same requirements from every other offer's PAYMENT-REQUIRED: a Credential for them is
+ * dispatched to the checked offer first, which rejects x402, so advertising them elsewhere would
+ * offer a payment that always fails.
+ */
+const withheldX402 = new WeakMap<Response, readonly unknown[]>()
+
+/** Removes a 402's x402 offer, recording the requirements it withholds. */
+function withoutX402Offer(response: Response): Response {
   const headers = new Headers(response.headers)
-  headers.delete(name)
-  return new Response(response.body, {
+  const value = headers.get(x402_Types.paymentRequiredHeader)
+  headers.delete(x402_Types.paymentRequiredHeader)
+  const result = new Response(response.body, {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
+  const accepts = (() => {
+    try {
+      return value ? x402_Header.decodePaymentRequiredEnvelope(value).accepts : []
+    } catch {
+      return []
+    }
+  })()
+  withheldX402.set(result, [...(withheldX402.get(response) ?? []), ...accepts])
+  return result
+}
+
+/** Records the requirements a composed 402 withholds, so an outer composer withholds them too. */
+function withWithheldX402(response: Response, withheld: readonly unknown[]): Response {
+  if (withheld.length > 0) withheldX402.set(response, withheld)
+  return response
+}
+
+/** Removes withheld requirements from an x402 PAYMENT-REQUIRED value; undefined when none remain. */
+function withoutWithheldX402(value: string, withheld: readonly unknown[]): string | undefined {
+  if (withheld.length === 0) return value
+  const paymentRequired = x402_Header.decodePaymentRequired(value)
+  const accepts = paymentRequired.accepts.filter(
+    (accept) => !withheld.some((requirement) => isDeepStrictEqual(accept, requirement)),
+  )
+  if (accepts.length === paymentRequired.accepts.length) return value
+  if (accepts.length === 0) return undefined
+  return x402_Header.encodePaymentRequired({ ...paymentRequired, accepts })
 }
 
 const challengeHeaderMerges = [
@@ -2815,7 +2852,9 @@ const challengeHeaderMerges = [
     values: (context) =>
       context.negotiatedChallengeResponses
         .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
-        .filter((value): value is string => value !== null),
+        .filter((value): value is string => value !== null)
+        .map((value) => withoutWithheldX402(value, context.withheldX402))
+        .filter((value): value is string => value !== undefined),
     merge: mergeX402PaymentRequiredHeaders,
   },
 ] satisfies readonly ChallengeHeaderMerge[]
@@ -3159,6 +3198,14 @@ function composeHandlers(
       ),
     )
 
+    // x402 requirements withheld by any offer with a payment check, including a nested
+    // composer's, are not advertised by another offer either.
+    const withheld = results.flatMap((result) =>
+      result.status === 402 && result.challenge instanceof globalThis.Response
+        ? (withheldX402.get(result.challenge) ?? [])
+        : [],
+    )
+
     // Merge challenge headers from the negotiated 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
@@ -3169,6 +3216,7 @@ function composeHandlers(
           challengeEntries,
           challengeResponses,
           negotiatedChallengeResponses,
+          withheldX402: withheld,
         }),
       )) {
         mergedHeaders.append(header.name, value)
@@ -3228,7 +3276,10 @@ function composeHandlers(
 
       return {
         status: 402,
-        challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+        challenge: withWithheldX402(
+          new Response(body, { status: 402, headers: mergedHeaders }),
+          withheld,
+        ),
       }
     }
 
@@ -3250,7 +3301,10 @@ function composeHandlers(
 
     return {
       status: 402,
-      challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+      challenge: withWithheldX402(
+        new Response(body, { status: 402, headers: mergedHeaders }),
+        withheld,
+      ),
     }
   }
 
@@ -3462,6 +3516,7 @@ type ChallengeHeaderMerge = {
     }[]
     challengeResponses: readonly Response[]
     negotiatedChallengeResponses: readonly Response[]
+    withheldX402: readonly unknown[]
   }): readonly string[]
   merge(values: readonly string[]): readonly string[]
 }
