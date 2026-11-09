@@ -141,6 +141,49 @@ test('acquires every listed requirement, same-type issuers included', async () =
   ])
 })
 
+test('meets a group of alternatives with one attestation, trying the next on failure', async () => {
+  const third = 'https://third-issuer.example'
+  const asked: string[] = []
+  const prover = Attestation.Client.prover({
+    acquire: ({ issuer: from, type }) => {
+      asked.push(`${type}@${from}`)
+      if (from === issuer) throw new Error('issuer down')
+      if (from === other) return undefined
+      return sign({ iss: from, type })
+    },
+    issuers: [issuer, other, third],
+    scope: '*',
+  })
+  const headers = await prover.retry!(
+    rejected(
+      `(email;issuer="${issuer}" email;issuer="${other}" email;issuer="${third}" email;issuer="https://untrusted.example"), phone;issuer="${third}", (phone;issuer="${issuer}" phone;issuer="${third}")`,
+    ),
+    sent(),
+  )
+  // The failed and declined alternatives fall through to the next; the last group is already met.
+  expect(asked).toEqual([`email@${issuer}`, `email@${other}`, `email@${third}`, `phone@${third}`])
+  const tokens = new Headers(headers as HeadersInit).get(Attestation.Constants.header)!.split(', ')
+  expect(tokens.map((token) => Attestation.decode(token)?.claims.type)).toEqual(['email', 'phone'])
+})
+
+test('prefers a held alternative over acquiring another', async () => {
+  const held = await sign({ iss: other })
+  let calls = 0
+  const prover = Attestation.Client.prover({
+    acquire: () => {
+      calls++
+      return undefined
+    },
+    attestations: [held],
+    issuers: [issuer, other],
+    scope: '*',
+  })
+  expect(
+    await prover.retry!(rejected(`(email;issuer="${issuer}" email;issuer="${other}")`), sent()),
+  ).toEqual({ [Attestation.Constants.header]: held })
+  expect(calls).toBe(0)
+})
+
 test('keeps the attestations the request carried on the resend, except those replaced', async () => {
   const attached = await sign({ iss: other, type: 'phone' })
   const stale = await sign()
@@ -319,9 +362,10 @@ test('hands out frozen requirements', () => {
   const list = Attestation.Client.requirements(
     new Headers({ [Attestation.Constants.requiredHeader]: `phone;issuer="${issuer}"` }),
   )
-  expect(list).toEqual([{ issuer, type: 'phone' }])
+  expect(list).toEqual([[{ issuer, type: 'phone' }]])
   expect(Object.isFrozen(list)).toBe(true)
   expect(Object.isFrozen(list[0])).toBe(true)
+  expect(Object.isFrozen(list[0]![0])).toBe(true)
 })
 
 test('cache transitions keep the entry being replaced unless the server rejected it', async () => {
@@ -436,6 +480,86 @@ test('requires and obtains a phone attestation through Mppx', async () => {
   expect(forbidden.status).toBe(403)
   expect(await forbidden.text()).toBe('Only US numbers.')
   expect(blocked.asked).toEqual(['phone'])
+})
+
+test('obtains one attestation for a route accepting any of two issuers through Mppx', async () => {
+  const method = Method.from({
+    name: 'test',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
+    },
+  })
+  const email = (from: string) =>
+    Attestation.Server.verifier({
+      audience: (request) => new URL(request.url).origin,
+      issuer: from,
+      keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+      type: 'email',
+    })
+  const either = Identity.anyOf(email(issuer), email(other))
+  const mppx = Mppx.create({
+    methods: [
+      Method.toServer(method, {
+        async verify() {
+          return Receipt.from({
+            method: 'test',
+            reference: 'test-payment',
+            status: 'success',
+            timestamp: new Date().toISOString(),
+          })
+        },
+      }),
+    ],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  const listener = ServerRequest.toNodeListener(async (request) => {
+    const result = await mppx.charge({
+      amount: '1',
+      currency: 'USD',
+      identity: [either],
+      recipient: 'merchant',
+    })(request)
+    if (result.status !== 200) return result.challenge
+    return result.withReceipt(Response.json({ ok: true }))
+  })
+  const server = await Http.createServer(((request, response) =>
+    listener(request, response)) as RequestListener)
+  servers.push(server)
+  const origin = new URL(server.url).origin
+
+  const missing = await fetch(server.url)
+  expect(missing.status).toBe(401)
+  expect(missing.headers.get(Attestation.Constants.requiredHeader)).toBe(
+    `(email;issuer="${issuer}" email;issuer="${other}")`,
+  )
+
+  const asked: string[] = []
+  const client = ClientMppx.create({
+    identity: [
+      Attestation.Client.prover({
+        acquire({ audience, issuer: from }) {
+          asked.push(from)
+          return sign({ aud: audience, iss: from })
+        },
+        issuers: [other, issuer],
+        scope: [origin],
+      }),
+    ],
+    methods: [
+      Method.toClient(method, {
+        async createCredential({ challenge }) {
+          return Credential.serialize({ challenge, payload: { token: 'paid' } })
+        },
+      }),
+    ],
+    polyfill: false,
+  })
+  expect((await client.fetch(server.url)).status).toBe(200)
+  // The server's listed order decides, not the client's trusted list.
+  expect(asked).toEqual([issuer])
 })
 
 test('sends an attestation acquired from an issuer whose clock trails, without acquiring again', async () => {

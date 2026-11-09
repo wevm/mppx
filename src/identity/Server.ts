@@ -21,6 +21,9 @@ type Rejected = Exclude<Types.Verification, { status: 'valid' }>
  * Every member runs. The result is `valid` if any member verifies (the first valid member
  * wins). Otherwise the rejected member whose status has the highest precedence
  * (`Identity.Status.precedence`) decides the status and reason, with every member's headers.
+ * Members' `Identity-Attestation-Required` values become one inner list of alternatives, such
+ * as `(email;issuer="https://a.example" email;issuer="https://b.example")`, so a client
+ * obtains one of them rather than all.
  *
  * @example
  * ```ts
@@ -56,12 +59,35 @@ function combineAnyOf(outcomes: readonly Types.Verification[]): Types.Verificati
       status: 'valid',
       value: Object.freeze({ index, value: matched.value }),
     })
-  const decision = decide(outcomes as readonly Rejected[])
-  return toVerification(
-    decision.status === 'missing'
-      ? { ...decision, reason: 'None of the accepted identity proofs was presented.' }
-      : decision,
-  )
+  const rejected = outcomes as readonly Rejected[]
+  const decision = decide(rejected)
+  return toVerification({
+    ...decision,
+    headers: groupAlternatives(rejected.map((outcome) => normalize(outcome).headers)),
+    ...(decision.status === 'missing' && {
+      reason: 'None of the accepted identity proofs was presented.',
+    }),
+  })
+}
+
+/**
+ * Merges the headers of `anyOf` members: each requirements header
+ * (`Requirements.alternativeHeaders`) once, its values grouped as alternatives; every other
+ * header as it is, in order.
+ */
+function groupAlternatives(members: readonly Decision['headers'][]): Decision['headers'] {
+  const grouped = new Map<string, string[]>()
+  const others: Decision['headers'][number][] = []
+  for (const [name, value] of members.flat()) {
+    if (!Requirements.alternativeHeaders.includes(name)) others.push(Object.freeze([name, value]))
+    else grouped.set(name, [...(grouped.get(name) ?? []), value])
+  }
+  return Object.freeze([
+    ...others,
+    ...[...grouped].map(([name, values]) =>
+      Object.freeze([name, Requirements.alternatives(values)] as const),
+    ),
+  ])
 }
 
 /** A rejected outcome reduced to its fixed status, the HTTP code it is sent with, headers and reason. */

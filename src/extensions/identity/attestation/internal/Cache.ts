@@ -56,6 +56,25 @@ export type Decision =
   /** Do nothing: a new attestation would not change the outcome. */
   | { readonly action: 'skip' }
 
+/** Order in which a retry tries a group's alternatives: no new attestation first. */
+const rank = { reuse: 0, join: 1, acquire: 2, skip: 3 } as const satisfies Record<
+  Decision['action'],
+  number
+>
+
+/**
+ * Orders the alternatives of one requirement group for a retry, as data: one the cache holds
+ * first, then one being acquired, then those to acquire, each in listed order. Skipped ones are
+ * dropped. Pure.
+ */
+export function order<alternative extends { readonly decision: Decision }>(
+  alternatives: readonly alternative[],
+): readonly alternative[] {
+  return alternatives
+    .filter(({ decision }) => decision.action !== 'skip')
+    .sort((a, b) => rank[a.decision.action] - rank[b.decision.action])
+}
+
 /** Returns the cache key of an attestation. */
 export function keyOf(claims: Pick<Types.Claims, 'aud' | 'iss' | 'type'>): string {
   return JSON.stringify([claims.aud, claims.iss, claims.type])

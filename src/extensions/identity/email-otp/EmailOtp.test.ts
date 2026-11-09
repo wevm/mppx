@@ -391,7 +391,7 @@ test("accepts the server's own identity system through Identity.from, or email",
 
   const none = await fetch(server.url)
   expect(none.status).toBe(401)
-  expect(Attestation.Client.requirements(none.headers)).toEqual([{ issuer, type: 'email' }])
+  expect(Attestation.Client.requirements(none.headers)).toEqual([[{ issuer, type: 'email' }]])
 
   expect((await fetch(server.url, { headers: { 'X-Api-Key': 'wrong' } })).status).toBe(403)
 

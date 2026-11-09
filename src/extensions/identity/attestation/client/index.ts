@@ -1,4 +1,5 @@
 import { isInnerList, parseList, Token as SfToken } from 'structured-headers'
+import type { Item } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
@@ -14,8 +15,10 @@ import type * as Types from '../Types.js'
  * audience is the request's origin: on a paid attempt every one not expired beyond the clock
  * tolerance, on an unpaid one only those outside the refresh margin, so one close to expiry is
  * replaced before paying. When a server answers 401 or 403 with `Identity-Attestation-Required`,
- * the prover obtains an attestation for each listed requirement from a trusted issuer and resends
- * the request with them, keeping the attestations it already carried.
+ * the prover meets each listed group (see {@link requirements}) with one attestation from a
+ * trusted issuer, and resends the request with them, keeping the attestations it already carried.
+ * Within a group of alternatives it prefers one it holds, and otherwise acquires them in listed
+ * order until one succeeds, so a route accepting any of several issuers costs one acquisition.
  *
  * Trust is set by two options together:
  * - `scope`: the origins that may receive attestations and ask for new ones. The audience is
@@ -125,28 +128,42 @@ export function prover(config: prover.Config): Identity.Prover {
       if (!Token.isIssuer(audience)) return undefined
       const sent = sentTokens(context?.request)
       const obtained = new Map<string, string>()
+      // Requirements tried in this retry, so one listed in several groups is acquired once.
+      const tried = new Set<string>()
       let failure: { error: unknown } | undefined
-      // Every listed requirement is answered: the header lists a route's conjunctive and
-      // alternative requirements alike, so one attestation per type could leave the route unmet.
-      for (const { key, requirement } of trusted(requirements(response.headers), audience)) {
-        const decision = Cache.decide({
-          now: now(),
-          sent: sent.get(key) ?? [],
-          slot: slots.get(key),
-        })
-        try {
-          const entry =
-            decision.action === 'reuse'
-              ? decision.entry
-              : decision.action === 'skip' || !config.acquire
-                ? undefined
-                : await (decision.action === 'join'
-                    ? decision.pending
-                    : acquire(key, requirement, audience, decision.rejected))
-          if (entry) obtained.set(key, entry.token)
-        } catch (error) {
-          // One issuer failing does not stop the others.
-          failure ??= { error }
+      // Every group must be met; one alternative meets it.
+      for (const group of requirements(response.headers)) {
+        const alternatives = trusted(group, audience)
+        if (alternatives.some(({ key }) => obtained.has(key))) continue
+        const decided = alternatives
+          .filter(({ key }) => !tried.has(key))
+          .map((alternative) => ({
+            ...alternative,
+            decision: Cache.decide({
+              now: now(),
+              sent: sent.get(alternative.key) ?? [],
+              slot: slots.get(alternative.key),
+            }),
+          }))
+        for (const { decision, key, requirement } of Cache.order(decided)) {
+          tried.add(key)
+          try {
+            const entry =
+              decision.action === 'reuse'
+                ? decision.entry
+                : decision.action === 'join'
+                  ? await decision.pending
+                  : decision.action === 'acquire' && config.acquire
+                    ? await acquire(key, requirement, audience, decision.rejected)
+                    : undefined
+            if (entry) {
+              obtained.set(key, entry.token)
+              break
+            }
+          } catch (error) {
+            // One issuer failing does not stop the next alternative or the other groups.
+            failure ??= { error }
+          }
         }
       }
       // A failure surfaces only when nothing was obtained, so another attestation still resends.
@@ -200,8 +217,17 @@ export declare namespace prover {
   }
 }
 
-/** Parses the attestation requirements of a rejected response, skipping malformed members. */
-export function requirements(headers: Headers): readonly Types.Requirement[] {
+/**
+ * Parses the attestation requirements of a rejected response as groups, every one of which a
+ * request must meet with any one of its requirements:
+ *
+ * - An item, such as `phone;issuer="https://a.example"`, is a group of one.
+ * - An inner list, such as `(email;issuer="https://a.example" email;issuer="https://b.example")`,
+ *   is a group of alternatives, as `Identity.anyOf` sends them.
+ *
+ * Malformed members are skipped, and a group left with none is dropped.
+ */
+export function requirements(headers: Headers): readonly (readonly Types.Requirement[])[] {
   const value = headers.get(Constants.requiredHeader)
   if (!value) return []
   let list: ReturnType<typeof parseList>
@@ -210,16 +236,23 @@ export function requirements(headers: Headers): readonly Types.Requirement[] {
   } catch {
     return []
   }
-  const result: Types.Requirement[] = []
-  for (const member of list) {
-    if (isInnerList(member) || !(member[0] instanceof SfToken)) continue
-    const type = member[0].toString()
-    const issuer = member[1].get('issuer')
-    if (issuer === undefined) result.push(Object.freeze({ type }))
-    else if (typeof issuer === 'string' && Token.isIssuer(issuer))
-      result.push(Object.freeze({ type, issuer }))
-  }
-  return Object.freeze(result)
+  const groups = list
+    .map((member) =>
+      (isInnerList(member) ? member[0] : [member]).flatMap((item) => toRequirement(item) ?? []),
+    )
+    .filter((group) => group.length > 0)
+    .map((group) => Object.freeze(group))
+  return Object.freeze(groups)
+}
+
+/** Parses one requirement item, or returns `undefined` when it is malformed. */
+function toRequirement([value, parameters]: Item): Types.Requirement | undefined {
+  if (!(value instanceof SfToken)) return undefined
+  const type = value.toString()
+  const issuer = parameters.get('issuer')
+  if (issuer === undefined) return Object.freeze({ type })
+  if (typeof issuer === 'string' && Token.isIssuer(issuer)) return Object.freeze({ type, issuer })
+  return undefined
 }
 
 /** A requirement from a trusted issuer. */

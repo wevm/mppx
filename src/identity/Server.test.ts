@@ -121,6 +121,34 @@ test('anyOf applies the precedence rule and merges member headers', async () => 
   ).toEqual({ status: 'forbidden', headers: [['x', '1']], reason: 'forbidden proof' })
 })
 
+test("anyOf groups members' attestation requirements as alternatives", async () => {
+  const required = (value: string) => missing({ 'Identity-Attestation-Required': value })
+  const a = 'email;issuer="https://a.example"'
+  const b = 'email;issuer="https://b.example"'
+  const c = 'phone;issuer="https://c.example"'
+  // As the response sends it: one value per header name.
+  const header = async (verifiers: readonly Identity.Verifier[]) =>
+    new Headers(headersOf(await verify(verifiers)) as [string, string][]).get(
+      'Identity-Attestation-Required',
+    )
+  expect(await header([Identity.anyOf(required(a), required(b), missing({ X: '1' }))])).toBe(
+    `(${a} ${b})`,
+  )
+  // Nested alternatives flatten into one group; a duplicate is listed once.
+  expect(
+    await header([Identity.anyOf(Identity.anyOf(required(a), required(b)), required(a))]),
+  ).toBe(`(${a} ${b})`)
+  expect(await header([Identity.anyOf(required(a), required(a))])).toBe(a)
+  // Inner lists cannot nest, so a member requiring two attestations keeps every value.
+  expect(await header([Identity.anyOf(required(`${a}, ${c}`), required(b))])).toBe(
+    `${a}, ${c}, ${b}`,
+  )
+  // Separate verifiers stay conjunctive, beside a group.
+  expect(await header([required(c), Identity.anyOf(required(a), required(b))])).toBe(
+    `${c}, (${a} ${b})`,
+  )
+})
+
 test('runs each verifier once per context, across anyOf members', async () => {
   const run = vi.fn(() => ({ status: 'valid', value: true }) as const)
   const verifier: Identity.Verifier<boolean> = { verify: run }

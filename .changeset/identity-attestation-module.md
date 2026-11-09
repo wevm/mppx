@@ -4,7 +4,8 @@
 
 Added `mppx/extensions/identity/attestation` and rebuilt the identity extensions on fixed statuses.
 
-- Added the attestation module (`Attestation` from `mppx/extensions/identity`): `Attestation.Server.verifier` for any attestation type, `Attestation.Client.prover`, `Attestation.sign`, `decode` and `verify` for issuers, `Attestation.Jwks.resolver` and `Attestation.Constants`. The attestation wire format and the `Identity-Attestation` and `Identity-Attestation-Required` headers are unchanged.
+- Added the attestation module (`Attestation` from `mppx/extensions/identity`): `Attestation.Server.verifier` for any attestation type, `Attestation.Client.prover`, `Attestation.sign`, `decode` and `verify` for issuers, `Attestation.Jwks.resolver` and `Attestation.Constants`. The attestation wire format and the `Identity-Attestation` header are unchanged.
+- Grouped alternatives in `Identity-Attestation-Required`: `Identity.anyOf` lists its members' requirements as one inner list, and the prover meets each group with one attestation, the first that succeeds in listed order, so a route accepting any of several issuers costs one code. `Attestation.Client.requirements` returns these groups.
 - Rebuilt `EmailOtp` on it, with the same public API. Deprecated `EmailOtp.Constants.header` and `requiredHeader` in favor of `Attestation.Constants`.
 - Added `Identity.Headers`, the identity request headers that never cross origins or reach upstream and the identity response headers a proxy drops, and `Prover.headers` for a prover's own sensitive request headers. The client's cross-origin redirect stripping and the proxy now read them instead of hardcoded names.
 - Added a second `Prover.retry` parameter, `{ request }`: the request that got the rejected response.

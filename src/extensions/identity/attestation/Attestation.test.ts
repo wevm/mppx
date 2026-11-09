@@ -101,10 +101,26 @@ test('parses requirements and ignores malformed members', () => {
       'email;issuer="https://a.example", phone;issuer=1, "x", sms;issuer="http://evil.example", kyc;issuer="https://b.example", dev;issuer="http://localhost:8787"',
   })
   expect(Attestation.Client.requirements(headers)).toEqual([
-    { issuer: 'https://a.example', type: 'email' },
-    { issuer: 'https://b.example', type: 'kyc' },
-    { issuer: 'http://localhost:8787', type: 'dev' },
+    [{ issuer: 'https://a.example', type: 'email' }],
+    [{ issuer: 'https://b.example', type: 'kyc' }],
+    [{ issuer: 'http://localhost:8787', type: 'dev' }],
   ])
+})
+
+test('parses an inner list as a group of alternatives', () => {
+  const headers = new Headers({
+    [Attestation.Constants.requiredHeader]:
+      'phone;issuer="https://a.example", (email;issuer="https://a.example" "x" email;issuer="https://b.example"), ("y")',
+  })
+  const groups = Attestation.Client.requirements(headers)
+  expect(groups).toEqual([
+    [{ issuer: 'https://a.example', type: 'phone' }],
+    [
+      { issuer: 'https://a.example', type: 'email' },
+      { issuer: 'https://b.example', type: 'email' },
+    ],
+  ])
+  expect(Object.isFrozen(groups) && groups.every(Object.isFrozen)).toBe(true)
 })
 
 test('keeps the last key set when a refresh has no keys list', async () => {
