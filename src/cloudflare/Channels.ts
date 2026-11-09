@@ -254,10 +254,7 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
       }, settlementLeaseMs / 2)
       try {
         const client = await getClient({ chainId: state.chainId })
-        if (
-          isPrecompileState(state) &&
-          (resolveSettleableVoucher(state)?.cumulativeAmount ?? state.settledOnChain) < state.spent
-        ) {
+        if (isPrecompileState(state) && !resolveSettleableVoucher(state)) {
           const result = await CloseSupervisor.superviseCloses({
             ...options,
             channelIds: [channelId as Hex],
@@ -266,7 +263,9 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
             store,
           })
           if (
-            !['closed', 'finalized', 'missing'].includes(result.channels[0]?.outcome ?? 'failed')
+            !['closed', 'settled', 'finalized', 'missing'].includes(
+              result.channels[0]?.outcome ?? 'failed',
+            )
           ) {
             message.retry({ delaySeconds: 60 })
             continue

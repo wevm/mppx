@@ -1,5 +1,7 @@
 import {
   BaseError as viem_BaseError,
+  createClient,
+  custom,
   ExecutionRevertedError,
   HttpRequestError,
   InternalRpcError,
@@ -842,4 +844,31 @@ async function emitSessionSettlement(
   } catch {
     // Errors are isolated — observers cannot break the settlement flow.
   }
+}
+
+const sendMethods = new Set([
+  'eth_sendRawTransaction',
+  'eth_sendRawTransactionSync',
+  'eth_sendTransaction',
+])
+
+/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
+export function trackSendAttempts(client: Chain.TransactionClient) {
+  const tracked = { attempted: false }
+  const trackedClient = createClient({
+    account: client.account,
+    chain: client.chain,
+    pollingInterval: client.pollingInterval,
+    transport: custom(
+      {
+        request(parameters) {
+          if (sendMethods.has(parameters.method)) tracked.attempted = true
+          return client.request(parameters as never)
+        },
+      },
+      // The wrapped client already owns retries.
+      { retryCount: 0 },
+    ),
+  })
+  return { client: trackedClient, tracked }
 }

@@ -10,6 +10,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import { VerificationFailedError } from '../../../Errors.js'
 import * as Store from '../../../Store.js'
 import * as Chain from '../precompile/Chain.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
@@ -135,6 +136,7 @@ function createSupervisorClient(
               timestamp: numberToHex(block.timestamp),
               transactions: [],
             }
+          if (args.method === 'eth_sendRawTransaction') return txHash
           if (args.method === 'eth_getLogs') {
             const [filter] = args.params as [{ fromBlock: Hex; toBlock: Hex }]
             return (
@@ -245,10 +247,84 @@ describe('superviseCloses', () => {
     })
   })
 
+  test('keeps a channel open when a retained voucher can still settle', async () => {
+    const store = await seed({
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const close = vi.spyOn(Chain, 'closeOnChain')
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.channels).toEqual([{ channelId, outcome: 'open' }])
+    expect(close).not.toHaveBeenCalled()
+    expect((await store.getChannel(channelId))?.closeRequestedAt).toBe(0n)
+  })
+
+  test('reconciles already-settled spend without closing or allowing credits below it', async () => {
+    const store = await seed({
+      pendingSettlement: { amount: 350n, expiresAt: 1 },
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 350n })
+    const close = vi.spyOn(Chain, 'closeOnChain')
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.channels).toEqual([{ channelId, outcome: 'settled' }])
+    expect(close).not.toHaveBeenCalled()
+    const current = await store.getChannel(channelId)
+    expect(current).toMatchObject({
+      settledOnChain: 350n,
+      retainedVouchers: [],
+      closeRequestedAt: 0n,
+    })
+    expect(current?.pendingSettlement).toBeUndefined()
+    expect(
+      await ChannelStore.creditChannel(store, channelId, 1n, { idempotencyKey: 'refund' }),
+    ).toMatchObject({ status: 'declined' })
+  })
+
+  test.each([false, true])(
+    'clears a definitively failed close (submitted: %s)',
+    async (submitted) => {
+      const store = await seed()
+      mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+      vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
+        if (!submitted) throw new Error('fee policy rejected')
+        await client.request({ method: 'eth_sendRawTransaction', params: ['0x1234'] })
+        return txHash
+      })
+      vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockRejectedValue(
+        new VerificationFailedError({ reason: 'transaction reverted' }),
+      )
+      const result = await superviseCloses({
+        channelIds: [channelId],
+        client: createSupervisorClient(),
+        store,
+        closeUnsettled: true,
+      })
+      expect(result.failed).toBe(1)
+      expect(await store.getChannel(channelId)).toMatchObject({
+        closeRequestedAt: 0n,
+        finalized: false,
+      })
+    },
+  )
+
   test('keeps ambiguous close attempts frozen until their transaction expiry', async () => {
     const store = await seed()
     mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
-    const close = vi.spyOn(Chain, 'closeOnChain').mockRejectedValue(new Error('RPC disconnected'))
+    const close = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
+      await client.request({ method: 'eth_sendRawTransaction', params: ['0x1234'] })
+      throw new Error('RPC disconnected')
+    })
     const parameters = {
       channelIds: [channelId],
       client: createSupervisorClient(),

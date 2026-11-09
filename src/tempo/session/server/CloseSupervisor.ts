@@ -15,6 +15,7 @@ import {
   resolveChannelStore,
   type SessionStoreInput,
   type SettlementTransactionOptions,
+  trackSendAttempts,
 } from './Settlement.js'
 
 /** Escrow event every close and withdrawal emits, with the amount paid to the payee. */
@@ -37,7 +38,7 @@ export const defaultCloseSearchMarginBlocks = 2_000n
 export type CloseSupervisionOutcome =
   /** Open with no close request, or not yet open at the pinned block. */
   | 'open'
-  /** Open, and settled because its spend crossed `settlementSchedule`. */
+  /** Open and settled, including reconciliation of an already completed settlement. */
   | 'settled'
   /** Close requested, with nothing above the settled amount to capture; the payer's withdrawal finalizes it. */
   | 'closing'
@@ -108,7 +109,7 @@ export type SuperviseClosesParameters = Pick<
   client: Chain.TransactionClient
   /** Blocks searched before `previousBlock` for a channel no supervision has read open. @default 2_000n */
   closeSearchMarginBlocks?: bigint | undefined
-  /** Closes open channels to collect unpaid spend, bounded by the voucher and deposit. @default false */
+  /** Closes open channels with unpaid spend but no settleable voucher, bounded by spend and deposit. @default false */
   closeUnsettled?: boolean | undefined
   /** Widest block range of one log query. @default 100_000n */
   logBlockRange?: bigint | undefined
@@ -310,7 +311,27 @@ async function superviseChannel(
       const closing = await store.updateChannel(channelId, (current) => {
         claimed = false
         if (!current || current.finalized || current.closeRequestedAt !== 0n) return current
-        if (current.spent <= state.settled) return current
+        const { pendingSettlement, ...rest } = current
+        const onChain = ChannelStore.mergeActiveOnChainState(current, state)
+        current = {
+          ...rest,
+          ...onChain,
+          ...(pendingSettlement && pendingSettlement.amount > onChain.settledOnChain
+            ? { pendingSettlement }
+            : {}),
+          ...(current.retainedVouchers
+            ? {
+                retainedVouchers: current.retainedVouchers.filter(
+                  (voucher) => voucher.cumulativeAmount > onChain.settledOnChain,
+                ),
+              }
+            : {}),
+        }
+        if (
+          current.spent <= current.settledOnChain ||
+          ChannelStore.resolveSettleableVoucher(current)
+        )
+          return current
         const next = ChannelStore.markPendingClose({
           closeRequestedAt: now,
           cumulativeAmount: current.highestVoucher?.cumulativeAmount ?? 0n,
@@ -322,7 +343,8 @@ async function superviseChannel(
         return next
       })
       if (!closing || closing.finalized) return { outcome: 'finalized' }
-      if (!claimed || !ChannelStore.isPrecompileState(closing)) return { outcome: 'open' }
+      if (!claimed || !ChannelStore.isPrecompileState(closing))
+        return { outcome: closing.spent <= closing.settledOnChain ? 'settled' : 'open' }
       return closeAtSpend(parameters, store, closing, state)
     }
     // A pinned read without a request means the payer cancelled it, unless the record holds a
@@ -386,6 +408,8 @@ async function closeAtSpend(
 ): Promise<{ outcome: CloseSupervisionOutcome; txHash?: Hex | undefined }> {
   const { client } = parameters
   const { channelId } = channel
+  const send = trackSendAttempts(client)
+  let reverted = false
   try {
     const voucher = channel.highestVoucher
     if (!voucher) throw new VerificationFailedError({ reason: 'no voucher to close with' })
@@ -409,7 +433,7 @@ async function closeAtSpend(
         ? {}
         : { validBefore: Number(channel.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds }
     const txHash = await Chain.closeOnChain(
-      client,
+      send.client,
       channel.descriptor,
       voucher.cumulativeAmount,
       capture,
@@ -426,7 +450,10 @@ async function closeAtSpend(
           }
         : validity,
     )
-    const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
+    const receipt = await Chain.waitForSuccessfulReceipt(client, txHash).catch((error) => {
+      reverted = error instanceof VerificationFailedError
+      throw error
+    })
     const { refundedToPayer, settledToPayee } = Chain.readChannelClosedReceiptFields(
       Chain.getChannelEvent(receipt, 'ChannelClosed', channelId),
     )
@@ -458,6 +485,19 @@ async function closeAtSpend(
     }
     return { outcome: 'closed', txHash }
   } catch (error) {
+    if (
+      state.closeRequestedAt === 0 &&
+      channel.pendingCloseAt !== undefined &&
+      (!send.tracked.attempted || reverted)
+    ) {
+      await store.updateChannel(channelId, (current) =>
+        current &&
+        current.pendingCloseAt === channel.pendingCloseAt &&
+        current.closeRequestedAt === channel.pendingCloseAt
+          ? { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
+          : current,
+      )
+    }
     await reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
       chainId: channel.chainId,
       channelId,

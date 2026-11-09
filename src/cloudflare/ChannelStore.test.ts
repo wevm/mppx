@@ -122,12 +122,29 @@ describe('settle', () => {
     expect(supervise).toHaveBeenCalledWith(
       expect.objectContaining({ closeUnsettled: true, channelIds: [channelId] }),
     )
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'settled' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
     supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'failed' }] } as never)
     expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
       delaySeconds: 60,
       calls: 0,
     })
     supervise.mockRestore()
+  })
+
+  test('keeps ordinary settlement when a retained voucher fits partial spend', async () => {
+    expect(
+      await run(
+        channel({
+          voucher: 2_000n,
+          spent: 1_500n,
+          retainedVouchers: [{ cumulativeAmount: 1_200n, signature: '0x02' }],
+        }),
+      ),
+    ).toEqual({ acked: true, calls: 1 })
   })
 
   test('settles a channel and acknowledges it', async () => {
