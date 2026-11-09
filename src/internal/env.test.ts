@@ -2,6 +2,7 @@ import * as Env from './env.js'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('Env.get', () => {
@@ -38,5 +39,41 @@ describe('Env.get', () => {
   test('falls through to later vars when earlier ones are unset', () => {
     vi.stubEnv('VERCEL_URL', 'my-app.vercel.app')
     expect(Env.get('realm')).toBe('my-app.vercel.app')
+  })
+})
+
+describe('Env.sharedRuntime', () => {
+  test('returns undefined in tests', () => {
+    expect(Env.sharedRuntime()).toBeUndefined()
+  })
+
+  test('detects NODE_ENV=production', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    expect(Env.sharedRuntime()).toBe('NODE_ENV is "production"')
+  })
+
+  test.each([
+    'AWS_LAMBDA_FUNCTION_NAME',
+    'DENO_DEPLOYMENT_ID',
+    'DYNO',
+    'FLY_APP_NAME',
+    'K_SERVICE',
+    'NETLIFY',
+    'RAILWAY_ENVIRONMENT',
+    'RENDER',
+    'VERCEL',
+  ])('detects %s', (name) => {
+    vi.stubEnv(name, '1')
+    expect(Env.sharedRuntime()).toBe(`${name} is set`)
+  })
+
+  test('detects Cloudflare Workers', () => {
+    vi.stubGlobal('navigator', { userAgent: 'Cloudflare-Workers' })
+    expect(Env.sharedRuntime()).toBe('the runtime is Cloudflare Workers')
+  })
+
+  test('ignores an empty platform variable', () => {
+    vi.stubEnv('VERCEL', '')
+    expect(Env.sharedRuntime()).toBeUndefined()
   })
 })

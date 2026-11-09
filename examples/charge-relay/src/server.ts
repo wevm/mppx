@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { Errors, Receipt } from 'mppx'
 import { Mppx } from 'mppx/hono'
-import { tempo } from 'mppx/server'
+import { Store, tempo } from 'mppx/server'
 import { createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Chain } from 'viem/tempo'
@@ -30,6 +30,10 @@ function createPayments(env: Env) {
     chainId: Chain.testnet.id,
     getClient: () => client,
     recipient: account.address,
+    // The relay below validates and broadcasts every credential and enforces single use, so
+    // tempo.charge's own replay store is never read. Passing one explicitly keeps it from
+    // refusing to start in production without a shared store.
+    store: Store.memory(),
     // To replace the local `relay` implementation below with the built-in adapter:
     // relay: { apiBaseUrl: env.TEMPO_API_URL, apiKey: env.TEMPO_API_KEY },
     supportedModes: ['pull'],

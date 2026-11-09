@@ -89,8 +89,12 @@ export function charge<const parameters extends charge.Parameters>(
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
+  // A relay validates and broadcasts credentials and enforces single use itself, so it never
+  // reads the local replay store and needs no shared one.
   const rawStore = (parameters.store ??
-    fallbackStore('tempo.charge')) as Store.AtomicStore<charge.StoreItemMap>
+    (relay
+      ? Store.memory()
+      : fallbackStore('tempo.charge'))) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,
@@ -1123,16 +1127,21 @@ export declare namespace charge {
     /**
      * Store for charge replay protection.
      *
-     * Non-zero charge flows default to an in-memory store if omitted. For
-     * zero-dollar proof auth, replay prevention is enabled only when a store
+     * Replay protection requires a {@link Store.AtomicStore} so replay markers
+     * can be written atomically. Use a shared store, such as `Store.redis()`,
+     * `Store.upstash()`, `Store.postgres()` or `Store.durableObject()`, so
+     * consumed hashes and proofs are visible across all server instances.
+     *
+     * If omitted, this throws in production (`NODE_ENV=production`), on
+     * multi-instance platforms (such as Vercel, AWS Lambda, Netlify, Fly.io,
+     * Cloud Run, Render, Railway or Heroku) and on Cloudflare Workers. Elsewhere,
+     * such as local development and tests, it warns and falls back to an
+     * in-memory store. Pass `Store.memory()` explicitly to accept replay
+     * protection scoped to one instance.
+     *
+     * For zero-dollar proof auth, replay prevention is enabled only when a store
      * is explicitly provided; otherwise proofs remain reusable until the
      * challenge expires.
-     *
-     * Replay protection requires a {@link Store.AtomicStore} so replay markers
-     * can be written atomically.
-     *
-     * Use a shared store in multi-instance deployments so consumed hashes and
-     * proofs are visible across all server instances.
      */
     store?: Store.AtomicStore | undefined
     /**
@@ -1213,7 +1222,7 @@ export declare namespace charge {
     maxInFlightReservations?: number | undefined
     /** Maximum aggregate declared fee exposure. @default `feePayerPolicy.maxTotalFee * 10` */
     maxInFlightTotalFee?: bigint | undefined
-    /** Atomic store shared by every process using the sponsor. Defaults to `store`. */
+    /** Atomic store shared by every process using the sponsor. Defaults to `store`, under the same production rule. */
     store?: Store.AtomicStore | undefined
   }
 
