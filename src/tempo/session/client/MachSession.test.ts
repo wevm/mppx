@@ -18,9 +18,11 @@ import * as Credential from '../../../Credential.js'
 import type * as z from '../../../zod.js'
 import * as defaults from '../../internal/defaults.js'
 import type * as Methods from '../../Methods.js'
+import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import type * as Types from '../precompile/Protocol.js'
+import { createChannelStore, persistChannel } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const mocks = vi.hoisted(() => ({ getMetadata: vi.fn(), getRemainingLimit: vi.fn() }))
@@ -50,7 +52,14 @@ const usdc = defaults.tokens.usdc as Address
 const payee = '0x0000000000000000000000000000000000000002' as Address
 
 /** A test client whose MACH balance read returns \`machBalance\`, or fails when it is an Error. */
-function makeClient(machBalance: bigint | Error) {
+function makeClient(
+  machBalance: bigint | Error | ((holder: Address) => bigint),
+  channelState: { settled: bigint; deposit: bigint; closeRequestedAt: number } = {
+    settled: 0n,
+    deposit: 1_000n,
+    closeRequestedAt: 0,
+  },
+) {
   return createClient({
     account,
     chain: { id: chainId } as never,
@@ -65,15 +74,17 @@ function makeClient(machBalance: bigint | Error) {
           if (args.method === 'eth_call') {
             const [call] = args.params as [{ to: Address; data: `0x${string}` }]
             if (call.to.toLowerCase() === mach.toLowerCase()) {
-              const { functionName } = decodeFunctionData({ abi: erc20Abi, data: call.data })
-              if (functionName !== 'balanceOf') throw new Error('unexpected MACH call')
+              const decoded = decodeFunctionData({ abi: erc20Abi, data: call.data })
+              if (decoded.functionName !== 'balanceOf') throw new Error('unexpected MACH call')
               if (machBalance instanceof Error) throw machBalance
-              return encodeFunctionResult({ abi: erc20Abi, functionName, result: machBalance })
+              const result =
+                typeof machBalance === 'function' ? machBalance(decoded.args[0]) : machBalance
+              return encodeFunctionResult({ abi: erc20Abi, functionName: 'balanceOf', result })
             }
             return encodeFunctionResult({
               abi: escrowAbi,
               functionName: 'getChannelState',
-              result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+              result: channelState,
             })
           }
           throw new Error(`unexpected rpc request: ${args.method}`)
@@ -124,7 +135,11 @@ function paymentRequired(offers: readonly SessionChallenge[]) {
 /** Pays one request against a server advertising \`offers\` and returns the credential it sent. */
 async function pay(
   offers: readonly SessionChallenge[],
-  options: { machBalance?: bigint | Error; parameters?: Partial<session.Parameters> } = {},
+  options: {
+    context?: Record<string, unknown> | undefined
+    machBalance?: bigint | Error | ((holder: Address) => bigint)
+    parameters?: Partial<session.Parameters>
+  } = {},
 ) {
   const client = makeClient(options.machBalance ?? 1_000n)
   const credentials: Credential.Credential<Types.SessionCredentialPayload>[] = []
@@ -137,7 +152,7 @@ async function pay(
     },
     methods: [session({ account, decimals: 0, getClient: () => client, ...options.parameters })],
   })
-  await fetch('https://example.com/resource')
+  await fetch('https://example.com/resource', { context: options.context } as RequestInit)
   expect(credentials).toHaveLength(1)
   return credentials[0]!
 }
@@ -244,6 +259,97 @@ describe('MACH session preference', () => {
       accessKey: accessKeyAddress,
       token: mach,
     })
+  })
+
+  test('falls back when a stored MACH channel would exceed maxDeposit', async () => {
+    const channelStore = createChannelStore()
+    const descriptor = {
+      authorizedSigner: account.address,
+      expiringNonceHash: `0x2222222222222222222222222222222222222222222222222222222222222222`,
+      operator: '0x0000000000000000000000000000000000000000',
+      payee,
+      payer: account.address,
+      salt: `0x1111111111111111111111111111111111111111111111111111111111111111`,
+      token: mach,
+    } as const
+    const escrow = tip20ChannelEscrow
+    await persistChannel(channelStore, {
+      chainId,
+      channelId: Channel.computeId({ ...descriptor, chainId, escrow }),
+      cumulativeAmount: 500n,
+      deposit: 1_000n,
+      descriptor,
+      escrow,
+      opened: true,
+      origin: 'https://example.com',
+    })
+    const credential = await pay([offer(mach), offer(stablecoin)], {
+      parameters: { channelStore, maxDeposit: '500' },
+    })
+    expect(credential.challenge.request.currency).toBe(stablecoin)
+  })
+
+  test.each([
+    { name: 'open', state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 }, pick: mach },
+    { name: 'closed', state: { settled: 0n, deposit: 0n, closeRequestedAt: 0 }, pick: stablecoin },
+    {
+      name: 'close-requested',
+      state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 1 },
+      pick: stablecoin,
+    },
+    {
+      name: 'exhausted',
+      state: { settled: 0n, deposit: 50n, closeRequestedAt: 0 },
+      pick: stablecoin,
+    },
+  ])('prefers a snapshot MACH channel only when it is usable ($name)', async ({ state, pick }) => {
+    const descriptor = {
+      authorizedSigner: account.address,
+      expiringNonceHash: `0x2222222222222222222222222222222222222222222222222222222222222222`,
+      operator: '0x0000000000000000000000000000000000000000',
+      payee,
+      payer: account.address,
+      salt: `0x1111111111111111111111111111111111111111111111111111111111111111`,
+      token: mach,
+    } as const
+    const escrow = tip20ChannelEscrow
+    const snapshot = {
+      acceptedCumulative: '0',
+      chainId,
+      channelId: Channel.computeId({ ...descriptor, chainId, escrow }),
+      deposit: '1000',
+      descriptor,
+      escrow,
+      requiredCumulative: '100',
+      settled: '0',
+      spent: '0',
+    }
+    const client = makeClient(0n, state)
+    const mppx = Mppx.create({
+      methods: [session({ account, decimals: 0, getClient: () => client })],
+      polyfill: false,
+    })
+    const prepared = await mppx.preparePayment(
+      paymentRequired([offer(stablecoin), offer(mach, { sessionSnapshot: snapshot })]),
+    )
+    expect(prepared.challenge.request.currency).toBe(pick)
+  })
+
+  test("checks the caller's account override", async () => {
+    const other = privateKeyToAccount(
+      '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+    )
+    const balanceOf = (holder: Address) =>
+      holder.toLowerCase() === account.address.toLowerCase() ? 1_000n : 0n
+    const offers = [offer(stablecoin), offer(mach)]
+    const overridden = await pay(offers, { context: { account: other }, machBalance: balanceOf })
+    expect(overridden.challenge.request.currency).toBe(stablecoin)
+    const funded = await pay(offers, {
+      context: { account },
+      machBalance: balanceOf,
+      parameters: { account: other },
+    })
+    expect(funded.challenge.request.currency).toBe(mach)
   })
 
   test('prefers MACH in preparePayment', async () => {

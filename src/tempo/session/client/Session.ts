@@ -49,6 +49,8 @@ import {
   planCredential,
   resolveChallengeContext,
   resolveRecoverContext,
+  resolveRecoveredCumulative,
+  resolveReusableChannel,
   sessionContextSchema,
   type ChallengeContext,
   type SessionContext as CredentialContext,
@@ -525,11 +527,15 @@ export function session(parameters: session.Parameters = {}) {
   }
 
   /**
-   * Returns whether the wallet can fund a MACH session offer: an open channel that covers the next
-   * voucher or a recoverable one, or enough MACH (and access-key allowance) for the deposit an
-   * open or top-up would lock. Failed reads count as unfundable.
+   * Returns whether the wallet can fund a MACH session offer the way `createCredential` would pay
+   * it: a stored channel whose next voucher fits the deposit and `maxDeposit`, a snapshot channel
+   * that is still open and covers the recovered voucher, or enough MACH (and access-key allowance)
+   * for the deposit an open or top-up would lock. Failed reads count as unfundable.
    */
-  const canFundMachSession = async (challenge: TempoSessionChallenge) => {
+  const canFundMachSession = async (
+    challenge: TempoSessionChallenge,
+    context: CredentialContext | undefined,
+  ) => {
     try {
       const resolved = await resolveChallengeContext({
         allowCustomEscrow,
@@ -540,13 +546,15 @@ export function session(parameters: session.Parameters = {}) {
         machFeeToken,
       })
       const entry = await store.get(resolved.key)
-      const account = await resolveCredentialAccount(resolved, undefined, entry)
+      const plan = await resolveCredentialPlan(resolved, context, entry)
+      const { account } = plan
       let deposit: bigint
-      if (entry?.opened && canSignDescriptor(account, entry.descriptor)) {
-        const requiredCumulative = entry.cumulativeAmount + resolved.amount
-        if (requiredCumulative <= entry.deposit) return true
+      if (plan.type === 'voucher') {
+        const requiredCumulative = plan.entry.cumulativeAmount + resolved.amount
+        assertWithinMaxDeposit(requiredCumulative, maxDeposit)
+        if (requiredCumulative <= plan.entry.deposit) return true
         deposit = resolveAutomaticTopUp({
-          deposit: entry.deposit,
+          deposit: plan.entry.deposit,
           maxDeposit,
           requiredCumulative,
           suggestedDeposit:
@@ -555,15 +563,37 @@ export function session(parameters: session.Parameters = {}) {
               : BigInt(resolved.suggestedDepositRaw),
           topUpAmount,
         })
-      } else {
-        const recover = resolveRecoverContext({ context: undefined, snapshot: resolved.snapshot })
-        if (recover && canSignDescriptor(account, recover.descriptor)) return true
+      } else if (plan.type === 'recover') {
+        const reusable = await resolveReusableChannel({
+          channelId: plan.context.channelId,
+          client: resolved.client,
+          descriptor: plan.context.descriptor,
+          expected: {
+            chainId: resolved.chainId,
+            escrow: resolved.escrow,
+            payee: resolved.payee,
+            payer: account.address,
+            authorizedSigner: resolveAuthorizedSigner(account),
+            token: resolved.token,
+          },
+        })
+        const cumulativeAmount = resolveRecoveredCumulative({
+          context: plan.context,
+          decimals,
+          requestAmount: resolved.amount,
+          settled: reusable.state.settled,
+          snapshot: resolved.snapshot,
+        })
+        assertWithinMaxDeposit(cumulativeAmount, maxDeposit)
+        return cumulativeAmount <= reusable.state.deposit
+      } else if (plan.type === 'open') {
         deposit = resolveOpeningDeposit({
+          contextDepositRaw: plan.context?.depositRaw,
           maxDeposit,
           requestAmount: resolved.amount,
           suggestedDepositRaw: resolved.suggestedDepositRaw,
         })
-      }
+      } else return false
       // Reads never carry the client's account, which a node refuses while an access key is unpublished.
       const balance = (await readContract(resolved.client, {
         ...Actions.token.getBalance.call(resolved.client, {
@@ -581,14 +611,24 @@ export function session(parameters: session.Parameters = {}) {
 
   // Prefer a MACH session offer the wallet can fund, so closed-loop MACH credit pays before
   // stablecoins; otherwise try stablecoin offers first. Currency pins (`currencies`) already
-  // filter offers, and a caller-supplied channel or action keeps the offer order.
+  // filter offers, and a caller-supplied channel or action keeps the offer order. The funding
+  // check uses the caller's context (such as an `account` override), as the payment will.
   MethodOrder.register(method, async ({ candidates, context }) => {
     if (selectsChannel(context)) return candidates
     const isMach = (candidate: (typeof candidates)[number]) =>
       isMachSessionChallenge(candidate.challenge)
     const mach = candidates.find(isMach)
     if (!mach || candidates.every(isMach)) return candidates
-    if (await canFundMachSession(mach.challenge as TempoSessionChallenge))
+    let sessionContext: CredentialContext | undefined
+    try {
+      sessionContext =
+        context === undefined || context === AcceptPayment.deferredContext
+          ? undefined
+          : sessionContextSchema.parse(context)
+    } catch {
+      return candidates
+    }
+    if (await canFundMachSession(mach.challenge as TempoSessionChallenge, sessionContext))
       return [mach, ...candidates.filter((candidate) => candidate !== mach)]
     return [...candidates.filter((candidate) => !isMach(candidate)), ...candidates.filter(isMach)]
   })
