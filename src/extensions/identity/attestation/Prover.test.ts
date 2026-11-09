@@ -3,12 +3,14 @@ import type { RequestListener } from 'node:http'
 import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Attestation from 'mppx/extensions/identity/attestation'
+import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { afterEach, beforeAll, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
 
 import * as Cache from './internal/Cache.js'
+import * as Token from './Token.js'
 
 const issuer = 'https://issuer.example'
 const other = 'https://other-issuer.example'
@@ -452,4 +454,28 @@ test('sends an attestation acquired from an issuer whose clock trails, without a
   // Its margin runs from when the client received it, so the next unpaid request carries it.
   expect(await proved(prover)).toBe(token)
   expect(calls).toBe(1)
+})
+
+test('two provers replacing different attestations resend neither rejected one', async () => {
+  const staleEmail = await sign()
+  const stalePhone = await sign({ iss: other, type: 'phone' })
+  const freshEmail = await sign({ jti: 'fresh-email' })
+  const freshPhone = await sign({ iss: other, jti: 'fresh-phone', type: 'phone' })
+  const client = Identity.Client.from([
+    Attestation.Client.prover({ acquire: () => freshEmail, issuers: [issuer], scope: '*' }),
+    Attestation.Client.prover({ acquire: () => freshPhone, issuers: [other], scope: '*' }),
+  ])
+  const sentRequests: Request[] = []
+  await client.send(
+    (async (request: Request) => {
+      sentRequests.push(request)
+      if (sentRequests.length > 1) return new Response('ok')
+      return rejected(`email;issuer="${issuer}", phone;issuer="${other}"`)
+    }) as never,
+    new Request(`${api}/resource`, {
+      headers: { [Attestation.Constants.header]: `${staleEmail}, ${stalePhone}` },
+    }),
+  )
+  const resent = Token.parseHeader(sentRequests[1]!.headers.get(Attestation.Constants.header))
+  expect(new Set(resent)).toEqual(new Set([freshEmail, freshPhone]))
 })

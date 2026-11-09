@@ -40,6 +40,9 @@ export function prover(config: prover.Config): Identity.Prover {
   // Compared as the verifier names them, without a trailing slash.
   const issuers = config.issuers?.map((issuer) => issuer.replace(/\/+$/, ''))
   const slots = new Map<string, Cache.Slot>()
+  // Tokens a retry replaced because the server rejected them. Several provers' resend headers
+  // are combined, so another prover may carry one back; `prove` drops them.
+  const replaced = new Set<string>()
   const update = (key: string, event: Cache.Event) => {
     const next = Cache.transition(slots.get(key), event)
     if (next) slots.set(key, next)
@@ -90,7 +93,10 @@ export function prover(config: prover.Config): Identity.Prover {
       // attempt) is dropped once it has expired beyond the clock tolerance: the server would
       // reject it, so a fresher cached one goes in its place.
       const carried = Token.parseHeader(request.headers.get(Constants.header))
-      const kept = carried.filter((token) => !expired(token, origin, time))
+      for (const token of replaced) if (expired(token, origin, time)) replaced.delete(token)
+      const kept = [...new Set(carried)].filter(
+        (token) => !replaced.has(token) && !expired(token, origin, time),
+      )
       const present = new Set(kept)
       const tokens = [...slots.values()]
         .map(Cache.entryOf)
@@ -150,6 +156,8 @@ export function prover(config: prover.Config): Identity.Prover {
       }
       // The resend header replaces the request's, so the attestations the request already
       // carried stay, except those this retry replaced.
+      for (const [key, tokens] of sent)
+        if (obtained.has(key)) for (const token of tokens) replaced.add(token)
       const kept = [...sent].filter(([key]) => !obtained.has(key)).flatMap(([, tokens]) => tokens)
       return { [Constants.header]: [...kept, ...obtained.values()].join(', ') }
     },
