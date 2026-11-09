@@ -370,10 +370,10 @@ export function session<const parameters extends session.Parameters>(
     unitType,
   } = parameters
   // MACH cannot pay transaction fees: pay its session gas in the chain's default stablecoin.
-  const feeToken =
+  const resolveFeeToken = (token: string, chainId: number): Address | undefined =>
     parameters.feeToken ??
-    (defaults.isMachineToken(currency)
-      ? (defaults.resolveCurrency(parameters) as Address)
+    (defaults.isMachineToken(token)
+      ? (defaults.resolveCurrency({ chainId }) as Address)
       : undefined)
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
@@ -410,7 +410,7 @@ export function session<const parameters extends session.Parameters>(
       client,
       ...(configuredFeePayer ? { feePayer: configuredFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
-      feeToken,
+      feeToken: resolveFeeToken(channel.token, channel.chainId),
       onSessionSettlement,
       onSessionSettlementFailure,
       schedule: settlementSchedule,
@@ -558,7 +558,7 @@ export function session<const parameters extends session.Parameters>(
         client: context.client,
         ...(context.feePayer ? { feePayer: context.feePayer } : {}),
         feePayerPolicy: parameters.feePayerPolicy,
-        feeToken,
+        feeToken: resolveFeeToken(channel.token, channel.chainId),
         onSessionSettlement,
         onSessionSettlementFailure,
         schedule: settlementSchedule,
@@ -689,7 +689,7 @@ export function session<const parameters extends session.Parameters>(
       })
       return {
         ...resolvedRequest,
-        feeToken,
+        feeToken: resolveFeeToken(resolvedRequest.currency, resolvedRequest.chainId),
         sessionProtocol: Constants.SessionProtocols.v2,
       }
     },

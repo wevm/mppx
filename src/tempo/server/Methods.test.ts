@@ -13,6 +13,7 @@ import { machineToken, tokens } from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Chain from '../session/precompile/Chain.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
+import { session } from '../session/server/Session.js'
 import * as Settlement from '../session/server/Settlement.js'
 import * as Ws from '../session/server/Ws.js'
 import * as Charge from './Charge.js'
@@ -555,6 +556,20 @@ describe('MACH session offers', () => {
       machineToken[42431].token,
     ])
     expect(challenges[2]!.request.methodDetails).toMatchObject({
+      chainId: 42431,
+      feeToken: tokens.pathUsd,
+    })
+  })
+
+  test('picks the MACH fee token for the Challenge chain', async () => {
+    const moderato = createClient({
+      chain: { ...tempoChain, id: 42431 },
+      transport: custom({ request: rpc }),
+    })
+    const challenges = await sessionChallenges([
+      session({ currency: mach, getClient: () => moderato, recipient, store: Store.memory() }),
+    ])
+    expect(challenges[0]!.request.methodDetails).toMatchObject({
       chainId: 42431,
       feeToken: tokens.pathUsd,
     })
