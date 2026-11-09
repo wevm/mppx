@@ -1173,6 +1173,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _identity: hasIdentity,
+      _paymentCheck: paymentCheck,
       _stableBinding: stableBinding as never,
       _transport: transport,
     } as unknown as ConfiguredHandler['_internal']
@@ -1204,6 +1205,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       const checkIdentity = async (
         challenge: Challenge.Challenge,
         credential: Credential.Credential | undefined,
+        options: { readonly challengeFromTransport?: boolean } = {},
       ) => {
         identityState = IdentityServer.transition(identityState, {
           type: 'pay',
@@ -1212,13 +1214,21 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         })
         identityState = IdentityServer.transition(identityState, {
           type: 'checked',
-          outcome: paymentCheck
-            ? await IdentityServer.check(paymentCheck, {
-                challenge,
-                credential,
-                request: input as globalThis.Request,
-              })
-            : IdentityServer.none,
+          outcome: !paymentCheck
+            ? IdentityServer.none
+            : options.challengeFromTransport
+              ? // Fails closed before settlement: the client proved nothing bound to this Challenge.
+                IdentityServer.decide([
+                  {
+                    status: 'invalid',
+                    reason: "This route's identity payment check does not accept x402 credentials.",
+                  },
+                ])
+              : await IdentityServer.check(identityContext, paymentCheck, {
+                  challenge,
+                  credential,
+                  request: input as globalThis.Request,
+                }),
         })
         return identityState
       }
@@ -1285,6 +1295,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           ...(parameters.error && { error: parameters.error }),
           ...(parameters.html && { html: parameters.html }),
         })
+        // A route with a payment check rejects x402 Credentials, so it does not offer x402.
+        if (
+          paymentCheck &&
+          response instanceof globalThis.Response &&
+          response.headers.has(x402_Types.paymentRequiredHeader)
+        )
+          response = withoutX402Offer(response) as typeof response
         // Every 402 of a route with a payment check lists the identities it requires.
         const challenged = IdentityServer.transition(identityState, {
           type: 'challenge',
@@ -1386,7 +1403,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       const { challenge, parsedRequest, request } = routeChallenge
       internal._canonicalRequest = parsedRequest
 
+      // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
+      // no Challenge) leaves nothing the client proved a payment check against.
+      let challengeFromTransport = false
       if (credential && transport.bindCredential) {
+        const submitted = credential.challenge
         try {
           credential = hydrateCredentialMeta(
             (await transport.bindCredential({
@@ -1395,6 +1416,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               input,
             })) as Credential.Credential,
           )
+          challengeFromTransport = credential.challenge.id !== submitted.id
         } catch (e) {
           credential = null
           credentialError = e as Error
@@ -1667,7 +1689,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
 
       // The payment check runs once against the answered Challenge, before settlement.
-      const checked = await checkIdentity(credential.challenge, parsedCredential)
+      const checked = await checkIdentity(credential.challenge, parsedCredential, {
+        challengeFromTransport,
+      })
       if (checked.phase === 'rejected') {
         const error = new Errors.VerificationFailedError({ reason: checked.rejection.reason })
         await emitPaymentFailed({
@@ -2709,6 +2733,8 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
     /** Whether the route requires identity (request-stage verifiers or a payment check). */
     _identity?: boolean | undefined
+    /** The route's payment check, compared across composed offers. */
+    _paymentCheck?: Identity.PaymentCheck | undefined
     _transport: Transport.AnyTransport
   }
 }
@@ -2754,13 +2780,66 @@ function withIdentityRequirements(
   response: Response,
   requirements: readonly Identity.Requirement[],
 ): Response {
+  return withHeaders(response, (headers) =>
+    headers.set(IdentityRequirements.header, IdentityRequirements.serialize(requirements)),
+  )
+}
+
+/** Rebuilds a 402 with edited headers, keeping the x402 requirements it withholds. */
+function withHeaders(response: Response, edit: (headers: Headers) => void): Response {
   const headers = new Headers(response.headers)
-  headers.set(IdentityRequirements.header, IdentityRequirements.serialize(requirements))
-  return new Response(response.body, {
+  edit(headers)
+  const result = new Response(response.body, {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
+  const withheld = withheldX402.get(response)
+  if (withheld) withheldX402.set(result, withheld)
+  return result
+}
+
+/**
+ * The x402 requirements a 402 withholds because its route has a payment check. A composer drops
+ * the same requirements from every other offer's PAYMENT-REQUIRED: a Credential for them is
+ * dispatched to the checked offer first, which rejects x402, so advertising them elsewhere would
+ * offer a payment that always fails.
+ */
+const withheldX402 = new WeakMap<Response, readonly unknown[]>()
+
+/** Removes a 402's x402 offer, recording the requirements it withholds. */
+function withoutX402Offer(response: Response): Response {
+  const value = response.headers.get(x402_Types.paymentRequiredHeader)
+  const result = withHeaders(response, (headers) =>
+    headers.delete(x402_Types.paymentRequiredHeader),
+  )
+  const accepts = (() => {
+    try {
+      return value ? x402_Header.decodePaymentRequiredEnvelope(value).accepts : []
+    } catch {
+      return []
+    }
+  })()
+  withheldX402.set(result, [...(withheldX402.get(response) ?? []), ...accepts])
+  return result
+}
+
+/** Records the requirements a composed 402 withholds, so an outer composer withholds them too. */
+function withWithheldX402(response: Response, withheld: readonly unknown[]): Response {
+  if (withheld.length > 0) withheldX402.set(response, withheld)
+  return response
+}
+
+/** Removes withheld requirements from an x402 PAYMENT-REQUIRED value; undefined when none remain. */
+function withoutWithheldX402(value: string, withheld: readonly unknown[]): string | undefined {
+  if (withheld.length === 0) return value
+  const paymentRequired = x402_Header.decodePaymentRequired(value)
+  const accepts = paymentRequired.accepts.filter(
+    (accept) => !withheld.some((requirement) => isDeepStrictEqual(accept, requirement)),
+  )
+  if (accepts.length === paymentRequired.accepts.length) return value
+  if (accepts.length === 0) return undefined
+  return x402_Header.encodePaymentRequired({ ...paymentRequired, accepts })
 }
 
 const challengeHeaderMerges = [
@@ -2779,7 +2858,9 @@ const challengeHeaderMerges = [
     values: (context) =>
       context.negotiatedChallengeResponses
         .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
-        .filter((value): value is string => value !== null),
+        .filter((value): value is string => value !== null)
+        .map((value) => withoutWithheldX402(value, context.withheldX402))
+        .filter((value): value is string => value !== undefined),
     merge: mergeX402PaymentRequiredHeaders,
   },
 ] satisfies readonly ChallengeHeaderMerge[]
@@ -2874,6 +2955,25 @@ function composeHandlers(
     return internal?.selectOffers === selectOffers ? (internal?.handlers ?? [handler]) : [handler]
   })
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
+  // A Credential names no offer, so dispatch may send it to any offer with the same terms: every
+  // offer with a payment check must use the same one, or a stricter check could be skipped.
+  const paymentChecks = new Set(
+    handlers
+      .flatMap((handler) => getConfiguredOffers(handler as ConfiguredHandler))
+      .flatMap((offer) => offer._paymentCheck ?? []),
+  )
+  if (paymentChecks.size > 1)
+    throw new TypeError('Offers in a composed route must use the same identity payment check.')
+  // A Credential names no offer, so one for terms shared by a checked and an unchecked offer could
+  // reach either: the checked offer would ask for identities a 402 may never have listed (an
+  // offer-selection policy, a request-stage rejection), or the unchecked one would skip the check.
+  // Such a pair is ambiguous, so it is refused.
+  if (
+    hasCheckedTwin(handlers.flatMap((handler) => getConfiguredOffers(handler as ConfiguredHandler)))
+  )
+    throw new TypeError(
+      'A composed route cannot pair offers with the same payment terms where only one has an identity payment check.',
+    )
 
   const offerSelector = selectOffers
   const offerEntries = handlers.map((handler) => {
@@ -2938,29 +3038,36 @@ function composeHandlers(
         // Uses the schema-parsed canonical form (not raw options) so that
         // transformed fields (e.g. amount with decimals) match correctly.
         // Also checks inside methodDetails for fields moved there by transforms.
-        const candidates = handlers.filter((handler) =>
-          getConfiguredOffers(handler).some((internal) => {
-            try {
-              if (internal.name !== credMethod || internal.intent !== credIntent) return false
-              const mismatch = internal._stableBinding
-                ? getConfiguredStableBindingMismatch(
-                    getStableBinding(internal._canonicalRequest, internal._stableBinding),
-                    getStableBinding(credReq, internal._stableBinding),
-                  )
-                : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
-              // A handler without a static scope issues challenges scoped to the request's route.
-              const effectiveMeta =
-                internal.scope === undefined
-                  ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
-                  : internal.meta
-              return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
-            } catch {
-              return false
-            }
-          }),
-        )
+        const matches = (internal: ReturnType<typeof getConfiguredOffers>[number]) => {
+          try {
+            if (internal.name !== credMethod || internal.intent !== credIntent) return false
+            const mismatch = internal._stableBinding
+              ? getConfiguredStableBindingMismatch(
+                  getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                  getStableBinding(credReq, internal._stableBinding),
+                )
+              : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
+            // A handler without a static scope issues challenges scoped to the request's route.
+            const effectiveMeta =
+              internal.scope === undefined
+                ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
+                : internal.meta
+            return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
+          } catch {
+            return false
+          }
+        }
+        const candidates = handlers.filter((handler) => getConfiguredOffers(handler).some(matches))
 
+        // Offers with the same terms are indistinguishable, so a handler whose matching offer has
+        // a payment check (all share the same one) is preferred and an unchecked twin cannot skip
+        // it, including one inside a nested composer.
         const match =
+          candidates.find((handler) =>
+            getConfiguredOffers(handler).some(
+              (internal) => matches(internal) && internal._paymentCheck !== undefined,
+            ),
+          ) ??
           candidates[0] ??
           handlers.find((handler) =>
             getConfiguredOffers(handler).some(
@@ -2983,19 +3090,34 @@ function composeHandlers(
       : handlers
 
     const transportResults = new Map<(typeof handlers)[number], MethodFn.Response<Transport.Http>>()
+    // A transport Credential (x402) names no offer, so a handler whose matching offer has a payment
+    // check tries it first, judged per offer so a nested composer counts by the offer that
+    // matched, and its identity rejection is final: an unchecked offer with the same terms
+    // cannot settle it instead.
+    const transportMatches: { handler: (typeof handlers)[number]; checked: boolean }[] = []
     for (const handler of selectedHandlers) {
+      let matched = false
+      let checked = false
       for (const internal of getConfiguredOffers(handler)) {
         const matchCredential = internal._transport.matchCredential
         if (!matchCredential) continue
         try {
-          if (await matchCredential({ input, request: internal._canonicalRequest })) {
-            const result = await call(handler)
-            transportResults.set(handler, result)
-            if (result.status === 200) return result
-            break
-          }
-        } catch {}
+          if (!(await matchCredential({ input, request: internal._canonicalRequest }))) continue
+        } catch {
+          continue
+        }
+        matched = true
+        if (internal._paymentCheck !== undefined) checked = true
       }
+      if (matched) transportMatches.push({ handler, checked })
+    }
+    for (const { handler } of [
+      ...transportMatches.filter(({ checked }) => checked),
+      ...transportMatches.filter(({ checked }) => !checked),
+    ]) {
+      const result = await call(handler)
+      transportResults.set(handler, result)
+      if (result.status === 200 || result.rejection) return result
     }
 
     const transportCredentialHandler = selectedHandlers.find((handler) =>
@@ -3092,6 +3214,14 @@ function composeHandlers(
       ),
     )
 
+    // x402 requirements withheld by any offer with a payment check, including a nested
+    // composer's, are not advertised by another offer either.
+    const withheld = results.flatMap((result) =>
+      result.status === 402 && result.challenge instanceof globalThis.Response
+        ? (withheldX402.get(result.challenge) ?? [])
+        : [],
+    )
+
     // Merge challenge headers from the negotiated 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
@@ -3102,6 +3232,7 @@ function composeHandlers(
           challengeEntries,
           challengeResponses,
           negotiatedChallengeResponses,
+          withheldX402: withheld,
         }),
       )) {
         mergedHeaders.append(header.name, value)
@@ -3161,7 +3292,10 @@ function composeHandlers(
 
       return {
         status: 402,
-        challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+        challenge: withWithheldX402(
+          new Response(body, { status: 402, headers: mergedHeaders }),
+          withheld,
+        ),
       }
     }
 
@@ -3183,7 +3317,10 @@ function composeHandlers(
 
     return {
       status: 402,
-      challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+      challenge: withWithheldX402(
+        new Response(body, { status: 402, headers: mergedHeaders }),
+        withheld,
+      ),
     }
   }
 
@@ -3191,6 +3328,34 @@ function composeHandlers(
   if (offers.length > 0)
     composed._internal = { offers, handlers: handlers as ConfiguredHandler[], selectOffers }
   return composed
+}
+
+/**
+ * Whether an offer with a payment check has a twin without one: the same method, intent and
+ * payment terms. Scope and meta are not compared: an x402 Credential carries neither.
+ */
+function hasCheckedTwin(offers: readonly ConfiguredHandler['_internal'][]): boolean {
+  const checked = offers.filter((offer) => offer._paymentCheck !== undefined)
+  const unchecked = offers.filter((offer) => offer._paymentCheck === undefined)
+  return checked.some((a) =>
+    unchecked.some(
+      (b) => a.name === b.name && a.intent === b.intent && sameTerms(a, b) && sameTerms(b, a),
+    ),
+  )
+}
+
+/** Whether a Credential for offer `b`'s terms passes offer `a`'s dispatch binding. */
+function sameTerms(a: ConfiguredHandler['_internal'], b: ConfiguredHandler['_internal']): boolean {
+  try {
+    return !(a._stableBinding
+      ? getConfiguredStableBindingMismatch(
+          getStableBinding(a._canonicalRequest, a._stableBinding),
+          getStableBinding(b._canonicalRequest, a._stableBinding),
+        )
+      : getConfiguredRequestBindingMismatch(a._canonicalRequest, b._canonicalRequest))
+  } catch {
+    return false
+  }
 }
 
 /** Returns the flattened configured offers accepted by a handler. */
@@ -3395,6 +3560,7 @@ type ChallengeHeaderMerge = {
     }[]
     challengeResponses: readonly Response[]
     negotiatedChallengeResponses: readonly Response[]
+    withheldX402: readonly unknown[]
   }): readonly string[]
   merge(values: readonly string[]): readonly string[]
 }

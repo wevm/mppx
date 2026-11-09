@@ -4,14 +4,14 @@ import * as Requirements from './internal/Requirements.js'
 import * as Status from './Status.js'
 import type * as Types from './Types.js'
 
-const members = Symbol('mppx.identity.members')
+/**
+ * The members of each verifier `anyOf` returned, keyed by that exact object, so a copy or a
+ * derived verifier (spread, `Object.create`) is not taken for one and its own `verify` runs.
+ */
+const anyOfMembers = new WeakMap<Types.Verifier, readonly Types.Verifier[]>()
 
 /** The value of an `anyOf` verifier: the index of the first valid member and its value. */
 type AnyOfValue = { readonly index: number; readonly value: unknown }
-
-type AnyOfVerifier = Types.Verifier<AnyOfValue> & {
-  readonly [members]: readonly Types.Verifier[]
-}
 
 type Rejected = Exclude<Types.Verification, { status: 'valid' }>
 
@@ -31,8 +31,7 @@ export function anyOf(
   ...verifiers: readonly [Types.Verifier, Types.Verifier, ...Types.Verifier[]]
 ): Types.Verifier<AnyOfValue> {
   for (const verifier of verifiers) assertRequestStage(verifier)
-  const verifier: AnyOfVerifier = {
-    [members]: Object.freeze([...verifiers]),
+  const verifier: Types.Verifier<AnyOfValue> = Object.freeze({
     async verify(request) {
       // Every member runs, so each presented proof's replay nonce is consumed even when an
       // earlier member already verified.
@@ -40,8 +39,9 @@ export function anyOf(
       for (const member of verifiers) outcomes.push(await member.verify(request))
       return combineAnyOf(outcomes)
     },
-  }
-  return Object.freeze(verifier)
+  })
+  anyOfMembers.set(verifier, Object.freeze([...verifiers]))
+  return verifier
 }
 
 /**
@@ -105,11 +105,17 @@ export function decide(outcomes: readonly Rejected[]): Decision {
   })
 }
 
-/** Maps a rejected outcome to its fixed status, honoring the deprecated `code`. */
+/**
+ * Maps a rejected outcome to its fixed status, honoring the deprecated `code`. Fails closed: an
+ * unknown status is `invalid`, and a deprecated `code` that is not an HTTP error status is ignored.
+ */
 function normalize(outcome: Rejected): Decision {
-  const code = 'code' in outcome ? outcome.code : undefined
-  const status: Types.RejectionStatus =
-    code === Status.codes.forbidden
+  const known = Object.hasOwn(Status.codes, outcome.status)
+  const raw = known && 'code' in outcome ? outcome.code : undefined
+  const code = Number.isInteger(raw) && raw! >= 400 && raw! <= 599 ? raw : undefined
+  const status: Types.RejectionStatus = !known
+    ? 'invalid'
+    : code === Status.codes.forbidden
       ? 'forbidden'
       : code === Status.codes.unavailable
         ? 'unavailable'
@@ -122,7 +128,9 @@ function normalize(outcome: Rejected): Decision {
         Object.freeze([name, value] as const),
       ),
     ),
-    reason: outcome.reason ?? defaultReasons[status],
+    reason: known
+      ? (outcome.reason ?? defaultReasons[status])
+      : 'The identity verifier returned an unknown status.',
   }
 }
 
@@ -149,6 +157,11 @@ function toVerification(decision: Decision): Rejected {
 export class Context {
   /** Verification promises by verifier. Internal and mutable; outcomes are frozen. */
   readonly verifications = new Map<Types.Verifier, Promise<Types.Verification>>()
+  /**
+   * Payment check promises by check, then by Challenge id and attempt (`paid` or `unpaid`), so
+   * a check runs once per attempt even when `compose` calls the matched offer again.
+   */
+  readonly checks = new Map<Types.PaymentCheck, Map<string, Promise<Outcome>>>()
 }
 
 /** Creates the identity context of one request. @internal */
@@ -169,7 +182,7 @@ function evaluate(
 ): Promise<Types.Verification> {
   let outcome = context.verifications.get(verifier)
   if (outcome) return outcome
-  const nested = (verifier as Partial<AnyOfVerifier>)[members]
+  const nested = anyOfMembers.get(verifier)
   outcome = nested
     ? (async () => {
         const outcomes: Types.Verification[] = []
@@ -205,7 +218,7 @@ export async function verify(
     let value: unknown = outcome.value
     for (;;) {
       values.set(current, value)
-      const nested = (current as Partial<AnyOfVerifier>)[members]
+      const nested = anyOfMembers.get(current)
       if (!nested) break
       const matched = value as AnyOfValue
       current = nested[matched.index]!
@@ -216,14 +229,27 @@ export async function verify(
   return Object.freeze({ status: 'valid', values })
 }
 
-/** Runs a payment check once and returns its outcome. @internal */
-export async function check(
+/**
+ * Runs a payment check at most once per context, Challenge and attempt, and returns its
+ * outcome. @internal
+ */
+export function check(
+  context: Context,
   paymentCheck: Types.PaymentCheck,
   parameters: Parameters<Types.PaymentCheck['verify']>[0],
 ): Promise<Outcome> {
-  const outcome = await paymentCheck.verify(Object.freeze({ ...parameters }))
-  if (outcome.status !== 'valid') return decide([outcome])
-  return Object.freeze({ status: 'valid', values: new Map([[paymentCheck, outcome.value]]) })
+  const key = `${parameters.challenge.id}:${parameters.credential ? 'paid' : 'unpaid'}`
+  const outcomes = context.checks.get(paymentCheck) ?? new Map<string, Promise<Outcome>>()
+  context.checks.set(paymentCheck, outcomes)
+  let outcome = outcomes.get(key)
+  if (outcome) return outcome
+  outcome = (async () => {
+    const result = await paymentCheck.verify(Object.freeze({ ...parameters }))
+    if (result.status !== 'valid') return decide([result])
+    return Object.freeze({ status: 'valid', values: new Map([[paymentCheck, result.value]]) })
+  })()
+  outcomes.set(key, outcome)
+  return outcome
 }
 
 /**
@@ -372,14 +398,43 @@ export type RouteConfig = {
 export function route(identity: Types.Route | undefined): RouteConfig {
   const { payment = undefined, request = [] } = Array.isArray(identity)
     ? { request: identity as readonly Types.Verifier[] }
-    : ((identity ?? {}) as Exclude<Types.Route, readonly Types.Verifier[]>)
+    : parseObject(identity)
   for (const verifier of request) assertRequestStage(verifier)
-  if (payment) {
+  // Any value but undefined is a payment check, so a falsy malformed one cannot turn it off.
+  if (payment !== undefined) {
+    if (typeof payment !== 'object' || payment === null)
+      throw new TypeError('Identity payment check must be { requires, verify }.')
     if (!Array.isArray(payment.requires))
       throw new TypeError('Identity payment check must list the identities it requires.')
+    if (typeof payment.verify !== 'function')
+      throw new TypeError('Identity payment check must have a verify function.')
     Requirements.serialize(payment.requires)
   }
   return Object.freeze({ payment, request: Object.freeze([...request]) })
+}
+
+/**
+ * Parses the object form `{ request?, payment? }`. Any other shape (a bare verifier, an `anyOf`
+ * result, a misspelled key) throws, so a route never silently runs without its identity checks.
+ */
+function parseObject(
+  identity: Types.Route | undefined,
+): Exclude<Types.Route, readonly Types.Verifier[]> {
+  if (identity === undefined) return {}
+  if (typeof identity !== 'object' || identity === null)
+    throw new TypeError('Route identity must be an array of verifiers or { request, payment }.')
+  const keys = Object.keys(identity)
+  const unknown = keys.filter((key) => key !== 'request' && key !== 'payment')
+  if (unknown.length > 0 || 'verify' in identity)
+    throw new TypeError(
+      `Route identity must be an array of verifiers or { request, payment }; got ${
+        unknown.length > 0 ? `key "${unknown[0]}"` : 'a verifier'
+      }. Wrap a single verifier in an array.`,
+    )
+  const { request } = identity as Exclude<Types.Route, readonly Types.Verifier[]>
+  if (request !== undefined && !Array.isArray(request))
+    throw new TypeError('Route identity request must be an array of verifiers.')
+  return identity as Exclude<Types.Route, readonly Types.Verifier[]>
 }
 
 /** Throws unless a verifier runs at the request stage (the only one). */

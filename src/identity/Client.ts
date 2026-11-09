@@ -57,6 +57,13 @@ export type Client = {
 /** x402 credential headers (v2 and v1); a request carrying one is a paid attempt. */
 const x402CredentialHeaders = ['payment-signature', 'x-payment'] as const
 
+/** Payment credential headers a prover's retry headers may never set, lowercased. */
+const credentialHeaders: ReadonlySet<string> = new Set([
+  'authorization',
+  'payment-authorization',
+  ...x402CredentialHeaders,
+])
+
 /**
  * The state of one `send`, as a state machine:
  *
@@ -167,7 +174,15 @@ export function from(provers: readonly Types.Prover[]): Client {
     })
     // Resend headers are set before the provers run, so signing provers cover them.
     const merged = new Headers(source.headers)
-    for (const [name, value] of headers) merged.set(name, value)
+    // Retry headers never replace a payment credential: the fixed credential headers, the one the
+    // Challenge names, or any header that already holds a Payment credential.
+    const protectedHeaders = new Set(credentialHeaders)
+    if (context.challenge)
+      protectedHeaders.add(Challenge.credentialHeader(context.challenge).toLowerCase())
+    for (const [name, value] of source.headers)
+      if (Credential.extractPaymentScheme(value) !== null) protectedHeaders.add(name.toLowerCase())
+    for (const [name, value] of headers)
+      if (!protectedHeaders.has(name.toLowerCase())) merged.set(name, value)
     let sent = new Request(source, {
       headers: merged,
       redirect: request.redirect === 'follow' ? 'error' : request.redirect,
@@ -253,7 +268,9 @@ async function resendHeaders(
       else if (typeof decision === 'object' && decision !== null) {
         resend = true
         // Same-named headers from several provers are combined, so each one's values resend.
-        for (const [name, value] of new Headers(decision)) headers.append(name, value)
+        // Payment credential headers are never set from a retry.
+        for (const [name, value] of new Headers(decision))
+          if (!credentialHeaders.has(name)) headers.append(name, value)
       }
     }
   } finally {
@@ -280,6 +297,9 @@ export function wrapFetch(
 ): typeof globalThis.fetch {
   return async (input, init) => {
     const request = new Request(input, init)
+    // A request carrying a Payment Credential is a paid attempt for that Credential's Challenge,
+    // which provers bind their proofs to; otherwise the wrapper's context applies.
+    const challenge = credentialChallenge(request.headers) ?? context.challenge
     const { response } = await client.send(
       (input, options) =>
         fetch(input, {
@@ -289,9 +309,8 @@ export function wrapFetch(
             : {}),
         }),
       request,
-      context,
+      { ...context, challenge },
     )
-    const { challenge } = context
     if (response.status === 402 && challenge)
       // Provers prepare for a refreshed 402 of the same method and intent. A 402 without a
       // parseable Payment challenge is returned as is: the caller decides.
@@ -300,6 +319,18 @@ export function wrapFetch(
           await client.challenge(response, { challenge: next }, request.url)
     return response
   }
+}
+
+/** Returns the Challenge of a Payment Credential in `headers`, if any. */
+function credentialChallenge(headers: Headers): Challenge.Challenge | undefined {
+  for (const [, value] of headers) {
+    const payment = Credential.extractPaymentScheme(value)
+    if (!payment) continue
+    try {
+      return Credential.deserialize(payment).challenge
+    } catch {}
+  }
+  return undefined
 }
 
 /** Returns the Payment challenges of a 402, or none when it carries none that parse. */

@@ -183,17 +183,40 @@ test('a payment check outcome is keyed by the check', async () => {
       credential ? { status: 'valid', value: 'kyc-1' } : { status: 'missing' },
   }
   const challenge = { id: 'c' } as never
-  const outcome = await Identity.Server.check(check, {
+  const context = Identity.Server.createContext()
+  const outcome = await Identity.Server.check(context, check, {
     challenge,
     credential: { challenge, payload: {} } as never,
     request: request(),
   })
   if (outcome.status !== 'valid') throw new Error()
   expect(outcome.values.get(check)).toBe('kyc-1')
-  expect(await Identity.Server.check(check, { challenge, request: request() })).toMatchObject({
-    status: 'missing',
-    code: 401,
+  expect(
+    await Identity.Server.check(context, check, { challenge, request: request() }),
+  ).toMatchObject({ status: 'missing', code: 401 })
+})
+
+test('runs a payment check once per context, Challenge and attempt', async () => {
+  const run = vi.fn(() => ({ status: 'valid', value: true }) as const)
+  const check: Identity.PaymentCheck<boolean> = { requires: [], verify: run }
+  const challenge = { id: 'c' } as never
+  const credential = { challenge, payload: {} } as never
+  const context = Identity.Server.createContext()
+  await Identity.Server.check(context, check, { challenge, credential, request: request() })
+  await Identity.Server.check(context, check, { challenge, credential, request: request() })
+  expect(run).toHaveBeenCalledTimes(1)
+  await Identity.Server.check(context, check, { challenge, request: request() })
+  await Identity.Server.check(context, check, {
+    challenge: { id: 'd' } as never,
+    credential,
+    request: request(),
   })
+  await Identity.Server.check(Identity.Server.createContext(), check, {
+    challenge,
+    credential,
+    request: request(),
+  })
+  expect(run).toHaveBeenCalledTimes(4)
 })
 
 test('server transitions: request-stage rejection', async () => {
@@ -276,4 +299,18 @@ test('server transitions: illegal transitions throw', () => {
       `Illegal identity transition "${event.type}" from phase "${state.phase}".`,
     )
   expect(() => Identity.Server.decide([])).toThrow(TypeError)
+})
+
+test('runs the own verify of a verifier derived from anyOf', async () => {
+  const either = Identity.anyOf(valid('a'), valid('b'))
+  const policy: Identity.Verifier = {
+    ...either,
+    verify: () => ({ status: 'forbidden', reason: 'policy' }),
+  }
+  const inherited: Identity.Verifier = Object.create(either, {
+    verify: { value: () => ({ status: 'forbidden', reason: 'policy' }) },
+  })
+  expect((await verify([policy])).status).toBe('forbidden')
+  expect((await verify([inherited])).status).toBe('forbidden')
+  expect((await verify([either])).status).toBe('valid')
 })

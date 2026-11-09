@@ -200,7 +200,7 @@ test('sends the request itself when it can never be resent', async () => {
   expect(outcome.request).toBe(out)
 })
 
-test('wrapFetch binds proofs to the context challenge, not a credential it re-parses', async () => {
+test("wrapFetch binds proofs to an attached Credential's Challenge, else to the context's", async () => {
   const seen: (string | undefined)[] = []
   const client = Identity.Client.from([
     {
@@ -221,7 +221,7 @@ test('wrapFetch binds proofs to the context challenge, not a credential it re-pa
     method: 'POST',
   })
   await fetch('https://merchant.example', { method: 'POST' })
-  expect(seen).toEqual(['first', 'first'])
+  expect(seen).toEqual(['second', 'first'])
 })
 
 test('challenge releases each unread copy after its prepare callback', async () => {
@@ -409,6 +409,70 @@ test('attempt transitions', () => {
     expect(() => transition(state, event)).toThrow(
       `Illegal identity attempt transition "${name}" from phase "${phase}".`,
     )
+})
+
+test('retry headers never replace a payment credential header', async () => {
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: () => ({ Authorization: 'Bearer leaked', 'Payment-Signature': 'x', 'X-Proof': '1' }),
+    },
+  ])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return sent.length === 1 ? new Response(null, { status: 401 }) : new Response('ok')
+  })
+  const first = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(first.headers).toEqual([['x-proof', '1']])
+  expect(sent[1]!.headers.has('Authorization')).toBe(false)
+  expect(sent[1]!.headers.get('X-Proof')).toBe('1')
+  // The paid attempt carries the retry headers without touching its Credential.
+  const credential = Credential.serialize({ challenge: testChallenge('c'), payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: credential } }),
+    { challenge: testChallenge('c'), headers: [['authorization', 'Bearer leaked']] },
+  )
+  expect(sent[2]!.headers.get('Authorization')).toBe(credential)
+})
+
+test('retry headers never replace the credential header a Challenge names', async () => {
+  const challenge = Challenge.from({
+    id: 'c',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+    header: 'X-Pay',
+  })
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request }])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return new Response('ok')
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      headers: { 'X-Pay': credential, 'X-Other': credential },
+    }),
+    {
+      challenge,
+      headers: [
+        ['x-pay', 'leaked'],
+        ['x-other', 'leaked'],
+        ['payment-authorization', 'leaked'],
+        ['x-proof', '1'],
+      ],
+    },
+  )
+  expect(sent[0]!.headers.get('X-Pay')).toBe(credential)
+  expect(sent[0]!.headers.get('X-Other')).toBe(credential)
+  expect(sent[0]!.headers.has('Payment-Authorization')).toBe(false)
+  expect(sent[0]!.headers.get('X-Proof')).toBe('1')
 })
 
 test('retry receives the request that got the response, as proved', async () => {

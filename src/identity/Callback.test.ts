@@ -153,3 +153,15 @@ test('Rejection carries a fixed status; the deprecated code still maps to one', 
   })
   expect(new Identity.Rejection('no', { status: 'forbidden' }).code).toBe(403)
 })
+
+test('a Rejection never passes as valid, whatever status it carries at runtime', async () => {
+  expect(() => new Identity.Rejection('no', { status: 'valid' as never })).toThrow(TypeError)
+  const rejection = new Identity.Rejection('no')
+  Object.defineProperty(rejection, 'status', { value: 'valid' })
+  const outcome = await Identity.from({
+    verify() {
+      throw rejection
+    },
+  }).verify(new Request('https://api.example'))
+  expect(outcome).toMatchObject({ status: 'invalid', reason: 'no' })
+})
