@@ -55,6 +55,9 @@ export type Client = {
 /** x402 credential headers (v2 and v1); a request carrying one is a paid attempt. */
 const x402CredentialHeaders = ['payment-signature', 'x-payment'] as const
 
+/** Payment credential headers a prover's retry headers may never set, lowercased. */
+const credentialHeaders: ReadonlySet<string> = new Set(['authorization', ...x402CredentialHeaders])
+
 /**
  * The state of one `send`, as a state machine:
  *
@@ -155,7 +158,9 @@ export function from(provers: readonly Types.Prover[]): Client {
     })
     // Resend headers are set before the provers run, so signing provers cover them.
     const merged = new Headers(source.headers)
-    for (const [name, value] of headers) merged.set(name, value)
+    // Retry headers never replace a payment credential, such as the paid attempt's Authorization.
+    for (const [name, value] of headers)
+      if (!credentialHeaders.has(name.toLowerCase())) merged.set(name, value)
     let sent = new Request(source, {
       headers: merged,
       redirect: request.redirect === 'follow' ? 'error' : request.redirect,
@@ -237,7 +242,8 @@ async function resendHeaders(
       if (decision === true) resend = true
       else if (typeof decision === 'object' && decision !== null) {
         resend = true
-        for (const [name, value] of new Headers(decision)) headers.set(name, value)
+        for (const [name, value] of new Headers(decision))
+          if (!credentialHeaders.has(name)) headers.set(name, value)
       }
     }
   } finally {

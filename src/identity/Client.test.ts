@@ -396,3 +396,30 @@ test('attempt transitions', () => {
       `Illegal identity attempt transition "${name}" from phase "${phase}".`,
     )
 })
+
+test('retry headers never replace a payment credential header', async () => {
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: () => ({ Authorization: 'Bearer leaked', 'Payment-Signature': 'x', 'X-Proof': '1' }),
+    },
+  ])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return sent.length === 1 ? new Response(null, { status: 401 }) : new Response('ok')
+  })
+  const first = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(first.headers).toEqual([['x-proof', '1']])
+  expect(sent[1]!.headers.has('Authorization')).toBe(false)
+  expect(sent[1]!.headers.get('X-Proof')).toBe('1')
+  // The paid attempt carries the retry headers without touching its Credential.
+  const credential = Credential.serialize({ challenge: testChallenge('c'), payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: credential } }),
+    { challenge: testChallenge('c'), headers: [['authorization', 'Bearer leaked']] },
+  )
+  expect(sent[2]!.headers.get('Authorization')).toBe(credential)
+})

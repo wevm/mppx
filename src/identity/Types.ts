@@ -202,7 +202,8 @@ export type Prover = {
    * Inspects a rejected (non-402) response and decides whether to resend the request once.
    *
    * Return headers to resend the request with: they are set on the request before every
-   * in-scope prover proves it again, so signing provers cover them. Return `false` or `undefined`
+   * in-scope prover proves it again, so signing provers cover them. Payment credential headers
+   * (`Authorization`, `Payment-Signature`, `X-Payment`) are ignored. Return `false` or `undefined`
    * not to resend. Paid attempts are never resent. `true` resends with no extra headers and is
    * deprecated: return `{}` instead.
    */
