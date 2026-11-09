@@ -1172,7 +1172,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         ]),
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
-      _identityRequirements: identityRequirements,
       _identity: hasIdentity,
       _stableBinding: stableBinding as never,
       _transport: transport,
@@ -2708,8 +2707,6 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     scope?: string | undefined
     _canonicalRequest: Record<string, unknown>
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
-    /** The identities the offer's payment check requires, listed in its 402s. */
-    _identityRequirements?: readonly Identity.Requirement[] | undefined
     /** Whether the route requires identity (request-stage verifiers or a payment check). */
     _identity?: boolean | undefined
     _transport: Transport.AnyTransport
@@ -3087,17 +3084,12 @@ function composeHandlers(
             ...unnegotiatedX402Responses,
           ]
         : challengeResponses
-    // The identities required by every offer still advertised after negotiation, read from the
-    // offers' configuration and merged into one Identity-Required header.
-    const handlerByResponse = new Map(
-      results.map((result, i) => [result.challenge as Response, selectedHandlers[i]!] as const),
-    )
+    // The identities required by the negotiated responses, merged into one Identity-Required
+    // header. Read from each response, so a nested composer's own negotiation is respected.
     const identityRequirements = IdentityRequirements.merge(
-      negotiatedChallengeResponses.map((response) => {
-        const handler = handlerByResponse.get(response) as ConfiguredHandler | undefined
-        if (!handler) return []
-        return getConfiguredOffers(handler).flatMap((offer) => offer._identityRequirements ?? [])
-      }),
+      negotiatedChallengeResponses.map((response) =>
+        IdentityRequirements.parse(response.headers.get(IdentityRequirements.header)),
+      ),
     )
 
     // Merge challenge headers from the negotiated 402 responses.

@@ -6,10 +6,18 @@ import type * as Types from './Types.js'
 
 const skipPayment = Symbol.for('mppx.fetch.skipPayment')
 
-/** Payment state of one send: the Challenge a paid attempt answers. */
+/** Headers a prover's `retry` returned, as name and value pairs. */
+export type ResendHeaders = readonly (readonly [name: string, value: string])[]
+
+/** Payment state of one send. */
 export type SendContext = {
   /** The Challenge a paid attempt answers. Its presence makes the attempt paid. */
   readonly challenge?: Challenge.Challenge | undefined
+  /**
+   * Headers a `retry` returned earlier in the same logical request, such as on the unpaid
+   * attempt before a 402. They are set before the provers run, so the paid attempt carries them.
+   */
+  readonly headers?: ResendHeaders | undefined
 }
 
 /** Sends HTTP attempts with every in-scope prover applied. */
@@ -27,7 +35,12 @@ export type Client = {
     fetch: typeof globalThis.fetch,
     request: Request,
     context?: SendContext,
-  ) => Promise<{ request: Request; response: Response }>
+  ) => Promise<{
+    request: Request
+    response: Response
+    /** The retry headers the last attempt carried, to pass on to the paid attempt. */
+    headers: ResendHeaders
+  }>
   /**
    * Lets in-scope provers prepare proofs for a 402 from `url` before the payment retry,
    * with the selected Challenge and the requirements of the 402's `Identity-Required` header.
@@ -41,9 +54,6 @@ export type Client = {
 
 /** x402 credential headers (v2 and v1); a request carrying one is a paid attempt. */
 const x402CredentialHeaders = ['payment-signature', 'x-payment'] as const
-
-/** Headers to resend a request with, as name and value pairs. */
-type ResendHeaders = readonly (readonly [name: string, value: string])[]
 
 /**
  * The state of one `send`, as a state machine:
@@ -162,24 +172,20 @@ export function from(provers: readonly Types.Prover[]): Client {
       })
       const retriers = inScope(request.url).filter((prover) => prover.retry)
       const keepReadable = attempt.phase === 'sent' && retriers.length > 0
-      const result = await sendOnce({ context, fetch, headers: [], keepReadable, request })
+      const carried = context.headers ?? []
+      const result = await sendOnce({ context, fetch, headers: carried, keepReadable, request })
       const { response } = result
       const resend =
         keepReadable && response.status >= 400 && response.status !== 402
           ? await resendHeaders(retriers, response)
           : undefined
       attempt = transition(attempt, { type: 'response', resend })
-      if (attempt.phase !== 'resent') return result
+      if (attempt.phase !== 'resent') return { ...result, headers: carried }
       release([response])
-      const resent = await sendOnce({
-        context,
-        fetch,
-        headers: attempt.headers,
-        keepReadable: false,
-        request,
-      })
+      const headers = mergeHeaders(carried, attempt.headers)
+      const resent = await sendOnce({ context, fetch, headers, keepReadable: false, request })
       transition(attempt, { type: 'response', resend: undefined })
-      return resent
+      return { ...resent, headers }
     },
     async challenge(response, { challenge }, url) {
       const context: Types.PrepareContext = Object.freeze({
@@ -287,4 +293,12 @@ function challengesOf(response: Response): readonly Challenge.Challenge[] {
   } catch {
     return []
   }
+}
+
+/** Merges two lists of retry headers; `next` replaces same-named headers of `previous`. */
+function mergeHeaders(previous: ResendHeaders, next: ResendHeaders): ResendHeaders {
+  const merged = new Headers()
+  for (const [name, value] of previous) merged.set(name, value)
+  for (const [name, value] of next) merged.set(name, value)
+  return Object.freeze([...merged].map((entry) => Object.freeze(entry)))
 }

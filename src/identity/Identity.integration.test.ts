@@ -464,6 +464,27 @@ test('forwards Identity-Required through nested composers', async () => {
   )
 })
 
+test('drops requirements of offers a nested composer negotiated away', async () => {
+  const inner = Mppx.create({
+    methods: [serverMethod],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+    // Keeps only the second offer, which requires no identity.
+    selectOffers: (offers) => offers.slice(1),
+  })
+  const handler = Mppx.compose(
+    inner.compose(
+      [serverMethod, { ...charge, amount: '1', identity: { payment: kycCheck() } }],
+      [serverMethod, { ...charge, amount: '2' }],
+    ),
+  )
+  const result = await handler(new Request('https://x.test'))
+  if (result.status !== 402) throw new Error()
+  const response = result.challenge as Response
+  expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['2'])
+  expect(response.headers.has('Identity-Required')).toBe(false)
+})
+
 test('merges the distinct requirements of composed offers into one header', async () => {
   const result = await createPayments().compose(
     [serverMethod, { ...charge, amount: '1', identity: { payment: kycCheck() } }],
@@ -663,6 +684,37 @@ test('rejects a payment check on routes with the HTML checkout', () => {
   expect(() => mppx.charge({ ...charge, identity: { payment: kycCheck() } })).toThrow(
     'Payment-stage identity is not supported on test/charge routes with the HTML checkout.',
   )
+})
+
+test('the paid attempt carries the headers a retry returned on the unpaid attempt', async () => {
+  const route = createPayments().charge(charge)
+  const seen: { token: string | null; paid: boolean }[] = []
+  const base = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const token = request.headers.get('X-Token')
+    const paid = [...request.headers.values()].some((value) => value.startsWith('Payment '))
+    seen.push({ token, paid })
+    if (!token) return new Response(null, { status: 401 })
+    const result = await route(request)
+    return result.status === 402
+      ? (result.challenge as Response)
+      : result.withReceipt(new Response('ok'))
+  }
+  const client = ClientMppx.create({
+    fetch: base as never,
+    identity: [
+      { scope: '*', prove: (request) => request, retry: () => ({ 'X-Token': 'identity' }) },
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const response = await client.fetch('https://merchant.example/resource')
+  expect(await response.text()).toBe('ok')
+  expect(seen).toEqual([
+    { token: null, paid: false },
+    { token: 'identity', paid: false },
+    { token: 'identity', paid: true },
+  ])
 })
 
 test('rewrapping an identity-enabled fetch keeps its provers', async () => {
