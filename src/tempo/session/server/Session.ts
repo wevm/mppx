@@ -790,7 +790,11 @@ export namespace session {
      *
      * Session mutations must be linearizable across instances so spent,
      * highest-voucher, top-up, and close/finalization updates cannot race.
-     * Use `Store.memory()` for tests or local single-process usage.
+     *
+     * If omitted, this throws in production (`NODE_ENV=production`), on
+     * multi-instance platforms and on Cloudflare Workers, and otherwise warns
+     * and falls back to an in-memory store. Pass `Store.memory()` explicitly
+     * for tests or local single-process usage.
      */
     store?: Store.AtomicStore | undefined
     /** Enable SSE streaming. Pass `true` for defaults or an options object to configure SSE. */

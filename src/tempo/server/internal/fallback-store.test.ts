@@ -66,6 +66,8 @@ function memoryStoreWarnings(calls: readonly unknown[][]) {
 describe('fallbackStore', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
   })
 
   test.each(cases)('$name warns once when store is omitted', async ({ create, method }) => {
@@ -87,5 +89,53 @@ describe('fallbackStore', () => {
     create(modules, modules.memory())
 
     expect(memoryStoreWarnings(warn.mock.calls)).toHaveLength(0)
+  })
+
+  const productionRuntimes = [
+    { name: 'NODE_ENV=production', stub: () => vi.stubEnv('NODE_ENV', 'production') },
+    { name: 'Vercel', stub: () => vi.stubEnv('VERCEL', '1') },
+    {
+      name: 'Cloudflare Workers',
+      stub: () => vi.stubGlobal('navigator', { userAgent: 'Cloudflare-Workers' }),
+    },
+  ] as const
+
+  for (const runtime of productionRuntimes)
+    test.each(cases)(
+      `$name throws without store on ${runtime.name}`,
+      async ({ create, method }) => {
+        const modules = await load()
+        runtime.stub()
+
+        expect(() => create(modules, undefined)).toThrow(`${method}() has no \`store\` configured`)
+      },
+    )
+
+  test.each(cases)('$name accepts an explicit memory store in production', async ({ create }) => {
+    const modules = await load()
+    vi.stubEnv('NODE_ENV', 'production')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() => create(modules, modules.memory())).not.toThrow()
+    expect(memoryStoreWarnings(warn.mock.calls)).toHaveLength(0)
+  })
+
+  test('tempo.charge sponsorBudget uses the configured store in production', async () => {
+    const modules = await load()
+    vi.stubEnv('NODE_ENV', 'production')
+
+    expect(() =>
+      modules.tempo.charge({ recipient, sponsorBudget: { store: modules.memory() } }),
+    ).toThrow('tempo.charge() has no `store` configured')
+    expect(() => modules.tempo.charge({ recipient, store: modules.memory() })).not.toThrow()
+  })
+
+  test('error names the fix', async () => {
+    const modules = await load()
+    vi.stubEnv('VERCEL', '1')
+
+    expect(() => modules.tempo.charge({ recipient })).toThrowErrorMatchingInlineSnapshot(
+      `[Error: tempo.charge() has no \`store\` configured, and VERCEL is set, so this server may run as several instances. An in-memory store would let a credential accepted by one instance be accepted again by another. Pass a shared atomic store, such as \`Store.redis()\`, \`Store.upstash()\`, \`Store.postgres()\`, \`Store.sql()\`, \`Store.d1()\`, \`Store.durableObject()\` or \`Store.cloudflare()\` with \`update\`, or pass \`store: Store.memory()\` to accept replay protection scoped to this instance.]`,
+    )
   })
 })

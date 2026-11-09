@@ -1,5 +1,4 @@
 import type { NoExtraKeys } from '../../internal/types.js'
-import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
@@ -203,7 +202,7 @@ function sharedSponsorBudget(parameters: Pick<charge_.Parameters, 'store' | 'spo
   if (parameters.sponsorBudget === false) return false
   return {
     ...parameters.sponsorBudget,
-    store: parameters.sponsorBudget?.store ?? parameters.store ?? Store.memory(),
+    store: parameters.sponsorBudget?.store ?? parameters.store ?? fallbackStore('tempo.charge'),
   }
 }
 

@@ -1,12 +1,17 @@
 import { Hono } from 'hono'
 import { Errors, Receipt } from 'mppx'
 import { Mppx } from 'mppx/hono'
-import { tempo } from 'mppx/server'
+import { Store, tempo } from 'mppx/server'
 import { createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Chain } from 'viem/tempo'
 
+// The Durable Object class that stores used credentials, bound as `MPPX_STORE`.
+export class MppxStore extends Store.DurableObjectStore {}
+
 type Env = {
+  /** Durable Object namespace of {@link MppxStore}. */
+  MPPX_STORE: Store.durableObject.Namespace
   /** Payee account key: receives payments. */
   MPP_PRIVATE_KEY: string
   /** Secret that binds challenge IDs, so they verify statelessly. */
@@ -30,6 +35,8 @@ function createPayments(env: Env) {
     chainId: Chain.testnet.id,
     getClient: () => client,
     recipient: account.address,
+    // Replay protection lives in Durable Objects, so a credential can't be spent twice on two isolates.
+    store: Store.durableObject(env.MPPX_STORE),
     // To replace the local `relay` implementation below with the built-in adapter:
     // relay: { apiBaseUrl: env.TEMPO_API_URL, apiKey: env.TEMPO_API_KEY },
     supportedModes: ['pull'],
