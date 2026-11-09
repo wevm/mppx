@@ -504,37 +504,22 @@ test('lists the shared payment check once across composed offers, and rejects di
   ).toThrow('Offers in a composed route must use the same identity payment check.')
 })
 
-test('a Credential matching an unchecked and a checked offer with the same terms is checked', async () => {
+test('a composer refuses a checked and an unchecked offer with the same terms', () => {
   const kyc = kycCheck()
-  const handler = createPayments().compose(
-    [serverMethod, { ...charge, amount: '1' }],
-    [serverMethod, { ...charge, amount: '1', identity: { payment: kyc } }],
-  )
-  const first = await handler(new Request('https://x.test'))
-  if (first.status !== 402) throw new Error()
-  const [challenge] = Challenge.fromResponseList(first.challenge as Response)
-  const credential = Credential.serialize({ challenge: challenge!, payload: { token: 'paid' } })
-  const before = settlements
-  const paid = await handler(
-    new Request('https://x.test', {
-      headers: { [MppConstants.Headers.authorization]: credential },
-    }),
-  )
-  expect(paid.status).toBe(402)
-  expect(paid.status === 402 && paid.rejection?.status).toBe('missing')
-  expect(settlements).toBe(before)
-})
-
-test('a composer with an offer-selection policy refuses a checked and an unchecked twin', () => {
-  const kyc = kycCheck()
+  // A Credential for those terms could reach either offer, so the pair is refused.
+  expect(() =>
+    createPayments().compose(
+      [serverMethod, { ...charge, amount: '1' }],
+      [serverMethod, { ...charge, amount: '1', identity: { payment: kyc } }],
+    ),
+  ).toThrow(TypeError)
   const inner = Mppx.create({
     methods: [serverMethod],
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
     selectOffers: (offers) => offers,
   })
-  // The policy could advertise the unchecked offer alone, whose Credential would reach the
-  // checked one, so the pair is refused, whether the policy is outside or nested.
+  // Also under an offer-selection policy, outside or nested.
   expect(() =>
     inner.compose(
       [serverMethod, { ...charge, amount: '1' }],

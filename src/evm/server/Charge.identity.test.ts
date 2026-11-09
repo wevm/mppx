@@ -163,17 +163,6 @@ function setup() {
   return { amounts, check, create, method, payX402, request, server, settlements, x402Offer }
 }
 
-test('a composed route does not advertise x402 for terms a checked offer shares', async () => {
-  const { check, method, request, server } = setup()
-  const route = server.compose(
-    [method, { amount: '0.25' }],
-    [method, { amount: '0.25', identity: { payment: check } }],
-  )
-  const offered = await route(request)
-  if (offered.status !== 402) throw new Error()
-  expect(offered.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
-})
-
 test('a composed route still advertises and settles x402 for terms no checked offer shares', async () => {
   const { amounts, check, method, payX402, request, server, settlements } = setup()
   const route = server.compose(
@@ -188,29 +177,12 @@ test('a composed route still advertises and settles x402 for terms no checked of
   expect(settlements).toHaveLength(1)
 })
 
-test('a composed route never settles an x402 Credential through an unchecked twin', async () => {
-  const { check, method, payX402, server, settlements, x402Offer } = setup()
-  const route = server.compose(
-    [method, { amount: '0.25' }],
-    [method, { amount: '0.25', identity: { payment: check } }],
-  )
-  const result = await route(await payX402(await x402Offer('0.25')))
-  expect(result.status === 402 && result.rejection?.status).toBe('invalid')
-  expect(settlements).toEqual([])
-})
-
-test('a composed route withholds x402 terms a checked offer shares when it requires identities', async () => {
-  const { amounts, method, request, server } = setup()
-  const check: Identity.PaymentCheck = {
-    requires: [{ type: 'kyc' }],
-    verify: () => ({ status: 'valid', value: true }),
-  }
-  const route = server.compose(
-    [method, { amount: '0.5' }],
-    [method, { amount: '0.25' }],
-    [method, { amount: '0.25', identity: { payment: check } }],
-  )
-  const offered = await route(request)
-  if (offered.status !== 402) throw new Error()
-  expect(amounts(offered.challenge)).toEqual(['500000'])
+test('a composed route refuses x402 offers with the same terms where only one is checked', () => {
+  const { check, method, server } = setup()
+  expect(() =>
+    server.compose(
+      [method, { amount: '0.25' }],
+      [method, { amount: '0.25', identity: { payment: check } }],
+    ),
+  ).toThrow(TypeError)
 })
