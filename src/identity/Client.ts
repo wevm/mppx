@@ -247,8 +247,9 @@ function isPaid(request: Request, context: SendContext): boolean {
 
 /**
  * Asks each prover whether to resend a rejected response, each on its own copy so the response
- * stays readable, with the request that got it. Returns the headers to resend with (set in prover order, so a later prover's
- * header replaces an earlier one's), or `undefined` when no prover asks to resend.
+ * stays readable, with the request that got it. Returns the headers to resend with (same-named
+ * headers from several provers are combined, comma-separated, in prover order), or `undefined`
+ * when no prover asks to resend.
  */
 async function resendHeaders(
   provers: readonly Types.Prover[],

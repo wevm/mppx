@@ -78,8 +78,9 @@ function date(value: unknown): Date | undefined {
  * the prover asks the issuer to email a code to `email`, gets the code from
  * `code` (such as a terminal prompt or a form), exchanges it for an
  * attestation bound to the server's origin and sends the request again with it.
- * Later requests to that origin reuse it until it expires. A route that accepts
- * several issuers prompts once.
+ * Later requests to that origin reuse it until it expires. The server's header does not say
+ * whether listed issuers are alternatives or all required, so a route listing several trusted
+ * issuers gets a code from, and a prompt for, each of them.
  *
  * Trust is set by two options together:
  * - `scope`: the origins that may ask for and receive the attestation. It is always
