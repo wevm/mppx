@@ -591,6 +591,27 @@ test('a verifier runs once per request across composed offers and anyOf members'
   expect(direct.rejection).toBeUndefined()
 })
 
+test('rejects identity shapes that would skip the checks', async () => {
+  const mppx = createPayments()
+  const keys = await signatureKeys()
+  const { tap } = verifiers(keys)
+  expect(() => mppx.charge({ ...charge, identity: tap as never })).toThrow(
+    'Wrap a single verifier in an array.',
+  )
+  expect(() => mppx.charge({ ...charge, identity: Identity.anyOf(tap, tap) as never })).toThrow(
+    'Wrap a single verifier in an array.',
+  )
+  expect(() => mppx.charge({ ...charge, identity: { requests: [tap] } as never })).toThrow(
+    'key "requests"',
+  )
+  expect(() => mppx.charge({ ...charge, identity: { request: tap } as never })).toThrow(
+    'request must be an array',
+  )
+  expect(() =>
+    mppx.charge({ ...charge, identity: { payment: { requires: [] } } as never }),
+  ).toThrow('must have a verify function')
+})
+
 test('rejects a payment-stage verifier, pointing to the payment check', () => {
   const legacy: Identity.Verifier = { stage: 'payment', verify: () => ({ status: 'missing' }) }
   expect(() => createPayments().charge({ ...charge, identity: [legacy] })).toThrow(

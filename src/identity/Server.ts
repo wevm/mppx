@@ -372,14 +372,40 @@ export type RouteConfig = {
 export function route(identity: Types.Route | undefined): RouteConfig {
   const { payment = undefined, request = [] } = Array.isArray(identity)
     ? { request: identity as readonly Types.Verifier[] }
-    : ((identity ?? {}) as Exclude<Types.Route, readonly Types.Verifier[]>)
+    : parseObject(identity)
   for (const verifier of request) assertRequestStage(verifier)
   if (payment) {
     if (!Array.isArray(payment.requires))
       throw new TypeError('Identity payment check must list the identities it requires.')
+    if (typeof payment.verify !== 'function')
+      throw new TypeError('Identity payment check must have a verify function.')
     Requirements.serialize(payment.requires)
   }
   return Object.freeze({ payment, request: Object.freeze([...request]) })
+}
+
+/**
+ * Parses the object form `{ request?, payment? }`. Any other shape (a bare verifier, an `anyOf`
+ * result, a misspelled key) throws, so a route never silently runs without its identity checks.
+ */
+function parseObject(
+  identity: Types.Route | undefined,
+): Exclude<Types.Route, readonly Types.Verifier[]> {
+  if (identity === undefined) return {}
+  if (typeof identity !== 'object' || identity === null)
+    throw new TypeError('Route identity must be an array of verifiers or { request, payment }.')
+  const keys = Object.keys(identity)
+  const unknown = keys.filter((key) => key !== 'request' && key !== 'payment')
+  if (unknown.length > 0 || 'verify' in identity)
+    throw new TypeError(
+      `Route identity must be an array of verifiers or { request, payment }; got ${
+        unknown.length > 0 ? `key "${unknown[0]}"` : 'a verifier'
+      }. Wrap a single verifier in an array.`,
+    )
+  const { request } = identity as Exclude<Types.Route, readonly Types.Verifier[]>
+  if (request !== undefined && !Array.isArray(request))
+    throw new TypeError('Route identity request must be an array of verifiers.')
+  return identity as Exclude<Types.Route, readonly Types.Verifier[]>
 }
 
 /** Throws unless a verifier runs at the request stage (the only one). */
