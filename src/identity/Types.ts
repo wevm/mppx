@@ -203,7 +203,8 @@ export type Prover = {
    *
    * Return headers to resend the request with: they are set on the request before every
    * in-scope prover proves it again, so signing provers cover them. Payment credential headers
-   * (`Authorization`, `Payment-Signature`, `X-Payment`) are ignored. Return `false` or `undefined`
+   * (`Authorization`, `Payment-Authorization`, `Payment-Signature`, `X-Payment`, the header the
+   * Challenge names, and any header holding a Payment credential) are ignored. Return `false` or `undefined`
    * not to resend. Paid attempts are never resent. `true` resends with no extra headers and is
    * deprecated: return `{}` instead.
    */

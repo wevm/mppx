@@ -3035,7 +3035,16 @@ function composeHandlers(
       : handlers
 
     const transportResults = new Map<(typeof handlers)[number], MethodFn.Response<Transport.Http>>()
-    for (const handler of selectedHandlers) {
+    // A transport Credential (x402) names no offer, so handlers with a payment check try it first,
+    // and their identity rejection is final: an unchecked offer with the same terms cannot settle
+    // it instead.
+    const hasPaymentCheck = (handler: (typeof handlers)[number]) =>
+      getConfiguredOffers(handler).some((internal) => internal._paymentCheck !== undefined)
+    const transportOrder = [
+      ...selectedHandlers.filter(hasPaymentCheck),
+      ...selectedHandlers.filter((handler) => !hasPaymentCheck(handler)),
+    ]
+    for (const handler of transportOrder) {
       for (const internal of getConfiguredOffers(handler)) {
         const matchCredential = internal._transport.matchCredential
         if (!matchCredential) continue
@@ -3043,7 +3052,7 @@ function composeHandlers(
           if (await matchCredential({ input, request: internal._canonicalRequest })) {
             const result = await call(handler)
             transportResults.set(handler, result)
-            if (result.status === 200) return result
+            if (result.status === 200 || result.rejection) return result
             break
           }
         } catch {}

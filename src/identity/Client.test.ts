@@ -423,3 +423,40 @@ test('retry headers never replace a payment credential header', async () => {
   )
   expect(sent[2]!.headers.get('Authorization')).toBe(credential)
 })
+
+test('retry headers never replace the credential header a Challenge names', async () => {
+  const challenge = Challenge.from({
+    id: 'c',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+    header: 'X-Pay',
+  })
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request }])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return new Response('ok')
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      headers: { 'X-Pay': credential, 'X-Other': credential },
+    }),
+    {
+      challenge,
+      headers: [
+        ['x-pay', 'leaked'],
+        ['x-other', 'leaked'],
+        ['payment-authorization', 'leaked'],
+        ['x-proof', '1'],
+      ],
+    },
+  )
+  expect(sent[0]!.headers.get('X-Pay')).toBe(credential)
+  expect(sent[0]!.headers.get('X-Other')).toBe(credential)
+  expect(sent[0]!.headers.has('Payment-Authorization')).toBe(false)
+  expect(sent[0]!.headers.get('X-Proof')).toBe('1')
+})
