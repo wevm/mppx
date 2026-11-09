@@ -165,9 +165,9 @@ describe('registry', () => {
   test('rejects a Credential without a payer address', async () => {
     const { calls, client } = allowlist([account.address])
     const check = Onchain.Server.registry({ client, registry: registryAddress })
-    const { result, settlements } = await pay(check, (credential) => ({
-      ...credential,
-      source: undefined,
+    const { result, settlements } = await pay(check, ({ challenge, payload }) => ({
+      challenge,
+      payload,
     }))
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
