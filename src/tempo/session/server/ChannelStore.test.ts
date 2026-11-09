@@ -1218,6 +1218,21 @@ function voucherAt(cumulativeAmount: bigint): SessionSignedVoucher {
 }
 
 describe('ChannelStore idempotent charges', () => {
+  test.each(accountingStores)(
+    'rejects replayable prepaid delivery keys ($label)',
+    async ({ create }) => {
+      const cs = create()
+      await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
+      await expect(
+        ChannelStore.deductFromChannel(cs, channelId, 1n, {
+          idempotencyKey: 'charge',
+          prepaidRefundKey: 'delivery',
+        }),
+      ).rejects.toThrow('Prepaid deliveries cannot use a replayable charge key')
+      expect((await cs.getChannel(channelId))?.spent).toBe(0n)
+    },
+  )
+
   test.each(accountingStores)('charges a key once and replays it ($label)', async ({ create }) => {
     const cs = create()
     await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })

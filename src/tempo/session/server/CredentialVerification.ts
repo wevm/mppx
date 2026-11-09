@@ -374,6 +374,8 @@ export type BroadcastCredentialPayloadParameters = {
   voucherStateMaxAge?: number | undefined
   /** Request price a voucher credential pays in the same store update that accepts it. */
   chargeAmount?: bigint | undefined
+  /** Durable delivery key for an SSE request charged before its first item. */
+  prepaidRefundKey?: string | undefined
   /** Called with the stored channel after `chargeAmount` was charged. */
   onCharged?: ((channel: ChannelStore.State) => void) | undefined
 }
@@ -1063,6 +1065,7 @@ async function handleVoucherCredential(
       channelState: storedChannelState(channel),
       methodDetails: { chainId, escrowContract: escrow },
       chargeAmount,
+      prepaidRefundKey: parameters.prepaidRefundKey,
       onCharged,
     })
   }
@@ -1093,6 +1096,7 @@ async function handleVoucherCredential(
     methodDetails: { chainId, escrowContract: escrow },
     verifiedAt: startedAt,
     chargeAmount,
+    prepaidRefundKey: parameters.prepaidRefundKey,
     onCharged,
   })
 }
@@ -1162,6 +1166,7 @@ async function acceptVoucherInOneUpdate(
     const acceptance = ChannelStore.planVoucherAcceptance({
       accepted: ChannelStore.acceptVoucherStateUpdate({ channelState, current, voucher }),
       chargeAmount,
+      prepaidRefundKey: parameters.prepaidRefundKey,
     })
     return { op: 'set', value: acceptance.channel, result: acceptance }
   })

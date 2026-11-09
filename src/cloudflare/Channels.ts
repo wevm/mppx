@@ -8,6 +8,7 @@ import type { TransactionClient } from '../tempo/session/precompile/Chain.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 import {
   isPrecompileState,
+  normalizeChannelId,
   resolveSettleableVoucher,
   type State,
 } from '../tempo/session/server/ChannelStore.js'
@@ -215,7 +216,8 @@ export async function backfillSettlement(
   parameters: { store: Store.AtomicStore; queue: ChannelStore.Queue },
 ): Promise<number> {
   let queued = 0
-  for await (const channelId of channelIds) {
+  for await (const id of channelIds) {
+    const channelId = normalizeChannelId(id)
     const state = await parameters.store.get(channelId)
     if (!isChannelState(state) || state.finalized || unsettledAmount(state) <= 0n) continue
     await parameters.queue.send({ channelId })

@@ -19,6 +19,7 @@ import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import { superviseCloses } from './CloseSupervisor.js'
 import { claimScheduledSettlement, settle as settleChannel } from './Settlement.js'
+import * as Sse from './Sse.js'
 
 const account = privateKeyToAccount(
   '0x59c6995e998f97a5a0044976f5d56aabe9517a7f3146b789fe719a97d0a9b49f',
@@ -323,7 +324,8 @@ describe('superviseCloses', () => {
       }),
     })
     expect(first.failed).toBe(1)
-    expect((await store.getChannel(channelId))?.closeSupervisedFromBlock).toBe(100n)
+    expect((await store.getChannel(channelId))?.closeSearchFromBlock).toBe(100n)
+    expect((await store.getChannel(channelId))?.closeSupervisedFromBlock).toBeUndefined()
     const second = await superviseCloses({
       ...parameters,
       client: createSupervisorClient({
@@ -335,6 +337,74 @@ describe('superviseCloses', () => {
     })
     expect(second.closed).toBe(1)
     expect(ranges).toEqual([100n])
+  })
+
+  test('retries empty log ranges without moving the verified-open anchor', async () => {
+    const store = await seed({ closeSupervisedFromBlock: 10n })
+    mockStates({ closeRequestedAt: 0, deposit: 0n, settled: 350n })
+    const parameters = { channelIds: [channelId], store, logBlockRange: 100n }
+    expect(
+      (await superviseCloses({ ...parameters, client: createSupervisorClient() })).failed,
+    ).toBe(1)
+    expect((await store.getChannel(channelId))?.closeSupervisedFromBlock).toBe(10n)
+    expect((await store.getChannel(channelId))?.closeSearchFromBlock).toBeUndefined()
+    const ranges: bigint[] = []
+    const second = await superviseCloses({
+      ...parameters,
+      client: createSupervisorClient({
+        logs: ({ fromBlock }) => {
+          ranges.push(fromBlock)
+          return [rpcLog(closedLog(channelId, 350n, 650n), 20n)]
+        },
+      }),
+    })
+    expect(second.closed).toBe(1)
+    expect(ranges).toEqual([10n])
+  })
+
+  test('settles normally after a server close marker expires', async () => {
+    const store = await seed({ pendingCloseAt: 1n, closeRequestedAt: 1n, spent: 500n })
+    vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+      closeRequestedAt: 0,
+      deposit: 1_000n,
+      settled: 500n,
+    })
+    const owner = await claimScheduledSettlement({ channelId, store, schedule: { units: 1 } })
+    expect(owner).toBeDefined()
+    vi.spyOn(Chain, 'settleOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [settledLog(channelId, 500n, 400n)],
+    } as never)
+    await settleChannel(store, createSupervisorClient(), channelId)
+    expect((await store.getChannel(channelId))?.settledOnChain).toBe(500n)
+  })
+
+  test('retains a payer close observed during a rejected server close', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
+      await store.updateChannel(
+        channelId,
+        (current) => current && { ...current, onChainCloseRequestedAt: 100n },
+      )
+      throw new Error('fee policy rejected')
+    })
+    expect(
+      (
+        await superviseCloses({
+          channelIds: [channelId],
+          client: createSupervisorClient(),
+          store,
+          closeUnsettled: true,
+        })
+      ).failed,
+    ).toBe(1)
+    expect(await store.getChannel(channelId)).toMatchObject({
+      closeRequestedAt: 100n,
+      onChainCloseRequestedAt: 100n,
+    })
+    expect((await store.getChannel(channelId))?.pendingCloseAt).toBeUndefined()
+    expect((await ChannelStore.deductFromChannel(store, channelId, 1n)).ok).toBe(false)
   })
 
   test('queue finds a close older than the default supervision margin', async () => {
@@ -380,6 +450,102 @@ describe('superviseCloses', () => {
 
     expect(settleOnChain).not.toHaveBeenCalled()
     expect(supervision.channels).toEqual([{ channelId, outcome: 'open' }])
+  })
+
+  test.each(['voucher', 'charge'] as const)(
+    'waits for prepaid delivery reserved by %s before closing',
+    async (mode) => {
+      const store = await seed()
+      const key = 'stream:reserved-at-charge'
+      if (mode === 'voucher') {
+        await store.updateChannel(
+          channelId,
+          (current) =>
+            ChannelStore.planVoucherAcceptance({
+              accepted: current!,
+              chargeAmount: 100n,
+              prepaidRefundKey: key,
+            }).channel,
+        )
+      } else {
+        await ChannelStore.deductFromChannel(store, channelId, 100n, { prepaidRefundKey: key })
+      }
+      expect((await store.getChannel(channelId))?.prepaidRefunds?.[key]).toMatchObject({
+        amount: '100',
+        status: 'pending',
+      })
+      mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+      const close = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+      vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+        logs: [closedLog(channelId, 450n, 550n)],
+      } as never)
+      const parameters = {
+        channelIds: [channelId],
+        store,
+        client: createSupervisorClient(),
+        closeUnsettled: true,
+      }
+      await superviseCloses(parameters)
+      expect(close).not.toHaveBeenCalled()
+      const body = await new Response(
+        Sse.serve({
+          store,
+          channelId,
+          challengeId: 'challenge',
+          tickCost: 100n,
+          prepaidUnits: 1,
+          refundIdempotencyKey: key,
+          generate: (async function* () {
+            yield 'delivered'
+          })(),
+          beforeCharge: async () => {
+            expect((await store.getChannel(channelId))?.closeRequestedAt).toBe(0n)
+          },
+        }),
+      ).text()
+      expect(body).toContain('delivered')
+      expect((await store.getChannel(channelId))?.prepaidRefunds).toEqual({})
+      expect((await superviseCloses(parameters)).closed).toBe(1)
+      expect(close).toHaveBeenCalledOnce()
+    },
+  )
+
+  test('credits a failed prepaid delivery before automatic closure can capture it', async () => {
+    const store = await seed()
+    const key = 'stream:failed-delivery'
+    await ChannelStore.deductFromChannel(store, channelId, 100n, { prepaidRefundKey: key })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const close = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    const parameters = {
+      channelIds: [channelId],
+      store,
+      client: createSupervisorClient(),
+      closeUnsettled: true,
+    }
+    await expect(
+      new Response(
+        Sse.serve({
+          store,
+          channelId,
+          challengeId: 'challenge',
+          tickCost: 100n,
+          prepaidUnits: 1,
+          refundIdempotencyKey: key,
+          autoCreditPrepaid: true,
+          generate: (async function* () {
+            await superviseCloses(parameters)
+            expect(close).not.toHaveBeenCalled()
+            yield await Promise.reject(new Error('generation failed'))
+          })(),
+        }),
+      ).text(),
+    ).rejects.toThrow('generation failed')
+    expect((await store.getChannel(channelId))?.spent).toBe(350n)
+    expect((await store.getChannel(channelId))?.prepaidRefunds).toEqual({})
+    expect((await superviseCloses(parameters)).closed).toBe(1)
   })
 
   test('closes unpaid open channels at recorded spend and freezes concurrent updates', async () => {

@@ -5,6 +5,7 @@ import * as Store from '../Store.js'
 import {
   pendingCloseClockSkewSeconds,
   pendingCloseValiditySeconds,
+  hasPendingClose,
   type State,
 } from '../tempo/session/server/ChannelStore.js'
 
@@ -361,11 +362,7 @@ async function wakeBy(storage: Store.DurableObjectStore.Storage, at: number): Pr
  * settlement could, so settling meanwhile only spends gas.
  */
 export function pendingClose(state: State, now = Date.now()): boolean {
-  if (state.pendingCloseAt === undefined || state.finalized) return false
-  const requestedAt = BigInt(state.closeRequestedAt ?? 0n)
-  if (requestedAt === 0n || requestedAt !== BigInt(state.pendingCloseAt)) return false
-  const expiresAt = Number(requestedAt) + pendingCloseValiditySeconds + pendingCloseClockSkewSeconds
-  return Math.floor(now / 1000) <= expiresAt
+  return hasPendingClose(state, now)
 }
 
 /** The unsettled amount that sends a channel at once: `max(10% of deposit, minUnsettledAmount)`. */

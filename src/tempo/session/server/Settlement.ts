@@ -290,8 +290,7 @@ export async function claimScheduledSettlement(parameters: {
   await store.updateChannel(channelId, (current) => {
     claimed = false
     if (!current || !isSettlementDue(current, schedule)) return current
-    if (current.pendingCloseAt !== undefined && current.closeRequestedAt === current.pendingCloseAt)
-      return current
+    if (ChannelStore.hasPendingClose(current, now)) return current
     const lease = current.scheduledSettlementLease
     if (lease && lease.expiresAt > now) return current
     claimed = true
@@ -427,11 +426,12 @@ export async function applyVerifiedHttpAccounting(
 export async function chargeSessionChannel(
   parameters: ChargeParameters,
 ): Promise<ChannelStore.State> {
-  const { store, channelId, amount, idempotencyKey, retention } = parameters
+  const { store, channelId, amount, idempotencyKey, retention, prepaidRefundKey } = parameters
   ChannelStore.assertIdempotencyOptions({ idempotencyKey, retention })
   let result: Awaited<ReturnType<typeof ChannelStore.deductFromChannel>>
   try {
     result = await ChannelStore.deductFromChannel(store, channelId, amount, {
+      prepaidRefundKey,
       idempotencyKey,
       retention,
     })
@@ -629,10 +629,7 @@ export async function settle(
   // Choosing the voucher and raising the credit floor in one update keeps a concurrent credit from
   // lowering spent below what this transaction captures.
   await store.updateChannel(channelId, (current) => {
-    if (
-      current?.pendingCloseAt !== undefined &&
-      current.closeRequestedAt === current.pendingCloseAt
-    ) {
+    if (current && ChannelStore.hasPendingClose(current)) {
       claim.channel = undefined
       claim.voucher = undefined
       return current
