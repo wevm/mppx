@@ -95,9 +95,13 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           continue
         }
         // A later attestation, such as another address, may still be allowed.
-        const reason = await config.validate?.(result.claims, request)
-        if (reason) {
-          rejections.push({ status: 'forbidden', reason })
+        // Only `undefined` accepts, so an empty or otherwise falsy reason still rejects.
+        const reason = config.validate ? await config.validate(result.claims, request) : undefined
+        if (reason !== undefined) {
+          rejections.push({
+            status: 'forbidden',
+            reason: typeof reason === 'string' && reason ? reason : defaultForbiddenReason,
+          })
           continue
         }
         return { status: 'valid', value: Object.freeze({ claims: result.claims }) }
@@ -138,14 +142,18 @@ export declare namespace verifier {
     /** Clock tolerance in seconds. @default 60 */
     readonly clockTolerance?: number | undefined
     /**
-     * Applies the route's policy to verified claims. Return a reason to reject the request as
-     * `forbidden` (403), or `undefined` to accept it.
+     * Applies the route's policy to verified claims. Return `undefined` to accept it; any other
+     * value, an empty string included, rejects the request as `forbidden` (403), with the value as
+     * the reason when it is a non-empty string.
      */
     readonly validate?:
       | ((claims: Types.Claims, request: Request) => MaybePromise<string | undefined>)
       | undefined
   }
 }
+
+/** The reason sent when `validate` rejects without a usable one. */
+const defaultForbiddenReason = 'This identity attestation is not allowed.'
 
 /** Why one token did not verify. */
 type Rejection = {

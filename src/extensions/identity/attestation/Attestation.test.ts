@@ -353,6 +353,27 @@ test('accepts an allowed attestation behind one the policy rejects', async () =>
   expect(await verify(blocked)).toEqual({ status: 'forbidden', reason: 'Not allowed.' })
 })
 
+test('rejects an attestation whose policy returns an empty reason', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const token = await Attestation.sign(
+    { ...claims, exp: current + 600, iat: current },
+    { key: keys.privateKey, keyId },
+  )
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+    type: 'email',
+    validate: () => '',
+  })
+  expect(
+    await verifier.verify(
+      new Request(audience, { headers: { [Attestation.Constants.header]: token } }),
+    ),
+  ).toEqual({ status: 'forbidden', reason: 'This identity attestation is not allowed.' })
+})
+
 test('reports an outage for a rotated-in key while the issuer is down', async () => {
   const { keyId, keys } = await setup()
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
