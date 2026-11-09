@@ -1194,14 +1194,7 @@ async function recordPendingClose(
     current
       ? {
           ...current,
-          settledOnChain:
-            channelState.settled > current.settledOnChain
-              ? channelState.settled
-              : current.settledOnChain,
-          closeRequestedAt:
-            BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
-              ? BigInt(channelState.closeRequestedAt)
-              : current.closeRequestedAt,
+          ...ChannelStore.mergeActiveOnChainState(current, channelState),
         }
       : current,
   )

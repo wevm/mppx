@@ -2123,6 +2123,7 @@ describe('precompile server session unit guardrails', () => {
       await expect(method.verify(parameters)).rejects.toThrow(/pending close request/)
       expect(await store.getChannel(openPayload.channelId)).toMatchObject({
         closeRequestedAt: 1n,
+        onChainCloseRequestedAt: 1n,
         settledOnChain: 100n,
         highestVoucherAmount: 100n,
       })
