@@ -127,18 +127,3 @@ export function decide(parameters: {
   if (sent.length > 0 || usable(entry, now, 'unpaid')) return { action: 'reuse', entry }
   return { action: 'acquire' }
 }
-
-/**
- * Decides how a retry answers one type's alternatives (the same type from several trusted
- * issuers), so it obtains at most one attestation per type. Pure.
- *
- * Any alternative skipped skips the type; otherwise the first reusable attestation, then the
- * first pending acquisition, wins; otherwise the alternatives are acquired in order.
- */
-export function plan(decisions: readonly Decision[]): Decision {
-  if (decisions.some(({ action }) => action === 'skip')) return { action: 'skip' }
-  return (
-    decisions.find(({ action }) => action === 'reuse') ??
-    decisions.find(({ action }) => action === 'join') ?? { action: 'acquire' }
-  )
-}

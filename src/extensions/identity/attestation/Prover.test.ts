@@ -94,7 +94,7 @@ test('matches a trusted issuer listed with a trailing slash', async () => {
   expect(calls).toBe(1)
 })
 
-test('acquires from the next issuer of a type when one fails', async () => {
+test('acquires from the other issuers when one fails', async () => {
   const token = await sign({ iss: other })
   const asked: string[] = []
   const prover = Attestation.Client.prover({
@@ -115,7 +115,7 @@ test('acquires from the next issuer of a type when one fails', async () => {
   )
 })
 
-test('acquires one attestation per type across alternatives', async () => {
+test('acquires every listed requirement, same-type issuers included', async () => {
   const asked: string[] = []
   const prover = Attestation.Client.prover({
     acquire: ({ issuer: from, type }) => {
@@ -126,13 +126,26 @@ test('acquires one attestation per type across alternatives', async () => {
     scope: '*',
   })
   const headers = await prover.retry!(
-    rejected(`email;issuer="${issuer}", email;issuer="${other}", phone;issuer="${other}"`),
+    rejected(`phone;issuer="${issuer}", phone;issuer="${other}", email;issuer="${other}"`),
     sent(),
   )
-  // A route accepting either email issuer prompts once; the other type is acquired too.
-  expect(asked).toEqual([`email@${issuer}`, `phone@${other}`])
+  // The header does not say whether a route needs both phone issuers, so both are acquired.
+  expect(asked).toEqual([`phone@${issuer}`, `phone@${other}`, `email@${other}`])
   const tokens = new Headers(headers as HeadersInit).get(Attestation.Constants.header)!.split(', ')
-  expect(tokens.map((token) => Attestation.decode(token)?.claims.type)).toEqual(['email', 'phone'])
+  expect(tokens.map((token) => Attestation.decode(token)?.claims.iss)).toEqual([
+    issuer,
+    other,
+    other,
+  ])
+})
+
+test('keeps the attestations the request carried on the resend, except those replaced', async () => {
+  const attached = await sign({ iss: other, type: 'phone' })
+  const stale = await sign()
+  const fresh = await sign({ jti: 'fresh' })
+  const prover = Attestation.Client.prover({ acquire: () => fresh, issuers: [issuer], scope: '*' })
+  const headers = await prover.retry!(rejected(`email;issuer="${issuer}"`), sent(attached, stale))
+  expect(headers).toEqual({ [Attestation.Constants.header]: `${attached}, ${fresh}` })
 })
 
 test('keeps an expiring attestation on the paid retry, and replaces it before paying', async () => {
@@ -221,7 +234,7 @@ test('shares one pending acquisition between concurrent retries', async () => {
   ])
 })
 
-test('a retry that joined a failed acquisition falls back to the next issuer', async () => {
+test('a retry that joined a failed acquisition still resends the other issuers', async () => {
   const token = await sign({ iss: other })
   const asked: string[] = []
   const prover = Attestation.Client.prover({

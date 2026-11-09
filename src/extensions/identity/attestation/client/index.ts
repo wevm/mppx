@@ -14,7 +14,8 @@ import type * as Types from '../Types.js'
  * audience is the request's origin: on a paid attempt every one not expired beyond the clock
  * tolerance, on an unpaid one only those outside the refresh margin, so one close to expiry is
  * replaced before paying. When a server answers 401 or 403 with `Identity-Attestation-Required`,
- * the prover obtains at most one attestation per listed type and resends the request with it.
+ * the prover obtains an attestation for each listed requirement from a trusted issuer and resends
+ * the request with them, keeping the attestations it already carried.
  *
  * Trust is set by two options together:
  * - `scope`: the origins that may receive attestations and ask for new ones. The audience is
@@ -111,67 +112,53 @@ export function prover(config: prover.Config): Identity.Prover {
       if (URL.canParse(response.url) && new URL(response.url).origin !== audience) return undefined
       if (!Token.isIssuer(audience)) return undefined
       const sent = sentTokens(context?.request)
-      const tokens: string[] = []
+      const obtained = new Map<string, string>()
       let failure: { error: unknown } | undefined
-      const decide = (key: string) =>
-        Cache.decide({
+      // Every listed requirement is answered: the header lists a route's conjunctive and
+      // alternative requirements alike, so one attestation per type could leave the route unmet.
+      for (const { key, requirement } of trusted(requirements(response.headers), audience)) {
+        const decision = Cache.decide({
           now: now(),
           sent: sent.get(key) ?? [],
           slot: slots.get(key),
         })
-      for (const alternatives of byType(requirements(response.headers), audience)) {
-        const decision = Cache.plan(alternatives.map(({ key }) => decide(key)))
         try {
-          const entry = await (async () => {
-            if (decision.action === 'reuse') return decision.entry
-            if (decision.action === 'skip' || !config.acquire) return undefined
-            // A route may accept any one of the listed issuers, so one that fails does not stop
-            // the next, whether this retry started it or joined another's; a decline does, so
-            // the user is asked once.
-            let error: { error: unknown } | undefined
-            for (const { key, requirement } of alternatives) {
-              // Decided again, since an earlier alternative's failure took time.
-              const next = decide(key)
-              if (next.action === 'skip') continue
-              if (next.action === 'reuse') return next.entry
-              try {
-                return await (next.action === 'join'
-                  ? next.pending
-                  : acquire(key, requirement, audience, next.rejected))
-              } catch (caught) {
-                error ??= { error: caught }
-              }
-            }
-            if (error) throw error.error
-            return undefined
-          })()
-          if (entry) tokens.push(entry.token)
+          const entry =
+            decision.action === 'reuse'
+              ? decision.entry
+              : decision.action === 'skip' || !config.acquire
+                ? undefined
+                : await (decision.action === 'join'
+                    ? decision.pending
+                    : acquire(key, requirement, audience, decision.rejected))
+          if (entry) obtained.set(key, entry.token)
         } catch (error) {
+          // One issuer failing does not stop the others.
           failure ??= { error }
         }
       }
-      // A failure surfaces only when nothing was obtained, so another type's attestation still resends.
-      if (tokens.length === 0) {
+      // A failure surfaces only when nothing was obtained, so another attestation still resends.
+      if (obtained.size === 0) {
         if (failure) throw failure.error
         return undefined
       }
-      return { [Constants.header]: tokens.join(', ') }
+      // The resend header replaces the request's, so the attestations the request already
+      // carried stay, except those this retry replaced.
+      const kept = [...sent].filter(([key]) => !obtained.has(key)).flatMap(([, tokens]) => tokens)
+      return { [Constants.header]: [...kept, ...obtained.values()].join(', ') }
     },
   }
 
-  /** Groups the trusted requirements by type, each once, in listed order. */
-  function byType(list: readonly Types.Requirement[], audience: string) {
-    const groups = new Map<string, { key: string; requirement: Trusted }[]>()
+  /** The trusted requirements, each once, in listed order. */
+  function trusted(list: readonly Types.Requirement[], audience: string) {
+    const result = new Map<string, { key: string; requirement: Trusted }>()
     for (const { issuer, type } of list) {
       if (!issuer || !issuers?.includes(issuer)) continue
       if (config.types && !config.types.includes(type)) continue
       const key = Cache.keyOf({ aud: audience, iss: issuer, type })
-      const group = groups.get(type) ?? []
-      if (!group.some((alternative) => alternative.key === key))
-        group.push({ key, requirement: { issuer, type } })
-      groups.set(type, group)
+      if (!result.has(key)) result.set(key, { key, requirement: { issuer, type } })
     }
-    return [...groups.values()]
+    return [...result.values()]
   }
 }
 
