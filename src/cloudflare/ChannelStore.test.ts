@@ -312,6 +312,25 @@ describe('ChannelStore', () => {
     }
   }
 
+  test('retains scheduling and watchdog recovery for an oversized opening voucher', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    const channels = object()
+    const unpaid = channel({
+      voucher: 20_000n,
+      spent: 10_000n,
+      settledOnChain: 0n,
+      deposit: 100_000n,
+    })
+    await channels.write(unpaid)
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toEqual([{ channelId }])
+    await channels.write(unpaid)
+    expect(channels.alarmIn()).toBeGreaterThan(0)
+    await channels.fire()
+    expect(channels.sent).toHaveLength(2)
+  })
+
   test('sends a close request or a threshold of new vouchers at once while the watchdog waits', async () => {
     const channels = object()
     // 10% of the deposit, 1_000, is the threshold.
