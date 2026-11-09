@@ -4,14 +4,14 @@ import * as Requirements from './internal/Requirements.js'
 import * as Status from './Status.js'
 import type * as Types from './Types.js'
 
-const members = Symbol('mppx.identity.members')
+/**
+ * The members of each verifier `anyOf` returned, keyed by that exact object, so a copy or a
+ * derived verifier (spread, `Object.create`) is not taken for one and its own `verify` runs.
+ */
+const anyOfMembers = new WeakMap<Types.Verifier, readonly Types.Verifier[]>()
 
 /** The value of an `anyOf` verifier: the index of the first valid member and its value. */
 type AnyOfValue = { readonly index: number; readonly value: unknown }
-
-type AnyOfVerifier = Types.Verifier<AnyOfValue> & {
-  readonly [members]: readonly Types.Verifier[]
-}
 
 type Rejected = Exclude<Types.Verification, { status: 'valid' }>
 
@@ -31,8 +31,7 @@ export function anyOf(
   ...verifiers: readonly [Types.Verifier, Types.Verifier, ...Types.Verifier[]]
 ): Types.Verifier<AnyOfValue> {
   for (const verifier of verifiers) assertRequestStage(verifier)
-  const verifier: AnyOfVerifier = {
-    [members]: Object.freeze([...verifiers]),
+  const verifier: Types.Verifier<AnyOfValue> = Object.freeze({
     async verify(request) {
       // Every member runs, so each presented proof's replay nonce is consumed even when an
       // earlier member already verified.
@@ -40,8 +39,9 @@ export function anyOf(
       for (const member of verifiers) outcomes.push(await member.verify(request))
       return combineAnyOf(outcomes)
     },
-  }
-  return Object.freeze(verifier)
+  })
+  anyOfMembers.set(verifier, Object.freeze([...verifiers]))
+  return verifier
 }
 
 /**
@@ -177,7 +177,7 @@ function evaluate(
 ): Promise<Types.Verification> {
   let outcome = context.verifications.get(verifier)
   if (outcome) return outcome
-  const nested = (verifier as Partial<AnyOfVerifier>)[members]
+  const nested = anyOfMembers.get(verifier)
   outcome = nested
     ? (async () => {
         const outcomes: Types.Verification[] = []
@@ -213,7 +213,7 @@ export async function verify(
     let value: unknown = outcome.value
     for (;;) {
       values.set(current, value)
-      const nested = (current as Partial<AnyOfVerifier>)[members]
+      const nested = anyOfMembers.get(current)
       if (!nested) break
       const matched = value as AnyOfValue
       current = nested[matched.index]!

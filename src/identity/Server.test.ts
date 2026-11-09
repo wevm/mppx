@@ -277,3 +277,17 @@ test('server transitions: illegal transitions throw', () => {
     )
   expect(() => Identity.Server.decide([])).toThrow(TypeError)
 })
+
+test('runs the own verify of a verifier derived from anyOf', async () => {
+  const either = Identity.anyOf(valid('a'), valid('b'))
+  const policy: Identity.Verifier = {
+    ...either,
+    verify: () => ({ status: 'forbidden', reason: 'policy' }),
+  }
+  const inherited: Identity.Verifier = Object.create(either, {
+    verify: { value: () => ({ status: 'forbidden', reason: 'policy' }) },
+  })
+  expect((await verify([policy])).status).toBe('forbidden')
+  expect((await verify([inherited])).status).toBe('forbidden')
+  expect((await verify([either])).status).toBe('valid')
+})
