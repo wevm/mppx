@@ -570,6 +570,31 @@ test('rejects an issuer response with an invalid expiry', async () => {
   ).rejects.toThrow('malformed')
 })
 
+test('never sends an address or code to a plaintext http issuer', async () => {
+  let calls = 0
+  const fetch = async () => {
+    calls++
+    return Response.json({ expires_at: new Date(Date.now() + 60_000).toISOString(), id: 'otp-id' })
+  }
+  await expect(
+    EmailOtp.Client.sendCode({
+      audience: 'https://api.example',
+      email: 'a@b.example',
+      fetch,
+      issuer: 'http://issuer.example',
+    }),
+  ).rejects.toThrow('https')
+  await expect(
+    EmailOtp.Client.verifyCode({
+      code: '123456',
+      fetch,
+      id: 'otp-id',
+      issuer: 'http://issuer.example',
+    }),
+  ).rejects.toThrow('https')
+  expect(calls).toBe(0)
+})
+
 test('requires issuers to acquire attestations', () => {
   expect(() => Attestation.Client.prover({ acquire: () => undefined, scope: '*' })).toThrow(
     'must list its issuers',

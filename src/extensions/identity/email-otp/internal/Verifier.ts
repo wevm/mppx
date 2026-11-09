@@ -77,6 +77,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         }
       let reason = 'The identity attestation is invalid.'
       let unavailable: string | undefined
+      let forbidden: string | undefined
       for (const token of tokens) {
         const result = await Attestation.verify(token, {
           audience,
@@ -98,9 +99,14 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           continue
         }
         const rejected = await config.validate?.(result.claims, request)
-        if (rejected) return { status: 'invalid', code: 403, reason: rejected }
+        // A later attestation, such as another address, may still be allowed.
+        if (rejected) {
+          forbidden ??= rejected
+          continue
+        }
         return { status: 'valid', value: { claims: result.claims } }
       }
+      if (forbidden) return { status: 'invalid', code: 403, reason: forbidden }
       if (unavailable) return { status: 'invalid', code: 503, reason: unavailable }
       // The client may obtain a fresh attestation and retry.
       return { status: 'invalid', code: 401, headers: required, reason }

@@ -332,6 +332,32 @@ test('accepts a valid token behind one whose key cannot be resolved', async () =
   expect(await verify(forged)).toMatchObject({ status: 'invalid', code: 503 })
 })
 
+test('accepts an allowed attestation behind one the policy rejects', async () => {
+  const { claims, keyId, keys } = await setup()
+  const current = Math.floor(Date.now() / 1_000)
+  const sign = (sub: string, exp: number) =>
+    Attestation.sign({ ...claims, exp, iat: current, sub }, { key: keys.privateKey, keyId })
+  const blocked = await sign('mallory@example.com', current + 3_000)
+  const allowed = await sign('dana@example.com', current + 600)
+  const verifier = Attestation.Server.verifier({
+    audience,
+    issuer,
+    keyResolver: ({ keyId: kid }) => (kid === keyId ? keys.publicKey : undefined),
+    type: 'email',
+    validate: (verified) => (verified.sub === 'dana@example.com' ? undefined : 'Not allowed.'),
+  })
+  const verify = (header: string) =>
+    verifier.verify(
+      new Request(audience, { headers: { [Attestation.Constants.header]: header } }),
+      {} as Parameters<typeof verifier.verify>[1],
+    )
+  expect(await verify(blocked + ', ' + allowed)).toMatchObject({
+    status: 'valid',
+    value: { claims: { sub: 'dana@example.com' } },
+  })
+  expect(await verify(blocked)).toMatchObject({ status: 'invalid', code: 403 })
+})
+
 test('reports an outage for a rotated-in key while the issuer is down', async () => {
   const { keyId, keys } = await setup()
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
