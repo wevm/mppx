@@ -271,7 +271,9 @@ test('verifies one token however many the header repeats', async () => {
   const request = new Request(audience, {
     headers: { [Attestation.Constants.header]: Array(50).fill(forged).join(', ') },
   })
-  expect(await verifier.verify(request)).toMatchObject({ status: 'invalid', code: 401 })
+  const result = await verifier.verify(request)
+  expect(result).toMatchObject({ status: 'invalid' })
+  expect(result).not.toHaveProperty('code')
   expect(lookups).toBe(1)
 })
 
@@ -325,7 +327,7 @@ test('accepts a valid token behind one whose key cannot be resolved', async () =
   const verify = (header: string) =>
     verifier.verify(new Request(audience, { headers: { [Attestation.Constants.header]: header } }))
   expect(await verify(forged + ', ' + valid)).toMatchObject({ status: 'valid' })
-  expect(await verify(forged)).toMatchObject({ status: 'invalid', code: 503 })
+  expect(await verify(forged)).toMatchObject({ status: 'unavailable' })
 })
 
 test('accepts an allowed attestation behind one the policy rejects', async () => {
@@ -348,7 +350,7 @@ test('accepts an allowed attestation behind one the policy rejects', async () =>
     status: 'valid',
     value: { claims: { sub: 'dana@example.com' } },
   })
-  expect(await verify(blocked)).toMatchObject({ status: 'invalid', code: 403 })
+  expect(await verify(blocked)).toEqual({ status: 'forbidden', reason: 'Not allowed.' })
 })
 
 test('reports an outage for a rotated-in key while the issuer is down', async () => {
@@ -392,7 +394,7 @@ test('rejects a non-finite clock tolerance or max age', () => {
   )
 })
 
-test('answers 503 while the issuer keys are unreachable', async () => {
+test('reports unavailable (503) while the issuer keys are unreachable', async () => {
   const { claims, keyId, keys } = await setup()
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
@@ -409,7 +411,10 @@ test('answers 503 while the issuer keys are unreachable', async () => {
   })
   const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
   const result = await verifier.verify(request)
-  expect(result).toMatchObject({ status: 'invalid', code: 503 })
+  expect(result).toEqual({
+    reason: 'The attestation key could not be resolved.',
+    status: 'unavailable',
+  })
   expect(result).not.toHaveProperty('headers')
 })
 

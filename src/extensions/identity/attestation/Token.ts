@@ -6,14 +6,22 @@ import type * as Types from './Types.js'
 /** A decoded, unverified attestation. */
 export type Decoded = {
   /** JWS protected header. */
-  header: { alg?: unknown; kid?: unknown; typ?: unknown }
+  readonly header: { readonly alg?: unknown; readonly kid?: unknown; readonly typ?: unknown }
   /** Unverified claims. */
-  claims: Partial<Types.Claims> & Record<string, unknown>
+  readonly claims: Partial<Types.Claims> & Readonly<Record<string, unknown>>
   /** The signed bytes: `base64url(header) + '.' + base64url(claims)`. */
-  signingInput: Uint8Array
+  readonly signingInput: Uint8Array
   /** Signature bytes. */
-  signature: Uint8Array
+  readonly signature: Uint8Array
 }
+
+/**
+ * The outcome of {@link verify}: `unavailable` when the issuer's keys could not be fetched,
+ * which says nothing about the token.
+ */
+export type VerifyResult =
+  | { readonly status: 'valid'; readonly claims: Types.Claims }
+  | { readonly status: 'invalid' | 'unavailable'; readonly reason: string }
 
 /**
  * Signs attestation claims as a compact JWS (EdDSA over Ed25519).
@@ -23,7 +31,7 @@ export type Decoded = {
  */
 export async function sign(
   claims: Types.Claims,
-  options: { key: CryptoKey; keyId: string },
+  options: { readonly key: CryptoKey; readonly keyId: string },
 ): Promise<string> {
   const header = { alg: Constants.algorithm, kid: options.keyId, typ: Constants.tokenType }
   const input = `${encode(header)}.${encode(claims)}`
@@ -62,13 +70,7 @@ export function decode(token: string): Decoded | undefined {
  * `iat` and `exp` times (with `clockTolerance`), then the signature with the
  * key `keyResolver` returns for the header's `kid`.
  */
-export async function verify(
-  token: string,
-  options: verify.Options,
-): Promise<
-  | { status: 'valid'; claims: Types.Claims }
-  | { status: 'invalid'; reason: string; unavailable?: true }
-> {
+export async function verify(token: string, options: verify.Options): Promise<VerifyResult> {
   const decoded = decode(token)
   if (!decoded) return invalid('The attestation is malformed.')
   const { header, claims } = decoded
@@ -97,7 +99,7 @@ export async function verify(
     key = await options.keyResolver({ issuer: options.issuer, keyId: header.kid })
   } catch {
     // The issuer's keys are unreachable, which says nothing about the token.
-    return { ...invalid('The attestation key could not be resolved.'), unavailable: true }
+    return { status: 'unavailable', reason: 'The attestation key could not be resolved.' }
   }
   if (!key) return invalid('No public key is available for the attestation key ID.')
   let valid = false
@@ -110,30 +112,30 @@ export async function verify(
     )
   } catch {}
   if (!valid) return invalid('The attestation signature is invalid.')
-  return { status: 'valid', claims: claims as Types.Claims }
+  return { status: 'valid', claims: Object.freeze({ ...claims }) as Types.Claims }
 }
 
 export declare namespace verify {
   type Options = {
     /** Accepted attestation type, such as `email`. */
-    type: string
+    readonly type: string
     /** Trusted issuer URL. */
-    issuer: string
+    readonly issuer: string
     /** Origin the attestation must be bound to. */
-    audience: string
+    readonly audience: string
     /** Resolves the issuer's public key by key ID. */
-    keyResolver: Types.KeyResolver
+    readonly keyResolver: Types.KeyResolver
     /** Oldest accepted `iat`, in seconds before now. Defaults to the attestation's own `exp`. */
-    maxAge?: number | undefined
+    readonly maxAge?: number | undefined
     /** Clock tolerance in seconds. @default 60 */
-    clockTolerance?: number | undefined
+    readonly clockTolerance?: number | undefined
     /** Current Unix time in seconds, for tests. */
-    now?: number | undefined
+    readonly now?: number | undefined
   }
 }
 
 /** Splits an `Identity-Attestation` header value into its attestations. */
-export function parseHeader(value: string | null): string[] {
+export function parseHeader(value: string | null): readonly string[] {
   if (!value) return []
   return value
     .split(',')

@@ -396,3 +396,33 @@ test('attempt transitions', () => {
       `Illegal identity attempt transition "${name}" from phase "${phase}".`,
     )
 })
+
+test('retry receives the request that got the response, as proved', async () => {
+  const contexts: Identity.RetryContext[] = []
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: header('X-Proof', 'proved'),
+      retry(_, context) {
+        contexts.push(context)
+        return undefined
+      },
+    },
+  ])
+  await client.send(
+    async () => new Response(null, { status: 401 }),
+    new Request('https://a.example'),
+  )
+  expect(contexts).toHaveLength(1)
+  expect(contexts[0]!.request.headers.get('X-Proof')).toBe('proved')
+  expect(Object.isFrozen(contexts[0])).toBe(true)
+})
+
+test('exposes the headers provers declare, lowercased and frozen', () => {
+  const client = Identity.Client.from([
+    { scope: '*', prove: (request) => request, headers: ['X-Agent-Token'] },
+    { scope: '*', prove: (request) => request, headers: ['x-agent-token', 'X-Other'] },
+  ])
+  expect(client.headers).toEqual(['x-agent-token', 'x-other'])
+  expect(Object.isFrozen(client.headers)).toBe(true)
+})

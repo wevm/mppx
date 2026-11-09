@@ -242,6 +242,11 @@
       "types": "./dist/extensions/identity/index.d.ts",
       "default": "./dist/extensions/identity/index.js"
     },
+    "./extensions/identity/attestation": {
+      "src": "./src/extensions/identity/attestation/index.ts",
+      "types": "./dist/extensions/identity/attestation/index.d.ts",
+      "default": "./dist/extensions/identity/attestation/index.js"
+    },
     "./extensions/identity/tap": {
       "src": "./src/extensions/identity/tap/index.ts",
       "types": "./dist/extensions/identity/tap/index.d.ts",

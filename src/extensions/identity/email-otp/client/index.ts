@@ -1,9 +1,9 @@
 import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
+import * as Attestation from '../../attestation/client/index.js'
+import { isIssuer } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
-import { isIssuer } from '../internal/Attestation.js'
-import * as Attestation from '../internal/Prover.js'
 
 /**
  * Asks an issuer to email a one-time code for `audience`.
@@ -71,13 +71,22 @@ function date(value: unknown): Date | undefined {
 }
 
 /**
- * Creates a prover that verifies an email address when a server asks for one.
+ * Creates a prover that verifies an email address when a server asks for one: an
+ * `Attestation.Client.prover` of type `email` whose `acquire` sends the code, prompts and verifies.
  *
  * When a server answers with `Identity-Attestation-Required: email;issuer="…"`,
  * the prover asks the issuer to email a code to `email`, gets the code from
  * `code` (such as a terminal prompt or a form), exchanges it for an
  * attestation bound to the server's origin and sends the request again with it.
- * Later requests to that origin reuse it until it expires.
+ * Later requests to that origin reuse it until it expires. A route that accepts
+ * several issuers prompts once.
+ *
+ * Trust is set by two options together:
+ * - `scope`: the origins that may ask for and receive the attestation. It is always
+ *   bound to the request's own origin, never one a server names.
+ * - `issuers`: the issuers the email address may be sent to. A server only names the
+ *   issuer it wants; an untrusted one could relay a code and obtain an attestation
+ *   for another server.
  *
  * @example
  * ```ts
@@ -86,8 +95,9 @@ function date(value: unknown): Date | undefined {
  *     EmailOtp.Client.prover({
  *       code: () => prompt('Code:'),
  *       email: 'me@example.com',
+ *       // Only this issuer receives the address, and only this origin the attestation.
  *       issuers: ['https://issuer.example'],
- *       scope: '*',
+ *       scope: ['https://api.example'],
  *     }),
  *   ],
  *   methods: [tempo({ account })],
@@ -127,13 +137,13 @@ export function prover(config: prover.Config): Identity.Prover {
 export declare namespace prover {
   type Config = {
     /** Origins that may ask for and receive the attestation, or `'*'` for any origin. */
-    scope: Identity.Prover['scope']
+    readonly scope: Identity.Prover['scope']
     /** Email address to verify, or a function that returns it (or `undefined` to decline). */
-    email:
+    readonly email:
       | string
       | ((parameters: { audience: string; issuer: string }) => MaybePromise<string | undefined>)
     /** Returns the code the user received, or `undefined` to give up. */
-    code: (parameters: {
+    readonly code: (parameters: {
       /** Origin the attestation is for. */
       audience: string
       /** Email address the code was sent to. */
@@ -150,16 +160,11 @@ export declare namespace prover {
       error?: Error | undefined
     }) => MaybePromise<string | undefined>
     /** Attestations obtained beforehand, such as from the issuer with curl. */
-    attestations?: readonly string[] | undefined
-    /**
-     * Issuers the prover may send the email address to, such as `['https://identity.mpp.tempo.xyz']`.
-     *
-     * A server only names the issuer it wants; an untrusted one could relay a code
-     * and obtain an attestation for another server.
-     */
-    issuers: readonly string[]
+    readonly attestations?: readonly string[] | undefined
+    /** Issuers the prover may send the email address to, such as `['https://identity.mpp.tempo.xyz']`. */
+    readonly issuers: readonly string[]
     /** Fetch used to call the issuer. @default globalThis.fetch */
-    fetch?: typeof globalThis.fetch | undefined
+    readonly fetch?: typeof globalThis.fetch | undefined
   }
 }
 

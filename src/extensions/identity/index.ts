@@ -1,3 +1,5 @@
+/** Identity attestations: issuer-signed tokens a server requires and a client presents. */
+export * as Attestation from './attestation/index.js'
 /** Email address verification with a one-time code. */
 export * as EmailOtp from './email-otp/index.js'
 /** Client and server adapters for the TAP agent-recognition signature profile. */

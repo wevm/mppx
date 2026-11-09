@@ -50,6 +50,8 @@ export type Client = {
     context: { readonly challenge: Challenge.Challenge },
     url: string,
   ) => Promise<void>
+  /** Extra sensitive request headers the provers declare (`Prover.headers`), lowercased. */
+  readonly headers: readonly string[]
 }
 
 /** x402 credential headers (v2 and v1); a request carrying one is a paid attempt. */
@@ -131,6 +133,16 @@ export function from(provers: readonly Types.Prover[]): Client {
     if (prover.scope !== '*' && !Array.isArray(prover.scope))
       throw new TypeError('Identity prover scope must be "*" or an array of origins.')
 
+  const headers = Object.freeze([
+    ...new Set(
+      provers.flatMap((prover) => {
+        if (prover.headers !== undefined && !Array.isArray(prover.headers))
+          throw new TypeError('Identity prover headers must be an array of header names.')
+        return (prover.headers ?? []).map((name) => name.toLowerCase())
+      }),
+    ),
+  ])
+
   const inScope = (url: string) => {
     const origin = new URL(url).origin
     return provers.filter((prover) => prover.scope === '*' || prover.scope.includes(origin))
@@ -165,6 +177,7 @@ export function from(provers: readonly Types.Prover[]): Client {
   }
 
   return {
+    headers,
     async send(fetch, request, context = {}) {
       let attempt = transition(initial, {
         type: 'send',
@@ -177,7 +190,7 @@ export function from(provers: readonly Types.Prover[]): Client {
       const { response } = result
       const resend =
         keepReadable && response.status >= 400 && response.status !== 402
-          ? await resendHeaders(retriers, response)
+          ? await resendHeaders(retriers, response, result.request)
           : undefined
       attempt = transition(attempt, { type: 'response', resend })
       if (attempt.phase !== 'resent') return { ...result, headers: carried }
@@ -219,13 +232,15 @@ function isPaid(request: Request, context: SendContext): boolean {
 
 /**
  * Asks each prover whether to resend a rejected response, each on its own copy so the response
- * stays readable. Returns the headers to resend with (set in prover order, so a later prover's
+ * stays readable, with the request that got it. Returns the headers to resend with (set in prover order, so a later prover's
  * header replaces an earlier one's), or `undefined` when no prover asks to resend.
  */
 async function resendHeaders(
   provers: readonly Types.Prover[],
   response: Response,
+  request: Request,
 ): Promise<ResendHeaders | undefined> {
+  const context: Types.RetryContext = Object.freeze({ request })
   const copies: Response[] = []
   let resend = false
   const headers = new Headers()
@@ -233,7 +248,7 @@ async function resendHeaders(
     for (const prover of provers) {
       const copy = response.clone()
       copies.push(copy)
-      const decision = await prover.retry!(copy)
+      const decision = await prover.retry!(copy, context)
       if (decision === true) resend = true
       else if (typeof decision === 'object' && decision !== null) {
         resend = true
