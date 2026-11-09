@@ -1,5 +1,17 @@
 # mppx
 
+## 0.17.6
+
+### Patch Changes
+
+- 9bd6ad6: Fixed the email OTP client helpers so they refuse to send an address or code to a plaintext http issuer other than localhost.
+- 0a01b79: Added `mppx/extensions/identity/email-otp`: `EmailOtp.Server.verifier` requires a verified email address, sent as an issuer-signed attestation in `Identity-Attestation` and bound to the server's origin, and `EmailOtp.Client.prover` obtains one with a one-time code when a server answers 401 with `Identity-Attestation-Required`.
+- 9bd6ad6: Fixed the email OTP verifier so an attestation the route's policy rejects no longer hides an allowed one later in the same request.
+- 3d8fe95: Fixed the email OTP verifier so a forged attestation with a later expiry no longer hides a valid one, and a key rotated in during an issuer outage answers 503 instead of 401.
+- 970ac7b: Added `Identity.from` and `Identity.Rejection` to `mppx/identity`: `Identity.from({ verify })` turns a function, such as a lookup in your own database, session store or KYC provider, into a route identity verifier. It returns the caller's identity, `undefined` for a 401, or throws `Identity.Rejection` to reject the request before any payment.
+- db73851: Fixed `mppx stripe address --env` to recognize multiline dotenv values under any key Node accepts, such as one starting with a digit or holding a space, and in files with CRLF line endings, so a line inside one is no longer taken for the deposit address. It also checks the result with Node's dotenv parser and refuses to write when Node would read the address or any other entry differently.
+- 2067b0c: Fixed `mppx stripe address` to reject a deposit address that isn't valid for its network (Solana addresses must decode to 32 bytes), refuse env values with line breaks, and leave exactly one assignment of the key when writing with `--env`.
+
 ## 0.17.5
 
 ### Patch Changes
