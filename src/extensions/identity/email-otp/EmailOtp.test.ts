@@ -2,14 +2,13 @@ import type { RequestListener } from 'node:http'
 
 import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
+import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
-import { afterEach, expect, test, vi } from 'vp/test'
+import { afterEach, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
-
-import * as Attestation from './internal/index.js'
 
 const issuer = 'https://issuer.example'
 
@@ -319,245 +318,6 @@ test('does not store an attestation for another requirement from an issuer', asy
   expect(sent).toEqual([null])
 })
 
-test('acquires a requirement listed twice once', async () => {
-  let calls = 0
-  const prover = Attestation.Client.prover({
-    acquire: () => {
-      calls++
-      return undefined
-    },
-    issuers: [issuer],
-    scope: '*',
-  })
-  const response = new Response(null, {
-    status: 401,
-    headers: {
-      [Attestation.Constants.requiredHeader]: `email;issuer="${issuer}", email;issuer="${issuer}"`,
-    },
-  })
-  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
-  await prover.retry!(response)
-  expect(calls).toBe(1)
-})
-
-test('matches a trusted issuer listed with a trailing slash', async () => {
-  let calls = 0
-  const prover = Attestation.Client.prover({
-    acquire: () => {
-      calls++
-      return undefined
-    },
-    issuers: [`${issuer}/`],
-    scope: '*',
-  })
-  const response = new Response(null, {
-    status: 401,
-    headers: { [Attestation.Constants.requiredHeader]: `email;issuer="${issuer}"` },
-  })
-  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
-  await prover.retry!(response)
-  expect(calls).toBe(1)
-})
-
-test('acquires from the other listed issuers when one fails', async () => {
-  const other = 'https://other-issuer.example'
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  const iat = Math.floor(Date.now() / 1_000)
-  const token = await Attestation.sign(
-    {
-      aud: 'https://api.example',
-      exp: iat + 600,
-      iat,
-      iss: other,
-      sub: 'dana@example.com',
-      type: 'email',
-    },
-    { key: keys.privateKey, keyId },
-  )
-  const asked: string[] = []
-  const prover = Attestation.Client.prover({
-    acquire: ({ issuer: from }) => {
-      asked.push(from)
-      if (from === issuer) throw new Error('issuer down')
-      return token
-    },
-    issuers: [issuer, other],
-    scope: '*',
-  })
-  const response = (header: string) => {
-    const value = new Response(null, {
-      status: 401,
-      headers: { [Attestation.Constants.requiredHeader]: header },
-    })
-    Object.defineProperty(value, 'url', { value: 'https://api.example/resource' })
-    return value
-  }
-  await expect(
-    prover.retry!(response(`email;issuer="${issuer}", email;issuer="${other}"`)),
-  ).resolves.toBe(true)
-  expect(asked).toEqual([issuer, other])
-  await expect(prover.retry!(response(`email;issuer="${issuer}"`))).rejects.toThrow('issuer down')
-})
-
-test('replaces an attestation near expiry before paying, and keeps it on the paid retry', async () => {
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  const iat = Math.floor(Date.now() / 1_000)
-  const token = await Attestation.sign(
-    {
-      aud: 'https://api.example',
-      exp: iat + 30,
-      iat: iat - 3_570,
-      iss: issuer,
-      sub: 'dana@example.com',
-      type: 'email',
-    },
-    { key: keys.privateKey, keyId },
-  )
-  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
-  const context = { created: iat, nonce: 'n' }
-  const unpaid = await prover.prove(new Request('https://api.example/resource'), context)
-  expect(unpaid.headers.get(Attestation.Constants.header)).toBeNull()
-  const paid = await prover.prove(new Request('https://api.example/resource'), {
-    ...context,
-    challenge: {} as never,
-  })
-  expect(paid.headers.get(Attestation.Constants.header)).toBe(token)
-})
-
-test('sends a short-lived attestation while more than half its lifetime remains', async () => {
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  const iat = Math.floor(Date.now() / 1_000)
-  const token = await Attestation.sign(
-    {
-      aud: 'https://api.example',
-      exp: iat + 120,
-      iat,
-      iss: issuer,
-      sub: 'dana@example.com',
-      type: 'email',
-    },
-    { key: keys.privateKey, keyId },
-  )
-  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
-  const sent = await prover.prove(new Request('https://api.example/resource'), {
-    created: iat,
-    nonce: 'n',
-  })
-  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
-})
-
-test('sends a just-acquired short-lived attestation when the issuer clock is behind', async () => {
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  // The issuer clock is 550 seconds behind the client, and its attestations live 600 seconds.
-  const iat = Math.floor(Date.now() / 1_000) - 550
-  const token = await Attestation.sign(
-    {
-      aud: 'https://api.example',
-      exp: iat + 600,
-      iat,
-      iss: issuer,
-      sub: 'dana@example.com',
-      type: 'email',
-    },
-    { key: keys.privateKey, keyId },
-  )
-  const prover = Attestation.Client.prover({ acquire: () => token, issuers: [issuer], scope: '*' })
-  const response = new Response(null, {
-    status: 401,
-    headers: { [Attestation.Constants.requiredHeader]: 'email;issuer="' + issuer + '"' },
-  })
-  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
-  expect(await prover.retry!(response)).toBe(true)
-  // Concurrent resends each carry it: one does not use it up for the others.
-  for (const _ of [1, 2]) {
-    const sent = await prover.prove(new Request('https://api.example/resource'), {
-      created: iat,
-      nonce: 'n',
-    })
-    expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
-  }
-})
-
-test('sends a cached short-lived attestation within the clock tolerance', async () => {
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  // An issuer 60 seconds behind signs a 120-second attestation: it expires 60 seconds from now.
-  const iat = Math.floor(Date.now() / 1_000) - 60
-  const token = await Attestation.sign(
-    {
-      aud: 'https://api.example',
-      exp: iat + 120,
-      iat,
-      iss: issuer,
-      sub: 'dana@example.com',
-      type: 'email',
-    },
-    { key: keys.privateKey, keyId },
-  )
-  const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
-  const sent = await prover.prove(new Request('https://api.example/resource'), {
-    created: iat,
-    nonce: 'n',
-  })
-  expect(sent.headers.get(Attestation.Constants.header)).toBe(token)
-})
-
-test('keeps an earlier attestation fresh while a later code takes long', async () => {
-  const other = 'https://other-issuer.example'
-  const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  // Each attestation lives an hour and, by a skewed issuer clock, has 250 seconds left.
-  const sign = (iss: string) => {
-    const iat = Math.floor(Date.now() / 1_000) - 3_350
-    return Attestation.sign(
-      {
-        aud: 'https://api.example',
-        exp: iat + 3_600,
-        iat,
-        iss,
-        sub: 'dana@example.com',
-        type: 'email',
-      },
-      { key: keys.privateKey, keyId },
-    )
-  }
-  const tokens: string[] = []
-  const prover = Attestation.Client.prover({
-    acquire: async ({ issuer: from }) => {
-      // The second code takes the user two minutes to enter.
-      if (from === other) vi.setSystemTime(Date.now() + 120_000)
-      const token = await sign(from)
-      tokens.push(token)
-      return token
-    },
-    issuers: [issuer, other],
-    scope: '*',
-  })
-  const response = new Response(null, {
-    status: 401,
-    headers: {
-      [Attestation.Constants.requiredHeader]:
-        'email;issuer="' + issuer + '", email;issuer="' + other + '"',
-    },
-  })
-  Object.defineProperty(response, 'url', { value: 'https://api.example/resource' })
-  vi.useFakeTimers({ toFake: ['Date'] })
-  try {
-    expect(await prover.retry!(response)).toBe(true)
-    const sent = await prover.prove(new Request('https://api.example/resource'), {
-      created: 0,
-      nonce: 'n',
-    })
-    expect(sent.headers.get(Attestation.Constants.header)).toBe(tokens.join(', '))
-  } finally {
-    vi.useRealTimers()
-  }
-})
-
 test('rejects an issuer response with an invalid expiry', async () => {
   const fetch = async () => Response.json({ expires_at: 'soon', id: 'otp-id' })
   await expect(
@@ -631,7 +391,7 @@ test("accepts the server's own identity system through Identity.from, or email",
 
   const none = await fetch(server.url)
   expect(none.status).toBe(401)
-  expect(Attestation.Client.requirements(none.headers)).toEqual([{ issuer, type: 'email' }])
+  expect(Attestation.Client.requirements(none.headers)).toEqual([[{ issuer, type: 'email' }]])
 
   expect((await fetch(server.url, { headers: { 'X-Api-Key': 'wrong' } })).status).toBe(403)
 

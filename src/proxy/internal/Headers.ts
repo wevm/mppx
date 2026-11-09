@@ -1,3 +1,5 @@
+import * as IdentityHeaders from '../../identity/Headers.js'
+
 const hopByHopHeaders = new Set([
   'connection',
   'keep-alive',
@@ -12,8 +14,6 @@ const hopByHopHeaders = new Set([
 // Payment credentials are consumed by the proxy and must never reach upstream services.
 const paymentHeaders = new Set([
   'accept-payment',
-  'identity-attestation',
-  'identity-attestation-required',
   'authorization',
   'payment-authorization',
   'payment-receipt',
@@ -25,7 +25,7 @@ const paymentHeaders = new Set([
   'www-authenticate',
 ])
 
-/** Strips hop-by-hop, auth, encoding, cookie, and forwarding headers from a request before proxying upstream. */
+/** Strips hop-by-hop, auth, identity, encoding, cookie, and forwarding headers from a request before proxying upstream. */
 export function scrub(headers: Headers): Headers {
   const scrubbed = new Headers()
 
@@ -33,6 +33,7 @@ export function scrub(headers: Headers): Headers {
     const lower = name.toLowerCase()
 
     if (paymentHeaders.has(lower)) continue
+    if ((IdentityHeaders.request as readonly string[]).includes(lower)) continue
     if (lower === 'accept-encoding') continue
     if (lower === 'content-length') continue
     if (lower === 'cookie') continue
@@ -67,6 +68,8 @@ export function scrubResponse(response: Response): Response {
     if (name !== 'authorization' && name !== 'www-authenticate') headers.delete(name)
   }
   headers.delete('payment-authorization')
+  // The proxy decides which identity the client presents, so upstream identity headers never pass.
+  for (const name of [...IdentityHeaders.request, ...IdentityHeaders.response]) headers.delete(name)
   const authorization = headers.get('authorization')
   if (authorization && /^\s*Payment(?:\s|$)/i.test(authorization)) headers.delete('authorization')
   const authenticate = headers.get('www-authenticate')

@@ -2,6 +2,7 @@ import type * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Expires from '../Expires.js'
 import * as IdentityClient from '../identity/Client.js'
+import * as IdentityHeaders from '../identity/Headers.js'
 import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
@@ -655,12 +656,12 @@ const bodyHeaders = [
   'content-type',
   'transfer-encoding',
 ]
+/** Credential headers never sent across origins; identity headers come from `Identity.Headers` and the provers. */
 const crossOriginHeaders = [
   'authorization',
   'cookie',
   'cookie2',
   'host',
-  'identity-attestation',
   'payment-authorization',
   'payment-signature',
   'proxy-authorization',
@@ -689,6 +690,11 @@ async function prepareHttpRequest(parameters: {
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0)
     throw new TypeError('maxRedirects must be a non-negative integer.')
 
+  const stripped = new Set([
+    ...crossOriginHeaders,
+    ...IdentityHeaders.request,
+    ...(identity?.headers ?? []),
+  ])
   let request = new Request(input, { ...init, redirect: 'manual' })
   const explicitAcceptPayment = request.headers.has(Constants.Headers.acceptPayment)
   let body = await replayBody(request, init?.body)
@@ -753,8 +759,7 @@ async function prepareHttpRequest(parameters: {
     if (from.origin !== to.origin)
       for (const header of [...headers.keys()]) {
         const value = headers.get(header) ?? ''
-        if (crossOriginHeaders.includes(header) || value.startsWith('Payment '))
-          headers.delete(header)
+        if (stripped.has(header) || value.startsWith('Payment ')) headers.delete(header)
       }
 
     redirects.push(Object.freeze({ from: from.href, status: response.status, to: to.href }))
