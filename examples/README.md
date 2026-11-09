@@ -17,6 +17,7 @@ Each server is a Cloudflare Worker: `pnpm dev` runs it locally in workerd, the W
 | [stripe](./stripe/)                           | Stripe SPT charge with automatic client                                     |
 | [subscription](./subscription/)               | Daily news subscription using Tempo access keys                             |
 | [email-otp](./email-otp/)                     | Email OTP identity attestation before an MPP payment                        |
+| [identity-fortune](./identity-fortune/)       | Identity tiers on one paid route, with a live view of every step            |
 | [web-bot-auth](./web-bot-auth/)               | Web Bot Auth with automatic MPP payment retry                               |
 | [x402-mpp](./x402-mpp/)                       | Server route supporting x402 and mpp payments                               |
 

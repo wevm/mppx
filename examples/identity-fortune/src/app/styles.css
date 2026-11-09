@@ -1,0 +1,580 @@
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/fonts/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* MPP site palette (tempoxyz/mpp src/pages/_root.css). */
+:root {
+  --bg: #101010;
+  --elevated: #191919;
+  --raised: #202020;
+  --text: #ebebeb;
+  --secondary: #a6a6a6;
+  --muted: #757575;
+  --green: #98f3aa;
+  --purple: #9e94ff;
+  --red: #ff8a8a;
+  --border: rgba(235, 235, 235, 0.14);
+  --border-strong: rgba(235, 235, 235, 0.28);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+body {
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--text);
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+code,
+.mono {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+code {
+  font-size: 0.92em;
+  color: var(--green);
+}
+h3 {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin: 0 0 10px;
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 12px;
+}
+
+.page {
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: 28px 28px 40px;
+}
+header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  margin-bottom: 22px;
+}
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.logo {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 700;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 15px;
+}
+.slash {
+  color: var(--muted);
+  font-weight: 300;
+}
+.tagline {
+  margin: 0;
+  color: var(--secondary);
+  max-width: 760px;
+  text-align: right;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 16px;
+  align-items: start;
+}
+.panel {
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.panel-head h3 {
+  margin: 0;
+}
+.controls {
+  display: flex;
+  gap: 6px;
+}
+
+.card {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.row.gap {
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+.wallet .row + .row {
+  margin-top: 4px;
+}
+
+.prover {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+.prover.on {
+  border-color: var(--green);
+  background: rgba(152, 243, 170, 0.05);
+}
+.prover > input {
+  accent-color: var(--green);
+  margin-top: 3px;
+}
+.prover > div {
+  flex: 1;
+  min-width: 0;
+}
+.prover-title {
+  font-weight: 500;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.chip {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+input:not([type='checkbox']) {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  outline: none;
+}
+input:focus {
+  border-color: var(--border-strong);
+}
+input:disabled {
+  opacity: 0.4;
+}
+
+button {
+  font: inherit;
+  color: var(--bg);
+  background: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+button.ghost {
+  background: transparent;
+  color: var(--secondary);
+  border: 1px solid var(--border);
+}
+button.ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+button.small {
+  font-size: 12px;
+  padding: 4px 10px;
+  margin-top: 8px;
+}
+
+.tiers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 16px 0 12px;
+}
+.tier {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition: all 0.2s;
+}
+.tier.current {
+  border-color: var(--green);
+}
+.tier-name {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.tier-price {
+  font-family: 'Geist Mono', monospace;
+  font-size: 15px;
+}
+.tier.current .tier-price {
+  color: var(--green);
+}
+
+.crack {
+  width: 100%;
+  padding: 13px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+.inbox {
+  border-color: var(--purple);
+}
+.subject {
+  margin-top: 4px;
+}
+.otp {
+  font-size: 26px;
+  letter-spacing: 0.18em;
+  color: var(--purple);
+  margin: 6px 0 2px;
+}
+
+.error {
+  color: var(--red);
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+
+.slip {
+  border-color: var(--green);
+  animation: rise 0.5s ease;
+}
+.haiku {
+  font-size: 19px;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  margin: 4px 0 12px;
+}
+.meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.seen {
+  color: var(--secondary);
+  font-size: 12px;
+  margin-top: 10px;
+}
+.receipt {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--green);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Diagram */
+.diagram {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.node rect {
+  fill: var(--raised);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  transition: all 0.3s;
+}
+.node .label {
+  fill: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+.node .sub {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: 'Geist Mono', monospace;
+}
+.node.visited rect {
+  stroke: rgba(152, 243, 170, 0.45);
+}
+.node.lit rect {
+  stroke: var(--green);
+  stroke-width: 2;
+  fill: #1c2a20;
+  filter: drop-shadow(0 0 12px rgba(152, 243, 170, 0.35));
+}
+.node.idle {
+  opacity: 0.3;
+}
+.edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+  transition: all 0.3s;
+}
+.edge.idle {
+  opacity: 0.25;
+}
+.edge.lit {
+  stroke: var(--green);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  animation: flow 0.6s linear infinite;
+}
+@keyframes flow {
+  to {
+    stroke-dashoffset: -11;
+  }
+}
+.diagram-caption {
+  color: var(--green);
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.steps {
+  position: relative;
+  margin-top: 10px;
+  max-height: 260px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.step {
+  display: flex;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  color: var(--secondary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: normal;
+}
+.step:hover {
+  background: var(--raised);
+}
+.step.current {
+  background: rgba(152, 243, 170, 0.1);
+  color: var(--text);
+}
+.step.future {
+  opacity: 0.35;
+}
+.step-id {
+  color: var(--green);
+  min-width: 150px;
+}
+.step.future .step-id {
+  color: var(--muted);
+}
+.step-detail {
+  overflow-wrap: anywhere;
+}
+
+/* Code */
+.code {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 150px);
+  min-height: 560px;
+  position: sticky;
+  top: 16px;
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  align-items: center;
+}
+.tabs button {
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px 8px 0 0;
+  padding: 7px 12px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  border-bottom: 2px solid transparent;
+}
+.tabs button.on {
+  color: var(--text);
+  border-bottom-color: var(--green);
+}
+.follow {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.follow input {
+  accent-color: var(--green);
+}
+.code-body {
+  flex: 1;
+  overflow: auto;
+  font-size: 12.5px;
+}
+.code-body > * {
+  --diffs-font-family: 'Geist Mono', ui-monospace, monospace;
+  --diffs-bg: var(--elevated);
+}
+
+/* Timeline */
+.timeline {
+  margin-top: 16px;
+}
+.hop {
+  border-top: 1px solid var(--border);
+}
+.hop.current {
+  background: rgba(152, 243, 170, 0.04);
+}
+.hop-line {
+  width: 100%;
+  display: flex;
+  gap: 14px;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 4px;
+  text-align: left;
+}
+.method {
+  color: var(--secondary);
+  min-width: 44px;
+}
+.path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status {
+  font-weight: 600;
+}
+.status.s2 {
+  color: var(--green);
+}
+.status.s4 {
+  color: var(--purple);
+}
+.status.s5 {
+  color: var(--red);
+}
+.hop-detail {
+  font-size: 12px;
+  color: var(--secondary);
+  padding: 2px 4px 12px 62px;
+  overflow-wrap: anywhere;
+}
+.arrow {
+  color: var(--green);
+}
+.arrow.back {
+  color: var(--purple);
+}
+
+footer {
+  margin-top: 20px;
+  text-align: center;
+}
+
+@media (max-width: 1200px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  .code {
+    position: static;
+    height: 640px;
+  }
+  header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .tagline {
+    text-align: left;
+  }
+}

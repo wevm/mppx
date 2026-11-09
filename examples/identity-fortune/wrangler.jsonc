@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-identity-fortune",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The page is static assets; the paid API and the email issuer always reach the Worker.
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/issuer/*"],
+  },
+  // Workers AI writes the haiku. Without it (local dev without a Cloudflare login),
+  // the Worker falls back to ANTHROPIC_API_KEY, then to a built-in haiku.
+  "ai": { "binding": "AI" },
+  // One Durable Object store holds spent payment credentials and pending email codes.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+  "observability": { "enabled": true },
+}

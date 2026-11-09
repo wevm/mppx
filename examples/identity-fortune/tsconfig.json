@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "noEmit": true
+  },
+  "include": ["src/**/*", "vite.config.ts"]
+}

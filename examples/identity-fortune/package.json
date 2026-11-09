@@ -1,0 +1,28 @@
+{
+  "name": "identity-fortune",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -b",
+    "deploy": "vite build && wrangler deploy",
+    "dev": "vite dev",
+    "keygen": "tsx src/keygen.ts"
+  },
+  "dependencies": {
+    "@cloudflare/vite-plugin": "^1.66.0",
+    "@pierre/diffs": "1.2.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "@vitejs/plugin-react": "^6.0.0",
+    "mppx": "latest",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "latest",
+    "typescript": "catalog:",
+    "viem": "2.57.1",
+    "vite": "^8.3.0",
+    "wrangler": "^4.157.0"
+  }
+}
