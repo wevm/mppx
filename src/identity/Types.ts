@@ -107,7 +107,9 @@ export type Requirement = {
  * Credential's HMAC, pinned fields, expiry and payload are checked; any status other than
  * `valid` rejects with its fixed status code and no fresh 402, because the client may already
  * have pushed the payment. On a route with `authorize`, `verify` first runs without a
- * Credential, and only a `valid` result lets `authorize` run.
+ * Credential, and only a `valid` result lets `authorize` run. x402 Credentials name no
+ * Challenge the client could bind a proof to, so a route with a payment check rejects them as
+ * `invalid` before settlement.
  *
  * @experimental Unstable: may change or be removed in any release.
  */

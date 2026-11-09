@@ -1205,6 +1205,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       const checkIdentity = async (
         challenge: Challenge.Challenge,
         credential: Credential.Credential | undefined,
+        options: { readonly challengeFromTransport?: boolean } = {},
       ) => {
         identityState = IdentityServer.transition(identityState, {
           type: 'pay',
@@ -1213,13 +1214,21 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         })
         identityState = IdentityServer.transition(identityState, {
           type: 'checked',
-          outcome: paymentCheck
-            ? await IdentityServer.check(identityContext, paymentCheck, {
-                challenge,
-                credential,
-                request: input as globalThis.Request,
-              })
-            : IdentityServer.none,
+          outcome: !paymentCheck
+            ? IdentityServer.none
+            : options.challengeFromTransport
+              ? // Fails closed before settlement: the client proved nothing bound to this Challenge.
+                IdentityServer.decide([
+                  {
+                    status: 'invalid',
+                    reason: "This route's identity payment check does not accept x402 credentials.",
+                  },
+                ])
+              : await IdentityServer.check(identityContext, paymentCheck, {
+                  challenge,
+                  credential,
+                  request: input as globalThis.Request,
+                }),
         })
         return identityState
       }
@@ -1387,7 +1396,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       const { challenge, parsedRequest, request } = routeChallenge
       internal._canonicalRequest = parsedRequest
 
+      // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
+      // no Challenge) leaves nothing the client proved a payment check against.
+      let challengeFromTransport = false
       if (credential && transport.bindCredential) {
+        const submitted = credential.challenge
         try {
           credential = hydrateCredentialMeta(
             (await transport.bindCredential({
@@ -1396,6 +1409,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               input,
             })) as Credential.Credential,
           )
+          challengeFromTransport = credential.challenge.id !== submitted.id
         } catch (e) {
           credential = null
           credentialError = e as Error
@@ -1668,7 +1682,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
 
       // The payment check runs once against the answered Challenge, before settlement.
-      const checked = await checkIdentity(credential.challenge, parsedCredential)
+      const checked = await checkIdentity(credential.challenge, parsedCredential, {
+        challengeFromTransport,
+      })
       if (checked.phase === 'rejected') {
         const error = new Errors.VerificationFailedError({ reason: checked.rejection.reason })
         await emitPaymentFailed({
@@ -2950,33 +2966,35 @@ function composeHandlers(
         // Uses the schema-parsed canonical form (not raw options) so that
         // transformed fields (e.g. amount with decimals) match correctly.
         // Also checks inside methodDetails for fields moved there by transforms.
-        const candidates = handlers.filter((handler) =>
-          getConfiguredOffers(handler).some((internal) => {
-            try {
-              if (internal.name !== credMethod || internal.intent !== credIntent) return false
-              const mismatch = internal._stableBinding
-                ? getConfiguredStableBindingMismatch(
-                    getStableBinding(internal._canonicalRequest, internal._stableBinding),
-                    getStableBinding(credReq, internal._stableBinding),
-                  )
-                : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
-              // A handler without a static scope issues challenges scoped to the request's route.
-              const effectiveMeta =
-                internal.scope === undefined
-                  ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
-                  : internal.meta
-              return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
-            } catch {
-              return false
-            }
-          }),
-        )
+        const matches = (internal: ReturnType<typeof getConfiguredOffers>[number]) => {
+          try {
+            if (internal.name !== credMethod || internal.intent !== credIntent) return false
+            const mismatch = internal._stableBinding
+              ? getConfiguredStableBindingMismatch(
+                  getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                  getStableBinding(credReq, internal._stableBinding),
+                )
+              : getConfiguredRequestBindingMismatch(internal._canonicalRequest, credReq)
+            // A handler without a static scope issues challenges scoped to the request's route.
+            const effectiveMeta =
+              internal.scope === undefined
+                ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
+                : internal.meta
+            return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
+          } catch {
+            return false
+          }
+        }
+        const candidates = handlers.filter((handler) => getConfiguredOffers(handler).some(matches))
 
-        // Offers with the same terms are indistinguishable, so one with a payment check (all
-        // share the same one) is preferred and an unchecked twin cannot skip it.
+        // Offers with the same terms are indistinguishable, so a handler whose matching offer has
+        // a payment check (all share the same one) is preferred and an unchecked twin cannot skip
+        // it, including one inside a nested composer.
         const match =
           candidates.find((handler) =>
-            getConfiguredOffers(handler).some((internal) => internal._paymentCheck !== undefined),
+            getConfiguredOffers(handler).some(
+              (internal) => matches(internal) && internal._paymentCheck !== undefined,
+            ),
           ) ??
           candidates[0] ??
           handlers.find((handler) =>
