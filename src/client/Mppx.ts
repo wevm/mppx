@@ -9,6 +9,7 @@ import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
+import * as MethodOrder from './internal/MethodOrder.js'
 import * as MethodResponse from './internal/MethodResponse.js'
 import * as ProofRealm from './internal/ProofRealm.js'
 import * as Transport from './Transport.js'
@@ -324,7 +325,7 @@ export function create<
           AcceptPayment.deferredContext,
         )
       const orderedCandidates = await resolveChallengeOrder(
-        candidates,
+        await MethodOrder.apply(candidates, selectionContext),
         options?.orderChallenges ?? orderChallenges,
       )
       const selected = orderedCandidates[0]

@@ -64,6 +64,16 @@ export function isMachineToken(parameters: {
   )
 }
 
+/** Returns whether a currency is the machine token on any supported chain, when the chain is unknown. */
+export function isAnyMachineToken(currency: string): boolean {
+  return (
+    isAddress(currency, { strict: false }) &&
+    Object.values(defaults.machineToken).some((deployment) =>
+      isAddressEqual(currency as Address, deployment.token),
+    )
+  )
+}
+
 /** Resolves the canonical first-party settlement route for a compatible charge. */
 export function getRoute(parameters: {
   chainId: number | undefined

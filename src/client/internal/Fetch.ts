@@ -9,6 +9,7 @@ import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
+import * as MethodOrder from './MethodOrder.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as ProofRealm from './ProofRealm.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
@@ -331,7 +332,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           context,
         )
         const orderedCandidates = await resolveChallengeOrder(
-          candidates,
+          await MethodOrder.apply(candidates, context),
           (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
             orderChallenges,
         )

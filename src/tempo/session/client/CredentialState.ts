@@ -13,6 +13,8 @@ import * as Account from '../../../viem/Account.js'
 import { assertAllowedChainId, assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
+import * as defaults from '../../internal/defaults.js'
+import * as MachineToken from '../../internal/machine-token-charge.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
@@ -232,6 +234,11 @@ export type ResolveChallengeContextParameters = {
   allowedChainIds?: readonly number[] | undefined
   /** Resolves the viem client for the challenge chain. */
   getClient(parameters: { chainId?: number | undefined }): Client | Promise<Client>
+  /**
+   * Fee token for MACH sessions whose challenge advertises none. MACH cannot pay transaction fees.
+   * Defaults to the chain's default stablecoin.
+   */
+  machFeeToken?: Address | undefined
 }
 
 /** Reads TIP-1034 channel state for a recovery candidate. */
@@ -433,6 +440,28 @@ function readSuggestedDeposit(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+/**
+ * Resolves the fee token for open and top-up transactions: the advertised one, else the channel
+ * token. MACH is a session currency, never a gas token (TIP-1095), so a MACH channel pays its fees
+ * in a separate stablecoin and an advertised MACH fee token is rejected.
+ */
+function resolveFeeToken(parameters: {
+  advertised: Address | undefined
+  chainId: number
+  fallback: Address | undefined
+  token: Address
+}): Address | undefined {
+  const { advertised, chainId, fallback, token } = parameters
+  const isMach = (currency: Address) => MachineToken.isMachineToken({ chainId, currency })
+  if (advertised && isMach(advertised))
+    throw new Error('Tempo session fee token cannot be MACH: MACH cannot pay transaction fees.')
+  if (advertised || !isMach(token)) return advertised
+  const feeToken = fallback ?? (defaults.resolveCurrency({ chainId }) as Address)
+  if (isMach(feeToken))
+    throw new Error('Tempo session machFeeToken cannot be MACH: MACH cannot pay transaction fees.')
+  return feeToken
+}
+
 /** Resolves raw challenge fields into the typed data required by client credential planning. */
 export async function resolveChallengeContext(
   parameters: ResolveChallengeContextParameters,
@@ -452,6 +481,12 @@ export async function resolveChallengeContext(
   const escrow = resolveEscrow(challenge, escrowOverride, allowCustomEscrow)
   const payee = readAddress(challenge.request.recipient, 'recipient')
   const token = readAddress(challenge.request.currency, 'currency')
+  const feeToken = resolveFeeToken({
+    advertised: methodDetails.feeToken,
+    chainId,
+    fallback: parameters.machFeeToken,
+    token,
+  })
 
   return {
     amount: readAmount(challenge.request.amount),
@@ -460,7 +495,7 @@ export async function resolveChallengeContext(
     client,
     escrow,
     feePayer: methodDetails.feePayer,
-    feeToken: methodDetails.feeToken,
+    feeToken,
     key: channelKey({ payee, token, escrow, chainId }),
     operator: methodDetails.operator,
     payee,

@@ -1,7 +1,17 @@
-import { type Address, parseUnits } from 'viem'
+import {
+  type Account as viem_Account,
+  type Address,
+  type Client as viem_Client,
+  isAddressEqual,
+  parseUnits,
+} from 'viem'
+import { readContract } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
+import { Actions } from 'viem/tempo'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
+import * as MethodOrder from '../../../client/internal/MethodOrder.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
@@ -15,6 +25,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import * as MachineToken from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
@@ -23,7 +34,7 @@ import {
   readSessionChallengeAmount,
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
-import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
+import { resolveAuthorizedSigner, serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import {
   createChannelStore,
   entryKey,
@@ -42,7 +53,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
+import { assertWithinMaxDeposit, resolveAutomaticTopUp, resolveOpeningDeposit } from './Runtime.js'
 import {
   getSessionSnapshot,
   handleSseNeedVoucher,
@@ -196,6 +207,45 @@ function isExplicitClose(context: unknown) {
   )
 }
 
+/** Returns whether a challenge is a TIP-1034 session offer in MACH, the closed-loop machine token. */
+function isMachSessionChallenge(challenge: Challenge.Challenge) {
+  return (
+    isTip1034SessionChallenge(challenge) &&
+    typeof challenge.request.currency === 'string' &&
+    MachineToken.isAnyMachineToken(challenge.request.currency)
+  )
+}
+
+/** Returns whether a caller-supplied context names a channel or an action, which fixes the offer. */
+function selectsChannel(context: unknown) {
+  if (typeof context !== 'object' || context === null) return false
+  const { action, channelId, descriptor } = context as Record<string, unknown>
+  return action !== undefined || channelId !== undefined || descriptor !== undefined
+}
+
+/** Returns whether the account's signer may spend `amount` of `token`: always for a root key. */
+async function canAccessKeySpend(
+  client: viem_Client,
+  account: viem_Account,
+  token: Address,
+  amount: bigint,
+) {
+  const accessKey = resolveAuthorizedSigner(account)
+  if (isAddressEqual(accessKey, account.address)) return true
+  const parameters = { account: account.address, accessKey }
+  const metadata = await Actions.accessKey.getMetadata(client as never, parameters)
+  // An unpublished key reads as the zero address; its allowance is not on chain yet.
+  if (metadata.isRevoked || !isAddressEqual(metadata.address, accessKey)) return false
+  if (metadata.expiry !== 0n && metadata.expiry <= BigInt(Math.floor(Date.now() / 1_000)))
+    return false
+  if (metadata.spendPolicy === 'unlimited') return true
+  const { remaining } = await Actions.accessKey.getRemainingLimit(client as never, {
+    ...parameters,
+    token,
+  })
+  return remaining >= amount
+}
+
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
  *
@@ -213,6 +263,7 @@ export function session(parameters: session.Parameters = {}) {
     escrow: escrowOverride,
     allowedChainIds,
     getClient: getClientParameter,
+    machFeeToken,
     maxDeposit: maxDepositParameter,
     topUpAmount: topUpAmountParameter,
     onChannelUpdate,
@@ -291,6 +342,7 @@ export function session(parameters: session.Parameters = {}) {
         escrowOverride,
         allowedChainIds,
         getClient,
+        machFeeToken,
       })
       const attempt = MethodResponse.getAttempt(parameters)
       const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
@@ -472,6 +524,75 @@ export function session(parameters: session.Parameters = {}) {
     })
   }
 
+  /**
+   * Returns whether the wallet can fund a MACH session offer: an open channel that covers the next
+   * voucher or a recoverable one, or enough MACH (and access-key allowance) for the deposit an
+   * open or top-up would lock. Failed reads count as unfundable.
+   */
+  const canFundMachSession = async (challenge: TempoSessionChallenge) => {
+    try {
+      const resolved = await resolveChallengeContext({
+        allowCustomEscrow,
+        challenge,
+        escrowOverride,
+        allowedChainIds,
+        getClient,
+        machFeeToken,
+      })
+      const entry = await store.get(resolved.key)
+      const account = await resolveCredentialAccount(resolved, undefined, entry)
+      let deposit: bigint
+      if (entry?.opened && canSignDescriptor(account, entry.descriptor)) {
+        const requiredCumulative = entry.cumulativeAmount + resolved.amount
+        if (requiredCumulative <= entry.deposit) return true
+        deposit = resolveAutomaticTopUp({
+          deposit: entry.deposit,
+          maxDeposit,
+          requiredCumulative,
+          suggestedDeposit:
+            resolved.suggestedDepositRaw === undefined
+              ? undefined
+              : BigInt(resolved.suggestedDepositRaw),
+          topUpAmount,
+        })
+      } else {
+        const recover = resolveRecoverContext({ context: undefined, snapshot: resolved.snapshot })
+        if (recover && canSignDescriptor(account, recover.descriptor)) return true
+        deposit = resolveOpeningDeposit({
+          maxDeposit,
+          requestAmount: resolved.amount,
+          suggestedDepositRaw: resolved.suggestedDepositRaw,
+        })
+      }
+      // Reads never carry the client's account, which a node refuses while an access key is unpublished.
+      const balance = (await readContract(resolved.client, {
+        ...Actions.token.getBalance.call(resolved.client, {
+          account: account.address,
+          token: resolved.token,
+        }),
+        account: null,
+      } as never)) as bigint
+      if (balance < deposit) return false
+      return await canAccessKeySpend(resolved.client, account, resolved.token, deposit)
+    } catch {
+      return false
+    }
+  }
+
+  // Prefer a MACH session offer the wallet can fund, so closed-loop MACH credit pays before
+  // stablecoins; otherwise try stablecoin offers first. Currency pins (`currencies`) already
+  // filter offers, and a caller-supplied channel or action keeps the offer order.
+  MethodOrder.register(method, async ({ candidates, context }) => {
+    if (selectsChannel(context)) return candidates
+    const isMach = (candidate: (typeof candidates)[number]) =>
+      isMachSessionChallenge(candidate.challenge)
+    const mach = candidates.find(isMach)
+    if (!mach || candidates.every(isMach)) return candidates
+    if (await canFundMachSession(mach.challenge as TempoSessionChallenge))
+      return [mach, ...candidates.filter((candidate) => candidate !== mach)]
+    return [...candidates.filter((candidate) => !isMach(candidate)), ...candidates.filter(isMach)]
+  })
+
   MethodChallenge.register(method, async ({ challenge, context, fetch, input, signal }) => {
     if (!isTip1034SessionChallenge(challenge)) return
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
@@ -483,6 +604,7 @@ export function session(parameters: session.Parameters = {}) {
       escrowOverride,
       allowedChainIds,
       getClient,
+      machFeeToken,
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
@@ -545,6 +667,7 @@ export function session(parameters: session.Parameters = {}) {
           escrowOverride,
           allowedChainIds,
           getClient,
+          machFeeToken,
         })
       ).key
       let channel = await store.get(channelKey)
@@ -620,6 +743,12 @@ export declare namespace session {
       expectedRecipients?: readonly Address[] | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). `maxAmount` requires it explicitly. */
       decimals?: number | undefined
+      /**
+       * Fee token for MACH session open and top-up transactions when the challenge advertises
+       * none. MACH cannot pay transaction fees, so it must be another token.
+       * @default the chain's default stablecoin (USDC.e on mainnet, pathUSD on testnet)
+       */
+      machFeeToken?: Address | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
       /**

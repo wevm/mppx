@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import * as Challenge from '../../Challenge.js'
+import * as MethodOrder from '../../client/internal/MethodOrder.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as Credential from '../../Credential.js'
@@ -218,9 +219,10 @@ function createPaymentAwareCallTool<methods extends Methods>(
       paymentPreferences.entries,
       call.context,
     )
+    const methodOrdered = await MethodOrder.apply(candidates, call.context)
     const orderedCandidates = config.orderChallenges
-      ? await config.orderChallenges(candidates)
-      : candidates
+      ? await config.orderChallenges(methodOrdered)
+      : methodOrdered
     const selected = orderedCandidates[0]
 
     if (!selected) {
