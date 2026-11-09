@@ -201,6 +201,30 @@ export declare namespace channels {
 }
 
 /**
+ * Queues unpaid channels dropped by older settlement schedulers. Run once after upgrading,
+ * using every channel ID from the application's channel registry or escrow opening events;
+ * dormant Durable Objects cannot enumerate or wake themselves. Safe to rerun after a send failure.
+ *
+ * @example
+ * ```ts
+ * await backfillSettlement(channelIds, { store: channels(env.MPPX_CHANNELS).store, queue: env.MPPX_SETTLEMENT_QUEUE })
+ * ```
+ */
+export async function backfillSettlement(
+  channelIds: Iterable<Hex> | AsyncIterable<Hex>,
+  parameters: { store: Store.AtomicStore; queue: ChannelStore.Queue },
+): Promise<number> {
+  let queued = 0
+  for await (const channelId of channelIds) {
+    const state = await parameters.store.get(channelId)
+    if (!isChannelState(state) || state.finalized || unsettledAmount(state) <= 0n) continue
+    await parameters.queue.send({ channelId })
+    queued++
+  }
+  return queued
+}
+
+/**
  * Settles the channels of a settlement queue batch on-chain, from the Worker's `queue()`
  * handler. A voucher above recorded spend uses a payee close that captures only that spend
  * and refunds the remaining deposit. Each message is acknowledged once its channel settled or has nothing left to
@@ -220,7 +244,13 @@ export declare namespace channels {
  * ```
  */
 export async function settle(batch: settle.Batch, parameters: settle.Parameters): Promise<void> {
-  const { getClient, settle: settle_ = settleChannel, store, ...options } = parameters
+  const {
+    getClient,
+    settle: settle_ = settleChannel,
+    store,
+    closeSearchFromBlock = 0n,
+    ...options
+  } = parameters
   for (const message of batch.messages) {
     try {
       const channelId = (message.body as Partial<ChannelStore.Message> | null | undefined)
@@ -260,10 +290,13 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
             channelIds: [channelId as Hex],
             client,
             closeUnsettled: true,
+            settlementLeaseOwner: leaseOwner,
+            previousBlock: closeSearchFromBlock,
+            closeSearchMarginBlocks: 0n,
             store,
           })
           if (
-            !['closed', 'settled', 'finalized', 'missing'].includes(
+            !['closed', 'settled', 'unrecovered', 'finalized', 'missing'].includes(
               result.channels[0]?.outcome ?? 'failed',
             )
           ) {
@@ -289,6 +322,8 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
 export declare namespace settle {
   /** Parameters of {@link settle}: the channel store, a client, and the settlement transaction's options. */
   export type Parameters = SettlementTransactionOptions & {
+    /** Earliest escrow block for channels without a supervision checkpoint; must precede every channel opening. @default 0n */
+    closeSearchFromBlock?: bigint | undefined
     /** Returns an account-bearing client for the channel's chain. */
     getClient: (parameters: { chainId: number }) => MaybePromise<TransactionClient>
     /** Settles one channel. @default mppx's `Session.Server.settle` */

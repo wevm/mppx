@@ -4,7 +4,7 @@ import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
 import type { State } from '../tempo/session/server/ChannelStore.js'
 import * as CloseSupervisor from '../tempo/session/server/CloseSupervisor.js'
-import { settle } from './Channels.js'
+import { backfillSettlement, settle } from './Channels.js'
 import { ChannelStore, settlementDue, unsettledAmount } from './ChannelStore.js'
 
 const channelId = `0x${'1'.repeat(64)}` as const
@@ -73,6 +73,32 @@ describe('settlementDue', () => {
   })
 })
 
+describe('backfillSettlement', () => {
+  test('queues dormant unpaid channels without a payer write and skips terminal states', async () => {
+    const store = Store.memory()
+    const ids = [1, 2, 3, 4].map((n) => `0x${n.toString().repeat(64)}` as const)
+    await store.put(ids[0]!, channel({ channelId: ids[0]!, voucher: 20_000n, spent: 1_000n }))
+    await store.put(ids[1]!, channel({ channelId: ids[1]!, finalized: true }))
+    await store.put(ids[2]!, channel({ channelId: ids[2]!, settledOnChain: 2_000n }))
+    const send = vi.fn().mockResolvedValue(undefined)
+    expect(await backfillSettlement(ids, { store, queue: { send } })).toBe(1)
+    expect(send).toHaveBeenCalledExactlyOnceWith({ channelId: ids[0] })
+  })
+
+  test('surfaces failed sends so the caller can retry the backfill', async () => {
+    const store = Store.memory()
+    await store.put(channelId, channel({ voucher: 20_000n, spent: 1_000n }))
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('queue unavailable'))
+      .mockResolvedValue(undefined)
+    await expect(backfillSettlement([channelId], { store, queue: { send } })).rejects.toThrow(
+      'queue unavailable',
+    )
+    expect(await backfillSettlement([channelId], { store, queue: { send } })).toBe(1)
+  })
+})
+
 describe('settle', () => {
   function message() {
     const outcome: { acked?: boolean; delaySeconds?: number | undefined } = {}
@@ -120,9 +146,20 @@ describe('settle', () => {
       calls: 0,
     })
     expect(supervise).toHaveBeenCalledWith(
-      expect.objectContaining({ closeUnsettled: true, channelIds: [channelId] }),
+      expect.objectContaining({
+        closeUnsettled: true,
+        channelIds: [channelId],
+        settlementLeaseOwner: expect.any(String),
+        previousBlock: 0n,
+        closeSearchMarginBlocks: 0n,
+      }),
     )
     supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'settled' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'unrecovered' }] } as never)
     expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
       acked: true,
       calls: 0,

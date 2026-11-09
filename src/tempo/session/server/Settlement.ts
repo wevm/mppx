@@ -290,6 +290,8 @@ export async function claimScheduledSettlement(parameters: {
   await store.updateChannel(channelId, (current) => {
     claimed = false
     if (!current || !isSettlementDue(current, schedule)) return current
+    if (current.pendingCloseAt !== undefined && current.closeRequestedAt === current.pendingCloseAt)
+      return current
     const lease = current.scheduledSettlementLease
     if (lease && lease.expiresAt > now) return current
     claimed = true
@@ -627,6 +629,14 @@ export async function settle(
   // Choosing the voucher and raising the credit floor in one update keeps a concurrent credit from
   // lowering spent below what this transaction captures.
   await store.updateChannel(channelId, (current) => {
+    if (
+      current?.pendingCloseAt !== undefined &&
+      current.closeRequestedAt === current.pendingCloseAt
+    ) {
+      claim.channel = undefined
+      claim.voucher = undefined
+      return current
+    }
     claim.channel = current ?? undefined
     claim.voucher = (current && ChannelStore.resolveSettleableVoucher(current)) ?? undefined
     if (!current || !claim.voucher) return current
