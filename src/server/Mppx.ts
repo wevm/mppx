@@ -1295,6 +1295,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           ...(parameters.error && { error: parameters.error }),
           ...(parameters.html && { html: parameters.html }),
         })
+        // A route with a payment check rejects x402 Credentials, so it does not offer x402.
+        if (
+          paymentCheck &&
+          response instanceof globalThis.Response &&
+          response.headers.has(x402_Types.paymentRequiredHeader)
+        )
+          response = withoutHeader(response, x402_Types.paymentRequiredHeader) as typeof response
         // Every 402 of a route with a payment check lists the identities it requires.
         const challenged = IdentityServer.transition(identityState, {
           type: 'challenge',
@@ -2775,6 +2782,16 @@ function withIdentityRequirements(
 ): Response {
   const headers = new Headers(response.headers)
   headers.set(IdentityRequirements.header, IdentityRequirements.serialize(requirements))
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  })
+}
+
+function withoutHeader(response: Response, name: string): Response {
+  const headers = new Headers(response.headers)
+  headers.delete(name)
   return new Response(response.body, {
     headers,
     status: response.status,

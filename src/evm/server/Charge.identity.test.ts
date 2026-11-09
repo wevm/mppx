@@ -44,13 +44,17 @@ async function pay(protocol: 'mpp' | 'x402') {
   const request = new Request('https://example.test/paid')
   const offered = await route(request)
   if (offered.status !== 402) throw new Error()
+  // The checked route offers no x402, so an x402 client pays the same terms an unchecked
+  // route offers and presents that Credential to the checked one.
+  const x402Offer = await server.charge({ amount: '0.25' })(request)
+  if (x402Offer.status !== 402) throw new Error()
   const response =
     protocol === 'mpp'
       ? offered.challenge
       : new Response(null, {
           status: 402,
           headers: {
-            [Types.paymentRequiredHeader]: offered.challenge.headers.get(
+            [Types.paymentRequiredHeader]: x402Offer.challenge.headers.get(
               Types.paymentRequiredHeader,
             )!,
           },
@@ -65,7 +69,13 @@ async function pay(protocol: 'mpp' | 'x402') {
   const credential = await prepared.createCredential()
   const header = protocol === 'mpp' ? 'Authorization' : Types.paymentSignatureHeader
   const result = await route(new Request(request, { headers: { [header]: credential } }))
-  return { checked, offered: Challenge.fromResponse(offered.challenge), result, settlements }
+  return {
+    checked,
+    offered: Challenge.fromResponse(offered.challenge),
+    offeredResponse: offered.challenge,
+    result,
+    settlements,
+  }
 }
 
 test('a payment check runs against the Challenge an MPP Credential answers', async () => {
@@ -73,6 +83,11 @@ test('a payment check runs against the Challenge an MPP Credential answers', asy
   expect(result.status).toBe(200)
   expect(checked).toEqual([offered.id])
   expect(settlements).toHaveLength(1)
+})
+
+test('a route with a payment check does not offer x402', async () => {
+  const { offeredResponse } = await pay('mpp')
+  expect(offeredResponse.headers.has(Types.paymentRequiredHeader)).toBe(false)
 })
 
 test('a route with a payment check rejects x402 Credentials before settlement', async () => {
