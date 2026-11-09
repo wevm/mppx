@@ -39,12 +39,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   const issuer = config.issuer.replace(/\/+$/, '')
   if (!Token.isIssuer(issuer))
     throw new TypeError('Attestation issuer must be an https URL (http only on localhost).')
-  for (const [name, value] of [
-    ['clockTolerance', config.clockTolerance],
-    ['maxAge', config.maxAge],
-  ] as const)
-    if (value !== undefined && !(Number.isSafeInteger(value) && value >= 0))
-      throw new TypeError(`Attestation ${name} must be a non-negative integer of seconds.`)
+  Token.assertTimes({ clockTolerance: config.clockTolerance, maxAge: config.maxAge })
   const keyResolver = config.keyResolver ?? Jwks.resolver({ fetch: config.fetch })
   const tolerance = config.clockTolerance ?? Constants.clockTolerance
   const required = Object.freeze({

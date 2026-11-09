@@ -510,3 +510,19 @@ test('never attaches an attestation over plaintext http', async () => {
   )
   expect(request.headers.get(Attestation.Constants.header)).toBeNull()
 })
+
+test('verify throws on a non-finite or negative time option', async () => {
+  const { claims, keyId, keys, options } = await setup()
+  const token = await Attestation.sign(
+    { ...claims, exp: now - 3_600 },
+    { key: keys.privateKey, keyId },
+  )
+  for (const extra of [
+    { clockTolerance: Number.POSITIVE_INFINITY },
+    { clockTolerance: Number.NaN },
+    { maxAge: Number.NaN },
+    { maxAge: -1 },
+    { now: Number.NaN },
+  ])
+    await expect(Attestation.verify(token, { ...options, ...extra })).rejects.toThrow(TypeError)
+})

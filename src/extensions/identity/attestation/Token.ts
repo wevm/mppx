@@ -71,6 +71,7 @@ export function decode(token: string): Decoded | undefined {
  * key `keyResolver` returns for the header's `kid`.
  */
 export async function verify(token: string, options: verify.Options): Promise<VerifyResult> {
+  assertTimes(options)
   const decoded = decode(token)
   if (!decoded) return invalid('The attestation is malformed.')
   const { header, claims } = decoded
@@ -153,6 +154,25 @@ function invalid(reason: string) {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Throws a `TypeError` unless `clockTolerance`, `maxAge` and `now` are each absent or a
+ * non-negative integer of seconds: `NaN` or `Infinity` would turn the time checks off.
+ * @internal
+ */
+export function assertTimes(options: {
+  readonly clockTolerance?: number | undefined
+  readonly maxAge?: number | undefined
+  readonly now?: number | undefined
+}): void {
+  for (const [name, value] of [
+    ['clockTolerance', options.clockTolerance],
+    ['maxAge', options.maxAge],
+    ['now', options.now],
+  ] as const)
+    if (value !== undefined && !isTime(value))
+      throw new TypeError(`Attestation ${name} must be a non-negative integer of seconds.`)
 }
 
 function isTime(value: unknown): value is number {
