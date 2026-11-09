@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mppx-onchain-kyc",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // KYC_REGISTRY comes from .dev.vars locally (pnpm keygen) and from `wrangler secret put` or vars when deployed.
+  // A Durable Object holds spent payment credentials, so none can be replayed on another isolate.
+  "durable_objects": {
+    "bindings": [{ "name": "MPPX_STORE", "class_name": "MppxStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MppxStore"] }],
+}

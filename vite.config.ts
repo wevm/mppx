@@ -13,6 +13,10 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/email-otp',
   ),
+  'mppx/extensions/identity/onchain': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/onchain',
+  ),
   'mppx/extensions/identity/tap': path.resolve(import.meta.dirname, 'src/extensions/identity/tap'),
   'mppx/extensions/identity/web-bot-auth': path.resolve(
     import.meta.dirname,

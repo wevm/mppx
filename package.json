@@ -252,6 +252,11 @@
       "types": "./dist/extensions/identity/email-otp/index.d.ts",
       "default": "./dist/extensions/identity/email-otp/index.js"
     },
+    "./extensions/identity/onchain": {
+      "src": "./src/extensions/identity/onchain/index.ts",
+      "types": "./dist/extensions/identity/onchain/index.d.ts",
+      "default": "./dist/extensions/identity/onchain/index.js"
+    },
     "./extensions/identity/web-bot-auth": {
       "src": "./src/extensions/identity/web-bot-auth/index.ts",
       "types": "./dist/extensions/identity/web-bot-auth/index.d.ts",
