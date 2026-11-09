@@ -40,6 +40,16 @@ export const machineToken = Object.freeze({
 >
 
 /**
+ * Whether `address` is a canonical machine-token (MACH) deployment.
+ *
+ * MACH cannot pay transaction fees, so its sessions pay gas in another token.
+ */
+export function isMachineToken(address: string): boolean {
+  const normalized = address.toLowerCase()
+  return Object.values(machineToken).some(({ token }) => token.toLowerCase() === normalized)
+}
+
+/**
  * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).
  *
  * All TIP-20 tokens on Tempo use 6 decimals, so there is no risk of

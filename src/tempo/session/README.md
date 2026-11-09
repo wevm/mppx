@@ -133,6 +133,31 @@ The amounts below have intentionally different meanings.
 | `settled` / `settledOnChain`                  | Value captured by escrow.                    | Never decreases; chain-authoritative.                             |
 | `requiredCumulative`                          | Authorization required for the next request. | It is a boundary, not a signed voucher.                           |
 
+## MACH sessions
+
+MACH is closed-loop USD credit on Tempo: only merchants on its TIP-403 recipient
+whitelist can receive it. A MACH merchant can accept it in sessions with
+`machineTokenSessionEnabled`:
+
+```ts
+const methods = tempo({ account, machineTokenSessionEnabled: true, store })
+```
+
+This appends a MACH session offer after the configured currencies on Tempo
+mainnet and Moderato. Its channels are ordinary TIP-1034 channels with
+`token` set to MACH and `payee` set to the recipient: no swapper or operator
+sits between payer and merchant, settlement pays the merchant MACH, and a close
+refunds the unspent deposit to the payer. Charges are unchanged; use
+`machineTokenEnabled` for them.
+
+MACH cannot pay transaction fees. A MACH session advertises `feeToken`, which
+defaults to USDC.e on mainnet and pathUSD on Moderato, and the server accepts
+only that token for sponsored opens and top-ups and uses it for its own settle
+and close transactions. Clients pay open and top-up gas in the advertised token.
+
+Enable it only for a recipient on the MACH whitelist; transfers of MACH to any
+other recipient revert.
+
 ## Request lifecycle
 
 The session method owns payment control flow. The route handler owns content.

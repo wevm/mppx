@@ -28,6 +28,7 @@ export const tempoSuites: Record<string, number> = {
   'src/tempo/legacy/session/Chain.test.ts': 9404,
   'src/tempo/server/Charge.test.ts': 34952,
   'src/tempo/session/precompile/Chain.integration.test.ts': 4815,
+  'src/tempo/session/server/MachineToken.integration.test.ts': 3000,
   'src/tempo/session/server/Session.integration.test.ts': 7743,
   'src/x402/Exact.e2e.test.ts': 108,
 }

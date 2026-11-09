@@ -17,6 +17,7 @@ import {
   InvalidSignatureError,
   VerificationFailedError,
 } from '../../../Errors.js'
+import * as defaults from '../../internal/defaults.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
 import * as Chain from '../precompile/Chain.js'
 import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
@@ -110,6 +111,8 @@ export function validateChannelDescriptor(
 /** Accepts the advertised fee token while preserving pre-advertisement direct clients. */
 function allowedSponsoredFeeTokens(currency: Address, feeToken?: Address | undefined) {
   if (!feeToken || isAddressEqual(feeToken, currency)) return [currency]
+  // MACH cannot pay fees, so only the advertised fee token can.
+  if (defaults.isMachineToken(currency)) return [feeToken]
   return [feeToken, currency]
 }
 

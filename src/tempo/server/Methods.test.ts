@@ -9,7 +9,7 @@ import * as Credential from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Mppx from '../../server/Mppx.js'
 import * as Store from '../../Store.js'
-import { tokens } from '../internal/defaults.js'
+import { machineToken, tokens } from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Chain from '../session/precompile/Chain.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
@@ -498,3 +498,128 @@ test.each([false, true])(
     }
   },
 )
+
+describe('MACH session offers', () => {
+  const mach = machineToken[4217].token
+
+  async function sessionChallenges(methods: Parameters<typeof Mppx.create>[0]['methods']) {
+    const mppx = Mppx.create({ methods, secretKey }) as unknown as {
+      session: Mppx.AnyMethodFn
+    }
+    const response = await mppx.session({ amount: '1', unitType: 'request' })(
+      new Request('https://example.com/paid'),
+    )
+    if (response.status !== 402) throw new Error('Expected payment offers')
+    return Challenge.fromResponseList(response.challenge)
+  }
+
+  test('adds a direct MACH session offer that pays gas in the default stablecoin', async () => {
+    const methods = tempo.common({ ...config, machineTokenSessionEnabled: true })
+    expect(methods.map((method) => [method.intent, method.defaults?.currency])).toEqual([
+      ['charge', tokens.ousd],
+      ['session', tokens.ousd],
+      ['charge', tokens.usdc],
+      ['session', tokens.usdc],
+      ['session', mach],
+    ])
+    const challenges = await sessionChallenges([methods])
+    expect(challenges.map(({ request }) => request.currency)).toEqual([
+      tokens.ousd,
+      tokens.usdc,
+      mach,
+    ])
+    const machOffer = challenges[2]!.request
+    expect(machOffer.recipient).toBe(recipient)
+    expect(machOffer.methodDetails).toMatchObject({ chainId: 4217, feeToken: tokens.usdc })
+    expect(machOffer.methodDetails).not.toHaveProperty('operator')
+    for (const { request } of challenges.slice(0, 2))
+      expect(request.methodDetails).not.toHaveProperty('feeToken')
+
+    const charges = await Mppx.create({ methods: [methods], secretKey }).charge({ amount: '1' })(
+      new Request('https://example.com/paid'),
+    )
+    if (charges.status !== 402) throw new Error('Expected payment offers')
+    expect(
+      Challenge.fromResponseList(charges.challenge).map(({ request }) => request.currency),
+    ).toEqual([tokens.ousd, tokens.usdc])
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  test('uses pathUSD for MACH gas on Moderato', async () => {
+    const challenges = await sessionChallenges([
+      tempo.session({ recipient, chainId: 42431, machineTokenSessionEnabled: true }),
+    ])
+    expect(challenges.map(({ request }) => request.currency)).toEqual([
+      tokens.ousd,
+      tokens.pathUsd,
+      machineToken[42431].token,
+    ])
+    expect(challenges[2]!.request.methodDetails).toMatchObject({
+      chainId: 42431,
+      feeToken: tokens.pathUsd,
+    })
+  })
+
+  test('honors a configured fee token and explicit currencies', async () => {
+    const challenges = await sessionChallenges([
+      tempo.session({
+        ...config,
+        currencies: [tokens.usdc],
+        currency: undefined,
+        feeToken: tokens.ousd,
+        machineTokenSessionEnabled: true,
+      }),
+    ])
+    expect(
+      challenges.map(({ request }) => [
+        request.currency,
+        (request.methodDetails as { feeToken?: string } | undefined)?.feeToken,
+      ]),
+    ).toEqual([
+      [tokens.usdc, tokens.ousd],
+      [mach, tokens.ousd],
+    ])
+  })
+
+  test('does not duplicate an explicitly listed MACH currency', async () => {
+    const challenges = await sessionChallenges([
+      tempo.session({
+        ...config,
+        currencies: [mach.toLowerCase(), tokens.usdc],
+        machineTokenSessionEnabled: true,
+      }),
+    ])
+    expect(
+      challenges.map(({ request }) => [
+        request.currency,
+        (request.methodDetails as { feeToken?: string } | undefined)?.feeToken,
+      ]),
+    ).toEqual([
+      [mach.toLowerCase(), tokens.usdc],
+      [tokens.usdc, undefined],
+    ])
+  })
+
+  test('adds MACH to a legacy single-currency configuration', () => {
+    const methods = tempo.common({
+      ...config,
+      currency: tokens.usdc,
+      machineTokenSessionEnabled: true,
+    })
+    expect(methods.map((method) => [method.intent, method.defaults?.currency])).toEqual([
+      ['charge', tokens.usdc],
+      ['session', tokens.usdc],
+      ['session', mach],
+    ])
+  })
+
+  test('skips chains without a MACH deployment', () => {
+    const methods = tempo.session({
+      ...config,
+      chainId: 1337,
+      currencies: [tokens.usdc],
+      machineTokenSessionEnabled: true,
+    })
+    expect(methods.map((method) => method.defaults?.currency)).toEqual([tokens.usdc])
+  })
+})

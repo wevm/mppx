@@ -1,6 +1,7 @@
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
+import * as defaults from '../internal/defaults.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
@@ -33,7 +34,11 @@ function createChargeMethod<const parameters extends SharedParameters>(
   // `tempo()` accepts the intersection of charge/session parameters, then
   // forwards only the fields each method understands. Preserve the inferred
   // parameter type so configured request defaults remain visible to handlers.
-  return charge_(parameters as NoExtraKeys<parameters, charge_.Parameters> | undefined)
+  const { machineTokenSessionEnabled: _machineTokenSessionEnabled, ...chargeParameters } =
+    parameters ?? {}
+  return charge_(
+    (parameters && chargeParameters) as NoExtraKeys<parameters, charge_.Parameters> | undefined,
+  )
 }
 
 function createSessionMethod<const parameters extends SharedParameters>(
@@ -81,16 +86,16 @@ function createSessionMethod<const parameters extends SharedParameters>(
 export function tempo<const parameters extends tempo.Parameters>(
   parameters?: NoExtraKeys<parameters, tempo.Parameters>,
 ) {
-  if (parameters?.currency !== undefined) {
+  if (parameters?.currency !== undefined && !parameters.machineTokenSessionEnabled) {
     if (parameters.currencies !== undefined)
       throw new Error('Specify either `currency` or `currencies`, not both.')
     return [createChargeMethod(parameters), createSessionMethod(parameters)] as const
   }
-  const { currencies: _currencies, ...shared } = parameters ?? {}
-  const [first, ...rest] = Currencies.resolve(parameters ?? {})
+  const { currencies: _currencies, currency: _currency, ...shared } = parameters ?? {}
+  const [first, ...rest] = resolveCurrencies(parameters ?? {})
   const sponsorBudget = sharedSponsorBudget(parameters)
   const sessions = sessionOffers(
-    parameters as NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>> | undefined,
+    parameters as NoExtraKeys<parameters, SessionOffersParameters> | undefined,
   )
   function createMethods(currency: typeof first, index: number) {
     const configured = { ...shared, ...currency, sponsorBudget } as unknown as Omit<
@@ -103,14 +108,30 @@ export function tempo<const parameters extends tempo.Parameters>(
   return [
     ...createMethods(first, 0),
     ...rest.flatMap((currency, index) => createMethods(currency, index + 1)),
+    // Session-only offers, such as MACH, follow the charge/session pairs.
+    ...sessions.slice(rest.length + 1),
   ] as const
 }
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
-  session_.Parameters & {
+  session_.Parameters &
+  MachineTokenSessionParameters & {
     /** Enables MACH funding for compatible Tempo methods. Currently applies to `charge`. */
     machineTokenEnabled?: boolean | undefined
   }
+
+/** Options for offering MACH as a session currency. */
+type MachineTokenSessionParameters = {
+  /**
+   * Adds MACH as a TIP-1034 session currency on chains with a canonical MACH deployment
+   * (Tempo mainnet and Moderato). The offer follows the configured currencies, opens channels
+   * paid to `recipient` directly, without the MACH swapper, and pays gas in `feeToken` (the
+   * chain's default stablecoin when unset), since MACH cannot pay fees. MACH only reaches
+   * recipients on its TIP-403 recipient whitelist, so enable it only for a MACH merchant.
+   * Applies to `session` only; charges use `machineTokenEnabled`.
+   */
+  machineTokenSessionEnabled?: boolean | undefined
+}
 
 export namespace tempo {
   /** An accepted address or chain-indexed USD token definition from `viem/tokens`. */
@@ -231,12 +252,40 @@ function chargeOffers<const parameters extends CurrencyParameters<charge_.Parame
   return [create(first), ...rest.map(create)] as const
 }
 
+/** Appends the chain's MACH deployment, when there is one, to the resolved session currencies. */
+function withMachineTokenSession<const currencies extends ReturnType<typeof resolveCurrencies>>(
+  currencies: currencies,
+  enabled: boolean | undefined,
+): currencies {
+  if (!enabled) return currencies
+  const { chainId } = currencies[0]
+  const deployment = defaults.machineToken[chainId as keyof typeof defaults.machineToken]
+  if (!deployment) return currencies
+  if (currencies.some(({ currency }) => defaults.isMachineToken(currency))) return currencies
+  return [
+    ...currencies,
+    { chainId, currency: deployment.token, decimals: defaults.decimals },
+  ] as unknown as currencies
+}
+
+/** Session offer parameters: currency selection plus the MACH session option. */
+type SessionOffersParameters = CurrencyParameters<session_.Parameters> &
+  MachineTokenSessionParameters
+
 /** Creates OUSD-first session offers with shared storage and currency-aware settlement helpers. */
-function sessionOffers<const parameters extends CurrencyParameters<session_.Parameters>>(
-  parameters?: NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>>,
+function sessionOffers<const parameters extends SessionOffersParameters>(
+  parameters?: NoExtraKeys<parameters, SessionOffersParameters>,
 ) {
-  const { currencies: _currencies, ...shared } = parameters ?? {}
-  const [first, ...rest] = resolveCurrencies(parameters ?? {})
+  const {
+    currencies: _currencies,
+    currency: _currency,
+    machineTokenSessionEnabled,
+    ...shared
+  } = parameters ?? {}
+  const [first, ...rest] = withMachineTokenSession(
+    resolveCurrencies(parameters ?? {}),
+    machineTokenSessionEnabled,
+  )
   const store = parameters?.store ?? fallbackStore('tempo.session')
   const settlements = new Map<string, session_.Extensions['settleScheduled']>()
   const verifiers = new Map<string, (channelId: `0x${string}`) => Promise<void>>()

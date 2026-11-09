@@ -369,6 +369,12 @@ export function session<const parameters extends session.Parameters>(
     suggestedDeposit,
     unitType,
   } = parameters
+  // MACH cannot pay transaction fees: pay its session gas in the chain's default stablecoin.
+  const feeToken =
+    parameters.feeToken ??
+    (defaults.isMachineToken(currency)
+      ? (defaults.resolveCurrency(parameters) as Address)
+      : undefined)
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   const onSessionSettlement = parameters.onSessionSettlement
@@ -404,7 +410,7 @@ export function session<const parameters extends session.Parameters>(
       client,
       ...(configuredFeePayer ? { feePayer: configuredFeePayer } : {}),
       feePayerPolicy: parameters.feePayerPolicy,
-      feeToken: parameters.feeToken,
+      feeToken,
       onSessionSettlement,
       onSessionSettlementFailure,
       schedule: settlementSchedule,
@@ -552,7 +558,7 @@ export function session<const parameters extends session.Parameters>(
         client: context.client,
         ...(context.feePayer ? { feePayer: context.feePayer } : {}),
         feePayerPolicy: parameters.feePayerPolicy,
-        feeToken: parameters.feeToken,
+        feeToken,
         onSessionSettlement,
         onSessionSettlementFailure,
         schedule: settlementSchedule,
@@ -683,7 +689,7 @@ export function session<const parameters extends session.Parameters>(
       })
       return {
         ...resolvedRequest,
-        feeToken: parameters.feeToken,
+        feeToken,
         sessionProtocol: Constants.SessionProtocols.v2,
       }
     },
@@ -814,7 +820,12 @@ export namespace session {
     /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
     settlementSchedule?: SettlementSchedule | undefined
 
-    /** Optional fee token for management and server-driven settle/close transactions. */
+    /**
+     * Optional fee token for management and server-driven settle/close transactions, advertised
+     * to clients for their open and top-up transactions. Defaults to the chain's default
+     * stablecoin (USDC.e on mainnet, pathUSD on Moderato) when `currency` is MACH, which cannot
+     * pay fees.
+     */
     feeToken?: Address | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
