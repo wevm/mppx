@@ -419,3 +419,21 @@ test('requires and obtains a phone attestation through Mppx', async () => {
   expect(await forbidden.text()).toBe('Only US numbers.')
   expect(blocked.asked).toEqual(['phone'])
 })
+
+test('sends an attestation acquired from an issuer whose clock trails, without acquiring again', async () => {
+  // The issuer clock is 550 seconds behind the client, and its attestations live 600 seconds.
+  let calls = 0
+  const prover = Attestation.Client.prover({
+    acquire: () => {
+      calls++
+      return sign({ exp: now() + 50, iat: now() - 550 })
+    },
+    issuers: [issuer],
+    scope: '*',
+  })
+  const headers = await prover.retry!(rejected(`email;issuer="${issuer}"`), sent())
+  const token = new Headers(headers as HeadersInit).get(Attestation.Constants.header)
+  // Its margin runs from when the client received it, so the next unpaid request carries it.
+  expect(await proved(prover)).toBe(token)
+  expect(calls).toBe(1)
+})

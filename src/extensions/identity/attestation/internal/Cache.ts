@@ -6,8 +6,15 @@ import type * as Types from '../Types.js'
  * functions for what a prover sends and how a retry answers a rejection.
  */
 
-/** A cached attestation: the token and its decoded claims, frozen. */
-export type Entry = { readonly token: string; readonly claims: Types.Claims }
+/**
+ * A cached attestation: the token and its decoded claims, frozen. `received` is the client's
+ * time when it acquired the attestation; one given beforehand has none.
+ */
+export type Entry = {
+  readonly token: string
+  readonly claims: Types.Claims
+  readonly received?: number | undefined
+}
 
 /**
  * One cache slot, as a state machine. A missing slot (`undefined`) holds nothing.
@@ -84,10 +91,14 @@ export function entryOf(slot: Slot): Entry | undefined {
 
 /**
  * Seconds before expiry at which an unpaid attempt stops sending an attestation: the refresh
- * margin, capped at half its lifetime so a short-lived attestation is still sent.
+ * margin, capped at half its lifetime so a short-lived attestation is still sent. The lifetime
+ * of an acquired attestation runs from when the client received it, not the issuer's `iat`,
+ * so an issuer whose clock trails the client's cannot make every fresh one look expiring and
+ * force a new acquisition on each request.
  */
-export function margin(claims: Pick<Types.Claims, 'exp' | 'iat'>): number {
-  return Math.min(Constants.refreshMargin, Math.floor((claims.exp - claims.iat) / 2))
+export function margin(entry: Pick<Entry, 'claims' | 'received'>): number {
+  const { exp, iat } = entry.claims
+  return Math.min(Constants.refreshMargin, Math.floor((exp - (entry.received ?? iat)) / 2))
 }
 
 /**
@@ -98,7 +109,7 @@ export function margin(claims: Pick<Types.Claims, 'exp' | 'iat'>): number {
 export function usable(entry: Entry, now: number, attempt: Attempt): boolean {
   const { exp } = entry.claims
   if (exp <= now - Constants.clockTolerance) return false
-  return attempt === 'paid' || exp - now > margin(entry.claims)
+  return attempt === 'paid' || exp - now > margin(entry)
 }
 
 /**

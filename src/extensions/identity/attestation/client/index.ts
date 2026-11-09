@@ -60,7 +60,7 @@ export function prover(config: prover.Config): Identity.Prover {
     const task = (async () => {
       const token = await config.acquire!({ audience, ...requirement })
       if (!token) return undefined
-      const entry = toEntry(token)
+      const entry = toEntry(token, now())
       // Only an attestation for this requirement is kept, so an issuer cannot plant one.
       return Cache.keyOf(entry.claims) === key ? entry : undefined
     })()
@@ -217,7 +217,7 @@ function now() {
 }
 
 /** Decodes a token into a frozen cache entry, or throws a `TypeError` if it is malformed. */
-function toEntry(token: string): Cache.Entry {
+function toEntry(token: string, received?: number): Cache.Entry {
   const claims = Token.decode(token)?.claims
   if (
     !claims ||
@@ -228,7 +228,11 @@ function toEntry(token: string): Cache.Entry {
     typeof claims.iat !== 'number'
   )
     throw new TypeError('Identity attestation is malformed.')
-  return Object.freeze({ token, claims: Object.freeze({ ...claims }) as Types.Claims })
+  return Object.freeze({
+    token,
+    claims: Object.freeze({ ...claims }) as Types.Claims,
+    ...(received !== undefined && { received }),
+  })
 }
 
 /** The attestation tokens a request sent, by cache key. */
