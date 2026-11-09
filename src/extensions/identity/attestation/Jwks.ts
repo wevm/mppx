@@ -1,4 +1,4 @@
-import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import { unwrapFetch } from '../../../client/internal/Fetch.js'
 import { Constants } from './Constants.js'
 import type * as Types from './Types.js'
 
@@ -117,17 +117,17 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
 export declare namespace resolver {
   type Options = {
     /** Fetch implementation. @default globalThis.fetch */
-    fetch?: typeof globalThis.fetch | undefined
+    readonly fetch?: typeof globalThis.fetch | undefined
     /** Seconds a fetched key set is cached. @default 300 */
-    ttl?: number | undefined
+    readonly ttl?: number | undefined
     /** Seconds before a key set fetch is abandoned. @default 5 */
-    timeout?: number | undefined
+    readonly timeout?: number | undefined
     /** Minimum seconds between refetches for an unknown key ID, per issuer. @default 30 */
-    refreshInterval?: number | undefined
+    readonly refreshInterval?: number | undefined
     /**
      * Seconds after its fetch that the last good key set keeps verifying while
      * the issuer is unreachable, so a rotated-out key stops working. @default 3600
      */
-    maxStale?: number | undefined
+    readonly maxStale?: number | undefined
   }
 }

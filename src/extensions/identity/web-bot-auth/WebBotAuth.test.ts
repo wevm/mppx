@@ -67,7 +67,7 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
   expect(result).toMatchObject({ status: 'valid' })
 })
 
-test('reports directory lookup failures as untrusted (403) identities', async () => {
+test('reports directory lookup failures as forbidden (403) identities', async () => {
   const keys = await keyPair()
   const keyId = await jwkThumbprint(keys.publicKey)
   const signed = await WebBotAuth.Client.prover({
@@ -83,9 +83,8 @@ test('reports directory lookup failures as untrusted (403) identities', async ()
       nonceStore: Identity.Store.memory(),
     }).verify(signed),
   ).toEqual({
-    code: 403,
     reason: 'No public key is available for the signature key ID.',
-    status: 'invalid',
+    status: 'forbidden',
   })
   expect(
     await WebBotAuth.Server.verifier({
@@ -95,9 +94,8 @@ test('reports directory lookup failures as untrusted (403) identities', async ()
       nonceStore: Identity.Store.memory(),
     }).verify(signed),
   ).toEqual({
-    code: 403,
     reason: 'The public key could not be resolved.',
-    status: 'invalid',
+    status: 'forbidden',
   })
 })
 
