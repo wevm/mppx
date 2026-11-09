@@ -199,39 +199,6 @@ test('a composed route never settles an x402 Credential through an unchecked twi
   expect(settlements).toEqual([])
 })
 
-test('a nested composer cannot settle an x402 Credential through an unchecked twin', async () => {
-  const { check, create, method, payX402, request, server, settlements, x402Offer } = setup()
-  const inner = create({ selectOffers: (offers) => offers })
-  const route = Mppx.compose(
-    inner.compose(
-      [method, { amount: '0.25' }],
-      [method, { amount: '0.5', identity: { payment: check } }],
-    ),
-    server.charge({ amount: '0.25', identity: { payment: check } }),
-  )
-  const offered = await route(request)
-  if (offered.status !== 402) throw new Error()
-  expect(offered.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
-  const result = await route(await payX402(await x402Offer('0.25')))
-  expect(result.status === 402 && result.rejection?.status).toBe('invalid')
-  expect(settlements).toEqual([])
-})
-
-test('an outer composer withholds x402 terms a nested checked offer shares', async () => {
-  const { amounts, check, create, method, request, server } = setup()
-  const inner = create({ selectOffers: (offers) => offers })
-  const route = Mppx.compose(
-    inner.compose(
-      [method, { amount: '0.5' }],
-      [method, { amount: '0.25', identity: { payment: check } }],
-    ),
-    server.charge({ amount: '0.25' }),
-  )
-  const offered = await route(request)
-  if (offered.status !== 402) throw new Error()
-  expect(amounts(offered.challenge)).toEqual(['500000'])
-})
-
 test('a composed route withholds x402 terms a checked offer shares when it requires identities', async () => {
   const { amounts, method, request, server } = setup()
   const check: Identity.PaymentCheck = {

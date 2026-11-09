@@ -525,7 +525,7 @@ test('a Credential matching an unchecked and a checked offer with the same terms
   expect(settlements).toBe(before)
 })
 
-test('a nested composer does not route a checked twin Credential to its unchecked offer', async () => {
+test('a composer with an offer-selection policy refuses a checked and an unchecked twin', () => {
   const kyc = kycCheck()
   const inner = Mppx.create({
     methods: [serverMethod],
@@ -533,27 +533,37 @@ test('a nested composer does not route a checked twin Credential to its unchecke
     secretKey: 'test-secret-key-test-secret-key-32',
     selectOffers: (offers) => offers,
   })
-  const handler = Mppx.compose(
+  // The policy could advertise the unchecked offer alone, whose Credential would reach the
+  // checked one, so the pair is refused, whether the policy is outside or nested.
+  expect(() =>
+    inner.compose(
+      [serverMethod, { ...charge, amount: '1' }],
+      [serverMethod, { ...charge, amount: '1', identity: { payment: kyc } }],
+    ),
+  ).toThrow(TypeError)
+  expect(() =>
+    Mppx.compose(
+      inner.compose(
+        [serverMethod, { ...charge, amount: '1' }],
+        [serverMethod, { ...charge, amount: '2', identity: { payment: kyc } }],
+      ),
+      createPayments().charge({ ...charge, amount: '1', identity: { payment: kyc } }),
+    ),
+  ).toThrow(TypeError)
+  // Different terms are not twins.
+  expect(() =>
     inner.compose(
       [serverMethod, { ...charge, amount: '1' }],
       [serverMethod, { ...charge, amount: '2', identity: { payment: kyc } }],
     ),
-    createPayments().charge({ ...charge, amount: '1', identity: { payment: kyc } }),
-  )
-  const first = await handler(new Request('https://x.test'))
-  if (first.status !== 402) throw new Error()
-  const challenge = Challenge.fromResponseList(first.challenge as Response).find(
-    (c) => c.request.amount === '1',
-  )!
-  const credential = Credential.serialize({ challenge, payload: { token: 'paid' } })
-  const before = settlements
-  const paid = await handler(
-    new Request('https://x.test', {
-      headers: { [MppConstants.Headers.authorization]: credential },
-    }),
-  )
-  expect(paid.status === 402 && paid.rejection?.status).toBe('missing')
-  expect(settlements).toBe(before)
+  ).not.toThrow()
+})
+
+test('a payment check that is not an object is refused, even when falsy', () => {
+  for (const payment of [null, false, 0, ''])
+    expect(() =>
+      createPayments().charge({ ...charge, identity: { payment: payment as never } }),
+    ).toThrow(TypeError)
 })
 
 test('never reports a rejected identity as a successful payment', async () => {

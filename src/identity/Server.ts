@@ -400,7 +400,10 @@ export function route(identity: Types.Route | undefined): RouteConfig {
     ? { request: identity as readonly Types.Verifier[] }
     : parseObject(identity)
   for (const verifier of request) assertRequestStage(verifier)
-  if (payment) {
+  // Any value but undefined is a payment check, so a falsy malformed one cannot turn it off.
+  if (payment !== undefined) {
+    if (typeof payment !== 'object' || payment === null)
+      throw new TypeError('Identity payment check must be { requires, verify }.')
     if (!Array.isArray(payment.requires))
       throw new TypeError('Identity payment check must list the identities it requires.')
     if (typeof payment.verify !== 'function')

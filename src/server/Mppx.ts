@@ -2964,6 +2964,16 @@ function composeHandlers(
   )
   if (paymentChecks.size > 1)
     throw new TypeError('Offers in a composed route must use the same identity payment check.')
+  // An offer-selection policy can advertise an unchecked offer alone, yet its Credential is
+  // dispatched to a checked offer with the same terms, which asks for identities the 402 never
+  // listed. Such a pair is ambiguous under a policy, so it is refused.
+  if (
+    (selectOffers !== undefined || handlers.some(hasOfferSelection)) &&
+    hasCheckedTwin(handlers.flatMap((handler) => getConfiguredOffers(handler as ConfiguredHandler)))
+  )
+    throw new TypeError(
+      'A composed route with an offer-selection policy cannot pair offers with the same terms where only one has an identity payment check.',
+    )
 
   const offerSelector = selectOffers
   const offerEntries = handlers.map((handler) => {
@@ -3318,6 +3328,49 @@ function composeHandlers(
   if (offers.length > 0)
     composed._internal = { offers, handlers: handlers as ConfiguredHandler[], selectOffers }
   return composed
+}
+
+/** Whether a handler, or a composer nested in it, selects its offers per request. */
+function hasOfferSelection(handler: ConfiguredHandler | ComposedHandler): boolean {
+  const internal = handler._internal
+  if (!internal) return false
+  if (isComposedHandlerMetadata(internal))
+    return internal.selectOffers !== undefined || (internal.handlers ?? []).some(hasOfferSelection)
+  return internal._method?.canOffer !== undefined
+}
+
+/**
+ * Whether an offer with a payment check has a twin without one: the same method, intent, scope,
+ * meta and payment terms, so one Credential matches both.
+ */
+function hasCheckedTwin(offers: readonly ConfiguredHandler['_internal'][]): boolean {
+  const checked = offers.filter((offer) => offer._paymentCheck !== undefined)
+  const unchecked = offers.filter((offer) => offer._paymentCheck === undefined)
+  return checked.some((a) =>
+    unchecked.some(
+      (b) =>
+        a.name === b.name &&
+        a.intent === b.intent &&
+        isDeepStrictEqual(a.scope, b.scope) &&
+        isDeepStrictEqual(a.meta, b.meta) &&
+        sameTerms(a, b) &&
+        sameTerms(b, a),
+    ),
+  )
+}
+
+/** Whether a Credential for offer `b`'s terms passes offer `a`'s dispatch binding. */
+function sameTerms(a: ConfiguredHandler['_internal'], b: ConfiguredHandler['_internal']): boolean {
+  try {
+    return !(a._stableBinding
+      ? getConfiguredStableBindingMismatch(
+          getStableBinding(a._canonicalRequest, a._stableBinding),
+          getStableBinding(b._canonicalRequest, a._stableBinding),
+        )
+      : getConfiguredRequestBindingMismatch(a._canonicalRequest, b._canonicalRequest))
+  } catch {
+    return false
+  }
 }
 
 /** Returns the flattened configured offers accepted by a handler. */
