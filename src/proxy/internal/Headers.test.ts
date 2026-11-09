@@ -116,6 +116,13 @@ describe('scrub', () => {
 })
 
 describe('scrubResponse', () => {
+  test('behavior: strips an upstream identity attestation offer from a 402', () => {
+    const response = new Response('body', {
+      status: 402,
+      headers: { 'Identity-Attestation-Offered': 'email;issuer="https://issuer.example"' },
+    })
+    expect(Headers.scrubResponse(response).headers.has('identity-attestation-offered')).toBe(false)
+  })
   test('behavior: strips an upstream identity attestation requirement', () => {
     const response = new Response('body', {
       status: 401,

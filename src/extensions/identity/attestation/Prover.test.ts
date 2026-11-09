@@ -634,3 +634,25 @@ test('a verifier offers its type and issuer for a 402', () => {
     [Attestation.Constants.offeredHeader]: `email;issuer="${issuer}"`,
   })
 })
+
+test('leaves an offer alone when the request already carried an offered attestation', async () => {
+  const token = await sign()
+  let calls = 0
+  const prover = Attestation.Client.prover({
+    acquire: () => {
+      calls++
+      return undefined
+    },
+    attestations: [token],
+    issuers: [issuer],
+    scope: '*',
+  })
+  const response = new Response(null, {
+    status: 402,
+    headers: { [Attestation.Constants.offeredHeader]: `email;issuer="${issuer}"` },
+  })
+  Object.defineProperty(response, 'url', { value: `${api}/resource` })
+  expect(await prover.offer!(response, sent(token))).toBeUndefined()
+  expect(calls).toBe(0)
+  expect(await proved(prover, paid)).toBe(token)
+})

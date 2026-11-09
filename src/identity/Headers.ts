@@ -15,6 +15,7 @@ export const request = Object.freeze(['identity-attestation'] as const)
  * identity the proxy, not the upstream, decides on.
  */
 export const response = Object.freeze([
+  'identity-attestation-offered',
   'identity-attestation-required',
   'identity-required',
 ] as const)

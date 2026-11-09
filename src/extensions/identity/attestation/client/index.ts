@@ -122,11 +122,11 @@ export function prover(config: prover.Config): Identity.Prover {
     },
     async retry(response, context) {
       if (response.status !== 401 && response.status !== 403) return undefined
-      return answer(response, context, requirements(response.headers))
+      return answer(response, context, requirements(response.headers), 'retry')
     },
     async offer(response, context) {
       if (response.status !== 402) return undefined
-      return answer(response, context, offers(response.headers))
+      return answer(response, context, offers(response.headers), 'offer')
     },
   }
 
@@ -135,6 +135,7 @@ export function prover(config: prover.Config): Identity.Prover {
     response: Response,
     context: Identity.RetryContext | undefined,
     groups: readonly (readonly Types.Requirement[])[],
+    hook: 'retry' | 'offer',
   ): Promise<Record<string, string> | undefined> {
     // The resend goes to the request's URL, so attestations are bound to its origin, and a
     // response from any other origin (a followed redirect) is never answered.
@@ -152,6 +153,9 @@ export function prover(config: prover.Config): Identity.Prover {
     for (const group of groups) {
       const alternatives = trusted(group, audience)
       if (alternatives.some(({ key }) => obtained.has(key))) continue
+      // An offer does not reject what the request carried: a group it already meets stays as is,
+      // so a declined acquisition never drops a held attestation from the paid attempt.
+      if (hook === 'offer' && alternatives.some(({ key }) => sent.has(key))) continue
       const decided = alternatives
         .filter(({ key }) => !tried.has(key))
         .map((alternative) => ({
