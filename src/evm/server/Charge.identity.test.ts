@@ -153,3 +153,65 @@ test('a composed route never settles an x402 Credential through an unchecked twi
   expect(result.status === 402 && result.rejection?.status).toBe('invalid')
   expect(settlements).toEqual([])
 })
+
+test('a nested composer cannot settle an x402 Credential through an unchecked twin', async () => {
+  const settlements: unknown[] = []
+  const method = evm.charge({
+    currency: evm.assets.base.USDC,
+    recipient,
+    x402: {
+      facilitator: {
+        verify: async () => ({ isValid: true }),
+        async settle(paymentPayload) {
+          settlements.push(paymentPayload)
+          return { success: true, transaction: reference, network: 'eip155:8453' }
+        },
+      },
+    },
+  })
+  const check: Identity.PaymentCheck = {
+    requires: [],
+    verify: () => ({ status: 'valid', value: true }),
+  }
+  const server = Mppx.create({
+    methods: [method],
+    realm: 'example.test',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  const inner = Mppx.create({
+    methods: [method],
+    realm: 'example.test',
+    secretKey: 'test-secret-key-test-secret-key-32',
+    selectOffers: (offers) => offers,
+  })
+  const route = Mppx.compose(
+    inner.compose(
+      [method, { amount: '0.25' }],
+      [method, { amount: '0.5', identity: { payment: check } }],
+    ),
+    server.charge({ amount: '0.25', identity: { payment: check } }),
+  )
+  const request = new Request('https://example.test/paid')
+  const offered = await route(request)
+  if (offered.status !== 402) throw new Error()
+  const client = ClientMppx.create({
+    methods: [
+      clientEvm.charge({ account, currencies: [clientEvm.assets.base.USDC], networks: [8453] }),
+    ],
+    polyfill: false,
+  })
+  const prepared = await client.preparePayment(
+    new Response(null, {
+      status: 402,
+      headers: {
+        [Types.paymentRequiredHeader]: offered.challenge.headers.get(Types.paymentRequiredHeader)!,
+      },
+    }),
+  )
+  const credential = await prepared.createCredential()
+  const result = await route(
+    new Request(request, { headers: { [Types.paymentSignatureHeader]: credential } }),
+  )
+  expect(result.status === 402 && result.rejection?.status).toBe('invalid')
+  expect(settlements).toEqual([])
+})

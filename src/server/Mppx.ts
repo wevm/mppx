@@ -3035,28 +3035,34 @@ function composeHandlers(
       : handlers
 
     const transportResults = new Map<(typeof handlers)[number], MethodFn.Response<Transport.Http>>()
-    // A transport Credential (x402) names no offer, so handlers with a payment check try it first,
-    // and their identity rejection is final: an unchecked offer with the same terms cannot settle
-    // it instead.
-    const hasPaymentCheck = (handler: (typeof handlers)[number]) =>
-      getConfiguredOffers(handler).some((internal) => internal._paymentCheck !== undefined)
-    const transportOrder = [
-      ...selectedHandlers.filter(hasPaymentCheck),
-      ...selectedHandlers.filter((handler) => !hasPaymentCheck(handler)),
-    ]
-    for (const handler of transportOrder) {
+    // A transport Credential (x402) names no offer, so a handler whose matching offer has a payment
+    // check tries it first, judged per offer so a nested composer counts by the offer that
+    // matched, and its identity rejection is final: an unchecked offer with the same terms
+    // cannot settle it instead.
+    const transportMatches: { handler: (typeof handlers)[number]; checked: boolean }[] = []
+    for (const handler of selectedHandlers) {
+      let matched = false
+      let checked = false
       for (const internal of getConfiguredOffers(handler)) {
         const matchCredential = internal._transport.matchCredential
         if (!matchCredential) continue
         try {
-          if (await matchCredential({ input, request: internal._canonicalRequest })) {
-            const result = await call(handler)
-            transportResults.set(handler, result)
-            if (result.status === 200 || result.rejection) return result
-            break
-          }
-        } catch {}
+          if (!(await matchCredential({ input, request: internal._canonicalRequest }))) continue
+        } catch {
+          continue
+        }
+        matched = true
+        if (internal._paymentCheck !== undefined) checked = true
       }
+      if (matched) transportMatches.push({ handler, checked })
+    }
+    for (const { handler } of [
+      ...transportMatches.filter(({ checked }) => checked),
+      ...transportMatches.filter(({ checked }) => !checked),
+    ]) {
+      const result = await call(handler)
+      transportResults.set(handler, result)
+      if (result.status === 200 || result.rejection) return result
     }
 
     const transportCredentialHandler = selectedHandlers.find((handler) =>
