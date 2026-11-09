@@ -617,8 +617,7 @@ export function session(parameters: session.Parameters = {}) {
     if (selectsChannel(context)) return candidates
     const isMach = (candidate: (typeof candidates)[number]) =>
       isMachSessionChallenge(candidate.challenge)
-    const mach = candidates.find(isMach)
-    if (!mach || candidates.every(isMach)) return candidates
+    if (!candidates.some(isMach) || candidates.every(isMach)) return candidates
     let sessionContext: CredentialContext | undefined
     try {
       sessionContext =
@@ -628,8 +627,10 @@ export function session(parameters: session.Parameters = {}) {
     } catch {
       return candidates
     }
-    if (await canFundMachSession(mach.challenge as TempoSessionChallenge, sessionContext))
-      return [mach, ...candidates.filter((candidate) => candidate !== mach)]
+    // Check MACH offers in order: an unfundable one must not hide a fundable one behind it.
+    for (const candidate of candidates.filter(isMach))
+      if (await canFundMachSession(candidate.challenge as TempoSessionChallenge, sessionContext))
+        return [candidate, ...candidates.filter((other) => other !== candidate)]
     return [...candidates.filter((candidate) => !isMach(candidate)), ...candidates.filter(isMach)]
   })
 

@@ -352,6 +352,18 @@ describe('MACH session preference', () => {
     expect(funded.challenge.request.currency).toBe(mach)
   })
 
+  test('prefers a fundable MACH offer behind an unfundable one', async () => {
+    const large = offer(mach)
+    const unfundable = {
+      ...large,
+      id: 'session-mach-large',
+      request: { ...large.request, suggestedDeposit: '5000' },
+    }
+    const credential = await pay([unfundable, offer(stablecoin), offer(mach)])
+    expect(credential.challenge.request.currency).toBe(mach)
+    expect(credential.challenge.request.suggestedDeposit).toBe('1000')
+  })
+
   test('prefers MACH in preparePayment', async () => {
     const client = makeClient(1_000n)
     const mppx = Mppx.create({
