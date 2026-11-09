@@ -1,5 +1,33 @@
 # mppx
 
+## 0.18.0
+
+### Minor Changes
+
+- de802b9: Reworked identity verification around explicit statuses and data.
+
+  - Changed `Identity.Verification` to fixed statuses: `valid`, `missing` (401), `invalid` (401), `forbidden` (403) and `unavailable` (503), exported as `Identity.Status.codes` with the precedence list `Identity.Status.precedence`. When several verifiers (or every `anyOf` member) reject, the status with the highest precedence decides, and the headers of every rejection are merged. **Breaking:** `missing` now answers 401 instead of 403.
+  - Added `status` to `Identity.Rejection` (`invalid`, `forbidden` or `unavailable`).
+  - Marked identity rejections with a `rejection` field (`{ stage, status, reason }`) on the route result's non-200 branch, which `compose` now reads.
+  - Replaced payment-stage verifiers with an experimental payment check, `identity: { request, payment }`: `payment.requires` is listed in every 402's new `Identity-Required` header (merged across composed offers), and `payment.verify` runs once on the paid retry with the Credential. **Breaking:** `stage: 'payment'` verifiers now throw, the identity nonce is no longer added to Challenges, and request verifiers' `verify` receives only the request.
+  - Routes with a payment check reject x402 Credentials and do not offer x402. `compose` requires every payment check in a route to be the same one, and refuses a checked and an unchecked offer with the same payment terms, since a Credential could reach either.
+  - Changed `Prover.prepare` to receive the selected Challenge and the parsed `Identity-Required` requirements, and `Prover.retry` to return headers to resend with.
+  - Deprecated `Verifier.stage`, `Verifier.challenge`, the `code` of `missing` and `invalid` outcomes and `Identity.Rejection`'s `code`, and a `retry` result of `true`. They keep working.
+
+### Patch Changes
+
+- 802a27a: **Behavior change in production:** Changed `tempo.charge()`, `tempo.session()`, `tempo.subscription()` and `tempo()` to throw at construction when no `store` is passed and `NODE_ENV` is `production`, the server runs on a multi-instance platform (Vercel, AWS Lambda, Netlify, Fly.io, Cloud Run, Render, Railway, Heroku, Deno Deploy) or on Cloudflare Workers, instead of silently keeping replay protection and sponsor budgets in per-instance memory. Pass a shared store, or `store: Store.memory()` to keep instance-local state; local development and tests still fall back to memory with a warning. Charges served through `relay` need no store, since the relay enforces single use.
+- 454b9e0: Added `mppx/extensions/identity/attestation` and rebuilt the identity extensions on fixed statuses.
+
+  - Added the attestation module (`Attestation` from `mppx/extensions/identity`): `Attestation.Server.verifier` for any attestation type, `Attestation.Client.prover`, `Attestation.sign`, `decode` and `verify` for issuers, `Attestation.Jwks.resolver` and `Attestation.Constants`. The attestation wire format and the `Identity-Attestation` header are unchanged.
+  - Grouped alternatives in `Identity-Attestation-Required`: `Identity.anyOf` lists its members' requirements as one inner list, and the prover meets each group with one attestation, the first that succeeds in listed order, so a route accepting any of several issuers costs one code. `Attestation.Client.requirements` returns these groups.
+  - Rebuilt `EmailOtp` on it, with the same public API. Deprecated `EmailOtp.Constants.header` and `requiredHeader` in favor of `Attestation.Constants`.
+  - Added `Identity.Headers`, the identity request headers that never cross origins or reach upstream and the identity response headers a proxy drops, and `Prover.headers` for a prover's own sensitive request headers. The client's cross-origin redirect stripping and the proxy now read them instead of hardcoded names.
+  - Added a second `Prover.retry` parameter, `{ request }`: the request that got the rejected response.
+  - Simplified the attestation prover: it caches one attestation per audience, issuer and type, sends every unexpired one on a paid attempt and only those outside the refresh margin (`min(300s, half the lifetime)`) on an unpaid one, and its `retry` returns the attestations to resend with. Fixed a paid retry dropping an attestation close to expiry, and a late 401 on a concurrent request discarding a just-obtained attestation and asking for another code.
+  - Moved the identity extensions to fixed statuses: an untrusted or unresolvable signature key and an attestation the route's policy rejects are `forbidden` (403), an unreachable issuer key set is `unavailable` (503). `Attestation.verify` returns `unavailable` instead of `invalid` with `unavailable: true`.
+  - Deprecated the function form of `audience` in `Attestation.Server.verifier` and `EmailOtp.Server.verifier`: it is only safe where the platform guarantees the request's host.
+
 ## 0.17.6
 
 ### Patch Changes
