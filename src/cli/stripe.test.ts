@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import * as util from 'node:util'
 
 import { afterEach, describe, expect, test } from 'vp/test'
 
@@ -248,6 +249,77 @@ describe('writeEnvValue safety', () => {
     fs.writeFileSync(file, 'TEMPO_DEPOSIT_ADDRESS="0xa\nB=2\nTEMPO_DEPOSIT_ADDRESS=0xb\n')
     writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
     expect(fs.readFileSync(file, 'utf8')).toBe('TEMPO_DEPOSIT_ADDRESS=0xc\nB=2\n')
+  })
+
+  test.each(['1A', 'A B', 'A$B', 'A:B', 'É'])('keeps a multiline value keyed %s', (key) => {
+    const file = path.join(tempDir(), '.env')
+    const value = `${key}="x\nTEMPO_DEPOSIT_ADDRESS=0xb\n"\n`
+    fs.writeFileSync(file, `${value}TEMPO_DEPOSIT_ADDRESS=0xa\n`)
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\n`)
+  })
+
+  test('keeps multiline values in a CRLF file', () => {
+    const file = path.join(tempDir(), '.env')
+    const value = 'A="x\r\nTEMPO_DEPOSIT_ADDRESS=0xb\r\n"\r\n'
+    fs.writeFileSync(file, `${value}TEMPO_DEPOSIT_ADDRESS=0xa\r\nB=2\r\n`)
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe(`${value}TEMPO_DEPOSIT_ADDRESS=0xc\r\nB=2\r\n`)
+  })
+
+  test('reads a form feed before a quote as Node does', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(file, '1A=\f"x\nTEMPO_DEPOSIT_ADDRESS=0xa\n')
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('1A=\f"x\nTEMPO_DEPOSIT_ADDRESS=0xc\n')
+  })
+
+  test('either refuses or leaves Node reading the new value', () => {
+    const file = path.join(tempDir(), '.env')
+    // Node reads the second line inside A\'s single-quoted value; a stray quote later closes it.
+    const existing = "A='x\nTEMPO_DEPOSIT_ADDRESS=0xa\nB=y'z\n"
+    fs.writeFileSync(file, existing)
+    if (!(util as { parseEnv?: unknown }).parseEnv) return
+    try {
+      writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    } catch (error) {
+      expect((error as Error).message).toContain('safely')
+      expect(fs.readFileSync(file, 'utf8')).toBe(existing)
+      return
+    }
+    expect(
+      (util as unknown as { parseEnv: (s: string) => Record<string, string> }).parseEnv(
+        fs.readFileSync(file, 'utf8'),
+      ).TEMPO_DEPOSIT_ADDRESS,
+    ).toBe('0xc')
+  })
+
+  test.each([
+    ['a quote opening below a blank value', 'A=  \n"x\nTEMPO_DEPOSIT_ADDRESS=inside\n"\n'],
+    ['a carriage return before a quote', 'A=\r"x\nTEMPO_DEPOSIT_ADDRESS=inside\n"\n'],
+  ])('never changes another key: %s', (_, rest) => {
+    if (!(util as { parseEnv?: unknown }).parseEnv) return
+    const file = path.join(tempDir(), '.env')
+    const existing = `TEMPO_DEPOSIT_ADDRESS=old\n${rest}`
+    fs.writeFileSync(file, existing)
+    const parse = (util as unknown as { parseEnv: (s: string) => Record<string, string> }).parseEnv
+    try {
+      writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    } catch (error) {
+      expect((error as Error).message).toContain('safely')
+      expect(fs.readFileSync(file, 'utf8')).toBe(existing)
+      return
+    }
+    const after = parse(fs.readFileSync(file, 'utf8'))
+    expect(after.TEMPO_DEPOSIT_ADDRESS).toBe('0xc')
+    expect(after.A).toBe(parse(existing).A)
+  })
+
+  test('ignores quotes on comment lines', () => {
+    const file = path.join(tempDir(), '.env')
+    fs.writeFileSync(file, '# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xa\n')
+    writeEnvValue(file, 'TEMPO_DEPOSIT_ADDRESS', '0xc')
+    expect(fs.readFileSync(file, 'utf8')).toBe('# NOTE="x\nTEMPO_DEPOSIT_ADDRESS=0xc\n')
   })
 
   test('refuses values with line breaks', () => {
