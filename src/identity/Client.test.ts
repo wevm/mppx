@@ -2,6 +2,15 @@ import { Challenge, Credential } from 'mppx'
 import * as Identity from 'mppx/identity'
 import { expect, test, vi } from 'vp/test'
 
+const testChallenge = (id: string) =>
+  Challenge.from({
+    id,
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+
 const header =
   (name: string, value: string): Identity.Prover['prove'] =>
   (request) => {
@@ -122,8 +131,9 @@ test('passes a 402 challenge only to provers in scope for its URL', async () => 
     },
   })
   const client = Identity.Client.from([prover('any', '*'), prover('scoped', ['https://a.example'])])
-  await client.challenge(new Response(null, { status: 402 }), {}, 'https://b.example/x')
-  await client.challenge(new Response(null, { status: 402 }), {}, 'https://a.example/x')
+  const challenge = testChallenge('c')
+  await client.challenge(new Response(null, { status: 402 }), { challenge }, 'https://b.example/x')
+  await client.challenge(new Response(null, { status: 402 }), { challenge }, 'https://a.example/x')
   expect(ran).toEqual(['any', 'any', 'scoped'])
 })
 
@@ -190,15 +200,7 @@ test('sends the request itself when it can never be resent', async () => {
   expect(outcome.request).toBe(out)
 })
 
-test('wrapFetch binds proofs to the challenge of the credential being sent', async () => {
-  const challenge = (id: string) =>
-    Challenge.from({
-      id,
-      intent: 'charge',
-      method: 'test',
-      realm: 'merchant.example',
-      request: { amount: '1' },
-    })
+test("wrapFetch binds proofs to an attached Credential's Challenge, else to the context's", async () => {
   const seen: (string | undefined)[] = []
   const client = Identity.Client.from([
     {
@@ -210,11 +212,11 @@ test('wrapFetch binds proofs to the challenge of the credential being sent', asy
     },
   ])
   const fetch = Identity.Client.wrapFetch(vi.fn(async () => new Response('ok')) as never, client, {
-    challenge: challenge('first'),
+    challenge: testChallenge('first'),
   })
   await fetch('https://merchant.example', {
     headers: {
-      Authorization: Credential.serialize({ challenge: challenge('second'), payload: {} }),
+      Authorization: Credential.serialize({ challenge: testChallenge('second'), payload: {} }),
     },
     method: 'POST',
   })
@@ -235,7 +237,7 @@ test('challenge releases each unread copy after its prepare callback', async () 
   const client = Identity.Client.from([
     { scope: '*', prove: (request) => request, prepare: () => {} },
   ])
-  await client.challenge(response, {}, 'https://merchant.example')
+  await client.challenge(response, { challenge: testChallenge('c') }, 'https://merchant.example')
   await response.body!.cancel()
   expect(cancelled).toBe(1)
 })
@@ -282,7 +284,11 @@ test('prepare runs only on 402s and retry only on other rejections', async () =>
     async () => new Response(null, { status: 403 }),
     new Request('https://a.example'),
   )
-  await client.challenge(new Response(null, { status: 402 }), {}, 'https://a.example')
+  await client.challenge(
+    new Response(null, { status: 402 }),
+    { challenge: testChallenge('c') },
+    'https://a.example',
+  )
   expect(prepare).toHaveBeenCalledTimes(1)
   expect(retry).toHaveBeenCalledTimes(1)
 })
@@ -297,4 +303,160 @@ test('wrapFetch preserves payment suppression through identity request conversio
   const wrapped = Identity.Client.wrapFetch(send, identity)
   await wrapped('https://merchant.example', { [skipPayment]: true } as RequestInit)
   expect(send).toHaveBeenCalledOnce()
+})
+
+test('prepare receives the selected challenge and the Identity-Required requirements', async () => {
+  const prepare = vi.fn()
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, prepare }])
+  const challenge = testChallenge('c')
+  await client.challenge(
+    new Response(null, {
+      headers: { 'Identity-Required': 'kyc;issuer="https://kyc.example", email, ("bad")' },
+      status: 402,
+    }),
+    { challenge },
+    'https://a.example',
+  )
+  const [, context] = prepare.mock.calls[0]!
+  expect(context).toEqual({
+    challenge,
+    requirements: [{ type: 'kyc', issuer: 'https://kyc.example' }, { type: 'email' }],
+  })
+  expect(Object.isFrozen(context)).toBe(true)
+  await client.challenge(
+    new Response(null, { headers: { 'Identity-Required': '"unparsed' }, status: 402 }),
+    { challenge },
+    'https://a.example',
+  )
+  expect(prepare.mock.calls[1]![1].requirements).toEqual([])
+})
+
+test('a retry returning headers resends once with them set before the provers prove it', async () => {
+  const signed: (string | null)[] = []
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: () => ({ 'X-Token': 'from-retry' }),
+    },
+    {
+      scope: '*',
+      // A signing prover listed last records what its signature would cover.
+      prove: (request) => {
+        signed.push(request.headers.get('X-Token'))
+        return request
+      },
+    },
+  ])
+  const seen: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    seen.push(request)
+    return seen.length === 1 ? new Response(null, { status: 401 }) : new Response('ok')
+  })
+  const { response } = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(await response.text()).toBe('ok')
+  expect(seen.map((request) => request.headers.get('X-Token'))).toEqual([null, 'from-retry'])
+  expect(signed).toEqual([null, 'from-retry'])
+})
+
+test('a retry returning headers never resends a paid attempt, and resends at most once', async () => {
+  const retry = vi.fn(() => ({ 'X-Token': 't' }))
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  const fetch = vi.fn(async () => new Response(null, { status: 401 }))
+  await client.send(fetch as never, new Request('https://merchant.example'), {
+    challenge: testChallenge('paid'),
+  })
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(retry).not.toHaveBeenCalled()
+  await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(fetch).toHaveBeenCalledTimes(3)
+  expect(retry).toHaveBeenCalledTimes(1)
+})
+
+test('attempt transitions', () => {
+  const { initial, transition } = Identity.Client
+  const sent = transition(initial, { type: 'send', payment: 'unpaid' })
+  const paid = transition(initial, { type: 'send', payment: 'paid' })
+  expect([sent.phase, paid.phase]).toEqual(['sent', 'paid'])
+  expect(Object.isFrozen(sent)).toBe(true)
+  const resent = transition(sent, { type: 'response', resend: [['x-token', 't']] })
+  expect(resent).toEqual({ phase: 'resent', headers: [['x-token', 't']] })
+  for (const state of [sent, paid, resent])
+    expect(transition(state, { type: 'response', resend: undefined })).toEqual({ phase: 'done' })
+  const done = transition(sent, { type: 'response', resend: undefined })
+  const illegal = [
+    [paid, { type: 'response', resend: [] }, 'response with resend', 'paid'],
+    [resent, { type: 'response', resend: [] }, 'response with resend', 'resent'],
+    [initial, { type: 'response', resend: undefined }, 'response', 'unproved'],
+    [done, { type: 'response', resend: undefined }, 'response', 'done'],
+    [sent, { type: 'send', payment: 'unpaid' }, 'send', 'sent'],
+  ] as const
+  for (const [state, event, name, phase] of illegal)
+    expect(() => transition(state, event)).toThrow(
+      `Illegal identity attempt transition "${name}" from phase "${phase}".`,
+    )
+})
+
+test('retry headers never replace a payment credential header', async () => {
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: () => ({ Authorization: 'Bearer leaked', 'Payment-Signature': 'x', 'X-Proof': '1' }),
+    },
+  ])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return sent.length === 1 ? new Response(null, { status: 401 }) : new Response('ok')
+  })
+  const first = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(first.headers).toEqual([['x-proof', '1']])
+  expect(sent[1]!.headers.has('Authorization')).toBe(false)
+  expect(sent[1]!.headers.get('X-Proof')).toBe('1')
+  // The paid attempt carries the retry headers without touching its Credential.
+  const credential = Credential.serialize({ challenge: testChallenge('c'), payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: credential } }),
+    { challenge: testChallenge('c'), headers: [['authorization', 'Bearer leaked']] },
+  )
+  expect(sent[2]!.headers.get('Authorization')).toBe(credential)
+})
+
+test('retry headers never replace the credential header a Challenge names', async () => {
+  const challenge = Challenge.from({
+    id: 'c',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+    header: 'X-Pay',
+  })
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request }])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return new Response('ok')
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      headers: { 'X-Pay': credential, 'X-Other': credential },
+    }),
+    {
+      challenge,
+      headers: [
+        ['x-pay', 'leaked'],
+        ['x-other', 'leaked'],
+        ['payment-authorization', 'leaked'],
+        ['x-proof', '1'],
+      ],
+    },
+  )
+  expect(sent[0]!.headers.get('X-Pay')).toBe(credential)
+  expect(sent[0]!.headers.get('X-Other')).toBe(credential)
+  expect(sent[0]!.headers.has('Payment-Authorization')).toBe(false)
+  expect(sent[0]!.headers.get('X-Proof')).toBe('1')
 })

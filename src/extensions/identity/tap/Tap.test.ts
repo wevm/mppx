@@ -21,7 +21,7 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
       nonceStore: Identity.Store.memory(),
     })
 
-  expect(await createVerifier().verify(signed, {})).toMatchObject({
+  expect(await createVerifier().verify(signed)).toMatchObject({
     status: 'valid',
     value: {
       intent: Tap.Constants.intents.payment,
@@ -31,7 +31,6 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
   expect(
     await createVerifier().verify(
       new Request('https://merchant.example/different-resource', { headers: signed.headers }),
-      {},
     ),
   ).toMatchObject({ status: 'invalid' })
 
@@ -40,7 +39,7 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
     Signatures.Headers.signatureInput,
     headers.get(Signatures.Headers.signatureInput)!.replace('alg="ed25519"', 'alg="invalid"'),
   )
-  expect(await createVerifier().verify(new Request(signed, { headers }), {})).toMatchObject({
+  expect(await createVerifier().verify(new Request(signed, { headers }))).toMatchObject({
     status: 'invalid',
   })
   expect(() =>
@@ -76,8 +75,8 @@ test('shares replay protection across verifier instances and TAP intents', async
   const createVerifier = () =>
     Tap.Server.verifier({ keyResolver: () => keys.publicKey, nonceStore })
 
-  expect(await createVerifier().verify(browse, {})).toMatchObject({ status: 'valid' })
-  expect(await createVerifier().verify(payment, {})).toEqual({
+  expect(await createVerifier().verify(browse)).toMatchObject({ status: 'valid' })
+  expect(await createVerifier().verify(payment)).toEqual({
     reason: 'The signature nonce has already been used.',
     status: 'invalid',
   })
@@ -125,7 +124,7 @@ test('verifies externally ordered signature parameters and extensions', async ()
     nonceStore: Identity.Store.memory(),
   })
 
-  expect(await verifier.verify(new Request(request, { headers }), {})).toMatchObject({
+  expect(await verifier.verify(new Request(request, { headers }))).toMatchObject({
     status: 'valid',
   })
 })

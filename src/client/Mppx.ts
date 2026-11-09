@@ -507,6 +507,7 @@ export function create<
         if (!identityClient) return rawFetch(paidRequest)
         const { response } = await identityClient.send(rawFetch, paidRequest, {
           challenge: payment.challenge,
+          headers: preparedHttp.identityHeaders,
         })
         return response
       },
@@ -676,6 +677,8 @@ async function prepareHttpRequest(parameters: {
   identity: IdentityClient.Client | undefined
 }): Promise<{
   body: BodyInit | undefined
+  /** Retry headers the final attempt carried, which the paid attempt carries too. */
+  identityHeaders: IdentityClient.ResendHeaders
   replayRequest: Request
   request: Request
   response: Response
@@ -693,17 +696,22 @@ async function prepareHttpRequest(parameters: {
 
   for (;;) {
     request = withAcceptPayment(request, acceptPayment, explicitAcceptPayment, acceptPaymentPolicy)
-    const { request: sentRequest, response } = await (async () => {
+    const {
+      request: sentRequest,
+      response,
+      headers: identityHeaders,
+    } = await (async () => {
       // `request` stays unread for replay; the reported request is the one actually sent.
       if (identity) return identity.send(fetch, request.clone())
       const sent = request.clone()
-      return { request: sent, response: await fetch(sent) }
+      return { request: sent, response: await fetch(sent), headers: [] as const }
     })()
     if (response.type === 'opaqueredirect' || response.status === 0)
       throw new Error('prepareRequest requires a runtime that exposes manual redirect responses.')
     if (!redirectStatuses.has(response.status))
       return {
         body,
+        identityHeaders,
         replayRequest: request,
         request: sentRequest,
         response,
@@ -714,6 +722,7 @@ async function prepareHttpRequest(parameters: {
     if (!location)
       return {
         body,
+        identityHeaders,
         replayRequest: request,
         request: sentRequest,
         response,
