@@ -323,16 +323,14 @@ function closing(state: State): boolean {
   return closeRequest(state) !== 0n
 }
 
-/**
- * The payer's close request: `closeRequestedAt`, or `0n` without one. The server's own
- * cooperative-close marker ({@link State.pendingCloseAt}) is not one while that close may still
- * land ({@link pendingClose}): it captures the vouchers itself. An on-chain close request merged
- * into the marker keeps its timestamp when the payer's is not later, so once the marker can no
- * longer land, it counts as one.
- */
+/** The payer's observed close request, never an expired server-owned marker. */
 function closeRequest(state: State): bigint {
   if (pendingClose(state)) return 0n
-  return BigInt(state.closeRequestedAt ?? 0n)
+  if (state.onChainCloseRequestedAt !== undefined) return BigInt(state.onChainCloseRequestedAt)
+  const requested = BigInt(state.closeRequestedAt ?? 0n)
+  return state.pendingCloseAt !== undefined && requested === BigInt(state.pendingCloseAt)
+    ? 0n
+    : requested
 }
 
 /**

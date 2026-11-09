@@ -424,6 +424,26 @@ describe('ChannelStore', () => {
     expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
   })
 
+  test('expired recovery markers do not reset maxAttempts', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    const channels = object({ maxAttempts: 2 })
+    const unpaid = channel({ voucher: 20_000n, spent: 10_000n, deposit: 100_000n })
+    await channels.write(unpaid)
+    await channels.fire()
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const marker = BigInt(Math.floor(Date.now() / 1000))
+      await channels.write({ ...unpaid, closeRequestedAt: marker, pendingCloseAt: marker })
+      await channels.fire() // Marker expires, but cannot renew the send budget.
+      await channels.fire() // Watchdog retries or exhausts maxAttempts.
+    }
+    expect(channels.sent).toHaveLength(2)
+    expect(channels.alarmIn()).toBeNull()
+    // A newly observed payer close is new work and can restart recovery.
+    await channels.write({ ...unpaid, closeRequestedAt: 1n, onChainCloseRequestedAt: 1n })
+    await channels.fire()
+    expect(channels.sent).toHaveLength(3)
+  })
+
   test('waits out a live close marker instead of giving up, and sends a close request merged into it', async () => {
     vi.useFakeTimers({ now: 1_800_000_000_000 })
     try {
@@ -435,7 +455,12 @@ describe('ChannelStore', () => {
       vi.setSystemTime(Date.now() + channels.alarmIn()! - 10_000)
       const marker = BigInt(Math.floor(Date.now() / 1000))
       await channels.write(
-        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+        channel({
+          voucher: 2_000n,
+          closeRequestedAt: marker,
+          pendingCloseAt: marker,
+          onChainCloseRequestedAt: marker - 1n,
+        }),
       )
       expect(channels.alarmIn()).toBeLessThanOrEqual(10_000)
       // That attempt, inside the marker's window, neither sends nor gives up.
@@ -554,6 +579,7 @@ describe('ChannelStore', () => {
         voucher: 500n,
         closeRequestedAt: marker,
         pendingCloseAt: marker,
+        onChainCloseRequestedAt: marker - 1n,
       }),
     )
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
@@ -575,7 +601,12 @@ describe('ChannelStore', () => {
       // The server marks its close; a payer's close request merged into it stays hidden while it may land.
       const marker = BigInt(Math.floor(Date.now() / 1000))
       await channels.write(
-        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+        channel({
+          voucher: 2_000n,
+          closeRequestedAt: marker,
+          pendingCloseAt: marker,
+          onChainCloseRequestedAt: marker - 1n,
+        }),
       )
       expect(channels.alarmIn()).toBeGreaterThan(0)
       expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)

@@ -63,7 +63,7 @@ export type OnChainChannelState = {
 /** Persisted fields that mirror authoritative on-chain channel state. */
 export type ActiveOnChainStateFields = Pick<
   State,
-  'closeRequestedAt' | 'deposit' | 'settledOnChain'
+  'closeRequestedAt' | 'onChainCloseRequestedAt' | 'deposit' | 'settledOnChain'
 >
 
 /** Parameters for selecting the persisted highest accepted voucher. */
@@ -359,6 +359,8 @@ export interface BaseState {
    * broadcasting a close, to tell that marker from a payer's close request on-chain.
    */
   pendingCloseAt?: bigint | undefined
+  /** Observed payer close timestamp, separate from a server marker that may hide it. */
+  onChainCloseRequestedAt?: bigint | undefined
 }
 
 /** Expiring ownership claim for one server-scheduled settlement attempt. */
@@ -428,6 +430,14 @@ export function mergeActiveOnChainState(
 ): ActiveOnChainStateFields {
   return {
     closeRequestedAt: keepGreaterTimestamp(current?.closeRequestedAt ?? 0n, state.closeRequestedAt),
+    ...(BigInt(state.closeRequestedAt) !== 0n
+      ? {
+          onChainCloseRequestedAt: keepGreater(
+            current?.onChainCloseRequestedAt ?? 0n,
+            BigInt(state.closeRequestedAt),
+          ),
+        }
+      : {}),
     deposit: keepGreater(current?.deposit ?? 0n, state.deposit),
     settledOnChain: keepGreater(current?.settledOnChain ?? 0n, state.settled),
   }
@@ -682,7 +692,12 @@ export function reconcileExpiredPendingClose(parameters: {
   if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n) return current
   const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds)
   if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds)) return current
-  return { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
+  return {
+    ...current,
+    closeRequestedAt: 0n,
+    pendingCloseAt: undefined,
+    onChainCloseRequestedAt: undefined,
+  }
 }
 
 /** Marks local channel state as pending close and returns the bounded capture amount. */
