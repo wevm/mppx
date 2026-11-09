@@ -89,8 +89,12 @@ export function charge<const parameters extends charge.Parameters>(
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
+  // A relay validates and broadcasts credentials and enforces single use itself, so it never
+  // reads the local replay store and needs no shared one.
   const rawStore = (parameters.store ??
-    fallbackStore('tempo.charge')) as Store.AtomicStore<charge.StoreItemMap>
+    (relay
+      ? Store.memory()
+      : fallbackStore('tempo.charge'))) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,

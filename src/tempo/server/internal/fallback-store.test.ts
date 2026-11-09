@@ -138,4 +138,13 @@ describe('fallbackStore', () => {
       `[Error: tempo.charge() has no \`store\` configured, and VERCEL is set, so this server may run as several instances. An in-memory store would let a credential accepted by one instance be accepted again by another. Pass a shared atomic store, such as \`Store.redis()\`, \`Store.upstash()\`, \`Store.postgres()\`, \`Store.sql()\`, \`Store.d1()\`, \`Store.durableObject()\` or \`Store.cloudflare()\` with \`update\`, or pass \`store: Store.memory()\` to accept replay protection scoped to this instance.]`,
     )
   })
+
+  test('tempo.charge with a relay needs no store in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const { tempo } = await load()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() => tempo.charge({ recipient, relay: { apiKey: 'key' } })).not.toThrow()
+    expect(memoryStoreWarnings(warn.mock.calls)).toHaveLength(0)
+  })
 })
