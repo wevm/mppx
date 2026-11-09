@@ -261,6 +261,24 @@ describe('superviseCloses', () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
+  test('answers a payer close after an earlier server close expired', async () => {
+    const store = await seed({ closeRequestedAt: 1n, pendingCloseAt: 1n })
+    mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 100n })
+    const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.closed).toBe(1)
+    expect(closeOnChain.mock.calls[0]?.[6]).not.toHaveProperty('validBefore')
+    expect(closeOnChain.mock.calls[0]?.slice(1, 4)).toEqual([descriptor, 500n, 350n])
+  })
+
   test('answers a close request with a payee close capturing spent', async () => {
     const store = await seed()
     mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 100n })

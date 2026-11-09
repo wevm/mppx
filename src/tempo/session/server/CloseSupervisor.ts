@@ -405,7 +405,7 @@ async function closeAtSpend(
       sender: account?.address,
     })
     const validity =
-      channel.pendingCloseAt === undefined
+      state.closeRequestedAt !== 0 || channel.pendingCloseAt === undefined
         ? {}
         : { validBefore: Number(channel.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds }
     const txHash = await Chain.closeOnChain(
