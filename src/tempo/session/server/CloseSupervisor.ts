@@ -315,6 +315,7 @@ async function superviseChannel(
         claimed = false
         if (!current || current.finalized || current.closeRequestedAt !== 0n) return current
         if (current.settledOnChain > state.settled) return current
+        if (Object.keys(current.prepaidRefunds ?? {}).length > 0) return current
         const lease = current.scheduledSettlementLease
         if (
           (lease &&
@@ -520,7 +521,11 @@ async function closeAtSpend(
         current &&
         current.pendingCloseAt === channel.pendingCloseAt &&
         current.closeRequestedAt === channel.pendingCloseAt
-          ? { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
+          ? {
+              ...current,
+              closeRequestedAt: current.onChainCloseRequestedAt ?? 0n,
+              pendingCloseAt: undefined,
+            }
           : current,
       )
     }
@@ -542,7 +547,12 @@ async function findSettledToPayee(
   range: { fromBlock: bigint; toBlock: bigint },
 ): Promise<bigint | undefined> {
   const step = parameters.logBlockRange ?? defaultLogBlockRange
-  for (let from = range.fromBlock; from <= range.toBlock; from += step) {
+  const cursor = channel.closeSearchFromBlock
+  const start =
+    cursor !== undefined && cursor >= range.fromBlock && cursor <= range.toBlock
+      ? cursor
+      : range.fromBlock
+  for (let from = start; from <= range.toBlock; from += step) {
     const to = from + step - 1n < range.toBlock ? from + step - 1n : range.toBlock
     const logs = await getLogs(parameters.client, {
       address: channel.escrowContract,
@@ -558,13 +568,14 @@ async function findSettledToPayee(
       current && !current.finalized
         ? {
             ...current,
-            closeSupervisedFromBlock: ChannelStore.keepGreater(
-              current.closeSupervisedFromBlock ?? 0n,
-              to + 1n,
-            ),
+            closeSearchFromBlock: to + 1n,
           }
         : current,
     )
   }
+  // Empty logs can reflect a lagging RPC index. Retry from the original anchor next time.
+  await store.updateChannel(channel.channelId, (current) =>
+    current && !current.finalized ? { ...current, closeSearchFromBlock: undefined } : current,
+  )
   return undefined
 }

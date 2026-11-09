@@ -85,6 +85,15 @@ describe('backfillSettlement', () => {
     expect(send).toHaveBeenCalledExactlyOnceWith({ channelId: ids[0] })
   })
 
+  test('normalizes mixed-case channel ids before reading and enqueueing', async () => {
+    const store = Store.memory()
+    const id = `0x${'ab'.repeat(32)}` as const
+    await store.put(id, channel({ channelId: id, voucher: 20_000n, spent: 1_000n }))
+    const send = vi.fn().mockResolvedValue(undefined)
+    expect(await backfillSettlement([`0x${'AB'.repeat(32)}`], { store, queue: { send } })).toBe(1)
+    expect(send).toHaveBeenCalledExactlyOnceWith({ channelId: id })
+  })
+
   test('surfaces failed sends so the caller can retry the backfill', async () => {
     const store = Store.memory()
     await store.put(channelId, channel({ voucher: 20_000n, spent: 1_000n }))

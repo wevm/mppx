@@ -30,10 +30,13 @@ export type PrepaidSessionReceipt = SessionReceipt & {
 }
 
 /** Marks a session receipt as already charged for the current request. */
-export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt {
+export function markPrepaidSessionTick(
+  receipt: SessionReceipt,
+  refundKey?: string,
+): SessionReceipt {
   if (hasPrepaidSessionTick(receipt)) return receipt
   Object.defineProperty(receipt, prepaidRefundKey, {
-    value: `stream:${globalThis.crypto.randomUUID()}`,
+    value: refundKey ?? `stream:${globalThis.crypto.randomUUID()}`,
   })
   Object.defineProperty(receipt, prepaidSessionTick, {
     configurable: false,
@@ -159,6 +162,8 @@ export function sse(
         return Sse_core.toResponse(Sse_core.serve(streamOptions))
       }
 
+      const deliveryKey = (receipt as PrepaidSessionReceipt)[prepaidRefundKey]
+      if (deliveryKey) await Sse_core.clearPrepaidRefund(store, channelId, deliveryKey)
       const baseResponse = base.respondReceipt({
         credential: verifiedCredential,
         envelope,

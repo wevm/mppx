@@ -47,6 +47,20 @@ export class PrepaidRefundError extends Error {
 /** Maximum retained automatic refund operations per channel. Never evict live retry keys. */
 export const maxPrepaidRefunds = 128
 
+/** Releases a completed prepaid delivery so automatic channel closure can proceed. */
+export async function clearPrepaidRefund(
+  store: ChannelStore.ChannelStore,
+  channelId: Hex,
+  key: string,
+): Promise<void> {
+  await store.updateChannel(channelId, (current) => {
+    if (!current?.prepaidRefunds?.[key]) return current
+    const prepaidRefunds = { ...current.prepaidRefunds }
+    delete prepaidRefunds[key]
+    return { ...current, prepaidRefunds }
+  })
+}
+
 /**
  * Persist a delivery obligation before returning a managed response. Failed hook deliveries remain
  * in `channel.prepaidRefunds` for a merchant worker. Pending entries require manual delivery
@@ -159,17 +173,9 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     options.refundIdempotencyKey ?? `stream:${globalThis.crypto.randomUUID()}`
   ChannelStore.assertIdempotencyOptions({ idempotencyKey: refundIdempotencyKey })
   const refundOptions = { ...options, refundIdempotencyKey }
-  const clearObligation = async () => {
-    if (!options.autoCreditPrepaid) return
-    await store.updateChannel(channelId, (current) => {
-      if (!current?.prepaidRefunds?.[refundIdempotencyKey]) return current
-      const prepaidRefunds = { ...current.prepaidRefunds }
-      delete prepaidRefunds[refundIdempotencyKey]
-      return { ...current, prepaidRefunds }
-    })
-  }
+  const clearObligation = () => clearPrepaidRefund(store, channelId, refundIdempotencyKey)
   const creditFailedDelivery = async () => {
-    if (!options.autoCreditPrepaid) return
+    if (!options.autoCreditPrepaid) return clearObligation()
     if (undeliveredPrepaidUnits === 0 || tickCost === 0n) {
       await clearObligation()
       return
