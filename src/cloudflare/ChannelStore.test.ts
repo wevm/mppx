@@ -3,7 +3,8 @@ import { afterEach, describe, expect, test, vi } from 'vp/test'
 import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
 import type { State } from '../tempo/session/server/ChannelStore.js'
-import { settle } from './Channels.js'
+import * as CloseSupervisor from '../tempo/session/server/CloseSupervisor.js'
+import { backfillSettlement, settle } from './Channels.js'
 import { ChannelStore, settlementDue, unsettledAmount } from './ChannelStore.js'
 
 const channelId = `0x${'1'.repeat(64)}` as const
@@ -50,10 +51,10 @@ describe('settlementDue', () => {
     expect(settlementDue(channel({ voucher: 200_000n, deposit: 1_000_000n }))).toBe('threshold')
   })
 
-  test('counts only what a settlement captures: within spent, above settledOnChain', () => {
+  test('counts bounded close recovery when no whole voucher fits spent', () => {
     expect(unsettledAmount(channel({ voucher: 2_000n, settledOnChain: 1_500n }))).toBe(500n)
     // A credit left the highest voucher above spent, and no retained voucher fits.
-    expect(unsettledAmount(channel({ voucher: 2_000n, spent: 1_000n }))).toBe(0n)
+    expect(unsettledAmount(channel({ voucher: 2_000n, spent: 1_000n }))).toBe(1_000n)
     expect(
       unsettledAmount(
         channel({
@@ -62,13 +63,39 @@ describe('settlementDue', () => {
           retainedVouchers: [{ cumulativeAmount: 1_200n, signature: '0x02' }],
         }),
       ),
-    ).toBe(1_200n)
+    ).toBe(1_500n)
   })
 
   test('needs nothing for a settled or finalized channel', () => {
     expect(settlementDue(channel({ settledOnChain: 2_000n }))).toBeUndefined()
     expect(settlementDue(channel({ finalized: true }))).toBeUndefined()
     expect(settlementDue(channel({ highestVoucher: null, voucher: 0n }))).toBeUndefined()
+  })
+})
+
+describe('backfillSettlement', () => {
+  test('queues dormant unpaid channels without a payer write and skips terminal states', async () => {
+    const store = Store.memory()
+    const ids = [1, 2, 3, 4].map((n) => `0x${n.toString().repeat(64)}` as const)
+    await store.put(ids[0]!, channel({ channelId: ids[0]!, voucher: 20_000n, spent: 1_000n }))
+    await store.put(ids[1]!, channel({ channelId: ids[1]!, finalized: true }))
+    await store.put(ids[2]!, channel({ channelId: ids[2]!, settledOnChain: 2_000n }))
+    const send = vi.fn().mockResolvedValue(undefined)
+    expect(await backfillSettlement(ids, { store, queue: { send } })).toBe(1)
+    expect(send).toHaveBeenCalledExactlyOnceWith({ channelId: ids[0] })
+  })
+
+  test('surfaces failed sends so the caller can retry the backfill', async () => {
+    const store = Store.memory()
+    await store.put(channelId, channel({ voucher: 20_000n, spent: 1_000n }))
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('queue unavailable'))
+      .mockResolvedValue(undefined)
+    await expect(backfillSettlement([channelId], { store, queue: { send } })).rejects.toThrow(
+      'queue unavailable',
+    )
+    expect(await backfillSettlement([channelId], { store, queue: { send } })).toBe(1)
   })
 })
 
@@ -109,6 +136,53 @@ describe('settle', () => {
     )
     return { calls, ...outcome }
   }
+
+  test('recovers oversized vouchers with a bounded close instead of full settlement', async () => {
+    const supervise = vi.spyOn(CloseSupervisor, 'superviseCloses').mockResolvedValue({
+      channels: [{ channelId, outcome: 'closed' }],
+    } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
+    expect(supervise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        closeUnsettled: true,
+        channelIds: [channelId],
+        settlementLeaseOwner: expect.any(String),
+        previousBlock: 0n,
+        closeSearchMarginBlocks: 0n,
+      }),
+    )
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'settled' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'unrecovered' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'failed' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      delaySeconds: 60,
+      calls: 0,
+    })
+    supervise.mockRestore()
+  })
+
+  test('keeps ordinary settlement when a retained voucher fits partial spend', async () => {
+    expect(
+      await run(
+        channel({
+          voucher: 2_000n,
+          spent: 1_500n,
+          retainedVouchers: [{ cumulativeAmount: 1_200n, signature: '0x02' }],
+        }),
+      ),
+    ).toEqual({ acked: true, calls: 1 })
+  })
 
   test('settles a channel and acknowledges it', async () => {
     expect(await run(channel())).toEqual({ acked: true, calls: 1 })
@@ -292,6 +366,25 @@ describe('ChannelStore', () => {
     }
   }
 
+  test('retains scheduling and watchdog recovery for an oversized opening voucher', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    const channels = object()
+    const unpaid = channel({
+      voucher: 20_000n,
+      spent: 10_000n,
+      settledOnChain: 0n,
+      deposit: 100_000n,
+    })
+    await channels.write(unpaid)
+    expect(channels.alarmIn()).toBeLessThanOrEqual(0)
+    await channels.fire()
+    expect(channels.sent).toEqual([{ channelId }])
+    await channels.write(unpaid)
+    expect(channels.alarmIn()).toBeGreaterThan(0)
+    await channels.fire()
+    expect(channels.sent).toHaveLength(2)
+  })
+
   test('sends a close request or a threshold of new vouchers at once while the watchdog waits', async () => {
     const channels = object()
     // 10% of the deposit, 1_000, is the threshold.
@@ -368,6 +461,26 @@ describe('ChannelStore', () => {
     expect(channels.alarmIn()).toBeGreaterThan(4 * 60_000)
   })
 
+  test('expired recovery markers do not reset maxAttempts', async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 })
+    const channels = object({ maxAttempts: 2 })
+    const unpaid = channel({ voucher: 20_000n, spent: 10_000n, deposit: 100_000n })
+    await channels.write(unpaid)
+    await channels.fire()
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const marker = BigInt(Math.floor(Date.now() / 1000))
+      await channels.write({ ...unpaid, closeRequestedAt: marker, pendingCloseAt: marker })
+      await channels.fire() // Marker expires, but cannot renew the send budget.
+      await channels.fire() // Watchdog retries or exhausts maxAttempts.
+    }
+    expect(channels.sent).toHaveLength(2)
+    expect(channels.alarmIn()).toBeNull()
+    // A newly observed payer close is new work and can restart recovery.
+    await channels.write({ ...unpaid, closeRequestedAt: 1n, onChainCloseRequestedAt: 1n })
+    await channels.fire()
+    expect(channels.sent).toHaveLength(3)
+  })
+
   test('waits out a live close marker instead of giving up, and sends a close request merged into it', async () => {
     vi.useFakeTimers({ now: 1_800_000_000_000 })
     try {
@@ -379,7 +492,12 @@ describe('ChannelStore', () => {
       vi.setSystemTime(Date.now() + channels.alarmIn()! - 10_000)
       const marker = BigInt(Math.floor(Date.now() / 1000))
       await channels.write(
-        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+        channel({
+          voucher: 2_000n,
+          closeRequestedAt: marker,
+          pendingCloseAt: marker,
+          onChainCloseRequestedAt: marker - 1n,
+        }),
       )
       expect(channels.alarmIn()).toBeLessThanOrEqual(10_000)
       // That attempt, inside the marker's window, neither sends nor gives up.
@@ -498,6 +616,7 @@ describe('ChannelStore', () => {
         voucher: 500n,
         closeRequestedAt: marker,
         pendingCloseAt: marker,
+        onChainCloseRequestedAt: marker - 1n,
       }),
     )
     expect(channels.alarmIn()).toBeLessThanOrEqual(0)
@@ -519,7 +638,12 @@ describe('ChannelStore', () => {
       // The server marks its close; a payer's close request merged into it stays hidden while it may land.
       const marker = BigInt(Math.floor(Date.now() / 1000))
       await channels.write(
-        channel({ voucher: 2_000n, closeRequestedAt: marker, pendingCloseAt: marker }),
+        channel({
+          voucher: 2_000n,
+          closeRequestedAt: marker,
+          pendingCloseAt: marker,
+          onChainCloseRequestedAt: marker - 1n,
+        }),
       )
       expect(channels.alarmIn()).toBeGreaterThan(0)
       expect(channels.alarmIn()).toBeLessThanOrEqual(56_000)

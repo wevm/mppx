@@ -1,6 +1,4 @@
 import {
-  createClient,
-  custom,
   isAddress,
   isAddressEqual,
   zeroAddress,
@@ -40,6 +38,7 @@ import {
   type OnSessionSettlement,
   type OnSessionSettlementFailure,
   reportSessionSettlementFailure,
+  trackSendAttempts,
 } from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
@@ -1195,14 +1194,7 @@ async function recordPendingClose(
     current
       ? {
           ...current,
-          settledOnChain:
-            channelState.settled > current.settledOnChain
-              ? channelState.settled
-              : current.settledOnChain,
-          closeRequestedAt:
-            BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
-              ? BigInt(channelState.closeRequestedAt)
-              : current.closeRequestedAt,
+          ...ChannelStore.mergeActiveOnChainState(current, channelState),
         }
       : current,
   )
@@ -1245,33 +1237,6 @@ function recordOnChainReadInBackground(
       )
     })
     .catch(() => {})
-}
-
-const sendMethods = new Set([
-  'eth_sendRawTransaction',
-  'eth_sendRawTransactionSync',
-  'eth_sendTransaction',
-])
-
-/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
-function trackSendAttempts(client: Chain.TransactionClient) {
-  const tracked = { attempted: false }
-  const trackedClient = createClient({
-    account: client.account,
-    chain: client.chain,
-    pollingInterval: client.pollingInterval,
-    transport: custom(
-      {
-        request(parameters) {
-          if (sendMethods.has(parameters.method)) tracked.attempted = true
-          return client.request(parameters as never)
-        },
-      },
-      // The wrapped client already owns retries.
-      { retryCount: 0 },
-    ),
-  })
-  return { client: trackedClient, tracked }
 }
 
 async function handleCloseCredential(

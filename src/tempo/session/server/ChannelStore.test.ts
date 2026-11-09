@@ -189,26 +189,31 @@ describe('ChannelStore state updates', () => {
     expect(ChannelStore.keepGreaterTimestamp(10n, 15n)).toBe(15n)
   })
 
-  test('merges active on-chain state without decreasing persisted fields', () => {
-    expect(
-      ChannelStore.mergeActiveOnChainState(
-        {
-          closeRequestedAt: 7n,
-          deposit: 100n,
-          settledOnChain: 20n,
-        },
-        {
-          closeRequestedAt: 5,
-          deposit: 90n,
-          settled: 25n,
-        },
-      ),
-    ).toEqual({
-      closeRequestedAt: 7n,
-      deposit: 100n,
-      settledOnChain: 25n,
-    })
-  })
+  test.each([undefined, 6n])(
+    'merges active on-chain state without decreasing persisted fields (%s)',
+    (observed) => {
+      expect(
+        ChannelStore.mergeActiveOnChainState(
+          {
+            closeRequestedAt: 7n,
+            onChainCloseRequestedAt: observed,
+            deposit: 100n,
+            settledOnChain: 20n,
+          },
+          {
+            closeRequestedAt: 5,
+            deposit: 90n,
+            settled: 25n,
+          },
+        ),
+      ).toEqual({
+        closeRequestedAt: 7n,
+        onChainCloseRequestedAt: observed ?? 5n,
+        deposit: 100n,
+        settledOnChain: 25n,
+      })
+    },
+  )
 
   test('stores a new voucher when it is higher than current state', () => {
     expect(

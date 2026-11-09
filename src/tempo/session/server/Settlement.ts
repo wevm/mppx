@@ -1,5 +1,7 @@
 import {
   BaseError as viem_BaseError,
+  createClient,
+  custom,
   ExecutionRevertedError,
   HttpRequestError,
   InternalRpcError,
@@ -288,6 +290,8 @@ export async function claimScheduledSettlement(parameters: {
   await store.updateChannel(channelId, (current) => {
     claimed = false
     if (!current || !isSettlementDue(current, schedule)) return current
+    if (current.pendingCloseAt !== undefined && current.closeRequestedAt === current.pendingCloseAt)
+      return current
     const lease = current.scheduledSettlementLease
     if (lease && lease.expiresAt > now) return current
     claimed = true
@@ -625,6 +629,14 @@ export async function settle(
   // Choosing the voucher and raising the credit floor in one update keeps a concurrent credit from
   // lowering spent below what this transaction captures.
   await store.updateChannel(channelId, (current) => {
+    if (
+      current?.pendingCloseAt !== undefined &&
+      current.closeRequestedAt === current.pendingCloseAt
+    ) {
+      claim.channel = undefined
+      claim.voucher = undefined
+      return current
+    }
     claim.channel = current ?? undefined
     claim.voucher = (current && ChannelStore.resolveSettleableVoucher(current)) ?? undefined
     if (!current || !claim.voucher) return current
@@ -842,4 +854,34 @@ async function emitSessionSettlement(
   } catch {
     // Errors are isolated — observers cannot break the settlement flow.
   }
+}
+
+const sendMethods = new Set([
+  'eth_sendRawTransaction',
+  'eth_sendRawTransactionSync',
+  'eth_sendTransaction',
+])
+
+/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
+export function trackSendAttempts(client: Chain.TransactionClient): {
+  client: Chain.TransactionClient
+  tracked: { attempted: boolean }
+} {
+  const tracked = { attempted: false }
+  const trackedClient = createClient({
+    account: client.account,
+    chain: client.chain,
+    pollingInterval: client.pollingInterval,
+    transport: custom(
+      {
+        request(parameters) {
+          if (sendMethods.has(parameters.method)) tracked.attempted = true
+          return client.request(parameters as never)
+        },
+      },
+      // The wrapped client already owns retries.
+      { retryCount: 0 },
+    ),
+  })
+  return { client: trackedClient, tracked }
 }

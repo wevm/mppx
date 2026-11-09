@@ -10,12 +10,15 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import { settle as settleQueue } from '../../../cloudflare/Channels.js'
+import { VerificationFailedError } from '../../../Errors.js'
 import * as Store from '../../../Store.js'
 import * as Chain from '../precompile/Chain.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import { superviseCloses } from './CloseSupervisor.js'
+import { claimScheduledSettlement, settle as settleChannel } from './Settlement.js'
 
 const account = privateKeyToAccount(
   '0x59c6995e998f97a5a0044976f5d56aabe9517a7f3146b789fe719a97d0a9b49f',
@@ -135,6 +138,11 @@ function createSupervisorClient(
               timestamp: numberToHex(block.timestamp),
               transactions: [],
             }
+          if (
+            args.method === 'eth_sendRawTransaction' ||
+            args.method === 'eth_sendRawTransactionSync'
+          )
+            return txHash
           if (args.method === 'eth_getLogs') {
             const [filter] = args.params as [{ fromBlock: Hex; toBlock: Hex }]
             return (
@@ -201,6 +209,164 @@ describe('superviseCloses', () => {
     })
   })
 
+  test.each(['lease', 'pending', 'progress'] as const)(
+    'defers a bounded close during settlement %s',
+    async (kind) => {
+      const store = await seed({
+        ...(kind === 'lease'
+          ? { scheduledSettlementLease: { owner: 'other', expiresAt: Date.now() + 60_000 } }
+          : {}),
+        ...(kind === 'pending'
+          ? { pendingSettlement: { amount: 300n, expiresAt: Date.now() + 60_000 } }
+          : {}),
+        ...(kind === 'progress' ? { settledOnChain: 300n } : {}),
+      })
+      mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+      const close = vi.spyOn(Chain, 'closeOnChain')
+      const result = await superviseCloses({
+        channelIds: [channelId],
+        client: createSupervisorClient(),
+        store,
+        closeUnsettled: true,
+      })
+      expect(result.channels[0]?.outcome).toBe('open')
+      expect(close).not.toHaveBeenCalled()
+      expect((await store.getChannel(channelId))?.closeRequestedAt).toBe(0n)
+    },
+  )
+
+  test('blocks settlement claims after a bounded close freezes the channel', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const settle = vi.spyOn(Chain, 'settleOnChain')
+    vi.spyOn(Chain, 'closeOnChain').mockImplementation(async () => {
+      // Even if a retained voucher becomes available, no new transaction may race the close.
+      await store.updateChannel(
+        channelId,
+        (current) =>
+          current && {
+            ...current,
+            retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+          },
+      )
+      expect(
+        await claimScheduledSettlement({ channelId, schedule: { units: 1 }, store }),
+      ).toBeUndefined()
+      await expect(settleChannel(store, createSupervisorClient(), channelId)).rejects.toThrow(
+        /nothing to settle/,
+      )
+      return txHash
+    })
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    expect(
+      (
+        await superviseCloses({
+          channelIds: [channelId],
+          client: createSupervisorClient(),
+          store,
+          closeUnsettled: true,
+        })
+      ).closed,
+    ).toBe(1)
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  test('accepts a top-up refund after the bounded close state read', async () => {
+    const store = await seed({
+      scheduledSettlementLease: { owner: 'queue', expiresAt: Date.now() + 60_000 },
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 1_650n)],
+    } as never)
+    const onSessionSettlement = vi.fn()
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+      settlementLeaseOwner: 'queue',
+      onSessionSettlement,
+    })
+    expect(result.closed).toBe(1)
+    expect(onSessionSettlement).toHaveBeenCalledExactlyOnceWith({
+      amount: 350n,
+      delta: 250n,
+      trigger: 'close',
+      txHash,
+      channelId,
+    })
+    expect((await store.getChannel(channelId))?.finalized).toBe(true)
+  })
+
+  test('resumes historical close searches after a failed RPC range', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 0n, settled: 350n })
+    const ranges: bigint[] = []
+    const parameters = {
+      channelIds: [channelId],
+      store,
+      previousBlock: 0n,
+      closeSearchMarginBlocks: 0n,
+      logBlockRange: 100n,
+    }
+    const first = await superviseCloses({
+      ...parameters,
+      client: createSupervisorClient({
+        logs: ({ fromBlock }) => {
+          if (fromBlock >= 100n) throw new Error('rpc unavailable')
+          return []
+        },
+      }),
+    })
+    expect(first.failed).toBe(1)
+    expect((await store.getChannel(channelId))?.closeSupervisedFromBlock).toBe(100n)
+    const second = await superviseCloses({
+      ...parameters,
+      client: createSupervisorClient({
+        logs: ({ fromBlock }) => {
+          ranges.push(fromBlock)
+          return [rpcLog(closedLog(channelId, 350n, 650n), 150n)]
+        },
+      }),
+    })
+    expect(second.closed).toBe(1)
+    expect(ranges).toEqual([100n])
+  })
+
+  test('queue finds a close older than the default supervision margin', async () => {
+    const state = channel()
+    const store = Store.memory()
+    await store.put(channelId, state)
+    mockStates({ closeRequestedAt: 0, deposit: 0n, settled: 350n })
+    const ack = vi.fn()
+    const retry = vi.fn()
+    const ranges: { fromBlock: bigint; toBlock: bigint }[] = []
+    await settleQueue(
+      { messages: [{ body: { channelId }, attempts: 1, ack, retry }] },
+      {
+        store,
+        getClient: () =>
+          createSupervisorClient({
+            block: { number: 10_000n, timestamp: 2_000_000n },
+            logs: (range) => {
+              ranges.push(range)
+              return range.fromBlock <= 100n && range.toBlock >= 100n
+                ? [rpcLog(closedLog(channelId, 350n, 650n), 100n)]
+                : []
+            },
+          }),
+      },
+    )
+    expect(ranges[0]?.fromBlock).toBe(0n)
+    expect(ack).toHaveBeenCalledOnce()
+    expect(retry).not.toHaveBeenCalled()
+    expect(await store.get(channelId)).toMatchObject({ finalized: true })
+  })
+
   test('only reads open channels without a settlement schedule', async () => {
     const store = await seed()
     mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
@@ -214,6 +380,148 @@ describe('superviseCloses', () => {
 
     expect(settleOnChain).not.toHaveBeenCalled()
     expect(supervision.channels).toEqual([{ channelId, outcome: 'open' }])
+  })
+
+  test('closes unpaid open channels at recorded spend and freezes concurrent updates', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (...args) => {
+      const current = await store.getChannel(channelId)
+      expect(current?.pendingCloseAt).toBeGreaterThan(0n)
+      expect(current?.closeRequestedAt).toBe(current?.pendingCloseAt)
+      expect(args[6]).toMatchObject({
+        validBefore: Number(current!.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds,
+      })
+      return txHash
+    })
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(closeOnChain.mock.calls[0]?.slice(1, 4)).toEqual([descriptor, 500n, 350n])
+    expect(result.closed).toBe(1)
+    expect(await store.getChannel(channelId)).toMatchObject({
+      finalized: true,
+      settledOnChain: 350n,
+    })
+  })
+
+  test('keeps a channel open when a retained voucher can still settle', async () => {
+    const store = await seed({
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const close = vi.spyOn(Chain, 'closeOnChain')
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.channels).toEqual([{ channelId, outcome: 'open' }])
+    expect(close).not.toHaveBeenCalled()
+    expect((await store.getChannel(channelId))?.closeRequestedAt).toBe(0n)
+  })
+
+  test('reconciles already-settled spend without closing or allowing credits below it', async () => {
+    const store = await seed({
+      pendingSettlement: { amount: 350n, expiresAt: 1 },
+      retainedVouchers: [{ cumulativeAmount: 300n, signature: '0xabcd' }],
+    })
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 350n })
+    const close = vi.spyOn(Chain, 'closeOnChain')
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.channels).toEqual([{ channelId, outcome: 'settled' }])
+    expect(close).not.toHaveBeenCalled()
+    const current = await store.getChannel(channelId)
+    expect(current).toMatchObject({
+      settledOnChain: 350n,
+      retainedVouchers: [],
+      closeRequestedAt: 0n,
+    })
+    expect(current?.pendingSettlement).toBeUndefined()
+    expect(
+      await ChannelStore.creditChannel(store, channelId, 1n, { idempotencyKey: 'refund' }),
+    ).toMatchObject({ status: 'declined' })
+  })
+
+  test.each(['preparation', 'receipt', 'synchronous'] as const)(
+    'clears a definitively failed close (%s)',
+    async (phase) => {
+      const store = await seed()
+      mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+      vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
+        if (phase === 'preparation') throw new Error('fee policy rejected')
+        await client.request({
+          method: phase === 'synchronous' ? 'eth_sendRawTransactionSync' : 'eth_sendRawTransaction',
+          params: ['0x1234'],
+        })
+        if (phase === 'synchronous')
+          throw new VerificationFailedError({ reason: 'close precompile transaction reverted' })
+        return txHash
+      })
+      vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockRejectedValue(
+        new VerificationFailedError({ reason: 'transaction reverted' }),
+      )
+      const result = await superviseCloses({
+        channelIds: [channelId],
+        client: createSupervisorClient(),
+        store,
+        closeUnsettled: true,
+      })
+      expect(result.failed).toBe(1)
+      expect(await store.getChannel(channelId)).toMatchObject({
+        closeRequestedAt: 0n,
+        finalized: false,
+      })
+    },
+  )
+
+  test('keeps ambiguous close attempts frozen until their transaction expiry', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const close = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (client) => {
+      await client.request({ method: 'eth_sendRawTransaction', params: ['0x1234'] })
+      throw new Error('RPC disconnected')
+    })
+    const parameters = {
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    }
+    expect((await superviseCloses(parameters)).failed).toBe(1)
+    expect((await store.getChannel(channelId))?.pendingCloseAt).toBeGreaterThan(0n)
+    await superviseCloses(parameters)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  test('answers a payer close after an earlier server close expired', async () => {
+    const store = await seed({ closeRequestedAt: 1n, pendingCloseAt: 1n })
+    mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 100n })
+    const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(result.closed).toBe(1)
+    expect(closeOnChain.mock.calls[0]?.[6]).not.toHaveProperty('validBefore')
+    expect(closeOnChain.mock.calls[0]?.slice(1, 4)).toEqual([descriptor, 500n, 350n])
   })
 
   test('answers a close request with a payee close capturing spent', async () => {
@@ -261,6 +569,49 @@ describe('superviseCloses', () => {
       settledOnChain: 350n,
     })
   })
+
+  test.each([0, 1_700])(
+    'notifies a confirmed close despite checkpoint failure (request %s)',
+    async (closeRequestedAt) => {
+      const store = await seed()
+      mockStates({ closeRequestedAt, deposit: 1_000n, settled: 100n })
+      const close = vi.spyOn(Chain, 'closeOnChain').mockResolvedValue(txHash)
+      vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+        logs: [closedLog(channelId, 350n, 650n)],
+      } as never)
+      const update = store.updateChannel.bind(store)
+      const write = vi.spyOn(store, 'updateChannel').mockImplementation((id, transform) =>
+        update(id, (current) => {
+          const next = transform(current)
+          if (next?.finalized) throw new Error('checkpoint unavailable')
+          return next
+        }),
+      )
+      const onSessionSettlement = vi.fn()
+      const parameters = {
+        channelIds: [channelId],
+        client: createSupervisorClient({
+          logs: () => [rpcLog(closedLog(channelId, 350n, 650n), 1_000n)],
+        }),
+        store,
+        closeUnsettled: true,
+        onSessionSettlement,
+      }
+      expect((await superviseCloses(parameters)).failed).toBe(1)
+      expect(onSessionSettlement).toHaveBeenCalledExactlyOnceWith({
+        amount: 350n,
+        channelId,
+        delta: 250n,
+        trigger: 'close',
+        txHash,
+      })
+      write.mockRestore()
+      mockStates({ closeRequestedAt: 0, deposit: 0n, settled: 350n })
+      expect((await superviseCloses(parameters)).closed).toBe(1)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(onSessionSettlement).toHaveBeenCalledTimes(1)
+    },
+  )
 
   test('marks a close request without sending a close when nothing is left to capture', async () => {
     const store = await seed({ settledOnChain: 350n })

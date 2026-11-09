@@ -5,7 +5,6 @@ import * as Store from '../Store.js'
 import {
   pendingCloseClockSkewSeconds,
   pendingCloseValiditySeconds,
-  resolveSettleableVoucher,
   type State,
 } from '../tempo/session/server/ChannelStore.js'
 
@@ -306,16 +305,17 @@ export function isChannelState(value: unknown): value is State {
 }
 
 /**
- * The raw amount a settlement of the channel would capture now: the largest accepted voucher
- * within `spent` (as mppx's `settle` picks it) above `settledOnChain`.
+ * The unpaid spend recoverable by settlement or a bounded payee close.
  */
 export function unsettledAmount(state: State): bigint {
   return settleableAmount(state) - state.settledOnChain
 }
 
-/** The cumulative amount a settlement of the channel would bring it to: its settleable voucher's, or `settledOnChain`. */
+/** Collectible spend, including partial capture of an oversized voucher through a payee close. */
 function settleableAmount(state: State): bigint {
-  return resolveSettleableVoucher(state)?.cumulativeAmount ?? state.settledOnChain
+  const voucher = state.highestVoucher?.cumulativeAmount ?? state.settledOnChain
+  const capture = [state.spent, voucher, state.deposit].reduce((a, b) => (a < b ? a : b))
+  return capture > state.settledOnChain ? capture : state.settledOnChain
 }
 
 /** Whether the payer requested a close, after which the escrow's grace period runs. */
@@ -323,16 +323,14 @@ function closing(state: State): boolean {
   return closeRequest(state) !== 0n
 }
 
-/**
- * The payer's close request: `closeRequestedAt`, or `0n` without one. The server's own
- * cooperative-close marker ({@link State.pendingCloseAt}) is not one while that close may still
- * land ({@link pendingClose}): it captures the vouchers itself. An on-chain close request merged
- * into the marker keeps its timestamp when the payer's is not later, so once the marker can no
- * longer land, it counts as one.
- */
+/** The payer's observed close request, never an expired server-owned marker. */
 function closeRequest(state: State): bigint {
   if (pendingClose(state)) return 0n
-  return BigInt(state.closeRequestedAt ?? 0n)
+  if (state.onChainCloseRequestedAt !== undefined) return BigInt(state.onChainCloseRequestedAt)
+  const requested = BigInt(state.closeRequestedAt ?? 0n)
+  return state.pendingCloseAt !== undefined && requested === BigInt(state.pendingCloseAt)
+    ? 0n
+    : requested
 }
 
 /**
