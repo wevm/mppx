@@ -21,6 +21,10 @@ import type * as Types from '../Types.js'
  * - `unavailable` (503): the issuer's keys could not be fetched, so the client keeps its
  *   attestation instead of asking for a new one.
  *
+ * The verifier's `offer` holds an `Identity-Attestation-Offered` header naming the same type and
+ * issuer, for a route to set on a 402 it would price lower with this attestation; a client prover
+ * answers it by obtaining one and resending the unpaid request.
+ *
  * Attestations of other types or issuers in the same header are left to their own verifiers.
  * An attestation is a bearer proof bound to this server's origin until it expires; it says what
  * the issuer checked, not what the subject may do.
@@ -35,19 +39,17 @@ import type * as Types from '../Types.js'
  * mppx.charge({ amount: '1', identity: [phone] })
  * ```
  */
-export function verifier(config: verifier.Config): Identity.Verifier<Types.Verified> {
+export function verifier(config: verifier.Config): verifier.ReturnType {
   const issuer = config.issuer.replace(/\/+$/, '')
   if (!Token.isIssuer(issuer))
     throw new TypeError('Attestation issuer must be an https URL (http only on localhost).')
   Token.assertTimes({ clockTolerance: config.clockTolerance, maxAge: config.maxAge })
   const keyResolver = config.keyResolver ?? Jwks.resolver({ fetch: config.fetch })
   const tolerance = config.clockTolerance ?? Constants.clockTolerance
-  const required = Object.freeze({
-    [Constants.requiredHeader]: serializeList([
-      [new SfToken(config.type), new Map([['issuer', issuer]])] as Item,
-    ]),
-  })
+  const item = serializeList([[new SfToken(config.type), new Map([['issuer', issuer]])] as Item])
+  const required = Object.freeze({ [Constants.requiredHeader]: item })
   return {
+    offer: Object.freeze({ [Constants.offeredHeader]: item }),
     async verify(request) {
       const audience = origin(
         typeof config.audience === 'function' ? config.audience(request) : config.audience,
@@ -109,6 +111,12 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
 }
 
 export declare namespace verifier {
+  /** The verifier, with the header that offers its attestation on a 402. */
+  type ReturnType = Identity.Verifier<Types.Verified> & {
+    /** An `Identity-Attestation-Offered` header naming this verifier's type and issuer. */
+    readonly offer: Readonly<Record<string, string>>
+  }
+
   /**
    * Derives this server's origin from the request.
    *

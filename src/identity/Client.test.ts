@@ -504,3 +504,41 @@ test('exposes the headers provers declare, lowercased and frozen', () => {
   expect(client.headers).toEqual(['x-agent-token', 'x-other'])
   expect(Object.isFrozen(client.headers)).toBe(true)
 })
+
+test('resends an unpaid 402 once when a prover answers its offer', async () => {
+  const offer = vi.fn(() => ({ 'X-Proof': 'yes' }))
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, offer }])
+  const seen: (string | null)[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    seen.push(request.headers.get('X-Proof'))
+    return new Response(null, { status: 402 })
+  })
+  const { headers } = await client.send(fetch as never, new Request('https://merchant.example'))
+  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(offer).toHaveBeenCalledTimes(1)
+  expect(seen).toEqual([null, 'yes'])
+  expect(headers).toEqual([['x-proof', 'yes']])
+})
+
+test('pays a 402 as it is when the offer is declined, fails or the attempt is paid', async () => {
+  const declined = Identity.Client.from([{ scope: '*', prove: (r) => r, offer: () => undefined }])
+  const failed = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (r) => r,
+      offer: () => {
+        throw new Error('no code')
+      },
+    },
+  ])
+  const offer = vi.fn(() => ({ 'X-Proof': 'yes' }))
+  const paid = Identity.Client.from([{ scope: '*', prove: (r) => r, offer }])
+  const fetch = vi.fn(async () => new Response(null, { status: 402 }))
+  await declined.send(fetch as never, new Request('https://merchant.example'))
+  await failed.send(fetch as never, new Request('https://merchant.example'))
+  await paid.send(fetch as never, new Request('https://merchant.example'), {
+    challenge: { id: 'paid' } as never,
+  })
+  expect(fetch).toHaveBeenCalledTimes(3)
+  expect(offer).not.toHaveBeenCalled()
+})

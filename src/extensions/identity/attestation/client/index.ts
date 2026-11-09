@@ -17,6 +17,9 @@ import type * as Types from '../Types.js'
  * replaced before paying. When a server answers 401 or 403 with `Identity-Attestation-Required`,
  * the prover meets each listed group (see {@link requirements}) with one attestation from a
  * trusted issuer, and resends the request with them, keeping the attestations it already carried.
+ * A 402 listing attestations in `Identity-Attestation-Offered` is answered the same way, as an
+ * offer: what the prover obtains resends the unpaid request once, so the server can price it
+ * again, and a failed acquisition pays the 402 as it is.
  * Within a group of alternatives it prefers one it holds, and otherwise acquires them in listed
  * order until one succeeds, so a route accepting any of several issuers costs one acquisition.
  *
@@ -119,65 +122,78 @@ export function prover(config: prover.Config): Identity.Prover {
     },
     async retry(response, context) {
       if (response.status !== 401 && response.status !== 403) return undefined
-      // The resend goes to the request's URL, so attestations are bound to its origin, and a
-      // response from any other origin (a followed redirect) is never answered.
-      const target = context?.request.url ?? response.url
-      if (!URL.canParse(target)) return undefined
-      const audience = new URL(target).origin
-      if (URL.canParse(response.url) && new URL(response.url).origin !== audience) return undefined
-      if (!Token.isIssuer(audience)) return undefined
-      const sent = sentTokens(context?.request)
-      const obtained = new Map<string, string>()
-      // Requirements tried in this retry, so one listed in several groups is acquired once.
-      const tried = new Set<string>()
-      let failure: { error: unknown } | undefined
-      // Every group must be met; one alternative meets it.
-      for (const group of requirements(response.headers)) {
-        const alternatives = trusted(group, audience)
-        if (alternatives.some(({ key }) => obtained.has(key))) continue
-        const decided = alternatives
-          .filter(({ key }) => !tried.has(key))
-          .map((alternative) => ({
-            ...alternative,
-            decision: Cache.decide({
-              now: now(),
-              sent: sent.get(alternative.key) ?? [],
-              slot: slots.get(alternative.key),
-            }),
-          }))
-        for (const { decision, key, requirement } of Cache.order(decided)) {
-          tried.add(key)
-          try {
-            const entry =
-              decision.action === 'reuse'
-                ? decision.entry
-                : decision.action === 'join'
-                  ? await decision.pending
-                  : decision.action === 'acquire' && config.acquire
-                    ? await acquire(key, requirement, audience, decision.rejected)
-                    : undefined
-            if (entry) {
-              obtained.set(key, entry.token)
-              break
-            }
-          } catch (error) {
-            // One issuer failing does not stop the next alternative or the other groups.
-            failure ??= { error }
+      return answer(response, context, requirements(response.headers))
+    },
+    async offer(response, context) {
+      if (response.status !== 402) return undefined
+      return answer(response, context, offers(response.headers))
+    },
+  }
+
+  /** Meets each group with one attestation and returns the headers to resend with, if any. */
+  async function answer(
+    response: Response,
+    context: Identity.RetryContext | undefined,
+    groups: readonly (readonly Types.Requirement[])[],
+  ): Promise<Record<string, string> | undefined> {
+    // The resend goes to the request's URL, so attestations are bound to its origin, and a
+    // response from any other origin (a followed redirect) is never answered.
+    const target = context?.request.url ?? response.url
+    if (!URL.canParse(target)) return undefined
+    const audience = new URL(target).origin
+    if (URL.canParse(response.url) && new URL(response.url).origin !== audience) return undefined
+    if (!Token.isIssuer(audience)) return undefined
+    const sent = sentTokens(context?.request)
+    const obtained = new Map<string, string>()
+    // Requirements tried in this retry, so one listed in several groups is acquired once.
+    const tried = new Set<string>()
+    let failure: { error: unknown } | undefined
+    // Every group must be met; one alternative meets it.
+    for (const group of groups) {
+      const alternatives = trusted(group, audience)
+      if (alternatives.some(({ key }) => obtained.has(key))) continue
+      const decided = alternatives
+        .filter(({ key }) => !tried.has(key))
+        .map((alternative) => ({
+          ...alternative,
+          decision: Cache.decide({
+            now: now(),
+            sent: sent.get(alternative.key) ?? [],
+            slot: slots.get(alternative.key),
+          }),
+        }))
+      for (const { decision, key, requirement } of Cache.order(decided)) {
+        tried.add(key)
+        try {
+          const entry =
+            decision.action === 'reuse'
+              ? decision.entry
+              : decision.action === 'join'
+                ? await decision.pending
+                : decision.action === 'acquire' && config.acquire
+                  ? await acquire(key, requirement, audience, decision.rejected)
+                  : undefined
+          if (entry) {
+            obtained.set(key, entry.token)
+            break
           }
+        } catch (error) {
+          // One issuer failing does not stop the next alternative or the other groups.
+          failure ??= { error }
         }
       }
-      // A failure surfaces only when nothing was obtained, so another attestation still resends.
-      if (obtained.size === 0) {
-        if (failure) throw failure.error
-        return undefined
-      }
-      // The resend header replaces the request's, so the attestations the request already
-      // carried stay, except those this retry replaced.
-      for (const [key, tokens] of sent)
-        if (obtained.has(key)) for (const token of tokens) replaced.add(token)
-      const kept = [...sent].filter(([key]) => !obtained.has(key)).flatMap(([, tokens]) => tokens)
-      return { [Constants.header]: [...kept, ...obtained.values()].join(', ') }
-    },
+    }
+    // A failure surfaces only when nothing was obtained, so another attestation still resends.
+    if (obtained.size === 0) {
+      if (failure) throw failure.error
+      return undefined
+    }
+    // The resend header replaces the request's, so the attestations the request already
+    // carried stay, except those this retry replaced.
+    for (const [key, tokens] of sent)
+      if (obtained.has(key)) for (const token of tokens) replaced.add(token)
+    const kept = [...sent].filter(([key]) => !obtained.has(key)).flatMap(([, tokens]) => tokens)
+    return { [Constants.header]: [...kept, ...obtained.values()].join(', ') }
   }
 
   /** The trusted requirements, each once, in listed order. */
@@ -228,7 +244,19 @@ export declare namespace prover {
  * Malformed members are skipped, and a group left with none is dropped.
  */
 export function requirements(headers: Headers): readonly (readonly Types.Requirement[])[] {
-  const value = headers.get(Constants.requiredHeader)
+  return groupsOf(headers.get(Constants.requiredHeader))
+}
+
+/**
+ * Parses the attestation offers of a 402 (`Identity-Attestation-Offered`), in the format of
+ * {@link requirements}: attestations the route would accept for a better offer.
+ */
+export function offers(headers: Headers): readonly (readonly Types.Requirement[])[] {
+  return groupsOf(headers.get(Constants.offeredHeader))
+}
+
+/** Parses a structured list of attestation requirements as groups. */
+function groupsOf(value: string | null): readonly (readonly Types.Requirement[])[] {
   if (!value) return []
   let list: ReturnType<typeof parseList>
   try {

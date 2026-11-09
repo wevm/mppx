@@ -603,3 +603,34 @@ test('two provers replacing different attestations resend neither rejected one',
   const resent = Token.parseHeader(sentRequests[1]!.headers.get(Attestation.Constants.header))
   expect(new Set(resent)).toEqual(new Set([freshEmail, freshPhone]))
 })
+
+test('answers an offer on a 402 by acquiring, and declines when acquiring fails', async () => {
+  const token = await sign()
+  const offered = (status = 402) => {
+    const response = new Response(null, {
+      status,
+      headers: { [Attestation.Constants.offeredHeader]: `email;issuer="${issuer}"` },
+    })
+    Object.defineProperty(response, 'url', { value: `${api}/resource` })
+    return response
+  }
+  const prover = Attestation.Client.prover({ acquire: () => token, issuers: [issuer], scope: '*' })
+  expect(await prover.offer!(offered(), sent())).toEqual({ [Attestation.Constants.header]: token })
+  expect(await prover.retry!(offered(), sent())).toBeUndefined()
+  const failing = Attestation.Client.prover({
+    acquire: () => {
+      throw new Error('no code')
+    },
+    issuers: [issuer],
+    scope: '*',
+  })
+  await expect(failing.offer!(offered(), sent())).rejects.toThrow('no code')
+  expect(await prover.offer!(offered(401), sent())).toBeUndefined()
+})
+
+test('a verifier offers its type and issuer for a 402', () => {
+  const verifier = Attestation.Server.verifier({ audience: api, issuer, type: 'email' })
+  expect(verifier.offer).toEqual({
+    [Attestation.Constants.offeredHeader]: `email;issuer="${issuer}"`,
+  })
+})

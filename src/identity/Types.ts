@@ -227,4 +227,15 @@ export type Prover = {
         context: RetryContext,
       ) => MaybePromise<HeadersInit | boolean | undefined>)
     | undefined
+  /**
+   * Answers an optional identity offer on an unpaid 402, such as a lower price for a verified
+   * email, and decides whether to resend the unpaid request once so the server prices it again.
+   *
+   * Return headers to resend with, as for {@link Prover.retry} (payment credential headers are
+   * ignored), or `undefined` to pay the 402 as it is. A prover that throws declines. Paid
+   * attempts are never resent.
+   */
+  readonly offer?:
+    | ((response: Response, context: RetryContext) => MaybePromise<HeadersInit | undefined>)
+    | undefined
 }

@@ -28,8 +28,8 @@ export type Client = {
    * Requests that carry proofs do not follow redirects: a redirect rejects
    * (`redirect: 'error'`), so proofs never reach another URL. Requests with no
    * prover in scope are sent unchanged. If a prover asks to retry a rejected
-   * (non-402) response, the request is proved again and resent once, except for
-   * paid attempts, which are never resent.
+   * (non-402) response, or answers the identity offer of an unpaid 402, the request
+   * is proved again and resent once, except for paid attempts, which are never resent.
    */
   readonly send: (
     fetch: typeof globalThis.fetch,
@@ -198,15 +198,22 @@ export function from(provers: readonly Types.Prover[]): Client {
         type: 'send',
         payment: isPaid(request, context) ? 'paid' : 'unpaid',
       })
-      const retriers = inScope(request.url).filter((prover) => prover.retry)
-      const keepReadable = attempt.phase === 'sent' && retriers.length > 0
+      const scoped = inScope(request.url)
+      const retriers = scoped.filter((prover) => prover.retry)
+      const offerers = scoped.filter((prover) => prover.offer)
+      const keepReadable = attempt.phase === 'sent' && (retriers.length > 0 || offerers.length > 0)
       const carried = context.headers ?? []
       const result = await sendOnce({ context, fetch, headers: carried, keepReadable, request })
       const { response } = result
-      const resend =
-        keepReadable && response.status >= 400 && response.status !== 402
-          ? await resendHeaders(retriers, response, result.request)
-          : undefined
+      const resend = await (() => {
+        if (!keepReadable) return undefined
+        // An unpaid 402 may offer a better price for more identity; other errors may ask for it.
+        if (response.status === 402)
+          return resendHeaders(offerers, response, result.request, 'offer')
+        if (response.status >= 400)
+          return resendHeaders(retriers, response, result.request, 'retry')
+        return undefined
+      })()
       attempt = transition(attempt, { type: 'response', resend })
       if (attempt.phase !== 'resent') return { ...result, headers: carried }
       release([response])
@@ -246,15 +253,16 @@ function isPaid(request: Request, context: SendContext): boolean {
 }
 
 /**
- * Asks each prover whether to resend a rejected response, each on its own copy so the response
- * stays readable, with the request that got it. Returns the headers to resend with (same-named
- * headers from several provers are combined, comma-separated, in prover order), or `undefined`
- * when no prover asks to resend.
+ * Asks each prover whether to resend a response (`retry` for a rejection, `offer` for an unpaid
+ * 402), each on its own copy so the response stays readable, with the request that got it.
+ * Returns the headers to resend with (same-named headers from several provers are combined,
+ * comma-separated, in prover order), or `undefined` when no prover asks to resend.
  */
 async function resendHeaders(
   provers: readonly Types.Prover[],
   response: Response,
   request: Request,
+  hook: 'retry' | 'offer',
 ): Promise<ResendHeaders | undefined> {
   const context: Types.RetryContext = Object.freeze({ request })
   const copies: Response[] = []
@@ -264,7 +272,13 @@ async function resendHeaders(
     for (const prover of provers) {
       const copy = response.clone()
       copies.push(copy)
-      const decision = await prover.retry!(copy, context)
+      const decision =
+        hook === 'retry'
+          ? await prover.retry!(copy, context)
+          : // An offer is optional: a prover that fails declines it, and the 402 is paid as is.
+            await Promise.resolve()
+              .then(() => prover.offer!(copy, context))
+              .catch(() => undefined)
       if (decision === true) resend = true
       else if (typeof decision === 'object' && decision !== null) {
         resend = true

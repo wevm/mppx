@@ -4,6 +4,11 @@ export const Constants = {
   header: 'Identity-Attestation',
   /** Response header listing the attestations a route requires, as a structured list. */
   requiredHeader: 'Identity-Attestation-Required',
+  /**
+   * Response header of a 402 listing attestations the route accepts for a better offer, such as a
+   * lower price, as a structured list in the format of {@link requiredHeader}.
+   */
+  offeredHeader: 'Identity-Attestation-Offered',
   /** JWS `typ` header of an attestation. */
   tokenType: 'mpp-attestation+jwt',
   /** JWS algorithm of an attestation: EdDSA over Ed25519. */

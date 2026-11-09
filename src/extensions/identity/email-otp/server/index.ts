@@ -25,7 +25,7 @@ import type * as Types from '../Types.js'
  * if (result.status === 200) result.identity?.get(email)?.email
  * ```
  */
-export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedEmail> {
+export function verifier(config: verifier.Config): verifier.ReturnType {
   const { allow } = config
   const inner = Attestation.verifier({
     audience: config.audience,
@@ -43,6 +43,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }),
   })
   return {
+    offer: inner.offer,
     async verify(request) {
       const result = await inner.verify(request)
       if (result.status !== 'valid') return result
@@ -61,6 +62,12 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
 }
 
 export declare namespace verifier {
+  /** The verifier, with the header that offers an email attestation on a 402. */
+  type ReturnType = Identity.Verifier<Types.VerifiedEmail> & {
+    /** An `Identity-Attestation-Offered` header naming `email` and this verifier's issuer. */
+    readonly offer: Readonly<Record<string, string>>
+  }
+
   type Config = {
     /** Trusted issuer URL. */
     readonly issuer: string
