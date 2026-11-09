@@ -2780,13 +2780,23 @@ function withIdentityRequirements(
   response: Response,
   requirements: readonly Identity.Requirement[],
 ): Response {
+  return withHeaders(response, (headers) =>
+    headers.set(IdentityRequirements.header, IdentityRequirements.serialize(requirements)),
+  )
+}
+
+/** Rebuilds a 402 with edited headers, keeping the x402 requirements it withholds. */
+function withHeaders(response: Response, edit: (headers: Headers) => void): Response {
   const headers = new Headers(response.headers)
-  headers.set(IdentityRequirements.header, IdentityRequirements.serialize(requirements))
-  return new Response(response.body, {
+  edit(headers)
+  const result = new Response(response.body, {
     headers,
     status: response.status,
     statusText: response.statusText,
   })
+  const withheld = withheldX402.get(response)
+  if (withheld) withheldX402.set(result, withheld)
+  return result
 }
 
 /**
@@ -2799,14 +2809,10 @@ const withheldX402 = new WeakMap<Response, readonly unknown[]>()
 
 /** Removes a 402's x402 offer, recording the requirements it withholds. */
 function withoutX402Offer(response: Response): Response {
-  const headers = new Headers(response.headers)
-  const value = headers.get(x402_Types.paymentRequiredHeader)
-  headers.delete(x402_Types.paymentRequiredHeader)
-  const result = new Response(response.body, {
-    headers,
-    status: response.status,
-    statusText: response.statusText,
-  })
+  const value = response.headers.get(x402_Types.paymentRequiredHeader)
+  const result = withHeaders(response, (headers) =>
+    headers.delete(x402_Types.paymentRequiredHeader),
+  )
   const accepts = (() => {
     try {
       return value ? x402_Header.decodePaymentRequiredEnvelope(value).accepts : []

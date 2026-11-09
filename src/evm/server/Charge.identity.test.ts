@@ -231,3 +231,19 @@ test('an outer composer withholds x402 terms a nested checked offer shares', asy
   if (offered.status !== 402) throw new Error()
   expect(amounts(offered.challenge)).toEqual(['500000'])
 })
+
+test('a composed route withholds x402 terms a checked offer shares when it requires identities', async () => {
+  const { amounts, method, request, server } = setup()
+  const check: Identity.PaymentCheck = {
+    requires: [{ type: 'kyc' }],
+    verify: () => ({ status: 'valid', value: true }),
+  }
+  const route = server.compose(
+    [method, { amount: '0.5' }],
+    [method, { amount: '0.25' }],
+    [method, { amount: '0.25', identity: { payment: check } }],
+  )
+  const offered = await route(request)
+  if (offered.status !== 402) throw new Error()
+  expect(amounts(offered.challenge)).toEqual(['500000'])
+})
