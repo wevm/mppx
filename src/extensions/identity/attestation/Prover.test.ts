@@ -156,6 +156,22 @@ test('keeps an expiring attestation on the paid retry, and replaces it before pa
   expect(await proved(prover, paid)).toBe(token)
 })
 
+test('drops a carried attestation that expired, and sends a fresh cached one in its place', async () => {
+  const stale = await sign({ exp: now() - 3_600, iat: now() - 7_200 })
+  const fresh = await sign()
+  const other = await sign({
+    aud: 'https://elsewhere.example',
+    exp: now() - 3_600,
+    iat: now() - 7_200,
+  })
+  const prover = Attestation.Client.prover({ attestations: [fresh], scope: '*' })
+  const request = new Request(api + '/resource', {
+    headers: { [Attestation.Constants.header]: [stale, other].join(', ') },
+  })
+  const result = await prover.prove(request, paid)
+  expect(result.headers.get(Attestation.Constants.header)).toBe([other, fresh].join(', '))
+})
+
 test('sends a short-lived attestation while more than half its lifetime remains', async () => {
   const token = await sign({ exp: now() + 120 })
   const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })

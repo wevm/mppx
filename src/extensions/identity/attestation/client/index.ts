@@ -85,9 +85,13 @@ export function prover(config: prover.Config): Identity.Prover {
       // A bearer attestation never goes over plaintext HTTP, except to localhost.
       if (!Token.isIssuer(origin)) return request
       const attempt = context.challenge !== undefined ? 'paid' : 'unpaid'
-      const existing = request.headers.get(Constants.header)
-      const present = new Set(Token.parseHeader(existing))
       const time = now()
+      // An attestation already on the request (such as one a retry carried on to the paid
+      // attempt) is dropped once it has expired beyond the clock tolerance: the server would
+      // reject it, so a fresher cached one goes in its place.
+      const carried = Token.parseHeader(request.headers.get(Constants.header))
+      const kept = carried.filter((token) => !expired(token, origin, time))
+      const present = new Set(kept)
       const tokens = [...slots.values()]
         .map(Cache.entryOf)
         .filter(
@@ -97,9 +101,11 @@ export function prover(config: prover.Config): Identity.Prover {
             !present.has(entry.token),
         )
         .map(({ token }) => token)
-      if (tokens.length === 0) return request
+      if (tokens.length === 0 && kept.length === carried.length) return request
       const headers = new Headers(request.headers)
-      headers.set(Constants.header, [existing, ...tokens].filter(Boolean).join(', '))
+      const value = [...kept, ...tokens].join(', ')
+      if (value) headers.set(Constants.header, value)
+      else headers.delete(Constants.header)
       return new Request(request, { headers })
     },
     async retry(response, context) {
@@ -233,6 +239,16 @@ function toEntry(token: string, received?: number): Cache.Entry {
     claims: Object.freeze({ ...claims }) as Types.Claims,
     ...(received !== undefined && { received }),
   })
+}
+
+/** Whether a token for `origin` has expired beyond the clock tolerance at `now`. */
+function expired(token: string, origin: string, now: number): boolean {
+  const claims = Token.decode(token)?.claims
+  return (
+    claims?.aud === origin &&
+    typeof claims.exp === 'number' &&
+    claims.exp <= now - Constants.clockTolerance
+  )
 }
 
 /** The attestation tokens a request sent, by cache key. */
