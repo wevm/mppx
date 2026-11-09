@@ -103,8 +103,12 @@ export function prover(config: prover.Config): Identity.Prover {
     },
     async retry(response, context) {
       if (response.status !== 401 && response.status !== 403) return undefined
-      if (!URL.canParse(response.url)) return undefined
-      const audience = new URL(response.url).origin
+      // The resend goes to the request's URL, so attestations are bound to its origin, and a
+      // response from any other origin (a followed redirect) is never answered.
+      const target = context?.request.url ?? response.url
+      if (!URL.canParse(target)) return undefined
+      const audience = new URL(target).origin
+      if (URL.canParse(response.url) && new URL(response.url).origin !== audience) return undefined
       if (!Token.isIssuer(audience)) return undefined
       const sent = sentTokens(context?.request)
       const tokens: string[] = []
@@ -114,7 +118,6 @@ export function prover(config: prover.Config): Identity.Prover {
           now: now(),
           sent: sent.get(key) ?? [],
           slot: slots.get(key),
-          status: response.status,
         })
       for (const alternatives of byType(requirements(response.headers), audience)) {
         const decision = Cache.plan(alternatives.map(({ key }) => decide(key)))

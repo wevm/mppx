@@ -246,23 +246,42 @@ test('a retry that joined a failed acquisition falls back to the next issuer', a
   expect(asked).toEqual([issuer, other])
 })
 
-test('does not acquire again when the server forbids a presented attestation', async () => {
+test('replaces an advertised attestation even when another verifier makes the status 403', async () => {
   const token = await sign()
+  const fresh = await sign({ jti: 'fresh' })
+  let calls = 0
+  const prover = Attestation.Client.prover({
+    acquire: () => {
+      calls++
+      return fresh
+    },
+    attestations: [token],
+    issuers: [issuer],
+    scope: '*',
+  })
+  expect(await prover.retry!(rejected(`email;issuer="${issuer}"`, 403), sent(token))).toEqual({
+    [Attestation.Constants.header]: fresh,
+  })
+  expect(calls).toBe(1)
+})
+
+test('never answers a response from another origin than the request', async () => {
   let calls = 0
   const prover = Attestation.Client.prover({
     acquire: () => {
       calls++
       return undefined
     },
-    attestations: [token],
     issuers: [issuer],
     scope: '*',
   })
-  expect(
-    await prover.retry!(rejected(`email;issuer="${issuer}"`, 403), sent(token)),
-  ).toBeUndefined()
+  const response = new Response(null, {
+    status: 401,
+    headers: { [Attestation.Constants.requiredHeader]: `email;issuer="${issuer}"` },
+  })
+  Object.defineProperty(response, 'url', { value: 'https://elsewhere.example/resource' })
+  expect(await prover.retry!(response, sent())).toBeUndefined()
   expect(calls).toBe(0)
-  expect(await proved(prover)).toBe(token)
 })
 
 test('hands out frozen requirements', () => {

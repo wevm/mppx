@@ -106,7 +106,9 @@ export function usable(entry: Entry, now: number, attempt: Attempt): boolean {
  * rejected request sent. Pure.
  *
  * - A pending acquisition is joined.
- * - A 403 for a presented attestation is skipped: the server refused the identity itself.
+ * - A listed requirement is answered whatever the response's status: a verifier lists its
+ *   requirement only when a fresh attestation could pass, even when another verifier made the
+ *   combined status 403.
  * - A cached attestation the request sent is replaced: the server rejected it.
  * - A different, unexpired one is reused: it is newer than what the request sent, or the request
  *   sent none and it is outside the refresh margin.
@@ -115,12 +117,10 @@ export function usable(entry: Entry, now: number, attempt: Attempt): boolean {
 export function decide(parameters: {
   readonly slot: Slot | undefined
   readonly sent: readonly string[]
-  readonly status: number
   readonly now: number
 }): Decision {
-  const { now, sent, slot, status } = parameters
+  const { now, sent, slot } = parameters
   if (slot?.phase === 'acquiring') return { action: 'join', pending: slot.pending }
-  if (status === 403 && sent.length > 0) return { action: 'skip' }
   const entry = slot?.entry
   if (!entry || !usable(entry, now, 'paid')) return { action: 'acquire', rejected: entry?.token }
   if (sent.includes(entry.token)) return { action: 'acquire', rejected: entry.token }
