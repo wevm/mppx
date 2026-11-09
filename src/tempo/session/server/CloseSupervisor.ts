@@ -108,6 +108,8 @@ export type SuperviseClosesParameters = Pick<
   client: Chain.TransactionClient
   /** Blocks searched before `previousBlock` for a channel no supervision has read open. @default 2_000n */
   closeSearchMarginBlocks?: bigint | undefined
+  /** Closes open channels to collect unpaid spend, bounded by the voucher and deposit. @default false */
+  closeUnsettled?: boolean | undefined
   /** Widest block range of one log query. @default 100_000n */
   logBlockRange?: bigint | undefined
   /** Callback invoked when a payee close fails. Observer errors are ignored. */
@@ -299,7 +301,30 @@ async function superviseChannel(
         : current,
     )
   if (state.closeRequestedAt === 0) {
-    if (channel.closeRequestedAt === 0n) return settleDue(parameters, store, channel)
+    if (channel.closeRequestedAt === 0n) {
+      if (!parameters.closeUnsettled) return settleDue(parameters, store, channel)
+      // Freeze spend atomically before exposing a close transaction. Its expiry bounds how long
+      // an ambiguous send can land, so later supervision can safely clear an expired marker.
+      const now = BigInt(Math.floor(Date.now() / 1000) || 1)
+      let claimed = false
+      const closing = await store.updateChannel(channelId, (current) => {
+        claimed = false
+        if (!current || current.finalized || current.closeRequestedAt !== 0n) return current
+        if (current.spent <= state.settled) return current
+        const next = ChannelStore.markPendingClose({
+          closeRequestedAt: now,
+          cumulativeAmount: current.highestVoucher?.cumulativeAmount ?? 0n,
+          current,
+          onChainDeposit: state.deposit,
+          onChainSettled: state.settled,
+        }).state
+        claimed = true
+        return next
+      })
+      if (!closing || closing.finalized) return { outcome: 'finalized' }
+      if (!claimed || !ChannelStore.isPrecompileState(closing)) return { outcome: 'open' }
+      return closeAtSpend(parameters, store, closing, state)
+    }
     // A pinned read without a request means the payer cancelled it, unless the record holds a
     // server close that may still land: those expire before they are cleared.
     const cleared: { channel?: ChannelStore.State | null } = {}
@@ -379,6 +404,10 @@ async function closeAtSpend(
       payee: channel.payee,
       sender: account?.address,
     })
+    const validity =
+      channel.pendingCloseAt === undefined
+        ? {}
+        : { validBefore: Number(channel.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds }
     const txHash = await Chain.closeOnChain(
       client,
       channel.descriptor,
@@ -389,12 +418,13 @@ async function closeAtSpend(
       account
         ? {
             account,
+            ...validity,
             candidateFeeTokens: parameters.candidateFeeTokens ?? [channel.token],
             ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
             ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
           }
-        : undefined,
+        : validity,
     )
     const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
     const { refundedToPayer, settledToPayee } = Chain.readChannelClosedReceiptFields(

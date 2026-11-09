@@ -5,7 +5,6 @@ import * as Store from '../Store.js'
 import {
   pendingCloseClockSkewSeconds,
   pendingCloseValiditySeconds,
-  resolveSettleableVoucher,
   type State,
 } from '../tempo/session/server/ChannelStore.js'
 
@@ -306,16 +305,17 @@ export function isChannelState(value: unknown): value is State {
 }
 
 /**
- * The raw amount a settlement of the channel would capture now: the largest accepted voucher
- * within `spent` (as mppx's `settle` picks it) above `settledOnChain`.
+ * The unpaid spend recoverable by settlement or a bounded payee close.
  */
 export function unsettledAmount(state: State): bigint {
   return settleableAmount(state) - state.settledOnChain
 }
 
-/** The cumulative amount a settlement of the channel would bring it to: its settleable voucher's, or `settledOnChain`. */
+/** Collectible spend, including partial capture of an oversized voucher through a payee close. */
 function settleableAmount(state: State): bigint {
-  return resolveSettleableVoucher(state)?.cumulativeAmount ?? state.settledOnChain
+  const voucher = state.highestVoucher?.cumulativeAmount ?? state.settledOnChain
+  const capture = [state.spent, voucher, state.deposit].reduce((a, b) => (a < b ? a : b))
+  return capture > state.settledOnChain ? capture : state.settledOnChain
 }
 
 /** Whether the payer requested a close, after which the escrow's grace period runs. */

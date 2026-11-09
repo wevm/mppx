@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from 'vp/test'
 import { BadRequestError, VerificationFailedError } from '../Errors.js'
 import * as Store from '../Store.js'
 import type { State } from '../tempo/session/server/ChannelStore.js'
+import * as CloseSupervisor from '../tempo/session/server/CloseSupervisor.js'
 import { settle } from './Channels.js'
 import { ChannelStore, settlementDue, unsettledAmount } from './ChannelStore.js'
 
@@ -50,10 +51,10 @@ describe('settlementDue', () => {
     expect(settlementDue(channel({ voucher: 200_000n, deposit: 1_000_000n }))).toBe('threshold')
   })
 
-  test('counts only what a settlement captures: within spent, above settledOnChain', () => {
+  test('counts bounded close recovery when no whole voucher fits spent', () => {
     expect(unsettledAmount(channel({ voucher: 2_000n, settledOnChain: 1_500n }))).toBe(500n)
     // A credit left the highest voucher above spent, and no retained voucher fits.
-    expect(unsettledAmount(channel({ voucher: 2_000n, spent: 1_000n }))).toBe(0n)
+    expect(unsettledAmount(channel({ voucher: 2_000n, spent: 1_000n }))).toBe(1_000n)
     expect(
       unsettledAmount(
         channel({
@@ -62,7 +63,7 @@ describe('settlementDue', () => {
           retainedVouchers: [{ cumulativeAmount: 1_200n, signature: '0x02' }],
         }),
       ),
-    ).toBe(1_200n)
+    ).toBe(1_500n)
   })
 
   test('needs nothing for a settled or finalized channel', () => {
@@ -109,6 +110,25 @@ describe('settle', () => {
     )
     return { calls, ...outcome }
   }
+
+  test('recovers oversized vouchers with a bounded close instead of full settlement', async () => {
+    const supervise = vi.spyOn(CloseSupervisor, 'superviseCloses').mockResolvedValue({
+      channels: [{ channelId, outcome: 'closed' }],
+    } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      acked: true,
+      calls: 0,
+    })
+    expect(supervise).toHaveBeenCalledWith(
+      expect.objectContaining({ closeUnsettled: true, channelIds: [channelId] }),
+    )
+    supervise.mockResolvedValue({ channels: [{ channelId, outcome: 'failed' }] } as never)
+    expect(await run(channel({ voucher: 20_000n, spent: 10_000n }))).toEqual({
+      delaySeconds: 60,
+      calls: 0,
+    })
+    supervise.mockRestore()
+  })
 
   test('settles a channel and acknowledges it', async () => {
     expect(await run(channel())).toEqual({ acked: true, calls: 1 })

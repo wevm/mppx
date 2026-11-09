@@ -216,6 +216,51 @@ describe('superviseCloses', () => {
     expect(supervision.channels).toEqual([{ channelId, outcome: 'open' }])
   })
 
+  test('closes unpaid open channels at recorded spend and freezes concurrent updates', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const closeOnChain = vi.spyOn(Chain, 'closeOnChain').mockImplementation(async (...args) => {
+      const current = await store.getChannel(channelId)
+      expect(current?.pendingCloseAt).toBeGreaterThan(0n)
+      expect(current?.closeRequestedAt).toBe(current?.pendingCloseAt)
+      expect(args[6]).toMatchObject({
+        validBefore: Number(current!.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds,
+      })
+      return txHash
+    })
+    vi.spyOn(Chain, 'waitForSuccessfulReceipt').mockResolvedValue({
+      logs: [closedLog(channelId, 350n, 650n)],
+    } as never)
+    const result = await superviseCloses({
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    })
+    expect(closeOnChain.mock.calls[0]?.slice(1, 4)).toEqual([descriptor, 500n, 350n])
+    expect(result.closed).toBe(1)
+    expect(await store.getChannel(channelId)).toMatchObject({
+      finalized: true,
+      settledOnChain: 350n,
+    })
+  })
+
+  test('keeps ambiguous close attempts frozen until their transaction expiry', async () => {
+    const store = await seed()
+    mockStates({ closeRequestedAt: 0, deposit: 1_000n, settled: 100n })
+    const close = vi.spyOn(Chain, 'closeOnChain').mockRejectedValue(new Error('RPC disconnected'))
+    const parameters = {
+      channelIds: [channelId],
+      client: createSupervisorClient(),
+      store,
+      closeUnsettled: true,
+    }
+    expect((await superviseCloses(parameters)).failed).toBe(1)
+    expect((await store.getChannel(channelId))?.pendingCloseAt).toBeGreaterThan(0n)
+    await superviseCloses(parameters)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
   test('answers a close request with a payee close capturing spent', async () => {
     const store = await seed()
     mockStates({ closeRequestedAt: 1_700, deposit: 1_000n, settled: 100n })

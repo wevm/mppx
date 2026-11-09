@@ -6,7 +6,12 @@ import * as Store from '../Store.js'
 import { parsePkhSource } from '../tempo/internal/proof.js'
 import type { TransactionClient } from '../tempo/session/precompile/Chain.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
-import { isPrecompileState, type State } from '../tempo/session/server/ChannelStore.js'
+import {
+  isPrecompileState,
+  resolveSettleableVoucher,
+  type State,
+} from '../tempo/session/server/ChannelStore.js'
+import * as CloseSupervisor from '../tempo/session/server/CloseSupervisor.js'
 import type { ResolveSessionChannelId } from '../tempo/session/server/RequestState.js'
 import {
   settle as settleChannel,
@@ -197,7 +202,8 @@ export declare namespace channels {
 
 /**
  * Settles the channels of a settlement queue batch on-chain, from the Worker's `queue()`
- * handler. Each message is acknowledged once its channel settled or has nothing left to
+ * handler. A voucher above recorded spend uses a payee close that captures only that spend
+ * and refunds the remaining deposit. Each message is acknowledged once its channel settled or has nothing left to
  * settle, and when settlement cannot succeed (the channel is gone or has no voucher); any
  * other failure, such as a fee over the fee payer's cap, retries it after 30 s, doubling up
  * to 10 minutes. The {@link ChannelStore} watchdog sends a channel again if its job never settles it.
@@ -247,7 +253,27 @@ export async function settle(batch: settle.Batch, parameters: settle.Parameters)
         void renew(store, channelId, leaseOwner).catch(() => undefined)
       }, settlementLeaseMs / 2)
       try {
-        await settle_(store, await getClient({ chainId: state.chainId }), channelId, options)
+        const client = await getClient({ chainId: state.chainId })
+        if (
+          isPrecompileState(state) &&
+          (resolveSettleableVoucher(state)?.cumulativeAmount ?? state.settledOnChain) < state.spent
+        ) {
+          const result = await CloseSupervisor.superviseCloses({
+            ...options,
+            channelIds: [channelId as Hex],
+            client,
+            closeUnsettled: true,
+            store,
+          })
+          if (
+            !['closed', 'finalized', 'missing'].includes(result.channels[0]?.outcome ?? 'failed')
+          ) {
+            message.retry({ delaySeconds: 60 })
+            continue
+          }
+        } else {
+          await settle_(store, client, channelId, options)
+        }
       } finally {
         clearInterval(renewal)
         await release(store, channelId, leaseOwner).catch(() => undefined)
