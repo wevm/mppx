@@ -3,7 +3,6 @@ import * as Constants from '../../Constants.js'
 import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as IdentityClient from '../../identity/Client.js'
-import type * as Identity from '../../identity/Types.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
@@ -272,7 +271,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const send = async (
     input: RequestInfo | URL,
     init: RequestInit | undefined,
-    context?: Identity.Context,
+    context?: IdentityClient.SendContext,
   ): Promise<Response> =>
     identity
       ? (await identity.send(baseFetch, new Request(input, init), context)).response

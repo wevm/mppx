@@ -271,9 +271,7 @@ test('verifies one token however many the header repeats', async () => {
   const request = new Request(audience, {
     headers: { [Attestation.Constants.header]: Array(50).fill(forged).join(', ') },
   })
-  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
-    { status: 'invalid', code: 401 },
-  )
+  expect(await verifier.verify(request)).toMatchObject({ status: 'invalid', code: 401 })
   expect(lookups).toBe(1)
 })
 
@@ -298,9 +296,10 @@ test('accepts a valid token behind a forged one with a later expiry', async () =
   const request = new Request(audience, {
     headers: { [Attestation.Constants.header]: forged + ', ' + valid },
   })
-  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
-    { status: 'valid', value: { claims: { sub: 'dana@example.com' } } },
-  )
+  expect(await verifier.verify(request)).toMatchObject({
+    status: 'valid',
+    value: { claims: { sub: 'dana@example.com' } },
+  })
 })
 
 test('accepts a valid token behind one whose key cannot be resolved', async () => {
@@ -324,10 +323,7 @@ test('accepts a valid token behind one whose key cannot be resolved', async () =
     type: 'email',
   })
   const verify = (header: string) =>
-    verifier.verify(
-      new Request(audience, { headers: { [Attestation.Constants.header]: header } }),
-      {} as Parameters<typeof verifier.verify>[1],
-    )
+    verifier.verify(new Request(audience, { headers: { [Attestation.Constants.header]: header } }))
   expect(await verify(forged + ', ' + valid)).toMatchObject({ status: 'valid' })
   expect(await verify(forged)).toMatchObject({ status: 'invalid', code: 503 })
 })
@@ -347,10 +343,7 @@ test('accepts an allowed attestation behind one the policy rejects', async () =>
     validate: (verified) => (verified.sub === 'dana@example.com' ? undefined : 'Not allowed.'),
   })
   const verify = (header: string) =>
-    verifier.verify(
-      new Request(audience, { headers: { [Attestation.Constants.header]: header } }),
-      {} as Parameters<typeof verifier.verify>[1],
-    )
+    verifier.verify(new Request(audience, { headers: { [Attestation.Constants.header]: header } }))
   expect(await verify(blocked + ', ' + allowed)).toMatchObject({
     status: 'valid',
     value: { claims: { sub: 'dana@example.com' } },
@@ -415,7 +408,7 @@ test('answers 503 while the issuer keys are unreachable', async () => {
     type: 'email',
   })
   const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
-  const result = await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])
+  const result = await verifier.verify(request)
   expect(result).toMatchObject({ status: 'invalid', code: 503 })
   expect(result).not.toHaveProperty('headers')
 })
@@ -474,9 +467,7 @@ test('accepts an audience configured with a trailing slash', async () => {
     type: 'email',
   })
   const request = new Request(audience, { headers: { [Attestation.Constants.header]: token } })
-  expect(await verifier.verify(request, {} as Parameters<typeof verifier.verify>[1])).toMatchObject(
-    { status: 'valid' },
-  )
+  expect(await verifier.verify(request)).toMatchObject({ status: 'valid' })
 })
 
 test('never attaches an attestation over plaintext http', async () => {

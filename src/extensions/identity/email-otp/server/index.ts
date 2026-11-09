@@ -40,8 +40,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   })
   return {
     stage: 'request',
-    async verify(request, context) {
-      const result = await inner.verify(request, context)
+    async verify(request) {
+      const result = await inner.verify(request)
       if (result.status !== 'valid') return result
       const { claims } = result.value
       return {

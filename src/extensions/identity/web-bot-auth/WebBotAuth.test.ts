@@ -29,13 +29,13 @@ test('emits and verifies a signed Signature-Agent member', async () => {
       keyResolver: () => keys.publicKey,
       maxAge: WebBotAuth.Constants.defaultSignatureLifetime,
       nonceStore: Identity.Store.memory(),
-    }).verify(signed, {}),
+    }).verify(signed),
   ).toMatchObject({ status: 'invalid' })
   expect(
     await WebBotAuth.Server.verifier({
       keyResolver: () => keys.publicKey,
       nonceStore: Identity.Store.memory(),
-    }).verify(signed, {}),
+    }).verify(signed),
   ).toMatchObject({
     status: 'valid',
     value: { keyId, signatureAgent },
@@ -58,7 +58,7 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
       return candidate === keyId ? keys.publicKey : undefined
     },
     nonceStore: Identity.Store.memory(),
-  }).verify(signed, {})
+  }).verify(signed)
 
   expect(signed.headers.get(Signatures.Headers.signatureInput)).toContain(
     `alg="${Signatures.Algorithms.rsaPssSha512}"`,
@@ -81,7 +81,7 @@ test('reports directory lookup failures as untrusted (403) identities', async ()
     await WebBotAuth.Server.verifier({
       keyResolver: () => undefined,
       nonceStore: Identity.Store.memory(),
-    }).verify(signed, {}),
+    }).verify(signed),
   ).toEqual({
     code: 403,
     reason: 'No public key is available for the signature key ID.',
@@ -93,7 +93,7 @@ test('reports directory lookup failures as untrusted (403) identities', async ()
         throw new Error('directory unavailable')
       },
       nonceStore: Identity.Store.memory(),
-    }).verify(signed, {}),
+    }).verify(signed),
   ).toEqual({
     code: 403,
     reason: 'The public key could not be resolved.',
@@ -117,7 +117,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
     nonceStore: Identity.Store.memory(),
   })
 
-  expect(await verifier.verify(signed, {})).toMatchObject({ status: 'invalid' })
+  expect(await verifier.verify(signed)).toMatchObject({ status: 'invalid' })
 
   const alteredHeaders = new Headers(signed.headers)
   alteredHeaders.set(
@@ -128,7 +128,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
     await WebBotAuth.Server.verifier({
       keyResolver: () => signingKeys.publicKey,
       nonceStore: Identity.Store.memory(),
-    }).verify(new Request(signed, { headers: alteredHeaders }), {}),
+    }).verify(new Request(signed, { headers: alteredHeaders })),
   ).toMatchObject({ status: 'invalid' })
 
   const discoveryHeaders = new Headers({
@@ -155,7 +155,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
     await WebBotAuth.Server.verifier({
       keyResolver: () => advertisedKeys.publicKey,
       nonceStore: Identity.Store.memory(),
-    }).verify(unsupportedDiscovery, {}),
+    }).verify(unsupportedDiscovery),
   ).toMatchObject({
     reason: 'The Signature-Agent discovery type is not supported by this directory profile.',
     status: 'invalid',

@@ -55,52 +55,48 @@ const charge = {
   recipient: 'merchant',
 } as const
 
-const proofRequestHeader = 'Proof-Request'
+const kycHeader = 'X-Kyc'
+const kycIssuer = 'https://kyc.example'
 
-/** The identity nonce a challenge carries in its HMAC-bound metadata. */
-function identityNonce(challenge: Challenge.Challenge): string | undefined {
-  return challenge.opaque
-    ? (PaymentRequest.deserialize(challenge.opaque)._mppx_identity as string)
-    : undefined
-}
-const proofResponseHeader = 'Proof-Response'
-
-/** A payment-stage verifier shaped like x401: it challenges inside the 402 and binds proofs to its identity nonce. */
-function proofVerifier(): Identity.Verifier<{ subject: string }> {
+/**
+ * A KYC-style payment check: the paid retry must carry a KYC token bound to the answered
+ * Challenge, and a sanctioned subject is forbidden.
+ */
+function kycCheck(
+  requires: readonly Identity.Requirement[] = [{ type: 'kyc', issuer: kycIssuer }],
+): Identity.PaymentCheck<{ subject: string }> {
   return {
-    stage: 'payment',
-    challenge: (_request, { nonce }) => ({ [proofRequestHeader]: nonce }),
-    verify(request, { credential, nonce: expected }) {
-      if (!credential) return { status: 'missing', reason: 'Proof is required.' }
-      const proof = request.headers.get(proofResponseHeader)
-      if (!proof) return { status: 'missing', reason: 'Proof is required.' }
-      const [nonce, subject] = proof.split(':')
-      if (!expected || nonce !== expected)
+    requires,
+    verify({ challenge, credential, request }) {
+      const token = request.headers.get(kycHeader)
+      if (!credential || !token) return { status: 'missing', reason: 'KYC is required.' }
+      const [id, subject] = token.split(':')
+      if (id !== challenge.id || credential.challenge.id !== challenge.id)
         return {
           status: 'invalid',
-          headers: { 'Proof-Result': 'unbound' },
-          reason: 'Proof is not bound to this challenge.',
+          headers: { 'Kyc-Result': 'unbound' },
+          reason: 'The KYC token is not bound to this Challenge.',
         }
+      if (subject === 'sanctioned') return { status: 'forbidden', reason: 'Sanctioned subject.' }
       return { status: 'valid', value: { subject: subject! } }
     },
   }
 }
 
-/** The matching client prover: answers the proof request carried by a 402. */
-function proofProver(subject: string): Identity.Prover {
-  const proofs = new Map<string, string>()
+/** The matching client prover: binds a KYC token to the Challenge of a 402 that requires one. */
+function kycProver(subject: string): Identity.Prover {
+  const required = new Set<string>()
   return {
     scope: '*',
-    prove(request, { challenge }) {
-      const proof = challenge && proofs.get(challenge.id)
-      if (!proof) return request
-      const headers = new Headers(request.headers)
-      headers.set(proofResponseHeader, proof)
-      return new Request(request, { headers })
+    prepare(_response, { challenge, requirements }) {
+      if (requirements.some((r) => r.type === 'kyc' && r.issuer === kycIssuer))
+        required.add(challenge.id)
     },
-    prepare(response, { challenge }) {
-      const nonce = response.headers.get(proofRequestHeader)
-      if (challenge && nonce) proofs.set(challenge.id, `${nonce}:${subject}`)
+    prove(request, { challenge }) {
+      if (!challenge || !required.has(challenge.id)) return request
+      const headers = new Headers(request.headers)
+      headers.set(kycHeader, `${challenge.id}:${subject}`)
+      return new Request(request, { headers })
     },
   }
 }
@@ -162,7 +158,7 @@ test('applies identity per route and signs every attempt with a fresh shared non
     const open = await fetch(`${seen.server.url}/open`)
     expect(open.status).toBe(402)
     const unsigned = await fetch(`${seen.server.url}/gated`)
-    expect(unsigned.status).toBe(403)
+    expect(unsigned.status).toBe(401)
 
     const signer = provers(keys, [new URL(seen.server.url).origin])
     const client = ClientMppx.create({
@@ -218,52 +214,69 @@ test('accepts either TAP or Web Bot Auth with anyOf', async () => {
       const response = await client.fetch(seen.server.url)
       expect(await response.text()).toBe(expected)
     }
-    expect((await fetch(seen.server.url)).status).toBe(403)
+    expect((await fetch(seen.server.url)).status).toBe(401)
   } finally {
     seen.server.close()
   }
 })
 
-test('binds a payment-stage proof to the 402 challenge in one round trip', async () => {
+test('payment check: the 402 lists its requirements and the paid retry is checked once', async () => {
   const keys = await signatureKeys()
   const { tap } = verifiers(keys)
-  const proof = proofVerifier()
+  const kyc = kycCheck()
+  let checks = 0
+  const counted: Identity.PaymentCheck<{ subject: string }> = {
+    requires: kyc.requires,
+    verify(parameters) {
+      checks++
+      return kyc.verify(parameters)
+    },
+  }
   const seen = await createServer(async (request, payments) => {
-    const result = await payments.charge({ ...charge, identity: [tap, proof] })(request)
+    const result = await payments.charge({
+      ...charge,
+      identity: { request: [tap], payment: counted },
+    })(request)
     if (result.status === 402) return result.challenge
-    return result.withReceipt(new Response(result.identity?.get(proof)?.subject))
+    return result.withReceipt(
+      new Response(`${result.identity?.get(counted)?.subject}:${result.identity?.get(tap)?.keyId}`),
+    )
   })
 
   try {
     const signer = provers(keys, '*')
     const before = settlements
     const client = ClientMppx.create({
-      identity: [proofProver('dana'), signer.tap],
+      identity: [kycProver('dana'), signer.tap],
       methods: [clientMethod],
       polyfill: false,
     })
     const response = await client.fetch(seen.server.url)
     expect(response.status).toBe(200)
-    expect(await response.text()).toBe('dana')
+    expect(await response.text()).toBe('dana:tap-agent')
     expect(seen.requests).toEqual([false, true])
     expect(settlements).toBe(before + 1)
+    expect(checks).toBe(1)
 
-    // The 402 carries the proof request bound to its identity nonce.
     const challengeResponse = await fetch(
       await signer.tap.prove(new Request(seen.server.url), { created: now(), nonce: nonce() }),
     )
     expect(challengeResponse.status).toBe(402)
+    expect(challengeResponse.headers.get('Identity-Required')).toBe(`kyc;issuer="${kycIssuer}"`)
+    // The Challenge carries no identity nonce any more.
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challengeResponse.headers.get(proofRequestHeader)).toBe(identityNonce(challenge))
+    expect(
+      challenge.opaque ? PaymentRequest.deserialize(challenge.opaque)._mppx_identity : undefined,
+    ).toBeUndefined()
   } finally {
     seen.server.close()
   }
 })
 
-test('rejects an unbound or missing payment-stage proof without settling', async () => {
-  const proof = proofVerifier()
+test('payment check: a failed check rejects with its fixed status and no fresh 402', async () => {
+  const kyc = kycCheck()
   const seen = await createServer(async (request, payments) => {
-    const result = await payments.charge({ ...charge, identity: [proof] })(request)
+    const result = await payments.charge({ ...charge, identity: { payment: kyc } })(request)
     return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
   })
 
@@ -272,29 +285,78 @@ test('rejects an unbound or missing payment-stage proof without settling', async
     const first = await fetch(seen.server.url)
     const challenge = Challenge.fromResponse(first)
     const credential = Credential.serialize({ challenge, payload: { token: 'paid' } })
+    const send = (token?: string) =>
+      fetch(seen.server.url, {
+        headers: {
+          [MppConstants.Headers.authorization]: credential,
+          ...(token && { [kycHeader]: token }),
+        },
+      })
 
-    const missing = await fetch(seen.server.url, {
-      headers: { [MppConstants.Headers.authorization]: credential },
-    })
     // A paid attempt that fails identity is rejected without a payable challenge,
     // so a client whose payment already went out is not asked to pay again.
-    expect(missing.status).toBe(403)
+    const missing = await send()
+    expect(missing.status).toBe(401)
     expect(missing.headers.has(MppConstants.Headers.wwwAuthenticate)).toBe(false)
 
-    const unbound = await fetch(seen.server.url, {
-      headers: {
-        [MppConstants.Headers.authorization]: credential,
-        [proofResponseHeader]: 'another-challenge:dana',
-      },
-    })
+    const unbound = await send('another-challenge:dana')
     expect(unbound.status).toBe(401)
-    expect(await unbound.text()).toMatch(/not bound to this challenge/)
-    expect(unbound.headers.get('Proof-Result')).toBe('unbound')
+    expect(await unbound.text()).toMatch(/not bound to this Challenge/)
+    expect(unbound.headers.get('Kyc-Result')).toBe('unbound')
     expect(unbound.headers.has(MppConstants.Headers.wwwAuthenticate)).toBe(false)
+
+    const sanctioned = await send(`${challenge.id}:sanctioned`)
+    expect(sanctioned.status).toBe(403)
     expect(settlements).toBe(before)
   } finally {
     seen.server.close()
   }
+})
+
+test('payment check: verify gets the Credential, and its rejection is marked as data', async () => {
+  const mppx = createPayments()
+  const calls: (Credential.Credential | undefined)[] = []
+  const kyc = kycCheck()
+  const check: Identity.PaymentCheck<{ subject: string }> = {
+    requires: kyc.requires,
+    verify(parameters) {
+      calls.push(parameters.credential)
+      return kyc.verify(parameters)
+    },
+  }
+  const route = mppx.charge({ ...charge, identity: { payment: check } })
+  const first = await route(new Request('https://x.test'))
+  if (first.status !== 402) throw new Error()
+  expect(first.rejection).toBeUndefined()
+  const challenge = Challenge.fromResponse(first.challenge as Response)
+  const paid = (token: string) =>
+    route(
+      new Request('https://x.test', {
+        headers: {
+          [MppConstants.Headers.authorization]: Credential.serialize({
+            challenge,
+            payload: { token: 'paid' },
+          }),
+          [kycHeader]: token,
+        },
+      }),
+    )
+
+  const rejected = await paid(`${challenge.id}:sanctioned`)
+  expect(rejected.status).toBe(402)
+  if (rejected.status !== 402) throw new Error()
+  expect(rejected.rejection).toEqual({
+    stage: 'payment',
+    status: 'forbidden',
+    reason: 'Sanctioned subject.',
+  })
+  expect((rejected.challenge as Response).status).toBe(403)
+  expect(calls[0]?.payload).toEqual({ token: 'paid' })
+  expect(calls[0]?.challenge.id).toBe(challenge.id)
+
+  const accepted = await paid(`${challenge.id}:erin`)
+  if (accepted.status !== 200) throw new Error()
+  expect(accepted.identity?.get(check)).toEqual({ subject: 'erin' })
 })
 
 test('rejects an invalid request-stage identity before creating a payment challenge', async () => {
@@ -344,7 +406,7 @@ test('does not send identity to origins outside a prover scope', async () => {
   }
 })
 
-test('does not authorize without a credential until payment-stage identity is valid', async () => {
+test('does not authorize without a credential until the payment check is valid', async () => {
   const authorizing = Method.toServer(method, {
     authorize: () => ({
       receipt: Receipt.from({
@@ -363,61 +425,81 @@ test('does not authorize without a credential until payment-stage identity is va
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
-  const proof = proofVerifier()
-  const gated = await mppx.charge({ ...charge, identity: [proof] })(new Request('https://x.test'))
+  const gated = await mppx.charge({ ...charge, identity: { payment: kycCheck() } })(
+    new Request('https://x.test'),
+  )
   expect(gated.status).toBe(402)
+  if (gated.status !== 402) throw new Error()
+  expect(gated.rejection).toBeUndefined()
+  expect((gated.challenge as Response).headers.get('Identity-Required')).toContain('kyc')
+
+  const entitled: Identity.PaymentCheck<string> = {
+    requires: [{ type: 'kyc' }],
+    verify: ({ credential }) =>
+      credential === undefined ? { status: 'valid', value: 'session' } : { status: 'missing' },
+  }
+  const authorized = await mppx.charge({ ...charge, identity: { payment: entitled } })(
+    new Request('https://x.test'),
+  )
+  if (authorized.status !== 200) throw new Error()
+  expect(authorized.identity?.get(entitled)).toBe('session')
   const open = await mppx.charge(charge)(new Request('https://x.test'))
   expect(open.status).toBe(200)
 })
 
-test('forwards payment-stage identity headers through nested composers', async () => {
-  const proof = proofVerifier()
+test('forwards Identity-Required through nested composers', async () => {
   const inner = Mppx.create({
     methods: [serverMethod],
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
     selectOffers: (offers) => offers,
   })
-  const handler = Mppx.compose(inner.compose([serverMethod, { ...charge, identity: [proof] }]))
+  const handler = Mppx.compose(
+    inner.compose([serverMethod, { ...charge, identity: { payment: kycCheck() } }]),
+  )
   const result = await handler(new Request('https://x.test'))
-  expect(result.status).toBe(402)
+  if (result.status !== 402) throw new Error()
+  expect((result.challenge as Response).headers.get('Identity-Required')).toBe(
+    `kyc;issuer="${kycIssuer}"`,
+  )
+})
+
+test('merges the distinct requirements of composed offers into one header', async () => {
+  const result = await createPayments().compose(
+    [serverMethod, { ...charge, amount: '1', identity: { payment: kycCheck() } }],
+    [
+      serverMethod,
+      {
+        ...charge,
+        amount: '2',
+        identity: { payment: kycCheck([{ type: 'kyc', issuer: kycIssuer }, { type: 'email' }]) },
+      },
+    ],
+    [serverMethod, { ...charge, amount: '3' }],
+  )(new Request('https://x.test'))
   if (result.status !== 402) throw new Error()
   const response = result.challenge as Response
-  expect(response.headers.get(proofRequestHeader)).toBe(
-    identityNonce(Challenge.fromResponse(response)),
-  )
+  expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['1', '2', '3'])
+  expect(response.headers.get('Identity-Required')).toBe(`kyc;issuer="${kycIssuer}", email`)
 })
 
 test('never reports a rejected identity as a successful payment', async () => {
   const mppx = createPayments()
-  const proof = proofVerifier()
-  const first = await mppx.charge({ ...charge, identity: [proof] })(new Request('https://x.test'))
-  if (first.status !== 402) throw new Error()
-  const challenge = Challenge.fromResponse(first.challenge as Response)
-  const paid = await mppx.charge({ ...charge, identity: [proof] })(
-    new Request('https://x.test', {
-      headers: {
-        [MppConstants.Headers.authorization]: Credential.serialize({
-          challenge,
-          payload: { token: 'paid' },
-        }),
-      },
-    }),
-  )
-  expect(paid.status).toBe(402)
-  if (paid.status !== 402) throw new Error()
-  expect((paid.challenge as Response).status).toBe(403)
-
   const keys = await signatureKeys()
   const unsigned = await mppx.charge({ ...charge, identity: [verifiers(keys).tap] })(
     new Request('https://x.test'),
   )
   expect(unsigned.status).toBe(402)
   if (unsigned.status !== 402) throw new Error()
-  expect((unsigned.challenge as Response).status).toBe(403)
+  expect(unsigned.rejection).toEqual({
+    stage: 'request',
+    status: 'missing',
+    reason: 'Identity verification is required.',
+  })
+  expect((unsigned.challenge as Response).status).toBe(401)
 })
 
-test('does not forward identity headers for an offer removed by Accept-Payment', async () => {
+test('does not forward requirements for an offer removed by Accept-Payment', async () => {
   const other = Method.toServer(Method.from({ ...method, name: 'other' }), {
     async verify() {
       throw new Error('unreachable')
@@ -429,7 +511,7 @@ test('does not forward identity headers for an offer removed by Accept-Payment',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
   const result = await mppx.compose(
-    [serverMethod, { ...charge, identity: [proofVerifier()] }],
+    [serverMethod, { ...charge, identity: { payment: kycCheck() } }],
     [other, charge],
   )(
     new Request('https://x.test', {
@@ -439,14 +521,13 @@ test('does not forward identity headers for an offer removed by Accept-Payment',
   if (result.status !== 402) throw new Error()
   const response = result.challenge as Response
   expect(Challenge.fromResponseList(response).map((c) => c.method)).toEqual(['other'])
-  expect(response.headers.has(proofRequestHeader)).toBe(false)
+  expect(response.headers.has('Identity-Required')).toBe(false)
 })
 
 test('a composed route ignores non-Payment challenges from identity rejections', async () => {
   const bearer: Identity.Verifier = {
     verify: () => ({
       status: 'missing',
-      code: 401,
       headers: { 'WWW-Authenticate': 'Bearer realm="x"' },
     }),
   }
@@ -457,84 +538,43 @@ test('a composed route ignores non-Payment challenges from identity rejections',
   if (result.status !== 402) throw new Error()
   const response = result.challenge as Response
   expect(response.status).toBe(402)
+  expect(result.rejection).toBeUndefined()
   expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['2'])
 })
 
-test('composed 402s carry an identity WWW-Authenticate challenge once', async () => {
-  const bearer: Identity.Verifier = {
-    stage: 'payment',
-    challenge: () => ({ 'WWW-Authenticate': 'Proof realm="kyb"' }),
-    verify: () => ({ status: 'missing' }),
+test('a verifier runs once per request across composed offers and anyOf members', async () => {
+  let runs = 0
+  const counted: Identity.Verifier<string> = {
+    verify() {
+      runs++
+      return { status: 'valid', value: 'once' }
+    },
   }
-  const inner = Mppx.create({
-    methods: [serverMethod],
-    realm: 'localhost',
-    secretKey: 'test-secret-key-test-secret-key-32',
-    selectOffers: (offers) => offers,
-  })
-  const result = await Mppx.compose(
-    inner.compose([serverMethod, { ...charge, identity: [bearer] }]),
-  )(new Request('https://x.test'))
-  if (result.status !== 402) throw new Error()
-  const value = (result.challenge as Response).headers.get('WWW-Authenticate')!
-  expect(value.match(/Proof realm/g)).toHaveLength(1)
+  const other = Identity.from({ verify: () => undefined })
+  const either = Identity.anyOf(other, counted)
+  const handler = createPayments().compose(
+    [serverMethod, { ...charge, amount: '1', identity: [counted] }],
+    [serverMethod, { ...charge, amount: '2', identity: [either] }],
+  )
+  const first = await handler(new Request('https://x.test'))
+  expect(first.status).toBe(402)
+  expect(runs).toBe(1)
+  // A new request gets a new context, and a route called directly creates its own.
+  await handler(new Request('https://x.test'))
+  expect(runs).toBe(2)
+  const direct = await createPayments().charge({ ...charge, identity: [either] })(
+    new Request('https://x.test'),
+  )
+  expect(runs).toBe(3)
+  if (direct.status !== 402) throw new Error()
+  expect(direct.rejection).toBeUndefined()
 })
 
-test('offers in one 402 share a payment-stage identity challenge', async () => {
-  const proof = proofVerifier()
-  const seen = await createServer(async (request, payments) => {
-    const result = await payments.compose(
-      [serverMethod, { ...charge, amount: '1', identity: [proof] }],
-      [serverMethod, { ...charge, amount: '2', identity: [proof] }],
-    )(request)
-    if (result.status === 402) return result.challenge
-    return result.withReceipt(new Response(result.identity?.get(proof)?.subject))
-  })
-
-  try {
-    const first = await fetch(seen.server.url)
-    expect(first.status).toBe(402)
-    const challenges = Challenge.fromResponseList(first)
-    expect(challenges.map((c) => c.request.amount)).toEqual(['1', '2'])
-    const nonce = first.headers.get(proofRequestHeader)
-    expect(nonce?.split(',')).toHaveLength(1)
-    expect(challenges.map(identityNonce)).toEqual([nonce, nonce])
-
-    // Paying the second offer with the shared proof settles.
-    const before = settlements
-    const paid = await fetch(seen.server.url, {
-      headers: {
-        [MppConstants.Headers.authorization]: Credential.serialize({
-          challenge: challenges[1]!,
-          payload: { token: 'paid' },
-        }),
-        [proofResponseHeader]: `${nonce}:dana`,
-      },
-    })
-    expect(paid.status).toBe(200)
-    expect(await paid.text()).toBe('dana')
-    expect(settlements).toBe(before + 1)
-
-    const client = ClientMppx.create({
-      identity: [proofProver('erin')],
-      methods: [clientMethod],
-      polyfill: false,
-    })
-    const response = await client.fetch(seen.server.url)
-    expect(await response.text()).toBe('erin')
-  } finally {
-    seen.server.close()
-  }
-})
-
-test('offers in a composed route must require the same payment-stage verifiers', () => {
-  const mppx = createPayments()
-  expect(() =>
-    mppx.compose(
-      [serverMethod, { ...charge, amount: '1', identity: [proofVerifier()] }],
-      [serverMethod, { ...charge, amount: '2', identity: [proofVerifier()] }],
-    ),
-  ).toThrow('must require the same payment-stage identity verifiers')
+test('rejects a payment-stage verifier, pointing to the payment check', () => {
+  const legacy: Identity.Verifier = { stage: 'payment', verify: () => ({ status: 'missing' }) }
+  expect(() => createPayments().charge({ ...charge, identity: [legacy] })).toThrow(
+    'pass a payment check as `identity: { payment }` instead',
+  )
 })
 
 test('an identity rejection from one offer does not hide the other offers', async () => {
@@ -550,14 +590,17 @@ test('an identity rejection from one offer does not hide the other offers', asyn
   expect(response.status).toBe(402)
   expect(Challenge.fromResponseList(response).map((c) => c.request.amount)).toEqual(['2'])
 
-  const gated = await mppx.compose([serverMethod, { ...charge, identity: [tap] }])(
-    new Request('https://x.test'),
-  )
+  // With no offer issuing a 402, compose returns the rejection, marked by its rejection field.
+  const gated = await mppx.compose(
+    [serverMethod, { ...charge, amount: '1', identity: [tap] }],
+    [serverMethod, { ...charge, amount: '2', identity: [tap] }],
+  )(new Request('https://x.test'))
   if (gated.status !== 402) throw new Error()
-  expect((gated.challenge as Response).status).toBe(403)
+  expect(gated.rejection).toMatchObject({ stage: 'request', status: 'missing' })
+  expect((gated.challenge as Response).status).toBe(401)
 })
 
-test('rejects payment-stage identity on methods with a preflight hook', () => {
+test('rejects a payment check on methods with a preflight hook', () => {
   const preflighted = Method.toServer(method, {
     preflight: () => undefined,
     async verify() {
@@ -569,7 +612,7 @@ test('rejects payment-stage identity on methods with a preflight hook', () => {
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
-  expect(() => mppx.charge({ ...charge, identity: [proofVerifier()] })).toThrow(
+  expect(() => mppx.charge({ ...charge, identity: { payment: kycCheck() } })).toThrow(
     'Payment-stage identity is not supported on test/charge routes with a preflight hook.',
   )
 })
@@ -597,7 +640,7 @@ test('rejects an empty client identity list', () => {
 test('rejects a top-level server identity option instead of ignoring it', () => {
   expect(() =>
     Mppx.create({
-      identity: [proofVerifier()],
+      identity: [Identity.from({ verify: () => undefined })],
       methods: [serverMethod],
       realm: 'localhost',
       secretKey: 'test-secret-key-test-secret-key-32',
@@ -605,7 +648,7 @@ test('rejects a top-level server identity option instead of ignoring it', () => 
   ).toThrow('Mppx server identity is configured per route')
 })
 
-test('rejects payment-stage identity on routes with the HTML checkout', () => {
+test('rejects a payment check on routes with the HTML checkout', () => {
   const checkout = Method.toServer(method, {
     html: {} as never,
     async verify() {
@@ -617,7 +660,7 @@ test('rejects payment-stage identity on routes with the HTML checkout', () => {
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
-  expect(() => mppx.charge({ ...charge, identity: [proofVerifier()] })).toThrow(
+  expect(() => mppx.charge({ ...charge, identity: { payment: kycCheck() } })).toThrow(
     'Payment-stage identity is not supported on test/charge routes with the HTML checkout.',
   )
 })

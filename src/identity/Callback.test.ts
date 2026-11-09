@@ -105,10 +105,9 @@ test('composes with other verifiers through anyOf', async () => {
   const header = Identity.from({ verify: (request) => request.headers.get('X-Team') ?? undefined })
   const either = Identity.anyOf(apiKey, header)
   expect(
-    await either.verify(new Request('https://api.example', { headers: { 'X-Team': 'ops' } }), {}),
+    await either.verify(new Request('https://api.example', { headers: { 'X-Team': 'ops' } })),
   ).toEqual({ status: 'valid', value: { index: 1, value: 'ops' } })
-  expect(await either.verify(new Request('https://api.example'), {})).toMatchObject({
-    code: 401,
+  expect(await either.verify(new Request('https://api.example'))).toMatchObject({
     status: 'missing',
   })
 })
@@ -119,16 +118,38 @@ test('rethrows errors that are not rejections', async () => {
       throw new Error('database down')
     },
   })
-  await expect(broken.verify(new Request('https://api.example'), {})).rejects.toThrow(
-    'database down',
-  )
+  await expect(broken.verify(new Request('https://api.example'))).rejects.toThrow('database down')
 })
 
 test('treats a null lookup result as no identity', async () => {
   const lookup = Identity.from({ verify: () => null })
-  const result = await lookup.verify(
-    new Request('http://localhost'),
-    {} as Parameters<typeof lookup.verify>[1],
-  )
-  expect(result).toMatchObject({ status: 'missing', code: 401 })
+  const result = await lookup.verify(new Request('http://localhost'))
+  expect(result).toEqual({ status: 'missing', reason: 'Identity verification is required.' })
+})
+
+test('Rejection carries a fixed status; the deprecated code still maps to one', async () => {
+  const reject = (options: ConstructorParameters<typeof Identity.Rejection>[1]) =>
+    Identity.from({
+      challenge: { 'WWW-Authenticate': 'ApiKey' },
+      verify() {
+        throw new Identity.Rejection('no', options)
+      },
+    }).verify(new Request('https://api.example'))
+  const headers = { 'WWW-Authenticate': 'ApiKey' }
+  expect(await reject({})).toEqual({ status: 'invalid', headers, reason: 'no' })
+  expect(await reject({ status: 'forbidden' })).toEqual({
+    status: 'forbidden',
+    headers,
+    reason: 'no',
+  })
+  expect(await reject({ status: 'unavailable' })).toMatchObject({ status: 'unavailable' })
+  expect(await reject({ code: 403 })).toMatchObject({ status: 'forbidden' })
+  expect(await reject({ code: 503 })).toMatchObject({ status: 'unavailable' })
+  expect(await reject({ code: 400 })).toEqual({
+    status: 'invalid',
+    code: 400,
+    headers,
+    reason: 'no',
+  })
+  expect(new Identity.Rejection('no', { status: 'forbidden' }).code).toBe(403)
 })

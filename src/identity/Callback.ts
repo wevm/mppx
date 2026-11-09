@@ -1,4 +1,5 @@
 import type { MaybePromise } from '../internal/types.js'
+import * as Status from './Status.js'
 import type * as Types from './Types.js'
 
 /**
@@ -7,7 +8,7 @@ import type * as Types from './Types.js'
  *
  * `verify` returns the caller's identity, which the route handler reads with
  * `result.identity.get(verifier)`; `undefined` or `null` when the request carries none
- * (401, with `challenge` headers if set); or throws a {@link Rejection} to
+ * (`missing`, 401, with `challenge` headers if set); or throws a {@link Rejection} to
  * reject the identity it carries.
  *
  * @example
@@ -17,7 +18,7 @@ import type * as Types from './Types.js'
  *     const key = request.headers.get('X-Api-Key')
  *     if (!key) return undefined
  *     const row = await db.customerByKey(key)
- *     if (!row) throw new Identity.Rejection('Unknown API key.', { code: 403 })
+ *     if (!row) throw new Identity.Rejection('Unknown API key.', { status: 'forbidden' })
  *     return row
  *   },
  * })
@@ -25,32 +26,33 @@ import type * as Types from './Types.js'
  * ```
  */
 export function from<value>(config: from.Config<value>): Types.Verifier<value> {
-  return {
-    stage: 'request',
-    async verify(request) {
+  return Object.freeze({
+    async verify(request: Request): Promise<Types.Verification<value>> {
       let value: value | null | undefined
       try {
         value = await config.verify(request)
       } catch (error) {
         if (!(error instanceof Rejection)) throw error
+        const { code, message: reason, status } = error
+        if (status !== 'invalid') return { status, headers: config.challenge, reason }
         return {
-          status: 'invalid',
-          code: error.code,
+          status,
+          // A deprecated non-standard code is still sent as is.
+          ...(code !== Status.codes.invalid && { code }),
           headers: config.challenge,
-          reason: error.message,
+          reason,
         }
       }
       // A lookup that found nothing often returns null: treat it as no identity.
       if (value === undefined || value === null)
         return {
           status: 'missing',
-          code: 401,
           headers: config.challenge,
           reason: 'Identity verification is required.',
         }
       return { status: 'valid', value }
     },
-  }
+  })
 }
 
 export declare namespace from {
@@ -68,10 +70,39 @@ export declare namespace from {
 /** Rejects an identity a {@link from} verifier was given. */
 export class Rejection extends Error {
   override readonly name = 'Rejection'
-  /** HTTP status of the rejection. @default 401 */
+  /** Fixed status of the rejection. @default 'invalid' */
+  readonly status: Rejection.Status
+  /**
+   * HTTP status of the rejection.
+   *
+   * @deprecated Read `status`. Defaults to the status's fixed code (`Identity.Status.codes`).
+   */
   readonly code: number
-  constructor(message: string, options: { code?: number | undefined } = {}) {
+  constructor(message: string, options: Rejection.Options = {}) {
     super(message)
-    this.code = options.code ?? 401
+    this.status =
+      options.status ??
+      (options.code === Status.codes.forbidden
+        ? 'forbidden'
+        : options.code === Status.codes.unavailable
+          ? 'unavailable'
+          : 'invalid')
+    this.code = options.code ?? Status.codes[this.status]
+  }
+}
+
+export declare namespace Rejection {
+  /** Fixed statuses a {@link Rejection} can carry. */
+  type Status = Exclude<Types.RejectionStatus, 'missing'>
+  type Options = {
+    /** Fixed status of the rejection. @default 'invalid' */
+    status?: Status | undefined
+    /**
+     * HTTP status of the rejection.
+     *
+     * @deprecated Use `status`. 403 maps to `forbidden`, 503 to `unavailable`, and any other
+     * code to `invalid`, sent with that code.
+     */
+    code?: number | undefined
   }
 }

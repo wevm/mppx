@@ -1,17 +1,26 @@
+import type * as Challenge from '../Challenge.js'
+import type * as Credential from '../Credential.js'
+import * as Requirements from './internal/Requirements.js'
+import * as Status from './Status.js'
 import type * as Types from './Types.js'
 
 const members = Symbol('mppx.identity.members')
 
-type AnyOfVerifier = Types.Verifier<{ index: number; value: unknown }> & {
+/** The value of an `anyOf` verifier: the index of the first valid member and its value. */
+type AnyOfValue = { readonly index: number; readonly value: unknown }
+
+type AnyOfVerifier = Types.Verifier<AnyOfValue> & {
   readonly [members]: readonly Types.Verifier[]
 }
+
+type Rejected = Exclude<Types.Verification, { status: 'valid' }>
 
 /**
  * Accepts the first of several identity protocols that verifies.
  *
- * Every member runs. The result is `valid` if any member verifies, `invalid` if none verifies and
- * any member was presented but failed, and `missing` otherwise, with every
- * member's challenge headers. All members must run at the same stage.
+ * Every member runs. The result is `valid` if any member verifies (the first valid member
+ * wins). Otherwise the rejected member whose status has the highest precedence
+ * (`Identity.Status.precedence`) decides the status and reason, with every member's headers.
  *
  * @example
  * ```ts
@@ -20,203 +29,367 @@ type AnyOfVerifier = Types.Verifier<{ index: number; value: unknown }> & {
  */
 export function anyOf(
   ...verifiers: readonly [Types.Verifier, Types.Verifier, ...Types.Verifier[]]
-): Types.Verifier<{ index: number; value: unknown }> {
-  const stage = stageOf(verifiers[0])
-  if (verifiers.some((verifier) => stageOf(verifier) !== stage))
-    throw new TypeError('Identity anyOf verifiers must run at the same stage.')
+): Types.Verifier<AnyOfValue> {
+  for (const verifier of verifiers) assertRequestStage(verifier)
   const verifier: AnyOfVerifier = {
-    [members]: verifiers,
-    stage,
-    async verify(request, context) {
+    [members]: Object.freeze([...verifiers]),
+    async verify(request) {
       // Every member runs, so each presented proof's replay nonce is consumed even when an
-      // earlier member already verified; the first valid member wins.
-      const all = []
-      for (const member of verifiers) all.push(await run(member, request, context))
-      const index = all.findIndex((outcome) => outcome.status === 'valid')
-      const matched = all[index]
-      if (matched?.status === 'valid')
-        return { status: 'valid', value: { index, value: matched.value } }
-      const outcomes = all as Exclude<Types.Verification, { status: 'valid' }>[]
-      const headers = mergeHeaders(outcomes)
-      const invalid = outcomes.find((outcome) => outcome.status === 'invalid')
-      if (invalid) return { status: 'invalid', code: invalid.code, headers, reason: invalid.reason }
-      // Keep the first member's custom status so wrapping a verifier does not change its HTTP behavior.
-      const code = outcomes.find((outcome) => outcome.code !== undefined)?.code
-      return {
-        status: 'missing',
-        ...(code !== undefined && { code }),
-        headers,
-        reason: 'None of the accepted identity proofs was presented.',
-      }
+      // earlier member already verified.
+      const outcomes: Types.Verification[] = []
+      for (const member of verifiers) outcomes.push(await member.verify(request))
+      return combineAnyOf(outcomes)
     },
   }
-  return verifier
+  return Object.freeze(verifier)
 }
 
-/** The combined outcome of a route's verifiers at one stage. @internal */
-export type Outcome =
-  | { status: 'valid'; values: ReadonlyMap<Types.Verifier, unknown> }
-  | { status: 'missing' | 'invalid'; code: number; headers: Headers; reason: string }
+/**
+ * Combines the outcomes of `anyOf` members: `valid` with the first valid member, otherwise
+ * the precedence rule with merged headers.
+ */
+function combineAnyOf(outcomes: readonly Types.Verification[]): Types.Verification<AnyOfValue> {
+  const index = outcomes.findIndex((outcome) => outcome.status === 'valid')
+  const matched = outcomes[index]
+  if (matched?.status === 'valid')
+    return Object.freeze({
+      status: 'valid',
+      value: Object.freeze({ index, value: matched.value }),
+    })
+  const decision = decide(outcomes as readonly Rejected[])
+  return toVerification(
+    decision.status === 'missing'
+      ? { ...decision, reason: 'None of the accepted identity proofs was presented.' }
+      : decision,
+  )
+}
+
+/** A rejected outcome reduced to its fixed status, the HTTP code it is sent with, headers and reason. */
+export type Decision = {
+  readonly status: Types.RejectionStatus
+  /** HTTP status code: `Identity.Status.codes[status]`, unless a deprecated `code` overrides it. */
+  readonly code: number
+  readonly headers: readonly (readonly [name: string, value: string])[]
+  readonly reason: string
+}
+
+/** Verified values, keyed by the verifier (every `anyOf` level included) or payment check. */
+export type Values = ReadonlyMap<Types.Verifier | Types.PaymentCheck, unknown>
+
+/** The combined outcome of verifiers or a payment check. @internal */
+export type Outcome = { readonly status: 'valid'; readonly values: Values } | Decision
+
+/** The outcome of no verifiers: valid, with no values. @internal */
+export const none: Outcome = Object.freeze({ status: 'valid', values: new Map() })
+
+const defaultReasons = {
+  missing: 'Identity verification is required.',
+  invalid: 'The identity proof is invalid.',
+  forbidden: 'This identity is not allowed.',
+  unavailable: 'Identity verification is unavailable.',
+} as const satisfies Record<Types.RejectionStatus, string>
 
 /**
- * Runs every verifier at one stage and combines their outcomes.
+ * Decides one rejection from rejected outcomes: the outcome whose fixed status has the highest
+ * precedence decides status, code and reason (the first such outcome on ties), and the headers
+ * of every outcome are merged. @internal
+ */
+export function decide(outcomes: readonly Rejected[]): Decision {
+  if (outcomes.length === 0) throw new TypeError('An identity decision needs a rejected outcome.')
+  const normalized = outcomes.map(normalize)
+  const rank = (decision: Decision) => Status.precedence.indexOf(decision.status)
+  const winner = normalized.reduce((best, next) => (rank(next) < rank(best) ? next : best))
+  return Object.freeze({
+    ...winner,
+    headers: Object.freeze(normalized.flatMap((decision) => decision.headers)),
+  })
+}
+
+/** Maps a rejected outcome to its fixed status, honoring the deprecated `code`. */
+function normalize(outcome: Rejected): Decision {
+  const code = 'code' in outcome ? outcome.code : undefined
+  const status: Types.RejectionStatus =
+    code === Status.codes.forbidden
+      ? 'forbidden'
+      : code === Status.codes.unavailable
+        ? 'unavailable'
+        : outcome.status
+  return {
+    status,
+    code: code ?? Status.codes[status],
+    headers: Object.freeze(
+      [...new Headers(outcome.headers)].map(([name, value]) =>
+        Object.freeze([name, value] as const),
+      ),
+    ),
+    reason: outcome.reason ?? defaultReasons[status],
+  }
+}
+
+/** Turns a decision back into a verification, keeping a non-default code. */
+function toVerification(decision: Decision): Rejected {
+  const headers = decision.headers.map(([name, value]): [string, string] => [name, value])
+  const { code, reason, status } = decision
+  if (status === 'forbidden' || status === 'unavailable')
+    return Object.freeze({ status, headers, reason })
+  return Object.freeze({
+    status,
+    ...(code !== Status.codes[status] && { code }),
+    headers,
+    reason,
+  })
+}
+
+/**
+ * The identity state of one request. Every verifier runs at most once per context, so
+ * replay-protected nonces are consumed once even when `compose` calls several offers with
+ * the same request. `compose` creates one and passes it to every offer it calls; a route
+ * called directly creates its own. @internal
+ */
+export class Context {
+  /** Verification promises by verifier. Internal and mutable; outcomes are frozen. */
+  readonly verifications = new Map<Types.Verifier, Promise<Types.Verification>>()
+}
+
+/** Creates the identity context of one request. @internal */
+export function createContext(): Context {
+  return new Context()
+}
+
+/** Returns `value` if it is an identity context, otherwise a new one. @internal */
+export function contextOf(value: unknown): Context {
+  return value instanceof Context ? value : createContext()
+}
+
+/** Runs one verifier, or each `anyOf` member, at most once per context. */
+function evaluate(
+  context: Context,
+  request: Request,
+  verifier: Types.Verifier,
+): Promise<Types.Verification> {
+  let outcome = context.verifications.get(verifier)
+  if (outcome) return outcome
+  const nested = (verifier as Partial<AnyOfVerifier>)[members]
+  outcome = nested
+    ? (async () => {
+        const outcomes: Types.Verification[] = []
+        for (const member of nested) outcomes.push(await evaluate(context, request, member))
+        return combineAnyOf(outcomes)
+      })()
+    : (async () => verifier.verify(request))()
+  context.verifications.set(verifier, outcome)
+  return outcome
+}
+
+/**
+ * Runs request-stage verifiers and combines their outcomes.
  *
- * Every verifier must be valid. Any `invalid` outcome rejects with 401 unless
- * it sets its own code; otherwise any `missing` outcome rejects with 403. The
- * headers of every rejected outcome are merged. Each verifier runs at most once
- * per request and context, so replay-protected nonces are consumed once even
- * when several handlers evaluate the same request.
+ * Valid only if every verifier is valid, with each value recorded at every `anyOf` level, so
+ * `results.get(leaf)` works when nested. Otherwise the precedence rule of {@link decide}.
+ * @internal
  */
 export async function verify(
+  context: Context,
   request: Request,
   verifiers: readonly Types.Verifier[],
-  context: Types.Context = {},
 ): Promise<Outcome> {
   const values = new Map<Types.Verifier, unknown>()
-  const rejected: Exclude<Types.Verification, { status: 'valid' }>[] = []
+  const rejected: Rejected[] = []
   for (const verifier of verifiers) {
-    const outcome = await run(verifier, request, context)
+    const outcome = await evaluate(context, request, verifier)
     if (outcome.status !== 'valid') {
       rejected.push(outcome)
       continue
     }
-    // Record the matched member at every anyOf level, so results.get(leaf) works when nested.
     let current: Types.Verifier = verifier
     let value: unknown = outcome.value
     for (;;) {
       values.set(current, value)
       const nested = (current as Partial<AnyOfVerifier>)[members]
       if (!nested) break
-      const matched = value as { index: number; value: unknown }
+      const matched = value as AnyOfValue
       current = nested[matched.index]!
       value = matched.value
     }
   }
-  if (rejected.length === 0) return { status: 'valid', values }
-  const headers = mergeHeaders(rejected)
-  const invalid = rejected.find((outcome) => outcome.status === 'invalid')
-  if (invalid)
-    return { status: 'invalid', code: invalid.code ?? 401, headers, reason: invalid.reason }
-  const missing = rejected[0]!
-  return {
-    status: 'missing',
-    code: missing.code ?? 403,
-    headers,
-    reason: missing.reason ?? 'Identity verification is required.',
-  }
+  if (rejected.length > 0) return decide(rejected)
+  return Object.freeze({ status: 'valid', values })
+}
+
+/** Runs a payment check once and returns its outcome. @internal */
+export async function check(
+  paymentCheck: Types.PaymentCheck,
+  parameters: Parameters<Types.PaymentCheck['verify']>[0],
+): Promise<Outcome> {
+  const outcome = await paymentCheck.verify(Object.freeze({ ...parameters }))
+  if (outcome.status !== 'valid') return decide([outcome])
+  return Object.freeze({ status: 'valid', values: new Map([[paymentCheck, outcome.value]]) })
 }
 
 /**
- * Collects the challenge headers of payment-stage verifiers for one 402.
+ * The identity state of one route call, as a state machine:
  *
- * Each verifier's hook runs at most once per request and nonce, so every offer
- * in a composed 402 carries the same challenge. @internal
+ * - `request`: nothing checked yet.
+ * - `identified`: request-stage verifiers passed; no payment decision yet.
+ * - `payment`: the payment check runs for a Challenge, with the Credential on a paid retry
+ *   or without one before `authorize`.
+ * - `accepted`: the payment check passed (or the route has none): paid work may run.
+ * - `challenged`: the route issued a 402 carrying `requirements`.
+ * - `rejected`: identity was rejected; the response is sent as is, never a fresh 402.
+ *
+ * @internal
  */
-export async function challenge(
-  request: Request,
-  verifiers: readonly Types.Verifier[],
-  nonce: string,
-): Promise<Headers> {
-  const headers = new Headers()
-  for (const verifier of verifiers) {
-    for (const member of leaves(verifier)) {
-      if (!member.challenge) continue
-      let byVerifier = challenges.get(request)
-      if (!byVerifier) challenges.set(request, (byVerifier = new Map()))
-      let byNonce = byVerifier.get(member)
-      if (!byNonce) byVerifier.set(member, (byNonce = new Map()))
-      let result = byNonce.get(nonce)
-      if (!result) {
-        result = Promise.resolve(member.challenge(request, { nonce }))
-        byNonce.set(nonce, result)
-      }
-      const init = await result
-      if (init) for (const [name, value] of new Headers(init)) headers.append(name, value)
+export type State =
+  | { readonly phase: 'request' }
+  | { readonly phase: 'identified'; readonly values: Values }
+  | {
+      readonly phase: 'payment'
+      readonly values: Values
+      readonly challenge: Challenge.Challenge
+      readonly credential: Credential.Credential | undefined
     }
-  }
-  return headers
-}
+  | { readonly phase: 'accepted'; readonly values: Values }
+  | {
+      readonly phase: 'challenged'
+      readonly values: Values
+      readonly requirements: readonly Types.Requirement[]
+    }
+  | {
+      readonly phase: 'rejected'
+      readonly rejection: Types.Rejection
+      readonly code: number
+      readonly headers: Decision['headers']
+    }
 
 /**
- * Returns the identity nonce for every 402 issued on one request.
- *
- * Composed routes call each offer with the same request, so all offers share it. @internal
+ * An input to {@link transition}. The caller runs verifiers and checks (the only I/O) and feeds
+ * their outcomes in. @internal
  */
-export function nonceFor(request: Request, create: () => string): string {
-  let nonce = nonces.get(request)
-  if (!nonce) nonces.set(request, (nonce = create()))
-  return nonce
+export type Event =
+  /** Request-stage verifiers ran (`none` when the route has none). */
+  | { readonly type: 'verified'; readonly outcome: Outcome }
+  /** The payment check is about to run for `challenge`, with the paid retry's Credential if any. */
+  | {
+      readonly type: 'pay'
+      readonly challenge: Challenge.Challenge
+      readonly credential: Credential.Credential | undefined
+    }
+  /** The payment check ran (`none` when the route has none). */
+  | { readonly type: 'checked'; readonly outcome: Outcome }
+  /** The route issues a 402 carrying `requirements`. */
+  | { readonly type: 'challenge'; readonly requirements: readonly Types.Requirement[] }
+
+/** The state of a route call before identity runs. @internal */
+export const initial: State = Object.freeze({ phase: 'request' })
+
+/**
+ * Returns the next identity state. Pure: it never runs verifiers, and it throws a `TypeError`
+ * for an event the current phase does not accept.
+ *
+ * | Phase                    | Event                  | Next                              |
+ * | ------------------------ | ---------------------- | --------------------------------- |
+ * | `request`                | `verified` (valid)     | `identified`                      |
+ * | `request`                | `verified` (rejected)  | `rejected` (stage `request`)      |
+ * | `identified`             | `pay`                  | `payment`                         |
+ * | `payment`                | `checked` (valid)      | `accepted`                        |
+ * | `payment` + Credential   | `checked` (rejected)   | `rejected` (stage `payment`)      |
+ * | `payment`, no Credential | `checked` (rejected)   | `identified` (not authorized)     |
+ * | `identified`, `accepted` | `challenge`            | `challenged`                      |
+ *
+ * @internal
+ */
+export function transition(state: State, event: Event): State {
+  switch (event.type) {
+    case 'verified':
+      if (state.phase !== 'request') break
+      if (event.outcome.status !== 'valid') return reject('request', event.outcome)
+      return Object.freeze({ phase: 'identified', values: event.outcome.values })
+    case 'pay':
+      if (state.phase !== 'identified') break
+      return Object.freeze({
+        phase: 'payment',
+        values: state.values,
+        challenge: event.challenge,
+        credential: event.credential,
+      })
+    case 'checked':
+      if (state.phase !== 'payment') break
+      if (event.outcome.status === 'valid')
+        return Object.freeze({
+          phase: 'accepted',
+          values: new Map([...state.values, ...event.outcome.values]),
+        })
+      // A paid retry may already have pushed the payment: reject instead of a fresh 402.
+      if (state.credential) return reject('payment', event.outcome)
+      return Object.freeze({ phase: 'identified', values: state.values })
+    case 'challenge':
+      if (state.phase !== 'identified' && state.phase !== 'accepted') break
+      return Object.freeze({
+        phase: 'challenged',
+        values: state.values,
+        requirements: event.requirements,
+      })
+  }
+  throw new TypeError(`Illegal identity transition "${event.type}" from phase "${state.phase}".`)
 }
 
-/** Builds the rejection response for a failed request-stage outcome. @internal */
-export function toResponse(outcome: Exclude<Outcome, { status: 'valid' }>): Response {
-  const headers = new Headers(outcome.headers)
-  headers.set('Cache-Control', 'no-store')
-  return new Response(outcome.reason, { headers, status: outcome.code })
-}
-
-/** Creates a results lookup from verified values. @internal */
-export function results(values: ReadonlyMap<Types.Verifier, unknown> = new Map()): Types.Results {
+function reject(stage: Types.Rejection['stage'], decision: Decision): State {
   return Object.freeze({
-    get<value>(verifier: Types.Verifier<value>) {
+    phase: 'rejected',
+    rejection: Object.freeze({ stage, status: decision.status, reason: decision.reason }),
+    code: decision.code,
+    headers: decision.headers,
+  })
+}
+
+/** Builds the rejection response of a rejected state. @internal */
+export function toResponse(state: Extract<State, { phase: 'rejected' }>): Response {
+  const headers = new Headers(state.headers.map(([name, value]): [string, string] => [name, value]))
+  headers.set('Cache-Control', 'no-store')
+  return new Response(state.rejection.reason, { headers, status: state.code })
+}
+
+/** Returns the frozen results lookup of a state's verified values. @internal */
+export function results(state: State): Types.Results {
+  const values: Values = 'values' in state ? state.values : new Map()
+  return Object.freeze({
+    get<value>(verifier: Types.Verifier<value> | Types.PaymentCheck<value>) {
       return values.get(verifier) as value | undefined
     },
   })
 }
 
-/** Returns the stage a verifier runs at. @internal */
-export function stageOf(verifier: Types.Verifier): Types.Stage {
+/** A route's parsed `identity` option. @internal */
+export type RouteConfig = {
+  readonly request: readonly Types.Verifier[]
+  readonly payment: Types.PaymentCheck | undefined
+}
+
+/**
+ * Parses a route's `identity` option. Throws a `TypeError` for a payment-stage or unknown-stage
+ * verifier, and for payment requirements that cannot be serialized. @internal
+ */
+export function route(identity: Types.Route | undefined): RouteConfig {
+  const { payment = undefined, request = [] } = Array.isArray(identity)
+    ? { request: identity as readonly Types.Verifier[] }
+    : ((identity ?? {}) as Exclude<Types.Route, readonly Types.Verifier[]>)
+  for (const verifier of request) assertRequestStage(verifier)
+  if (payment) {
+    if (!Array.isArray(payment.requires))
+      throw new TypeError('Identity payment check must list the identities it requires.')
+    Requirements.serialize(payment.requires)
+  }
+  return Object.freeze({ payment, request: Object.freeze([...request]) })
+}
+
+/** Throws unless a verifier runs at the request stage (the only one). */
+function assertRequestStage(verifier: Types.Verifier): void {
   const stage = verifier.stage ?? 'request'
+  if (stage === 'payment')
+    throw new TypeError(
+      'Payment-stage identity verifiers were removed: pass a payment check as `identity: { payment }` instead.',
+    )
   // An unknown stage would leave the verifier unchecked, so it is rejected (fail closed).
-  if (stage !== 'request' && stage !== 'payment')
+  if (stage !== 'request')
     throw new TypeError(`Unknown identity verifier stage "${String(stage)}".`)
-  return stage
-}
-
-/** Returns a verifier and, through `anyOf`, every member it wraps. */
-function leaves(verifier: Types.Verifier): readonly Types.Verifier[] {
-  const nested = (verifier as Partial<AnyOfVerifier>)[members]
-  return nested ? nested.flatMap(leaves) : [verifier]
-}
-
-const nonces = new WeakMap<Request, string>()
-
-const challenges = new WeakMap<
-  Request,
-  Map<Types.Verifier, Map<string, Promise<HeadersInit | undefined>>>
->()
-
-const cache = new WeakMap<
-  Request,
-  Map<Types.Verifier, Map<string, Map<unknown, Promise<Types.Verification>>>>
->()
-
-function run(
-  verifier: Types.Verifier,
-  request: Request,
-  context: Types.Context,
-): Promise<Types.Verification> {
-  let byVerifier = cache.get(request)
-  if (!byVerifier) cache.set(request, (byVerifier = new Map()))
-  let byContext = byVerifier.get(verifier)
-  if (!byContext) byVerifier.set(verifier, (byContext = new Map()))
-  // Decisions can depend on the credential, so each credential object gets its own entry.
-  const key = `${context.challenge?.id ?? ''}|${context.nonce ?? ''}`
-  let byCredential = byContext.get(key)
-  if (!byCredential) byContext.set(key, (byCredential = new Map()))
-  let outcome = byCredential.get(context.credential)
-  if (!outcome) {
-    outcome = Promise.resolve(verifier.verify(request, context))
-    byCredential.set(context.credential, outcome)
-  }
-  return outcome
-}
-
-function mergeHeaders(outcomes: readonly Types.Verification[]): Headers {
-  const merged = new Headers()
-  for (const outcome of outcomes) {
-    if (outcome.status === 'valid' || !outcome.headers) continue
-    for (const [name, value] of new Headers(outcome.headers)) merged.append(name, value)
-  }
-  return merged
 }
