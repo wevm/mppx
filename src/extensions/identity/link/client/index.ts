@@ -33,8 +33,7 @@ export function attestation(config: attestation.Config): Identity.Prover {
   const refreshes = new Map<string, Promise<string | undefined>>()
   const remember = (origin: string, authorization: string) => {
     tokens.set(origin, authorization)
-    sent.add(authorization)
-    if (sent.size > 64) sent.delete(sent.values().next().value!)
+    track(sent, tokens, authorization)
   }
   return {
     scope: config.scope,
@@ -57,7 +56,7 @@ export function attestation(config: attestation.Config): Identity.Prover {
       const origin = new URL(request.url).origin
       const authorization = request.headers.get('Authorization')
       // Someone else's Authorization: the token can't be sent alongside it.
-      if (authorization && !sent.has(authorization)) return undefined
+      if (authorization && !owns(sent, tokens, authorization)) return undefined
       const current = tokens.get(origin)
       // Another request already replaced the rejected token: retry with the new one.
       if (current && current !== authorization) return {}
@@ -138,7 +137,7 @@ export function claims(config: claims.Config): Identity.Prover {
       if (!hasChallenge(response, Constants.presentationHeader)) return undefined
       const attached = request.headers.get(Constants.presentationHeader)
       // The caller's own presentation: leave the challenge to them.
-      if (attached && !sent.has(attached)) return undefined
+      if (attached && !owns(sent, presentations, attached)) return undefined
       const origin = new URL(request.url).origin
       presentations.delete(origin)
       const challenge = await claimsChallenge(response)
@@ -156,8 +155,7 @@ export function claims(config: claims.Config): Identity.Prover {
       })
       if (!presentation) return undefined
       presentations.set(origin, presentation)
-      sent.add(presentation)
-      if (sent.size > 64) sent.delete(sent.values().next().value!)
+      track(sent, presentations, presentation)
       return {}
     },
   }
@@ -213,4 +211,19 @@ function toAuthorization(token: string): string {
   const value = token.trim()
   if (/^privatetoken\s/i.test(value)) return value
   return `${Constants.attestationScheme} token="${value}"`
+}
+
+/** Whether this prover attached `value`: an origin's current one, or one it sent before. */
+function owns(sent: Set<string>, current: Map<string, string>, value: string): boolean {
+  return sent.has(value) || [...current.values()].includes(value)
+}
+
+/** Remembers a value this prover attached, keeping at most 64 that are no longer current. */
+function track(sent: Set<string>, current: Map<string, string>, value: string) {
+  sent.add(value)
+  const live = new Set(current.values())
+  for (const old of sent) {
+    if (sent.size <= 64) break
+    if (!live.has(old)) sent.delete(old)
+  }
 }

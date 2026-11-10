@@ -570,6 +570,32 @@ test('claims prover leaves a caller-supplied presentation alone', async () => {
   expect(presented).toBe(2)
 })
 
+test('claims prover keeps refreshing an origin after many others', async () => {
+  let presented = 0
+  const prover = Link.Client.claims({
+    claims: ['email'],
+    present: async () => `p${++presented}`,
+    scope: '*',
+  })
+  const challenge = (origin: string) =>
+    new Response(
+      JSON.stringify({
+        type: Link.Constants.claimsRequiredType,
+        aud: origin,
+        nonce: 'n',
+        claims: ['email'],
+        formats: [Link.Constants.format],
+        trusted_issuers: [Link.Constants.issuer],
+      }),
+      { status: 401, headers: { 'WWW-Authenticate': 'Identity-Presentation' } },
+    )
+  const origins = Array.from({ length: 70 }, (_, i) => `https://api${i}.example`)
+  for (const origin of origins)
+    await prover.retry!(challenge(origin), { request: new Request(origin) } as never)
+  const first = await prover.prove(new Request(origins[0]!), {} as never)
+  expect(await prover.retry!(challenge(origins[0]!), { request: first } as never)).toEqual({})
+})
+
 test('throws on an empty claims list', () => {
   expect(() =>
     Link.Server.claims({
