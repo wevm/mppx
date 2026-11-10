@@ -35,6 +35,8 @@ export function anyOf(
 ): Types.Verifier<AnyOfValue> {
   for (const verifier of verifiers) assertRequestStage(verifier)
   const verifier: Types.Verifier<AnyOfValue> = Object.freeze({
+    // A member that reads Authorization makes the whole set need requiresAuth.
+    ...(verifiers.some((member) => member.authorization) ? { authorization: true } : {}),
     async verify(request) {
       // Every member runs, so each presented proof's replay nonce is consumed even when an
       // earlier member already verified.

@@ -1143,6 +1143,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     const paymentCheck = identityRoute.payment
     const identityRequirements = paymentCheck?.requires ?? []
     const hasIdentity = identityRoute.request.length > 0 || paymentCheck !== undefined
+    // A verifier that reads Authorization would lose its credential to the Payment Credential.
+    if (
+      identityRoute.request.some((verifier) => verifier.authorization) &&
+      credentialHeader !== Constants.Headers.paymentAuthorization
+    )
+      throw new TypeError(
+        'An identity verifier on this route reads Authorization: create the server with requiresAuth: true.',
+      )
     // Preflight hooks (e.g. session bootstrap) issue and settle their own challenges, which
     // the payment check cannot see; reject the combination instead of skipping identity.
     if (paymentCheck && preflight)
