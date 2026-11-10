@@ -1,6 +1,6 @@
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
-import { PaymentOutcomeUnknownError } from '../../Errors.js'
+import { ChallengeUnpayableError, PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as IdentityClient from '../../identity/Client.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
@@ -320,6 +320,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     // Set when the paid request throws after the credential was sent.
     let outcomeUnknown: PaymentOutcomeUnknownError | undefined
 
+    // Offers of the current response the client found it cannot pay, by method and challenge.
+    let unpayable = new Set<string>()
+    const unpayableKey = (candidate: { challenge: Challenge.Challenge; method: methods[number] }) =>
+      `${methods.indexOf(candidate.method)}:${Challenge.serialize(candidate.challenge)}`
+
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
         challenges = await transport.getChallenges(response, transportRequest as never)
@@ -335,7 +340,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
             orderChallenges,
         )
-        const selected = orderedCandidates[0]
+        const remaining = orderedCandidates.filter(
+          (candidate) => !unpayable.has(unpayableKey(candidate)),
+        )
+        const selected = remaining[0]
         if (!selected) {
           await settleAttempt(preparedCredential, {
             challenges,
@@ -431,26 +439,38 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             return promise
           },
         )
-        const eventCredential = await events.emit(
-          'challenge.received',
-          createChallengeReceivedPayload({
-            challenge: selectedChallenge,
-            challenges,
-            createCredential,
-            init,
-            input,
-            method: selected.method,
-            response,
-          }),
-        )
-        const onChallengeCredential =
-          eventCredential ??
-          (onChallenge
-            ? await onChallenge(challenge, {
-                createCredential,
-              })
-            : undefined)
-        const credential = onChallengeCredential ?? (await createCredential())
+        let credential: string
+        try {
+          const eventCredential = await events.emit(
+            'challenge.received',
+            createChallengeReceivedPayload({
+              challenge: selectedChallenge,
+              challenges,
+              createCredential,
+              init,
+              input,
+              method: selected.method,
+              response,
+            }),
+          )
+          const onChallengeCredential =
+            eventCredential ??
+            (onChallenge
+              ? await onChallenge(challenge, {
+                  createCredential,
+                })
+              : undefined)
+          credential = onChallengeCredential ?? (await createCredential())
+        } catch (error) {
+          // Nothing was signed or sent for an offer the client cannot pay, so try the next offer
+          // from the same response without sending another request.
+          if (!(error instanceof ChallengeUnpayableError) || remaining.length < 2) throw error
+          unpayable.add(unpayableKey(selected))
+          await settleAttempt(preparedCredential, { status: 'rejected' })
+          preparedCredential = undefined
+          retry--
+          continue
+        }
         const prepared = preparedCredential
         if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
           await settleAttempt(prepared, { status: 'rejected' })
@@ -494,6 +514,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             },
             { challenge: selectedChallenge, headers: identityHeaders },
           ))
+          // A new response brings its own offers.
+          unpayable = new Set()
         } catch (cause) {
           outcomeUnknown = unknownOutcome(cause)
           throw cause

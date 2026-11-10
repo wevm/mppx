@@ -2958,3 +2958,81 @@ describe('Fetch.polyfill / restore', () => {
     globalThis.fetch = originalFetch
   })
 })
+
+describe('Fetch.from: unpayable offers', () => {
+  const offers = (...currencies: string[]) => {
+    const headers = new Headers()
+    for (const currency of currencies)
+      headers.append(
+        'WWW-Authenticate',
+        Challenge.serialize(
+          Challenge.from({
+            id: currency,
+            intent: 'test',
+            method: 'test',
+            realm: 'test',
+            request: { amount: '1', currency },
+          }),
+        ),
+      )
+    return new Response(null, { headers, status: 402 })
+  }
+  const setup = (failure: (currency: string) => Error | undefined) => {
+    const tried: string[] = []
+    const paid: string[] = []
+    const method = {
+      ...noopMethod,
+      async createCredential({ challenge }: { challenge: Challenge.Challenge }) {
+        const currency = challenge.request.currency as string
+        tried.push(currency)
+        const error = failure(currency)
+        if (error) throw error
+        return `credential:${currency}`
+      },
+    }
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get('Authorization')
+      if (!authorization) return offers('mach', 'ousd', 'usdc')
+      paid.push(authorization)
+      return new Response('OK')
+    }
+    return { fetch: Fetch.from({ fetch: mockFetch, methods: [method] }), paid, tried }
+  }
+
+  test('tries the next offer when one cannot be paid', async () => {
+    const { fetch, paid, tried } = setup((currency) =>
+      currency === 'usdc' ? undefined : new Errors.ChallengeUnpayableError(),
+    )
+    const response = await fetch('https://example.com/resource')
+    expect(response.status).toBe(200)
+    expect(tried).toEqual(['mach', 'ousd', 'usdc'])
+    expect(paid).toEqual(['credential:usdc'])
+  })
+
+  test('pays with the first offer when it can', async () => {
+    const { fetch, paid, tried } = setup(() => undefined)
+    await fetch('https://example.com/resource')
+    expect(tried).toEqual(['mach'])
+    expect(paid).toEqual(['credential:mach'])
+  })
+
+  test('does not try another offer after other errors', async () => {
+    const { fetch, paid, tried } = setup((currency) =>
+      currency === 'mach' ? new Error('signing failed') : undefined,
+    )
+    await expect(fetch('https://example.com/resource')).rejects.toThrow('signing failed')
+    expect(tried).toEqual(['mach'])
+    expect(paid).toEqual([])
+  })
+
+  test('throws the last error when no offer can be paid', async () => {
+    const { fetch, paid, tried } = setup(
+      (currency) => new Errors.ChallengeUnpayableError({ reason: currency }),
+    )
+    await expect(fetch('https://example.com/resource')).rejects.toThrow(
+      'Challenge cannot be paid: usdc',
+    )
+    expect(tried).toEqual(['mach', 'ousd', 'usdc'])
+    expect(paid).toEqual([])
+  })
+})

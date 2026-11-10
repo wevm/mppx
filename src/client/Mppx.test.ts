@@ -4,9 +4,11 @@ import * as Identity from 'mppx/identity'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { getTransactionReceipt } from 'viem/actions'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { accounts, asset, client } from '~test/tempo/viem.js'
+import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
@@ -1692,5 +1694,60 @@ describe('rawFetch', () => {
     expect(response.status).toBe(402)
 
     httpServer.close()
+  })
+})
+
+describe('fetch: offer fallback', () => {
+  test('pays with the next offer when the account cannot pay the first', async () => {
+    const payer = privateKeyToAccount(generatePrivateKey())
+    await fundAccount({ address: payer.address, token: asset })
+    const unfunded = '0x20c0000000000000000000000000000000000002' as const
+
+    const composed = Mppx_server.create({
+      methods: [
+        tempo_server.charge({
+          chainId: client.chain.id,
+          currency: unfunded,
+          getClient: () => client,
+          recipient: accounts[0].address,
+        }),
+        tempo_server.charge({
+          chainId: client.chain.id,
+          currency: asset,
+          getClient: () => client,
+          recipient: accounts[0].address,
+        }),
+      ],
+      secretKey,
+    })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [tempo({ account: payer, getClient: () => client })],
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(composed.charge({ amount: '1' }))(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    try {
+      const unpaid = await fetch(httpServer.url)
+      expect(
+        Challenge.fromResponseList(unpaid).map((challenge) => challenge.request.currency),
+      ).toEqual([unfunded, asset])
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+      const tx = await getTransactionReceipt(client, { hash: receipt.reference as `0x${string}` })
+      expect(tx.logs.some((log) => log.address.toLowerCase() === asset.toLowerCase())).toBe(true)
+      expect(tx.logs.some((log) => log.address.toLowerCase() === unfunded.toLowerCase())).toBe(
+        false,
+      )
+    } finally {
+      httpServer.close()
+    }
   })
 })

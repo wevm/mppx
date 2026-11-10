@@ -33,6 +33,7 @@ import * as defaults from '../internal/defaults.js'
 import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as Simulation from '../internal/simulation.js'
 import * as Zone from '../internal/zone.js'
 import * as Methods from '../Methods.js'
 import type * as AccountResolution from './ResolveAccount.js'
@@ -261,14 +262,16 @@ export function charge(parameters: charge.Parameters = {}) {
           ...(autoSwap ? {} : { calls: transferCalls }),
         })
         swapCalls = autoSwap
-          ? await AutoSwap.findCalls(client, {
-              account: account.address,
-              amountOut: BigInt(amount),
-              tokenOut: currency,
-              tokenIn: autoSwap.tokenIn,
-              slippage: autoSwap.slippage,
-              maxAmountIn: autoSwap.maxAmountIn,
-            })
+          ? await Simulation.simulate(() =>
+              AutoSwap.findCalls(client, {
+                account: account.address,
+                amountOut: BigInt(amount),
+                tokenOut: currency,
+                tokenIn: autoSwap.tokenIn,
+                slippage: autoSwap.slippage,
+                maxAmountIn: autoSwap.maxAmountIn,
+              }),
+            )
           : undefined
       }
 
@@ -358,13 +361,17 @@ export function charge(parameters: charge.Parameters = {}) {
           )
       }
       assertSponsorable()
-      const prepared = await prepareTransactionRequest(client, {
-        account,
-        calls,
-        ...(feeToken ? { feeToken } : {}),
-        nonceKey: 'expiring',
-        validBefore,
-      } as never)
+      // Preparing estimates gas, which simulates the calls: a revert, such as for a missing
+      // balance, means this offer cannot be paid and nothing has been signed.
+      const prepared = await Simulation.simulate(() =>
+        prepareTransactionRequest(client, {
+          account,
+          calls,
+          ...(feeToken ? { feeToken } : {}),
+          nonceKey: 'expiring',
+          validBefore,
+        } as never),
+      )
       // Estimate before enabling fee-payer mode so Tempo includes sender
       // signature and access-key verification costs in the gas budget.
       prepared.gas = (prepared.gas ?? 0n) + 5_000n
