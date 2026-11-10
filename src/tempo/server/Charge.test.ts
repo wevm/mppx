@@ -1838,8 +1838,6 @@ describe('tempo', () => {
         transport: custom({
           async request({ method }) {
             if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
-            // MACH's transfer policy allows every recipient.
-            if (method === 'eth_call') return encodeAbiParameters([{ type: 'uint256' }], [1n])
             if (method === 'eth_getTransactionByHash' && challenge)
               return {
                 hash,
@@ -1937,8 +1935,6 @@ describe('tempo', () => {
           {
             async request({ method }) {
               if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
-              // MACH's transfer policy allows every recipient.
-              if (method === 'eth_call') return encodeAbiParameters([{ type: 'uint256' }], [1n])
               if (method === 'eth_getTransactionByHash' && challenge)
                 return {
                   hash,
@@ -7457,12 +7453,9 @@ describe('direct MACH pull payments', () => {
             if (method === 'eth_call') {
               const [{ data, input }] = params as [{ data?: Hex.Hex; input?: Hex.Hex }]
               const calldata = data ?? input
-              // MACH balance reads cover the payment; simulations and policy reads succeed.
-              // MACH's transfer policy allows every recipient.
+              // MACH balance reads cover the payment; simulations succeed.
               if (calldata?.startsWith('0x70a08231'))
                 return encodeAbiParameters([{ type: 'uint256' }], [10_000_000n])
-              if (calldata?.startsWith('0x9c4bad29'))
-                return encodeAbiParameters([{ type: 'uint256' }], [1n])
               return '0x'
             }
             if (method === 'eth_sendRawTransactionSync') {

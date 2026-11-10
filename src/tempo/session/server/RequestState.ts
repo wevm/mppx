@@ -12,8 +12,6 @@ import type * as Credential from '../../../Credential.js'
 import { VerificationFailedError } from '../../../Errors.js'
 import type { Challenge } from '../../../index.js'
 import type * as z from '../../../zod.js'
-import * as defaults from '../../internal/defaults.js'
-import * as RecipientPolicy from '../../internal/recipient-policy.js'
 import * as Methods from '../../Methods.js'
 import {
   captureRequestBodyProbe,
@@ -54,8 +52,6 @@ export type SessionSnapshotPaymentFields = {
   chainId: number
   /** Token address expected by the challenge. */
   currency: Address
-  /** MACH, when the challenge also accepts a channel funded in MACH (`machineTokenDirect`). */
-  machineToken?: Address | undefined
   /** Escrow precompile address expected by the challenge. */
   escrowContract: Address
   /** Payee address expected by the challenge. */
@@ -195,8 +191,7 @@ function matchesSnapshotPaymentFields(
     channel.chainId === expected.chainId &&
     isAddressEqual(channel.escrowContract, expected.escrowContract) &&
     isAddressEqual(channel.payee, expected.recipient) &&
-    (isAddressEqual(channel.token, expected.currency) ||
-      (expected.machineToken !== undefined && isAddressEqual(channel.token, expected.machineToken)))
+    isAddressEqual(channel.token, expected.currency)
   )
 }
 
@@ -264,8 +259,6 @@ export type SessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Fee token clients must use for open/top-up transactions. */
   feeToken?: Address | undefined
-  /** Whether the payee also accepts a channel funded in MACH, 1:1 with the challenge currency. */
-  machineTokenDirect?: boolean | undefined
   /** Minimum raw-unit increase required for voucher credentials. */
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
@@ -288,8 +281,6 @@ export type ResolveSessionPaymentRequestParameters = {
   decimals: number
   defaultFeePayer?: viem_Account | undefined
   getClient: ResolveRequestChainIdParameters['getClient']
-  /** Advertises `machineTokenDirect` so clients may fund the channel in MACH instead. */
-  machineTokenEnabled?: boolean | undefined
   minVoucherDelta?: string | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
@@ -358,7 +349,6 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     (value.feePayer === undefined || typeof value.feePayer === 'boolean') &&
     (value.feeToken === undefined ||
       (typeof value.feeToken === 'string' && isAddress(value.feeToken, { strict: false }))) &&
-    (value.machineTokenDirect === undefined || typeof value.machineTokenDirect === 'boolean') &&
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
@@ -415,7 +405,6 @@ export async function resolveSessionPaymentRequest(
     decimals,
     defaultFeePayer,
     getClient,
-    machineTokenEnabled,
     minVoucherDelta,
     parameterChainId,
     parameterEscrowContract,
@@ -442,28 +431,6 @@ export async function resolveSessionPaymentRequest(
     request.escrowContract,
     parameterEscrowContract,
   )
-  const currency = readChallengeAddress(request.currency, 'currency')
-  const recipient = readChallengeAddress(request.recipient, 'recipient')
-  const offeredMachineToken = machineTokenEnabled
-    ? resolveMachineTokenOffer({ chainId, currency })
-    : undefined
-  // Only payees MACH's transfer policy authorizes can be paid in MACH, so others are offered the
-  // session currency alone. A credential echoes the HMAC-bound challenge, so verification keeps
-  // what the challenge offered.
-  const machineToken = !offeredMachineToken
-    ? undefined
-    : (
-          credential
-            ? isObject(credential.challenge.request.methodDetails) &&
-              credential.challenge.request.methodDetails.machineTokenDirect === true
-            : await RecipientPolicy.areRecipientsAuthorized(client as never, {
-                chainId,
-                currency: offeredMachineToken,
-                recipients: [recipient],
-              })
-        )
-      ? offeredMachineToken
-      : undefined
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
   const isContentRequest = capturedRequest ? isSessionContentRequest(capturedRequest) : false
@@ -478,17 +445,17 @@ export async function resolveSessionPaymentRequest(
   const sessionSnapshot = await resolveSessionSnapshot({
     amount: capturedRequest && !isContentRequest ? 0n : requestAmount,
     channelId,
-    expected: { chainId, currency, escrowContract, machineToken, recipient },
+    expected: {
+      chainId,
+      currency: readChallengeAddress(request.currency, 'currency'),
+      escrowContract,
+      recipient: readChallengeAddress(request.recipient, 'recipient'),
+    },
     minimumVoucherAdvance: parseUnits(minVoucherDelta ?? '0', decimals),
     requireVoucherAdvance: Boolean(capturedRequest) && !sseEnabled && isContentRequest,
     store,
   })
-  // `machineTokenDirect` is set only by `machineTokenEnabled`, for recipients MACH authorizes.
-  const {
-    machineTokenDirect: _machineTokenDirect,
-    operator: _operator,
-    ...requestWithoutOperator
-  } = request
+  const { operator: _operator, ...requestWithoutOperator } = request
 
   return {
     ...requestWithoutOperator,
@@ -500,90 +467,9 @@ export async function resolveSessionPaymentRequest(
       parameterFeePayer,
       requestFeePayer: request.feePayer,
     }),
-    ...(machineToken ? { machineTokenDirect: true as const } : {}),
     ...(operator ? { operator } : {}),
     ...(sessionSnapshot ? { sessionSnapshot } : {}),
   }
-}
-
-/** Returns MACH's address on a chain, if it is deployed there. */
-export function getMachineToken(chainId: number | undefined): Address | undefined {
-  if (chainId === undefined) return undefined
-  return defaults.machineToken[chainId as keyof typeof defaults.machineToken]?.token
-}
-
-/**
- * Returns MACH when a `machineTokenEnabled` session should also accept a MACH channel, or
- * `undefined` when the session is already priced in MACH. Throws on chains without MACH, as the
- * charge does.
- */
-export function resolveMachineTokenOffer(parameters: {
-  chainId: number
-  currency: Address
-}): Address | undefined {
-  const { chainId, currency } = parameters
-  const machineToken = getMachineToken(chainId)
-  if (!machineToken) throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
-  if (isAddressEqual(currency, machineToken)) return undefined
-  return machineToken
-}
-
-/** Credential verification inputs after a MACH channel was matched to a `machineTokenDirect` challenge. */
-export type MachineTokenCredentialResolution = {
-  /** Challenge to verify against, priced in MACH when the credential uses a MACH channel. */
-  challenge: Challenge.Challenge
-  /** Verification context, priced in MACH when the credential uses a MACH channel. */
-  context: CredentialVerificationContext
-  /** Fee token sponsored open/top-up transactions must use, since MACH cannot pay fees. */
-  sponsoredFeeToken?: Address | undefined
-}
-
-/**
- * Verifies a credential for a MACH channel against a `machineTokenDirect` challenge as if the
- * challenge were priced in MACH, which it accepts 1:1.
- *
- * Call it only after the challenge's HMAC was verified (Mppx does so before `validate` and
- * `broadcast`). It substitutes only when both the signed challenge and the route's current request
- * carry `machineTokenDirect: true` and the credential's channel token is MACH, so a channel in any
- * other token is still checked against the challenge currency and rejected.
- */
-export async function resolveMachineTokenCredential(parameters: {
-  challenge: Challenge.Challenge
-  context: CredentialVerificationContext
-  payload: SessionCredentialPayload
-  store: ChannelStore.ChannelStore
-}): Promise<MachineTokenCredentialResolution> {
-  const { challenge, context, payload, store } = parameters
-  const unchanged = { challenge, context }
-  if (!isObject(challenge.request.methodDetails)) return unchanged
-  if (challenge.request.methodDetails.machineTokenDirect !== true) return unchanged
-  if (context.methodDetails.machineTokenDirect !== true) return unchanged
-  const machineToken = getMachineToken(context.chainId)
-  if (!machineToken || isAddressEqual(context.request.currency as Address, machineToken))
-    return unchanged
-  const token = await readCredentialChannelToken(payload, store)
-  if (!token || !isAddressEqual(token, machineToken)) return unchanged
-  const currency = readChallengeAddress(challenge.request.currency, 'currency')
-  return {
-    challenge: { ...challenge, request: { ...challenge.request, currency: machineToken } },
-    context: { ...context, request: { ...context.request, currency: machineToken } },
-    sponsoredFeeToken: context.methodDetails.feeToken ?? currency,
-  }
-}
-
-async function readCredentialChannelToken(
-  payload: SessionCredentialPayload,
-  store: ChannelStore.ChannelStore,
-): Promise<Address | undefined> {
-  const descriptor = (payload as { descriptor?: { token?: unknown } }).descriptor
-  if (descriptor) {
-    const token = descriptor.token
-    return typeof token === 'string' && isAddress(token, { strict: false }) ? token : undefined
-  }
-  const channelId = normalizeSessionChannelId(payload.channelId)
-  if (!channelId) return undefined
-  const channel = await store.getChannel(channelId)
-  return channel && ChannelStore.isPrecompileState(channel) ? channel.token : undefined
 }
 
 function resolveRequestEscrowContract(

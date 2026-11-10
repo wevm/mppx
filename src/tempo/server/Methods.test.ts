@@ -9,7 +9,7 @@ import * as Credential from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Mppx from '../../server/Mppx.js'
 import * as Store from '../../Store.js'
-import { tokens } from '../internal/defaults.js'
+import { machineToken, tokens } from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Chain from '../session/precompile/Chain.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
@@ -204,6 +204,52 @@ test.each(
     }
   },
 )
+
+describe('machineTokenEnabled', () => {
+  const mach = machineToken[4217].token
+
+  test.each([
+    { parameters: {}, sessions: [tokens.ousd, tokens.usdc, mach], feeToken: tokens.ousd },
+    { parameters: { currency: tokens.usdc }, sessions: [tokens.usdc, mach], feeToken: tokens.usdc },
+    {
+      parameters: { feeToken: tokens.usdc },
+      sessions: [tokens.ousd, tokens.usdc, mach],
+      feeToken: tokens.usdc,
+    },
+  ] as const)(
+    'adds a MACH session offer for $parameters',
+    async ({ parameters, sessions, ...expected }) => {
+      const mppx = Mppx.create({
+        methods: [tempo({ ...config, machineTokenEnabled: true, ...parameters })],
+        secretKey,
+      })
+      const offers = async (handler: ReturnType<typeof mppx.charge>) => {
+        const response = await handler(new Request('https://example.com/paid'))
+        if (response.status !== 402) throw new Error('Expected payment offers')
+        return Challenge.fromResponseList(response.challenge)
+      }
+
+      const charges = await offers(mppx.charge({ amount: '1' }))
+      const session = await offers(mppx.session({ amount: '1', unitType: 'request' }))
+
+      // Charges keep their currencies and accept MACH 1:1 through `machineTokenDirect`.
+      expect(charges.map(({ request }) => request.currency)).not.toContain(mach)
+      expect(session.map(({ request }) => request.currency)).toEqual(sessions)
+      // MACH cannot pay fees, so the MACH session pays them in a stablecoin.
+      expect(session.at(-1)!.request.methodDetails).toMatchObject({
+        feeToken: expected.feeToken,
+      })
+    },
+  )
+
+  test('tempo.session adds the MACH offer too', () => {
+    expect(
+      tempo
+        .session({ ...config, machineTokenEnabled: true })
+        .map((method) => method.defaults?.currency),
+    ).toEqual([tokens.ousd, tokens.usdc, mach])
+  })
+})
 
 describe('common currency offers', () => {
   test('exports common as an alias and supports omitted parameters', () => {
