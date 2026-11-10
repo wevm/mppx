@@ -1921,6 +1921,14 @@ describe('tempo.charge client: machineTokenDirect', () => {
         expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
       ])
       expect(findRoute).not.toHaveBeenCalled()
+
+      // A `currencies` allowlist without MACH keeps the charge currency.
+      canPay = true
+      const allowlisted = mockedCharge({ account, currencies: [currency], getClient: () => client })
+      await allowlisted.createCredential({ challenge: challenge(), context: {} })
+      expect(prepareTransactionRequest.mock.calls[2]?.[1].calls).toEqual([
+        expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+      ])
     } finally {
       vi.doUnmock('viem/actions')
       vi.doUnmock('viem/tempo')

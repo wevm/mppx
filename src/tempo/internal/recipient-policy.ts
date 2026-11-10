@@ -13,8 +13,9 @@ const authorized = new Map<string, number>()
  * whether a payee is an approved MACH merchant. A payment in that currency to a forbidden
  * recipient would revert, so the server should not offer it.
  *
- * Only custom policies (ID 2 and above) restrict recipients, and only a definitive `false` from
- * the chain returns false. Unreadable policies count as authorized.
+ * Only custom policies (ID 2 and above) restrict recipients. A policy that cannot be read returns
+ * false, so the server keeps offering only the advertised currency rather than a MACH route that
+ * may not land.
  * Authorized recipients are cached for five minutes, so a revoked one stops being offered MACH
  * soon after; until then a client's pre-signing simulation fails and it pays the challenge
  * currency instead. Rejected recipients are checked again on every call.
@@ -49,7 +50,7 @@ export async function areRecipientsAuthorized(
       functionName: 'transferPolicyId',
     })) as bigint
   } catch {
-    return true
+    return false
   }
   // Built-in policies 0 (reject all) and 1 (allow all) do not restrict who receives.
   if (policyId < 2n) return true
@@ -64,7 +65,7 @@ export async function areRecipientsAuthorized(
         args: [policyId, recipient],
       })) as boolean
     } catch {
-      continue
+      return false
     }
     if (!allowed) return false
     authorized.set(key(chainId, currency, recipient), Date.now() + authorizedTtlMs)
