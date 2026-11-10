@@ -93,6 +93,9 @@ export function create(config: create.Config): Persona {
         if (attributes['reference-id'] !== referenceId) continue
         const status = attributes.status as Types.InquiryStatus
         if (!options.statuses.includes(status)) continue
+        // Fails closed when the inquiry does not name its template.
+        if (templateId && inquiry.relationships?.['inquiry-template']?.data?.id !== templateId)
+          continue
         const verifiedAt = date(attributes['decisioned-at'] ?? attributes['completed-at'])
         if (!fresh(verifiedAt, options.maxAge, now)) continue
         return Object.freeze({ inquiryId: inquiry.id, referenceId, status, verifiedAt })
@@ -355,6 +358,9 @@ export class PersonaError extends Error {
 type Inquiry = {
   readonly id?: unknown
   readonly attributes?: Record<string, unknown> | undefined
+  readonly relationships?:
+    | { readonly 'inquiry-template'?: { readonly data?: { readonly id?: unknown } | null } }
+    | undefined
 }
 
 type CacheEntry = {

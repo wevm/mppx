@@ -31,7 +31,11 @@ const serverMethod = Method.toServer(method, {
 })
 const charge = { amount: '1', currency: 'USD', recipient: 'merchant' } as const
 
-type Inquiry = { id: string; attributes: Record<string, unknown> }
+type Inquiry = {
+  id: string
+  attributes: Record<string, unknown>
+  relationships?: { 'inquiry-template': { data: { id: string; type: 'inquiry-template' } } }
+}
 
 /** A fake Persona API: lists inquiries as the real endpoint filters them, and starts new ones. */
 function fakePersona(inquiries: Inquiry[], options: { status?: number; pageSize?: number } = {}) {
@@ -46,6 +50,7 @@ function fakePersona(inquiries: Inquiry[], options: { status?: number; pageSize?
       inquiries.push({
         id,
         attributes: { status: 'created', 'reference-id': body.data.attributes['reference-id'] },
+        relationships: template(body.data.attributes['inquiry-template-id']),
       })
       return Response.json({ data: { id, type: 'inquiry' } })
     }
@@ -69,6 +74,10 @@ function fakePersona(inquiries: Inquiry[], options: { status?: number; pageSize?
     })
   }) as typeof globalThis.fetch
   return { calls, fetch, inquiries }
+}
+
+function template(id: string) {
+  return { 'inquiry-template': { data: { id, type: 'inquiry-template' as const } } }
 }
 
 function nextPage(url: URL, after: number) {
@@ -147,7 +156,7 @@ test('links a wallet, starts an inquiry, and accepts the payer once approved', a
   expect(pending.response?.status).toBe(403)
   expect(pending.response?.headers.get('Link')).toBe('<https://api.example/kyc>; rel="kyc"')
 
-  api.inquiries[0]!.attributes = { ...approved('inq_1').attributes }
+  api.inquiries[0] = { ...api.inquiries[0]!, attributes: { ...approved('inq_1').attributes } }
   const before = settlements
   // The Credential's source checksums the address; the check normalizes it.
   const { offered, result, value } = await pay(kyc, `did:pkh:eip155:4217:${account.address}`)
@@ -325,6 +334,27 @@ test('applies maxAge across pages, and a custom referenceId', async () => {
     referenceId: 'customer-1',
   })
   expect(api.calls).toHaveLength(3)
+})
+
+test('accepts only inquiries from the configured template', async () => {
+  const other = { ...approved('inq_2'), relationships: template('itmpl_other') }
+  const untagged = approved('inq_3')
+  const fetch = (async () =>
+    Response.json({ data: [other, untagged], links: { next: null } })) as typeof globalThis.fetch
+  const kyc = Persona.Server.create({ apiKey: 'k', fetch, templateId: 'itmpl_1' }).paymentCheck({
+    referenceId: fromSource,
+  })
+  expect((await pay(kyc, payer)).response?.status).toBe(403)
+
+  const matching = { ...approved('inq_1'), relationships: template('itmpl_1') }
+  const ok = (async () =>
+    Response.json({ data: [other, matching], links: { next: null } })) as typeof globalThis.fetch
+  const accepted = Persona.Server.create({
+    apiKey: 'k',
+    fetch: ok,
+    templateId: 'itmpl_1',
+  }).paymentCheck({ referenceId: fromSource })
+  expect((await pay(accepted, payer)).value).toMatchObject({ inquiryId: 'inq_1' })
 })
 
 test('ignores inquiries the API returns outside its filters', async () => {
