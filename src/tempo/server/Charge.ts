@@ -44,7 +44,6 @@ import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
-import * as RecipientPolicy from '../internal/recipient-policy.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Zone from '../internal/zone.js'
@@ -675,22 +674,8 @@ export function charge<const parameters extends charge.Parameters>(
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
-      // Only approved merchants can receive MACH directly, so offer direct MACH payments only to
-      // them; the legacy swapper route pays others in the charge currency. A credential echoes the
-      // HMAC-bound challenge, so verification keeps what the challenge offered.
-      const machineTokenDirect = !request.machineTokenEnabled
-        ? false
-        : credential
-          ? (credential.challenge.request as { methodDetails?: { machineTokenDirect?: unknown } })
-              .methodDetails?.machineTokenDirect === true
-          : await RecipientPolicy.areRecipientsAuthorized(client, {
-              chainId,
-              currency: MachineTokenCharge.getToken(chainId)!,
-              recipients: [
-                request.recipient,
-                ...(request.splits ?? []).map((split) => split.recipient),
-              ],
-            })
+      // Every MACH merchant is also authorized for the swapper, so `machineTokenEnabled` offers both.
+      const machineTokenDirect = Boolean(request.machineTokenEnabled)
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -1180,9 +1165,7 @@ export declare namespace charge {
     confirmationTimeoutMs?: number | undefined
     /**
      * Accepts MACH 1:1 for this charge: payers may transfer MACH directly to the recipient instead
-     * of the challenge currency. Challenges advertise direct MACH only when MACH's transfer policy
-     * authorizes every recipient and can be read; otherwise they offer only the legacy swapper
-     * route. Payments made through the legacy swapper are still accepted.
+     * of the challenge currency. Payments made through the legacy swapper are still accepted.
      */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
