@@ -182,11 +182,7 @@ export function claims(config: claims.Config): Identity.Verifier<Types.VerifiedC
       status,
       reason: JSON.stringify(body),
       headers: [
-        // Also in the header: anyOf and precedence can replace the body, never the challenges.
-        [
-          'WWW-Authenticate',
-          `${Constants.presentationHeader} challenge="${toBase64(new TextEncoder().encode(JSON.stringify(body)))}"`,
-        ],
+        ['WWW-Authenticate', headerChallenge(body)],
         ['Content-Type', 'application/problem+json'],
       ],
     }
@@ -648,6 +644,20 @@ async function getJson(
     throw new Error(`${url} is not a JSON object.`)
   return body as Record<string, unknown>
 }
+
+/**
+ * The `Identity-Presentation` challenge, carrying the claims challenge too (anyOf and precedence
+ * can replace the body, never the challenges) unless it would make headers too large for common
+ * HTTP clients, such as Node's 16 KiB limit: then the body alone carries it.
+ */
+function headerChallenge(body: object): string {
+  const encoded = toBase64(new TextEncoder().encode(JSON.stringify(body)))
+  if (encoded.length > maxHeaderChallenge) return Constants.presentationHeader
+  return `${Constants.presentationHeader} challenge="${encoded}"`
+}
+
+/** Longest `challenge` parameter sent in `WWW-Authenticate`. */
+const maxHeaderChallenge = 8_192
 
 /** Milliseconds a failed issuer fetch is reused before Link is asked again. */
 const failureBackoff = 30_000

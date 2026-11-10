@@ -207,7 +207,7 @@ export async function claimsChallenges(response: Response): Promise<Types.Claims
 function headerChallenges(response: Response): unknown[] {
   const header = response.headers.get('WWW-Authenticate') ?? ''
   const pattern = new RegExp(
-    `(?:^|,)\\s*${Constants.presentationHeader}\\s+challenge="([A-Za-z0-9_-]{1,16384})"`,
+    `(?:^|,)\\s*${Constants.presentationHeader}\\s+challenge="([A-Za-z0-9_-]+)"`,
     'gi',
   )
   return [...header.matchAll(pattern)].map((match) => {

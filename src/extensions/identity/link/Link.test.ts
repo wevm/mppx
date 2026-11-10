@@ -719,3 +719,20 @@ test('claims prover answers the anyOf challenge it can, not only the first', asy
   expect((await client.fetch(server.url)).status).toBe(200)
   expect(asked).toEqual([['email']])
 })
+
+test('an oversized claims challenge stays in the body, out of the header', async () => {
+  const { fetch } = await createLink()
+  const purpose = 'p'.repeat(20_000)
+  const server = await createServer((origin) => [
+    Link.Server.claims({
+      audience: origin,
+      claims: ['email'],
+      purpose,
+      secretKey,
+      verifier: Link.Server.presentationVerifier({ audience: origin, fetch }),
+    }),
+  ])
+  const response = await globalThis.fetch(server.url)
+  expect(response.headers.get('WWW-Authenticate')).toBe('Identity-Presentation')
+  expect(await Link.Client.claimsChallenge(response)).toMatchObject({ purpose })
+})
