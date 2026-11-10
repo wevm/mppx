@@ -443,17 +443,9 @@ export async function resolveSessionPaymentRequest(
   )
   const currency = readChallengeAddress(request.currency, 'currency')
   const recipient = readChallengeAddress(request.recipient, 'recipient')
-  const offeredMachineToken = machineTokenEnabled
+  const machineToken = machineTokenEnabled
     ? resolveMachineTokenOffer({ chainId, currency })
     : undefined
-  // A credential echoes the HMAC-bound challenge, so verification keeps what the challenge offered.
-  const machineToken =
-    offeredMachineToken &&
-    (!credential ||
-      (isObject(credential.challenge.request.methodDetails) &&
-        credential.challenge.request.methodDetails.machineTokenDirect === true))
-      ? offeredMachineToken
-      : undefined
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
   const isContentRequest = capturedRequest ? isSessionContentRequest(capturedRequest) : false

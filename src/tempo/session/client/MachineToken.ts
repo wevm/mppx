@@ -1,9 +1,8 @@
-import type { Account, Address, Client } from 'viem'
-import { readContract } from 'viem/actions'
-import { Actions } from 'viem/tempo'
+import type { Account, Address } from 'viem'
 
 import * as defaults from '../../internal/defaults.js'
 import { defaultFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
+import { canSpend } from '../../internal/machine-token-charge.js'
 import { isSameAddress } from './ChannelOps.js'
 import { channelKey, type ChannelStore } from './ChannelStore.js'
 import type { ChallengeContext, SessionContext } from './CredentialState.js'
@@ -87,11 +86,12 @@ export async function resolveMachineTokenOpen(parameters: {
   const { account, deposit, resolved } = parameters
   const machine = resolveMachineTokenContext(resolved)
   if (!machine) return undefined
-  if (!(await canSpend(resolved.client, account, machine.token, deposit))) return undefined
+  if (!(await canSpend(resolved.client, { account, amount: deposit, token: machine.token })))
+    return undefined
   if (machine.feePayer) return machine
   // MACH cannot pay fees: an unsponsored payer without a stablecoin for gas opens in the challenge
   // currency instead.
-  const feeToken = await findFundedFeeToken({ account, resolved: machine })
+  const feeToken = await findFeeToken({ account, resolved: machine })
   return feeToken ? { ...machine, feeToken } : undefined
 }
 
@@ -113,11 +113,11 @@ export async function resolveMachineTokenFeeToken(parameters: {
   )
     return resolved.feeToken
   if (resolved.feePayer) return resolved.feeToken
-  return (await findFundedFeeToken({ account, resolved })) ?? resolved.feeToken ?? currency
+  return (await findFeeToken({ account, resolved })) ?? resolved.feeToken ?? currency
 }
 
 /** Returns the server's fee token, or else the challenge currency or a default stablecoin, when the payer holds it. */
-async function findFundedFeeToken(parameters: {
+async function findFeeToken(parameters: {
   account: Account
   resolved: ChallengeContext
 }): Promise<Address | undefined> {
@@ -141,40 +141,9 @@ async function findFundedFeeToken(parameters: {
 }
 
 /**
- * Returns the payment-scope keys an automatic open must hold: the challenge currency's and, for a
- * `machineTokenDirect` challenge, the MACH channel's, which offers in other currencies share.
+ * Returns the scope an automatic open locks: for a `machineTokenDirect` challenge, the MACH
+ * channel's, which offers in other currencies share, so they cannot open two MACH channels at once.
  */
-export function getOpenScopes(resolved: ChallengeContext): readonly string[] {
-  const machine = resolveMachineTokenContext(resolved)
-  return machine ? [resolved.key, machine.key] : [resolved.key]
-}
-
-async function canSpend(
-  client: Client,
-  account: Account,
-  token: Address,
-  amount: bigint,
-): Promise<boolean> {
-  try {
-    const balance = (await readContract(
-      client,
-      Actions.token.getBalance.call(client, { account: account.address, token }) as never,
-    )) as bigint
-    if (balance < amount) return false
-    const accessKey = (account as { accessKeyAddress?: unknown }).accessKeyAddress
-    if (typeof accessKey !== 'string') return true
-    const metadata = await Actions.accessKey.getMetadata(client, {
-      account: account.address,
-      accessKey: accessKey as Address,
-    })
-    if (metadata.spendPolicy !== 'limited') return true
-    const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
-      account: account.address,
-      accessKey: accessKey as Address,
-      token,
-    })
-    return remaining >= amount
-  } catch {
-    return false
-  }
+export function getLockKey(resolved: ChallengeContext): string {
+  return resolveMachineTokenContext(resolved)?.key ?? resolved.key
 }

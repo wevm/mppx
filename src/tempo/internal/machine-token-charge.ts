@@ -293,10 +293,42 @@ export async function getInsufficientBalanceError(
 }
 
 /**
- * Returns whether an account can pay a charge directly in the machine token: its MACH balance
- * covers the total, an access key's remaining MACH limit covers it when the key limits spending,
- * and a simulation of the transfer calls succeeds. Any failed read returns false, so the caller
- * pays in the challenge currency instead.
+ * Returns whether an account can spend `amount` of a token: its balance covers it and, for an access
+ * key that limits spending, so does its remaining limit. Any failed read returns false.
+ */
+export async function canSpend(
+  client: Client,
+  parameters: { account: Account; amount: bigint; token: Address },
+): Promise<boolean> {
+  const { account, amount, token } = parameters
+  try {
+    const balance = (await readContract(
+      client,
+      Actions.token.getBalance.call(client, { account: account.address, token }) as never,
+    )) as bigint
+    if (balance < amount) return false
+    const accessKey = (account as { accessKeyAddress?: unknown }).accessKeyAddress
+    if (typeof accessKey !== 'string') return true
+    const metadata = await Actions.accessKey.getMetadata(client, {
+      account: account.address,
+      accessKey: accessKey as Address,
+    })
+    if (metadata.spendPolicy !== 'limited') return true
+    const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
+      account: account.address,
+      accessKey: accessKey as Address,
+      token,
+    })
+    return remaining >= amount
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Returns whether an account can pay a charge directly in the machine token: it can spend the total
+ * and a simulation of the transfer calls succeeds. Any failure returns false, so the caller pays in
+ * the challenge currency instead.
  */
 export async function canPayDirect(
   client: Client,
@@ -308,29 +340,8 @@ export async function canPayDirect(
   },
 ): Promise<boolean> {
   const { account, amount, calls, token } = parameters
+  if (!(await canSpend(client, { account, amount, token }))) return false
   try {
-    const balance = (await readContract(
-      client,
-      Actions.token.getBalance.call(client, { account: account.address, token }) as never,
-    )) as bigint
-    if (balance < amount) return false
-
-    if ('accessKeyAddress' in account && typeof account.accessKeyAddress === 'string') {
-      const accessKey = account.accessKeyAddress as Address
-      const metadata = await Actions.accessKey.getMetadata(client, {
-        account: account.address,
-        accessKey,
-      })
-      if (metadata.spendPolicy === 'limited') {
-        const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
-          account: account.address,
-          accessKey,
-          token,
-        })
-        if (remaining < amount) return false
-      }
-    }
-
     await call(client, { account: account.address, calls } as never)
     return true
   } catch {
