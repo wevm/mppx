@@ -405,6 +405,19 @@ test('calls Persona through the unwrapped fetch, never a payment-aware wrapper',
   expect(wrapped).toBe(0)
 })
 
+test('treats a Persona redirect as unavailable, without following it', async () => {
+  const inits: RequestInit[] = []
+  const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    inits.push(init ?? {})
+    return new Response(null, { status: 302, headers: { Location: 'https://evil.example/' } })
+  }) as typeof globalThis.fetch
+  const kyc = Persona.Server.create({ apiKey: 'k', fetch }).paymentCheck({
+    referenceId: fromSource,
+  })
+  expect((await pay(kyc, payer)).response?.status).toBe(503)
+  expect(inits.map((init) => init.redirect)).toEqual(['manual'])
+})
+
 test('validates its config', () => {
   expect(() => Persona.Server.create({ apiKey: '' })).toThrow('needs an apiKey')
   for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31])

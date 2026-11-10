@@ -63,6 +63,8 @@ export function create(config: create.Config): Persona {
     const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
     const response = await fetch(new URL(path, apiUrl), {
       ...init,
+      // A redirect is a failure: never send the bearer key on, nor read another origin's body.
+      redirect: 'manual',
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${apiKey}`,
