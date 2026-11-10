@@ -391,6 +391,6 @@ test('normalizes DIDs per chain', () => {
 
 test('validates its config', () => {
   expect(() => Persona.Server.create({ apiKey: '' })).toThrow('needs an apiKey')
-  for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 32])
+  for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31])
     expect(() => Persona.Server.create({ apiKey: 'k', timeout })).toThrow('timeout')
 })
