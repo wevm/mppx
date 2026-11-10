@@ -610,3 +610,52 @@ test('verifies smart accounts on World Chain only unless configured', async () =
     ),
   ).toMatchObject({ status: 'invalid', reason: expect.stringContaining('signature') })
 })
+
+test('binds the message to configured origins instead of the Host header', async () => {
+  // Signed for another site the agent talks to, then sent here with that site's Host.
+  const elsewhere = await craft({}, { url: 'https://evil.example/api/report' })
+  expect((await verifierFor().verify(elsewhere.clone())).status).toBe('valid')
+  const pinned = verifierFor({ origins: ['https://api.example'] })
+  expect(await pinned.verify(elsewhere)).toMatchObject({
+    status: 'invalid',
+    reason: expect.stringContaining('URI'),
+  })
+  expect((await pinned.verify(await craft())).status).toBe('valid')
+  // The scheme is part of the origin.
+  expect((await pinned.verify(await craft({}, { url: 'http://api.example/report' }))).status).toBe(
+    'invalid',
+  )
+  expect((await pinned.verify(await craft({ domain: 'other.example' }))).status).toBe('invalid')
+})
+
+test('accepts only canonical chain IDs, version 1 and plain request IDs', async () => {
+  const verifier = verifierFor()
+  for (const overrides of [
+    { chainId: 'eip155:0480' },
+    { chainId: 'eip155:0' },
+    { chainId: 'eip155:99999999999999999999999' },
+    { version: '2' },
+    { requestId: 'x\nResources:\n- https://z.example' },
+    { requestId: 'has space' },
+  ])
+    expect(await verifier.verify(await craft(overrides))).toMatchObject({ status: 'invalid' })
+})
+
+test('returns the checksummed address whatever case was signed', async () => {
+  const result = await verifierFor().verify(await craft({ address: account.address.toLowerCase() }))
+  expect(result).toMatchObject({ status: 'valid', value: { address: account.address } })
+})
+
+test('shares AgentBook lookups for the same wallet', async () => {
+  const book = registered()
+  const verifier = verifierFor({ agentBook: book })
+  const results = await Promise.all([1, 2, 3].map(async () => verifier.verify(await craft())))
+  expect(results.map((result) => result.status)).toEqual(['valid', 'valid', 'valid'])
+  expect(book.calls).toHaveLength(1)
+  // An outage is not cached.
+  const down = agentBook({}, { fail: true })
+  const flaky = verifierFor({ agentBook: down })
+  expect((await flaky.verify(await craft())).status).toBe('unavailable')
+  expect((await flaky.verify(await craft())).status).toBe('unavailable')
+  expect(down.calls).toHaveLength(2)
+})

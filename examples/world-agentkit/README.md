@@ -42,5 +42,7 @@ pnpm client
 
 - [`src/client.ts`](./src/client.ts) passes `World.Client.prover({ account, scope })` to `Mppx.create()`. Every in-scope request gets an `agentkit` header: a SIWE (CAIP-122) message for the request's host, signed by the wallet.
 - [`src/server.ts`](./src/server.ts) creates `World.Server.verifier({ nonceStore })`. `verify(request)` checks the message's domain, lifetime and signature, claims its nonce once, then reads `lookupHuman` from AgentBook. A valid result carries `humanId`, so the free report is counted per human, not per agent.
+- Payment replays, AgentKit nonces and free-trial counts share one SQLite store (`node:sqlite`, in `world-agentkit.db` or `DB_PATH`), so they survive restarts; the free report is counted with an atomic `store.update`. Use a shared store such as `Store.postgres()` or `Store.redis()` to run several instances, and set `MPP_SECRET_KEY`.
+- The verifier takes `origins` (`PUBLIC_ORIGIN`, default `http://localhost:4021`): the signed domain and URI must match it, so a header signed for another site can't be replayed here with that site's `Host`.
 - Smart accounts work too: pass the account (such as a Coinbase Smart Wallet or Safe) with `chainId` and `type: 'eip1271'`. The server verifies ERC-1271 and ERC-6492 signatures on World Chain by default, and on other chains you add through `rpcUrls`.
 - To require a human-backed agent instead, pass the verifier to a route: `mppx.charge({ amount, identity: [human] })`. Unsigned requests then get `401` and unregistered wallets `403` before any 402.

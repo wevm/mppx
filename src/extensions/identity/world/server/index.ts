@@ -1,5 +1,13 @@
 import { Base64 } from 'ox'
-import { createPublicClient, http, toHex, verifyMessage, type Address, type Hex } from 'viem'
+import {
+  createPublicClient,
+  getAddress,
+  http,
+  toHex,
+  verifyMessage,
+  type Address,
+  type Hex,
+} from 'viem'
 import { worldchain } from 'viem/chains'
 
 import type * as Identity from '../../../../identity/Types.js'
@@ -34,8 +42,9 @@ const abi = [
  */
 export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedAgent> {
   const maxAge = config.maxAge ?? Constants.maxAge
-  const lookup = agentBook(config.agentBook)
+  const lookup = cached(agentBook(config.agentBook))
   const clients = signingClients(config)
+  const origins = config.origins?.map((origin) => new URL(origin).origin)
   return {
     async verify(request) {
       const header = request.headers.get(Constants.header)
@@ -47,8 +56,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const payload = parse(header)
       if (!payload) return { status: 'invalid', reason: 'The agentkit header is malformed.' }
 
-      const url = new URL(request.url)
-      const reason = check(payload, url, maxAge)
+      const reason = check(payload, new URL(request.url), origins, maxAge)
       if (reason) return { status: 'invalid', reason }
 
       const chainId = Number(payload.chainId.slice('eip155:'.length))
@@ -105,7 +113,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         }
       return {
         status: 'valid',
-        value: Object.freeze({ address: payload.address, chainId: payload.chainId, humanId }),
+        value: Object.freeze({
+          address: getAddress(payload.address),
+          chainId: `eip155:${chainId}`,
+          humanId,
+        }),
       }
     },
   }
@@ -128,6 +140,13 @@ export declare namespace verifier {
     rpcUrls?: Record<number, string> | undefined
     /** Clients by signing chain ID, taking precedence over `rpcUrls`, such as for tests. */
     clients?: Record<number, SigningClient> | undefined
+    /**
+     * The server's public origins, such as `['https://api.example']`. The signed domain and URI
+     * must match one of them. When unset, they are compared with the request's URL, whose host
+     * comes from the `Host` header: then a header the agent signed for another site, sent with
+     * that site's `Host`, is accepted here. Set it in production.
+     */
+    origins?: readonly string[] | undefined
     /** Maximum age, in seconds, of a signed message. @default 300 */
     maxAge?: number | undefined
   }
@@ -194,6 +213,32 @@ export declare namespace agentBook {
   }
 }
 
+/** How long, in milliseconds, an AgentBook answer is reused, so floods of requests share calls. */
+const lookupTtl = { registered: 60_000, unregistered: 10_000 }
+
+/** Caches AgentBook answers briefly and shares in-flight lookups for the same wallet. */
+function cached(lookup: (agent: Address) => Promise<string | undefined>) {
+  const entries = new Map<string, { expires: number; value: Promise<string | undefined> }>()
+  return (agent: Address) => {
+    const key = agent.toLowerCase()
+    const now = Date.now()
+    const entry = entries.get(key)
+    if (entry && entry.expires > now) return entry.value
+    if (entries.size >= 10_000) entries.clear()
+    const value = lookup(agent)
+    entries.set(key, { expires: Number.POSITIVE_INFINITY, value })
+    value.then(
+      (humanId) =>
+        entries.set(key, {
+          expires: Date.now() + (humanId ? lookupTtl.registered : lookupTtl.unregistered),
+          value,
+        }),
+      () => entries.delete(key),
+    )
+    return value
+  }
+}
+
 function parse(header: string): Types.Payload | undefined {
   try {
     const value = JSON.parse(Base64.toString(header)) as Record<string, unknown>
@@ -217,7 +262,14 @@ function parse(header: string): Types.Payload | undefined {
     )
       return undefined
     if (value.type !== 'eip191' && value.type !== 'eip1271') return undefined
-    if (!/^eip155:\d+$/.test(value.chainId as string)) return undefined
+    if (value.version !== '1') return undefined
+    // A canonical, positive chain ID, so the signed `Chain ID` line and the result agree.
+    if (!/^eip155:[1-9]\d{0,15}$/.test(value.chainId as string)) return undefined
+    if (!Number.isSafeInteger(Number((value.chainId as string).slice('eip155:'.length))))
+      return undefined
+    // SIWE request IDs are pchar: no spaces or line breaks that could restate signed lines.
+    if (value.requestId !== undefined && !/^[\x21-\x7e]*$/.test(value.requestId as string))
+      return undefined
     if (!/^0x[0-9a-fA-F]{40}$/.test(value.address as string)) return undefined
     return value as Types.Payload
   } catch {
@@ -226,12 +278,24 @@ function parse(header: string): Types.Payload | undefined {
 }
 
 /** Returns why a message does not fit the request, or `undefined` when it does. */
-function check(payload: Types.Payload, url: URL, maxAge: number): string | undefined {
-  if (payload.domain !== url.hostname) return 'The agentkit message is for another domain.'
+function check(
+  payload: Types.Payload,
+  url: URL,
+  origins: readonly string[] | undefined,
+  maxAge: number,
+): string | undefined {
+  let uri: URL
   try {
-    if (new URL(payload.uri).host !== url.host) return 'The agentkit message is for another URI.'
+    uri = new URL(payload.uri)
   } catch {
     return 'The agentkit message URI is invalid.'
+  }
+  if (origins) {
+    if (!origins.includes(uri.origin)) return 'The agentkit message is for another URI.'
+    if (payload.domain !== uri.hostname) return 'The agentkit message is for another domain.'
+  } else {
+    if (payload.domain !== url.hostname) return 'The agentkit message is for another domain.'
+    if (uri.host !== url.host) return 'The agentkit message is for another URI.'
   }
   const now = Date.now()
   const issuedAt = Date.parse(payload.issuedAt)
