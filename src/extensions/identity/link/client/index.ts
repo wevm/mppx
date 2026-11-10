@@ -210,7 +210,7 @@ function headerChallenges(response: Response): unknown[] {
     `(?:^|,)\\s*${Constants.presentationHeader}\\s+challenge="([A-Za-z0-9_-]{1,16384})"`,
     'gi',
   )
-  return [...header.matchAll(pattern)].slice(0, 8).map((match) => {
+  return [...header.matchAll(pattern)].map((match) => {
     try {
       const binary = atob(match[1]!.replace(/-/g, '+').replace(/_/g, '/'))
       const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))

@@ -694,6 +694,13 @@ test('claims prover answers the anyOf challenge it can, not only the first', asy
   })
   const unproved = await globalThis.fetch(server.url)
   expect((await Link.Client.claimsChallenges(unproved)).length).toBeGreaterThanOrEqual(2)
+  // Every header challenge counts, however many anyOf sends.
+  const header = unproved.headers.get('WWW-Authenticate')!
+  const many = new Response(null, {
+    headers: { 'WWW-Authenticate': Array.from({ length: 12 }, () => header).join(', ') },
+    status: 401,
+  })
+  expect((await Link.Client.claimsChallenges(many)).length).toBeGreaterThanOrEqual(12)
   const asked: (readonly string[])[] = []
   const client = ClientMppx.create({
     identity: [
