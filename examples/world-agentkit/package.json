@@ -1,0 +1,19 @@
+{
+  "name": "world-agentkit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -b",
+    "client": "tsx src/client.ts",
+    "register": "tsx src/register.ts",
+    "server": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@types/node": "^26.2.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "mppx": "workspace:*",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "viem": "2.57.1"
+  }
+}
