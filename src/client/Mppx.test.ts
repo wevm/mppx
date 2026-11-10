@@ -1,5 +1,6 @@
 import { Challenge, Credential, Errors, Mcp, Method, Receipt } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/client'
+import * as Identity from 'mppx/identity'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
@@ -406,7 +407,7 @@ describe('preparePayment', () => {
 })
 
 describe('prepareRequest', () => {
-  function setup(fetch: typeof globalThis.fetch) {
+  function setup(fetch: typeof globalThis.fetch, identity?: readonly Identity.Prover[]) {
     const method = Method.toClient(
       Method.from({ name: 'test', intent: 'charge', schema: Methods.charge.schema }),
       {
@@ -418,7 +419,7 @@ describe('prepareRequest', () => {
         },
       },
     )
-    return Mppx.create({ fetch, methods: [method], polyfill: false })
+    return Mppx.create({ fetch, methods: [method], polyfill: false, ...(identity && { identity }) })
   }
 
   function paymentRequired(header?: string) {
@@ -498,6 +499,8 @@ describe('prepareRequest', () => {
       headers: {
         Authorization: 'Bearer secret',
         Cookie: 'session=secret',
+        'Identity-Attestation': 'secret',
+        'Identity-Presentation': 'secret',
         'Payment-Authorization': 'secret',
         'PAYMENT-SIGNATURE': 'secret',
         'X-Alternate-Credential': 'Payment secret',
@@ -509,6 +512,8 @@ describe('prepareRequest', () => {
     expect(prepared.request.url).toBe('https://pay.example/resource')
     expect(prepared.request.headers.get('authorization')).toBeNull()
     expect(prepared.request.headers.get('cookie')).toBeNull()
+    expect(prepared.request.headers.get('identity-attestation')).toBeNull()
+    expect(prepared.request.headers.get('identity-presentation')).toBeNull()
     expect(prepared.request.headers.get('payment-authorization')).toBeNull()
     expect(prepared.request.headers.get('payment-signature')).toBeNull()
     expect(prepared.request.headers.get('x-alternate-credential')).toBeNull()
@@ -600,6 +605,41 @@ describe('prepareRequest', () => {
       Mppx.restore()
       globalThis.fetch = originalFetch
     }
+  })
+
+  test('security: strips Identity.Headers and prover-declared headers on cross-origin redirects', async () => {
+    const prepare = async (identity?: readonly Identity.Prover[]) => {
+      let requests = 0
+      const fetch = vi.fn(async () =>
+        ++requests === 1
+          ? new Response(null, {
+              headers: { location: 'https://pay.example/resource' },
+              status: 307,
+            })
+          : paymentRequired(),
+      )
+      const mppx = setup(fetch as typeof globalThis.fetch, identity)
+      const prepared = await mppx.prepareRequest('https://shop.example/start', {
+        headers: {
+          ...Object.fromEntries(Identity.Headers.request.map((name) => [name, 'secret'])),
+          'X-Agent-Token': 'secret',
+          'X-Public': 'value',
+        },
+      })
+      return prepared.request.headers
+    }
+    const prover: Identity.Prover = {
+      headers: ['X-Agent-Token'],
+      prove: (request) => request,
+      scope: ['https://shop.example'],
+    }
+
+    const headers = await prepare([prover])
+    for (const name of Identity.Headers.request) expect(headers.get(name)).toBeNull()
+    expect(headers.get('x-agent-token')).toBeNull()
+    expect(headers.get('x-public')).toBe('value')
+    // Without a prover declaring it, the header is not a credential.
+    expect((await prepare()).get('x-agent-token')).toBe('secret')
   })
 
   test('behavior: applies Accept-Payment policy after redirects', async () => {

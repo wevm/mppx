@@ -20,7 +20,12 @@ import {
 import { Abis, Actions, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
-import { CredentialReplayedError, PaymentError, VerificationFailedError } from '../../Errors.js'
+import {
+  BroadcastOutcomeUnknownError,
+  CredentialReplayedError,
+  PaymentError,
+  VerificationFailedError,
+} from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -39,6 +44,7 @@ import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
+import * as Zone from '../internal/zone.js'
 import * as Methods from '../Methods.js'
 import { fallbackStore } from './internal/fallback-store.js'
 import * as Relay from './Relay.js'
@@ -78,12 +84,17 @@ export function charge<const parameters extends charge.Parameters>(
     supportedModes,
     validateSender,
     waitForConfirmation = true,
+    zones,
   } = parameters
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
+  // A relay validates and broadcasts credentials and enforces single use itself, so it never
+  // reads the local replay store and needs no shared one.
   const rawStore = (parameters.store ??
-    fallbackStore('tempo.charge')) as Store.AtomicStore<charge.StoreItemMap>
+    (relay
+      ? Store.memory()
+      : fallbackStore('tempo.charge'))) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,
@@ -192,6 +203,7 @@ export function charge<const parameters extends charge.Parameters>(
   type HashPayload = Extract<Credential['payload'], { type: 'hash' }>
   type ProofPayload = Extract<Credential['payload'], { type: 'proof' }>
   type TransactionPayload = Extract<Credential['payload'], { type: 'transaction' }>
+  type ZonePayload = Extract<Credential['payload'], { type: 'zone' }>
 
   /** Validates a recognized payment route and retains its funding metadata. */
   function validatePaymentRoute(
@@ -295,6 +307,65 @@ export function charge<const parameters extends charge.Parameters>(
     )
     const payer = payers.size === 1 ? [...payers][0] : undefined
     return { payer, receipt, sender, transfers }
+  }
+
+  /**
+   * Validates a payment that a Zone withdrawal settled on Tempo: the portal's
+   * `WithdrawalProcessed` event pays the recipient, and the withdrawal's memo in
+   * the `processWithdrawals` calldata binds it to this challenge.
+   */
+  async function validateZoneCredential(payload: ZonePayload, context: CredentialContext) {
+    const { amount, challenge, client, currency, methodDetails, recipient, supportedModes } =
+      context
+    if (supportedModes && !supportedModes.includes('push'))
+      throw new MismatchError('Zone credentials are not supported for this challenge.', {})
+    if (!Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, payload.zoneId))
+      throw new MismatchError('Zone is not accepted for this challenge.', {
+        zoneId: String(payload.zoneId),
+      })
+    if (methodDetails?.splits)
+      throw new MismatchError('Zone credentials do not support split payments.', {})
+
+    const portal = Zone.portalAddress(payload.zoneId)
+    const senderTag = payload.senderTag as `0x${string}`
+    const hash = payload.hash as `0x${string}`
+    const receipt = await getTransactionReceipt(client, { hash })
+    if (receipt.status !== 'success')
+      throw new MismatchError('Payment verification failed: settlement transaction reverted.', {
+        hash,
+      })
+
+    const event = Zone.findProcessedEvent(receipt, { portal, senderTag })
+    if (!event)
+      throw new MismatchError('Payment verification failed: Zone withdrawal not settled.', {
+        senderTag,
+      })
+    if (!event.callbackSuccess)
+      throw new MismatchError('Payment verification failed: Zone withdrawal bounced.', {
+        senderTag,
+      })
+
+    // The event has no memo, so the calldata's withdrawal shows what was paid and for which challenge.
+
+    const transaction = await getTransaction(client, { hash })
+    const calls =
+      (transaction as Transaction.Transaction).calls ??
+      (transaction.to ? [{ to: transaction.to, data: transaction.input }] : [])
+    const withdrawal = Zone.findWithdrawal(calls, { portal, senderTag })
+    if (
+      !withdrawal ||
+      withdrawal.gasLimit !== 0n ||
+      !TempoAddress.isEqual(withdrawal.to, recipient) ||
+      !TempoAddress.isEqual(withdrawal.token, currency) ||
+      withdrawal.amount.toString() !== amount
+    )
+      throw new MismatchError('Payment verification failed: Zone withdrawal not found.', {
+        senderTag,
+      })
+    if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
+      throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+
+    return { hash, portal, receipt, senderTag }
   }
 
   async function validateProofCredential(
@@ -441,6 +512,22 @@ export function charge<const parameters extends charge.Parameters>(
         }
       }
 
+      case 'zone': {
+        const { hash, portal, receipt, senderTag } = await validateZoneCredential(
+          context.payload,
+          context,
+        )
+        return {
+          details: { mode: 'push' as const },
+          hash,
+          payer: undefined,
+          portal,
+          receipt,
+          senderTag,
+          type: 'zone' as const,
+        }
+      }
+
       case 'transaction': {
         const {
           fundingCurrency,
@@ -484,6 +571,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
       splits,
       supportedModes,
+      zones,
     } as unknown as Defaults,
 
     stableBinding: chargeBinding,
@@ -642,6 +730,16 @@ export function charge<const parameters extends charge.Parameters>(
             }
           }
           return toReceipt(receipt.transactionHash, fundingCurrency)
+        }
+
+        case 'zone': {
+          const { portal, receipt, senderTag } = validated
+          if (!(await tryClaimZoneWithdrawal(store, portal, senderTag, replayExpires))) {
+            throw new CredentialReplayedError({
+              reason: 'Zone withdrawal has already been used',
+            })
+          }
+          return toReceipt(receipt.transactionHash)
         }
 
         case 'proof': {
@@ -874,7 +972,12 @@ export function charge<const parameters extends charge.Parameters>(
                     Math.max(deadline, Date.now() + client.pollingInterval),
                     broadcastError,
                   ).catch(() => undefined)
-                if (!recovered) throw broadcastError
+                if (!recovered)
+                  throw new BroadcastOutcomeUnknownError({
+                    cause: broadcastError,
+                    transactionHash: finalHash,
+                    validBefore: transaction.validBefore,
+                  })
                 receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
@@ -898,8 +1001,17 @@ export function charge<const parameters extends charge.Parameters>(
             // Optimistic path: broadcast without waiting for confirmation
             // (simulation above already ran). The returned receipt assumes
             // success — callers opt in via waitForConfirmation: false.
+            const transactionHash = finalHash
             const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
+            }).catch((broadcastError: unknown) => {
+              // Without a receipt wait, an ambiguous failure leaves the outcome to the caller.
+              if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
+              throw new BroadcastOutcomeUnknownError({
+                cause: broadcastError,
+                transactionHash,
+                validBefore: transaction.validBefore,
+              })
             })
             if (reference.toLowerCase() !== finalHash.toLowerCase())
               throw new VerificationFailedError({
@@ -983,8 +1095,10 @@ export declare namespace charge {
      * two thirds of this budget. If it fails with an unknown outcome (e.g. a
      * timeout, a lost connection, or "already known"), mppx polls for the
      * receipt until the deadline, or until 2 seconds after the transaction's
-     * `validBefore` followed by one final lookup, before surfacing the broadcast
-     * error. Definitive rejections fail immediately.
+     * `validBefore` followed by one final lookup, before throwing
+     * `Errors.BroadcastOutcomeUnknownError` with the transaction hash and
+     * `validBefore`, and the broadcast error as `cause`. Definitive rejections
+     * fail immediately with the RPC error.
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
@@ -1013,16 +1127,21 @@ export declare namespace charge {
     /**
      * Store for charge replay protection.
      *
-     * Non-zero charge flows default to an in-memory store if omitted. For
-     * zero-dollar proof auth, replay prevention is enabled only when a store
+     * Replay protection requires a {@link Store.AtomicStore} so replay markers
+     * can be written atomically. Use a shared store, such as `Store.redis()`,
+     * `Store.upstash()`, `Store.postgres()` or `Store.durableObject()`, so
+     * consumed hashes and proofs are visible across all server instances.
+     *
+     * If omitted, this throws in production (`NODE_ENV=production`), on
+     * multi-instance platforms (such as Vercel, AWS Lambda, Netlify, Fly.io,
+     * Cloud Run, Render, Railway or Heroku) and on Cloudflare Workers. Elsewhere,
+     * such as local development and tests, it warns and falls back to an
+     * in-memory store. Pass `Store.memory()` explicitly to accept replay
+     * protection scoped to one instance.
+     *
+     * For zero-dollar proof auth, replay prevention is enabled only when a store
      * is explicitly provided; otherwise proofs remain reusable until the
      * challenge expires.
-     *
-     * Replay protection requires a {@link Store.AtomicStore} so replay markers
-     * can be written atomically.
-     *
-     * Use a shared store in multi-instance deployments so consumed hashes and
-     * proofs are visible across all server instances.
      */
     store?: Store.AtomicStore | undefined
     /**
@@ -1065,7 +1184,9 @@ export declare namespace charge {
      * report `status: 'success'` based on simulation alone — if the
      * transaction reverts on-chain after broadcast (e.g. due to a state
      * change between simulation and inclusion), the receipt will not reflect
-     * the failure.
+     * the failure. An ambiguous broadcast failure (a timeout, a lost
+     * connection, a 5xx) throws `Errors.BroadcastOutcomeUnknownError` without
+     * polling for a receipt.
      */
     waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters &
@@ -1101,7 +1222,7 @@ export declare namespace charge {
     maxInFlightReservations?: number | undefined
     /** Maximum aggregate declared fee exposure. @default `feePayerPolicy.maxTotalFee * 10` */
     maxInFlightTotalFee?: bigint | undefined
-    /** Atomic store shared by every process using the sponsor. Defaults to `store`. */
+    /** Atomic store shared by every process using the sponsor. Defaults to `store`, under the same production rule. */
     store?: Store.AtomicStore | undefined
   }
 
@@ -1117,8 +1238,15 @@ function chargeBinding(request: ChargeRequest) {
     request
   requestRest satisfies Record<string, never>
 
-  const { chainId, feePayer, machineTokenEnabled, splits, supportedModes, ...methodDetailsRest } =
-    methodDetails ?? {}
+  const {
+    chainId,
+    feePayer,
+    machineTokenEnabled,
+    splits,
+    supportedModes,
+    zones,
+    ...methodDetailsRest
+  } = methodDetails ?? {}
   methodDetailsRest satisfies Record<string, never>
   void feePayer
 
@@ -1132,6 +1260,7 @@ function chargeBinding(request: ChargeRequest) {
     recipient,
     splits,
     supportedModes,
+    zones,
   }
 }
 
@@ -1456,6 +1585,23 @@ function getHashStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
 /** @internal */
 function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
+}
+
+/** @internal */
+function getZoneWithdrawalStoreKey(
+  portal: `0x${string}`,
+  senderTag: `0x${string}`,
+): `mppx:charge:${string}` {
+  return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`
+}
+
+async function tryClaimZoneWithdrawal(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  portal: `0x${string}`,
+  senderTag: `0x${string}`,
+  expires: number,
+): Promise<boolean> {
+  return Store.tryClaim(store, getZoneWithdrawalStoreKey(portal, senderTag), expires)
 }
 
 async function tryClaimHash(

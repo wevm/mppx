@@ -34,11 +34,14 @@
   ],
   "devDependencies": {
     "@changesets/cli": "^3.0.0",
+    "@electric-sql/pglite": "^0.5.15",
     "@hono/node-server": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@playwright/test": "^1.62.1",
+    "@stripe/agent-identity": "0.3.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
+    "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/browser-playwright": "5.0.5",
@@ -52,6 +55,7 @@
     "browserslist": "^4.28.8",
     "elysia": "^1.4.29",
     "eslint-plugin-compat": "^7.0.2",
+    "eventsource-parser": "4.1.1",
     "express": "^5.2.1",
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
@@ -59,7 +63,9 @@
     "hono": "4.13.11",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
+    "miniflare": "^4.20260730.0",
     "next": "16.4.3",
+    "pg": "^8.23.1",
     "pkg-pr-new": "0.0.88",
     "playwright": "^1.62.1",
     "prool": "^0.2.14",
@@ -79,7 +85,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "main": "./dist/index.js",
   "license": "MIT",
   "homepage": "https://github.com/wevm/mppx#readme",
@@ -116,6 +122,11 @@
       "src": "./src/client/node.ts",
       "types": "./dist/client/node.d.ts",
       "default": "./dist/client/node.js"
+    },
+    "./cloudflare": {
+      "src": "./src/cloudflare/index.ts",
+      "types": "./dist/cloudflare/index.d.ts",
+      "default": "./dist/cloudflare/index.js"
     },
     "./identity": {
       "src": "./src/identity/index.ts",
@@ -232,10 +243,25 @@
       "types": "./dist/extensions/identity/index.d.ts",
       "default": "./dist/extensions/identity/index.js"
     },
+    "./extensions/identity/attestation": {
+      "src": "./src/extensions/identity/attestation/index.ts",
+      "types": "./dist/extensions/identity/attestation/index.d.ts",
+      "default": "./dist/extensions/identity/attestation/index.js"
+    },
     "./extensions/identity/tap": {
       "src": "./src/extensions/identity/tap/index.ts",
       "types": "./dist/extensions/identity/tap/index.d.ts",
       "default": "./dist/extensions/identity/tap/index.js"
+    },
+    "./extensions/identity/email-otp": {
+      "src": "./src/extensions/identity/email-otp/index.ts",
+      "types": "./dist/extensions/identity/email-otp/index.d.ts",
+      "default": "./dist/extensions/identity/email-otp/index.js"
+    },
+    "./extensions/identity/link": {
+      "src": "./src/extensions/identity/link/index.ts",
+      "types": "./dist/extensions/identity/link/index.d.ts",
+      "default": "./dist/extensions/identity/link/index.js"
     },
     "./extensions/identity/web-bot-auth": {
       "src": "./src/extensions/identity/web-bot-auth/index.ts",
@@ -275,6 +301,7 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
+    "@stripe/agent-identity": ">=0.3.0",
     "@x402/core": ">=2.22.0",
     "@x402/express": ">=2.22.0",
     "@x402/hono": ">=2.22.0",
@@ -288,6 +315,9 @@
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@stripe/agent-identity": {
       "optional": true
     },
     "@x402/core": {
@@ -319,7 +349,6 @@
     }
   },
   "dependencies": {
-    "eventsource-parser": "4.1.1",
     "ox": "catalog:",
     "structured-headers": "2.1.0",
     "zod": "^4.6.7"

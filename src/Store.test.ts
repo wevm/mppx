@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'vp/test'
+import { DatabaseSync } from 'node:sqlite'
+
+import { PGlite } from '@electric-sql/pglite'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Store from './Store.js'
 
@@ -70,9 +73,78 @@ function fakeTryClaim(seen?: string[]) {
   }
 }
 
+function fakeDurableObjectNamespace() {
+  const objects = new Map<string, Store.DurableObjectStore>()
+  const queues = new Map<string, Promise<unknown>>()
+  return {
+    idFromName: (name: string) => name,
+    get(id: string) {
+      let object = objects.get(id)
+      if (!object) {
+        const map = new Map<string, unknown>()
+        object = new Store.DurableObjectStore({
+          storage: {
+            async get(key: string) {
+              return structuredClone(map.get(key))
+            },
+            async put(key: string, value: unknown) {
+              map.set(key, structuredClone(value))
+            },
+            async delete(key: string) {
+              return map.delete(key)
+            },
+          },
+        })
+        objects.set(id, object)
+      }
+      const target = object
+      // Serialize calls per object, as a Durable Object's input gate does.
+      const queue = <result>(run: () => Promise<result>) => {
+        const response = (queues.get(id) ?? Promise.resolve()).then(run)
+        queues.set(
+          id,
+          response.catch(() => {}),
+        )
+        return response
+      }
+      // RPC arguments and results are structured clones.
+      const rpc =
+        (method: 'storeGet' | 'storePut' | 'storeDelete' | 'storeSwap' | 'storeClaim') =>
+        (...args: unknown[]) =>
+          queue(async () =>
+            structuredClone(
+              await (target[method] as Function).apply(target, structuredClone(args)),
+            ),
+          )
+      return {
+        fetch(input: string, init: RequestInit) {
+          return queue(() => target.fetch(new Request(input, init)))
+        },
+        storeGet: rpc('storeGet'),
+        storePut: rpc('storePut'),
+        storeDelete: rpc('storeDelete'),
+        storeSwap: rpc('storeSwap'),
+        storeClaim: rpc('storeClaim'),
+      }
+    },
+  }
+}
+
 describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
+  { label: 'durableObject', create: () => Store.durableObject(fakeDurableObjectNamespace()) },
+  {
+    label: 'durableObject (rpc)',
+    create: () => Store.durableObject(fakeDurableObjectNamespace(), { transport: 'rpc' }),
+  },
+  {
+    label: 'durableObject (rpc, native)',
+    create: () =>
+      Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native', transport: 'rpc' }),
+  },
+  { label: 'postgres', create: () => pgliteStore() },
+  { label: 'sqlite', create: () => Store.sqlite(new DatabaseSync(':memory:')) },
   {
     label: 'redis',
     create: () => {
@@ -466,5 +538,652 @@ describe('json roundtrip behavior', () => {
 
     expect(result).toBe(2)
     expect(await kv.get('k')).toEqual({ count: 2 })
+  })
+})
+
+/** node:sqlite behind better-sqlite3's API: all() throws on statements that return no rows. */
+function betterSqlite3Like() {
+  const db = new DatabaseSync(':memory:')
+  return {
+    prepare(text: string) {
+      const statement = db.prepare(text)
+      const reader = statement.columns().length > 0
+      return {
+        reader,
+        all(...params: never[]) {
+          if (!reader) throw new TypeError('This statement does not return data. Use run() instead')
+          return statement.all(...params)
+        },
+        run: (...params: never[]) => statement.run(...params),
+      }
+    },
+  }
+}
+
+let pglite: PGlite | undefined
+let tables = 0
+
+/** A Postgres store on a fresh table of one shared in-process PGlite database. */
+function pgliteStore(options?: Store.sql.Options) {
+  pglite ??= new PGlite()
+  return Store.postgres(pglite, { table: `mppx_store_${++tables}`, ...options })
+}
+
+describe.each([
+  { label: 'memory', create: (options?: Store.Options) => Store.memory(options) },
+  {
+    label: 'durableObject',
+    create: (options?: Store.Options) => Store.durableObject(fakeDurableObjectNamespace(), options),
+  },
+  {
+    label: 'durableObject (rpc, native)',
+    create: (options?: Store.Options) =>
+      Store.durableObject(fakeDurableObjectNamespace(), {
+        ...options,
+        encoding: 'native',
+        transport: 'rpc',
+      }),
+  },
+  { label: 'postgres (PGlite)', create: (options?: Store.Options) => pgliteStore(options) },
+  {
+    label: 'sqlite (node:sqlite)',
+    create: (options?: Store.Options) => Store.sqlite(new DatabaseSync(':memory:'), options),
+  },
+  {
+    label: 'sqlite (better-sqlite3 API)',
+    create: (options?: Store.Options) => Store.sqlite(betterSqlite3Like(), options),
+  },
+])('atomic: $label', ({ create }) => {
+  test('round-trips values with bigints', async () => {
+    const store = create()
+    await store.put('k', { amount: 123456789012345678901234567890n, nested })
+    expect(await store.get('k')).toEqual({ amount: 123456789012345678901234567890n, nested })
+  })
+
+  test('update stays atomic under concurrent writers', async () => {
+    const store = create()
+    const results = await Promise.all(
+      Array.from({ length: 50 }, () =>
+        store.update('counter', (current) => {
+          const value = ((current as number | null) ?? 0) + 1
+          return { op: 'set', value, result: value }
+        }),
+      ),
+    )
+    expect(results.toSorted((a, b) => a - b)).toEqual(Array.from({ length: 50 }, (_, i) => i + 1))
+    expect(await store.get('counter')).toBe(50)
+  })
+
+  test('update supports noop and delete', async () => {
+    const store = create()
+    expect(await store.update('k', () => ({ op: 'noop', result: 'none' }))).toBe('none')
+    expect(await store.get('k')).toBeNull()
+    await store.put('k', 1)
+    expect(await store.update('k', () => ({ op: 'noop', result: 'kept' }))).toBe('kept')
+    expect(await store.get('k')).toBe(1)
+    expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
+    expect(await store.get('k')).toBeNull()
+    expect(await store.update('k', () => ({ op: 'delete', result: 'absent' }))).toBe('absent')
+  })
+
+  test('tryClaim records a key once across concurrent claims', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => Store.tryClaim(store, 'nonce', expires)),
+    )
+    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(await store.get('nonce')).toEqual({ expires, type: 'mppx:replay' })
+    expect(await Store.tryClaim(store, 'past', Date.now() - 1)).toBe(false)
+  })
+
+  test('tryClaim replaces expired markers, from put or from update', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    await store.put('put', { expires: Date.now() - 1, type: 'mppx:replay' })
+    await store.update('updated', () => ({
+      op: 'set',
+      value: { expires: Date.now() - 1, type: 'mppx:replay' },
+      result: undefined,
+    }))
+    expect(await Store.tryClaim(store, 'put', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'updated', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'put', expires)).toBe(false)
+  })
+
+  test('tryClaim keeps live markers and other values', async () => {
+    const store = create()
+    const expires = Date.now() + 60_000
+    await store.put('live', { expires: Date.now() + 30_000, type: 'mppx:replay' })
+    await store.put('legacy', Date.now() - 60_000)
+    await store.put('other', { expires: Date.now() - 1, type: 'something-else' })
+    expect(await Store.tryClaim(store, 'live', expires)).toBe(false)
+    expect(await Store.tryClaim(store, 'legacy', expires)).toBe(false)
+    expect(await Store.tryClaim(store, 'other', expires)).toBe(false)
+    expect(await store.get('other')).toEqual({
+      expires: expect.any(Number),
+      type: 'something-else',
+    })
+  })
+
+  test('applies keyPrefix', async () => {
+    const store = create({ keyPrefix: 'tenant:' })
+    await store.put('k', 'value')
+    expect(await store.get('k')).toBe('value')
+    expect(await Store.tryClaim(store, 'n', Date.now() + 60_000)).toBe(true)
+    expect(await Store.tryClaim(store, 'n', Date.now() + 60_000)).toBe(false)
+  })
+})
+
+/** A value with every type native compare-and-swap compares, nested. */
+function richValue() {
+  const holes: number[] = new Array(3)
+  holes[0] = 1
+  holes[2] = 3
+  return {
+    n: 0,
+    bytes: new Uint8Array([1, 2]),
+    floats: new Float64Array([1.5]),
+    view: new DataView(new Uint8Array([7]).buffer),
+    buffer: new Uint8Array([3]).buffer,
+    map: new Map<unknown, unknown>([
+      ['a', { b: 1n }],
+      [1, [2]],
+    ]),
+    set: new Set<unknown>([1, 'x', 2n]),
+    date: new Date(0),
+    re: /a/gi,
+    holes,
+    nested: [{ m: new Map([['k', new Uint8Array([9])]]) }],
+  }
+}
+
+/** A DurableObjectStore on an in-memory storage that copies values as Durable Object storage does. */
+function objectStore<store extends Store.DurableObjectStore = Store.DurableObjectStore>(
+  Class: new (state: Store.DurableObjectStore.State) => store = Store.DurableObjectStore as never,
+) {
+  const map = new Map<string, unknown>()
+  return new Class({
+    storage: {
+      async get(key: string) {
+        return structuredClone(map.get(key))
+      },
+      async put(key: string, value: unknown) {
+        map.set(key, structuredClone(value))
+      },
+      async delete(key: string) {
+        return map.delete(key)
+      },
+    },
+  })
+}
+
+describe('durableObject', () => {
+  test('native update compares typed arrays, buffers, maps, sets, dates, regexps and holes', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    await store.put('rich', richValue())
+    const increment = () =>
+      store.update('rich', (current) => {
+        const value = current as ReturnType<typeof richValue>
+        return { op: 'set', value: { ...value, n: value.n + 1 }, result: value.n + 1 }
+      })
+    expect(await increment()).toBe(1)
+    expect(await increment()).toBe(2)
+  })
+
+  test('native compare-and-swap tells holes, types and contents apart', async () => {
+    const holes: number[] = new Array(3)
+    holes[0] = 1
+    holes[2] = 3
+    const shared = { x: 1 }
+    const pairs: [unknown, unknown][] = [
+      [holes, [1, undefined, 3]],
+      [Object.assign([1], { tag: 'a' }), Object.assign([1], { tag: 'b' })],
+      [Object.assign([1], { tag: 'a' }), [1]],
+      [
+        { a: shared, b: shared },
+        { a: { x: 1 }, b: { x: 1 } },
+      ],
+      [new Uint8Array([1]), new Int8Array([1])],
+      [new Uint8Array([1]), new Uint8Array([2])],
+      [new Uint8Array([1, 2, 3]).subarray(0, 1), new Uint8Array([1, 2, 99]).subarray(0, 1)],
+      [new Uint8Array([1, 1]).subarray(0, 1), new Uint8Array([1, 1]).subarray(1, 2)],
+      [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer],
+      [new Map([[1, 'a']]), new Map([[1, 'b']])],
+      [new Set([1]), new Set([2])],
+      [/a/g, /a/i],
+      [new Date(0), new Date(1)],
+      [{ a: 1n }, { a: 1 }],
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
+      [
+        new Map([
+          [1, 'a'],
+          [2, 'b'],
+        ]),
+        new Map([
+          [2, 'b'],
+          [1, 'a'],
+        ]),
+      ],
+      [new Set([1, 2]), new Set([2, 1])],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1)],
+      [new ArrayBuffer(1, { maxByteLength: 2 }), new ArrayBuffer(1, { maxByteLength: 4 })],
+    ]
+    for (const [stored, other] of pairs) {
+      const object = objectStore()
+      await object.storePut('k', stored, 'native')
+      expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+      expect((await object.storeSwap('k', structuredClone(stored), 'next', 'native')).applied).toBe(
+        true,
+      )
+    }
+  })
+
+  test('native compare-and-swap compares sparse arrays by their elements, not their length', async () => {
+    const sparse: number[] = []
+    sparse.length = 2 ** 32 - 1
+    sparse[5] = 1
+    const object = objectStore()
+    await object.storePut('k', sparse, 'native')
+    const other = structuredClone(sparse)
+    other[6] = 1
+    expect((await object.storeSwap('k', other, 'next', 'native')).applied).toBe(false)
+    expect((await object.storeSwap('k', structuredClone(sparse), 'next', 'native')).applied).toBe(
+      true,
+    )
+  })
+
+  test('native update handles cyclic values', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      maxAttempts: 1,
+      transport: 'rpc',
+    })
+    const value: { n: number; self?: unknown; list: unknown[] } = { n: 0, list: [] }
+    value.self = value
+    value.list.push(value, value.list)
+    await store.put('cycle', value)
+    const result = await store.update('cycle', (current) => {
+      const next = current as typeof value
+      next.n += 1
+      return { op: 'set', value: next, result: next.n }
+    })
+    expect(result).toBe(1)
+    const stored = (await store.get('cycle')) as typeof value
+    expect(stored.n).toBe(1)
+    expect(stored.self).toBe(stored)
+  })
+
+  test('native encoding rejects views of resizable buffers, whose length tracking it would have to probe', async () => {
+    const view = new Uint8Array(new ArrayBuffer(4, { maxByteLength: 8 }))
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { view })).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
+    const object = objectStore()
+    await object.storePut('k', new Uint8Array(4), 'native')
+    await expect(object.storeSwap('k', view, null, 'native')).rejects.toThrow(
+      'cannot compare views of resizable ArrayBuffers',
+    )
+  })
+
+  test('native encoding rejects errors, whose cause and stack it cannot compare', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(
+      store.put('k', { error: new Error('x', { cause: { count: 0 } }) }),
+    ).rejects.toThrow('cannot compare Error values')
+  })
+
+  test('native encoding rejects values it cannot compare instead of conflicting', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), {
+      encoding: 'native',
+      transport: 'rpc',
+    })
+    await expect(store.put('k', { m: new Map([[{}, 1]]) })).rejects.toThrow(
+      'cannot compare a Map with object keys',
+    )
+    await expect(
+      store.update('k', () => ({ op: 'set', value: new Set([{}]), result: undefined })),
+    ).rejects.toThrow('cannot compare a Set with object keys')
+    // A value written directly to storage fails the swap instead of conflicting.
+    const object = objectStore()
+    await object.storePut('k', new Map([[{}, 1]]), 'native')
+    await expect(object.storeSwap('k', new Map([[{}, 1]]), null, 'native')).rejects.toThrow(
+      'cannot compare',
+    )
+  })
+
+  test('rejects replayShards and replayShardVersion that are not positive integers', () => {
+    for (const replayShards of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => Store.durableObject(fakeDurableObjectNamespace(), { replayShards })).toThrow(
+        '`replayShards` must be a positive integer',
+      )
+    expect(() =>
+      Store.durableObject(fakeDurableObjectNamespace(), { replayShards: 2, replayShardVersion: 0 }),
+    ).toThrow('`replayShardVersion` must be a positive integer')
+  })
+
+  test('replay shards need a SQLite-backed object', async () => {
+    const store = Store.durableObject(fakeDurableObjectNamespace(), { replayShards: 2 })
+    await expect(store.tryClaim!('nonce', Date.now() + 60_000)).rejects.toThrow('SQLite-backed')
+  })
+
+  test('a replay shard releases a claim whose cleanup alarm it could not schedule', async () => {
+    const db = new DatabaseSync(':memory:')
+    let alarm: number | null = null
+    let failAlarm = true
+    const object = new Store.DurableObjectStore({
+      storage: {
+        get: async () => undefined,
+        put: async () => {},
+        delete: async () => false,
+        getAlarm: async () => alarm,
+        async setAlarm(time) {
+          if (failAlarm) throw new Error('alarm unavailable')
+          alarm = Number(time)
+        },
+        sql: {
+          exec(query, ...bindings) {
+            const rows = db.prepare(query).all(...(bindings as never[]))
+            return { toArray: () => rows as Record<string, unknown>[] }
+          },
+        },
+      },
+    })
+    const expires = Date.now() + 60_000
+    await expect(object.claimReplay('nonce', expires)).rejects.toThrow('alarm unavailable')
+    // The failed claim left nothing behind, so a retry claims the key.
+    failAlarm = false
+    expect(await object.claimReplay('nonce', expires)).toBe(true)
+    expect(alarm).toBe(expires)
+    expect(await object.claimReplay('nonce', expires)).toBe(false)
+  })
+
+  test('fetch keeps to the store operations when a subclass has its own get, put and delete', async () => {
+    class Legacy extends Store.DurableObjectStore {
+      // A subclass's own methods, which the store must not call.
+      async get() {
+        throw new Error('subclass get')
+      }
+      async put() {
+        throw new Error('subclass put')
+      }
+      async delete() {
+        throw new Error('subclass delete')
+      }
+    }
+    const object = objectStore(Legacy)
+    const store = Store.durableObject({
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (input, init) => object.fetch(new Request(input, init)) }),
+    })
+    await store.put('k', { n: 1 })
+    expect(await store.get('k')).toEqual({ n: 1 })
+    expect(await store.update('k', () => ({ op: 'set', value: 2, result: 'ok' }))).toBe('ok')
+    await store.delete('k')
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('rpc keeps a subclass static members', () => {
+    class Base {
+      base = true
+    }
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      static describe() {
+        return this.label
+      }
+    }
+    class Child extends Parent {
+      static override label = 'child'
+    }
+    const Rpc = Child.rpc(Base)
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.describe()).toBe('child')
+    expect(Object.hasOwn(Rpc, 'rpc')).toBe(false)
+  })
+
+  test('rpc keeps the most-derived static and method when an ancestor made them non-configurable', () => {
+    class Base {}
+    class Parent extends Store.DurableObjectStore {
+      static label = 'parent'
+      describe() {
+        return 'parent'
+      }
+    }
+    Object.defineProperty(Parent, 'label', { configurable: false })
+    Object.defineProperty(Parent.prototype, 'describe', { configurable: false })
+    class Child extends Parent {
+      static override label = 'child'
+      override describe() {
+        return 'child'
+      }
+    }
+    const Rpc = Child.rpc(Base) as unknown as { label: string; prototype: { describe(): string } }
+    expect(Rpc.label).toBe('child')
+    expect(Rpc.prototype.describe()).toBe('child')
+  })
+
+  test('keeps keys named like replay shards out of shard objects', async () => {
+    for (const transport of ['fetch', 'rpc'] as const) {
+      const names: string[] = []
+      const namespace = fakeDurableObjectNamespace()
+      const store = Store.durableObject(
+        {
+          ...namespace,
+          idFromName: (name: string) => {
+            names.push(name)
+            return namespace.idFromName(name)
+          },
+        },
+        { transport },
+      )
+      await store.put('mppx:replay:v1:0', 1)
+      expect(await store.get('mppx:replay:v1:0')).toBe(1)
+      await store.put('mppx:replay:v1:x', 2)
+      await store.put('mppx:key:mppx:replay:v1:0', 3)
+      expect(names).toEqual([
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:key:mppx:replay:v1:0',
+        'mppx:replay:v1:x',
+        'mppx:key:mppx:key:mppx:replay:v1:0',
+      ])
+    }
+  })
+
+  test('rejects native encoding over fetch', () => {
+    expect(() => Store.durableObject(fakeDurableObjectNamespace(), { encoding: 'native' })).toThrow(
+      'requires `transport: "rpc"`',
+    )
+  })
+
+  test('update throws after maxAttempts conflicts without a final backoff', async () => {
+    // Every swap reports a conflict.
+    const namespace = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async (_input: string, init: RequestInit) =>
+          Response.json(
+            JSON.parse(init.body as string).op === 'swap' ? { applied: false, current: '1' } : '1',
+          ),
+      }),
+    }
+    const store = Store.durableObject(namespace, { maxAttempts: 3 })
+    const setTimeout = vi.spyOn(globalThis, 'setTimeout')
+    await expect(
+      store.update('k', () => ({ op: 'set', value: 2, result: undefined })),
+    ).rejects.toThrow('conflicted 3 times')
+    // Backoffs only between attempts.
+    expect(setTimeout).toHaveBeenCalledTimes(2)
+    setTimeout.mockRestore()
+  })
+})
+
+describe('sql', () => {
+  test('direct tryClaim rejects a claim whose expiry passed while the statement ran', async () => {
+    const db = new DatabaseSync(':memory:')
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text, params) {
+        // The clock passes the claim's expiry while the statement is in flight.
+        if (text.startsWith('INSERT')) now = 2_000
+        return db.prepare(text).all(...(params as never[])) as Store.sql.Row[]
+      },
+    })
+    try {
+      expect(await store.tryClaim!('nonce', 1_500)).toBe(false)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
+  test('leaves the table to migrations with createTable: false', async () => {
+    await expect(pgliteStore({ createTable: false }).get('k')).rejects.toThrow()
+    await expect(
+      Store.sqlite(new DatabaseSync(':memory:'), { createTable: false }).get('k'),
+    ).rejects.toThrow()
+  })
+
+  test('rejects table names that are not identifiers', () => {
+    expect(() =>
+      Store.sql({ dialect: 'sqlite', query: async () => [] }, { table: 'store; DROP TABLE x' }),
+    ).toThrow('Invalid SQL store table name')
+  })
+
+  test('numbers placeholders for Postgres and keeps them for SQLite', async () => {
+    const seen: Record<string, string[]> = { postgres: [], sqlite: [] }
+    for (const dialect of ['postgres', 'sqlite'] as const)
+      await Store.sql(
+        {
+          dialect,
+          async query(text) {
+            seen[dialect]!.push(text)
+            return []
+          },
+        },
+        { createTable: false },
+      ).put('k', 1)
+    expect(seen.postgres![0]).toContain('VALUES ($1, $2, $3)')
+    expect(seen.sqlite![0]).toContain('VALUES (?, ?, ?)')
+  })
+
+  test('accepts Postgres clients that resolve to rows', async () => {
+    const rows = [{ value: '"v"' }]
+    const store = Store.postgres({ query: async () => rows }, { createTable: false })
+    expect(await store.get('k')).toBe('v')
+  })
+
+  test('gives up after maxAttempts conflicts', async () => {
+    const store = Store.sql(
+      {
+        dialect: 'sqlite',
+        // Every read sees a value and every swap misses it.
+        query: async (text) => (text.startsWith('SELECT') ? [{ value: '1' }] : []),
+      },
+      { createTable: false, maxAttempts: 2 },
+    )
+    const setTimeout = vi.spyOn(globalThis, 'setTimeout')
+    await expect(
+      store.update('k', () => ({ op: 'set', value: 2, result: undefined })),
+    ).rejects.toThrow('conflicted 2 times')
+    // One backoff between the two attempts, none after the last.
+    expect(setTimeout).toHaveBeenCalledTimes(1)
+    setTimeout.mockRestore()
+  })
+
+  test('treats a failed CREATE TABLE as ready when the table exists', async () => {
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text) {
+        if (text.startsWith('CREATE'))
+          throw new Error('duplicate key value violates unique constraint')
+        return []
+      },
+    })
+    expect(await store.get('k')).toBeNull()
+  })
+
+  test('retries table creation after a failure', async () => {
+    let fail = true
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text) {
+        // Offline: the CREATE and the probe that follows it both fail.
+        if (fail && text.startsWith('SELECT 1')) {
+          fail = false
+          throw new Error('offline')
+        }
+        if (fail) throw new Error('offline')
+        return []
+      },
+    })
+    await expect(store.get('k')).rejects.toThrow('offline')
+    expect(await store.get('k')).toBeNull()
+  })
+})
+
+describe('sql compare-and-swap', () => {
+  // Another writer changes the value between update's read and its write: the
+  // write must miss, and update must retry from the new value.
+  async function raceOnce(
+    dialect: 'postgres' | 'sqlite',
+    run: (text: string, params: unknown[]) => Promise<Store.sql.Row[]>,
+  ) {
+    let raced = false
+    const store = Store.sql({
+      dialect,
+      async query(text, params) {
+        const rows = await run(text, params)
+        if (text.startsWith('SELECT') && rows.length > 0 && !raced) {
+          raced = true
+          await run(
+            dialect === 'postgres'
+              ? `UPDATE mppx_store SET value = '10' WHERE key = $1`
+              : `UPDATE mppx_store SET value = '10' WHERE key = ?`,
+            [params[0]],
+          )
+        }
+        return rows
+      },
+    })
+    await store.put('k', 1)
+    const result = await store.update('k', (current) => {
+      const value = (current as number) + 1
+      return { op: 'set', value, result: value }
+    })
+    expect(raced).toBe(true)
+    expect(result).toBe(11)
+    expect(await store.get('k')).toBe(11)
+  }
+
+  test('postgres (PGlite) retries a write that lost a race', async () => {
+    const db = new PGlite()
+    await raceOnce(
+      'postgres',
+      async (text, params) => (await db.query(text, params)).rows as Store.sql.Row[],
+    )
+  })
+
+  test('sqlite (node:sqlite) retries a write that lost a race', async () => {
+    const db = new DatabaseSync(':memory:')
+    await raceOnce(
+      'sqlite',
+      async (text, params) => db.prepare(text).all(...(params as never[])) as Store.sql.Row[],
+    )
   })
 })

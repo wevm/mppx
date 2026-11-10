@@ -1,3 +1,4 @@
+import * as Identity from 'mppx/identity'
 import { describe, expect, test } from 'vp/test'
 
 import * as Headers from './Headers.js'
@@ -33,6 +34,27 @@ describe('scrub', () => {
     expect(result.has('payment-signature')).toBe(false)
     expect(result.has('www-authenticate')).toBe(false)
     expect(result.get('content-type')).toBe('application/json')
+  })
+
+  test('behavior: strips identity attestation and presentation headers', () => {
+    const headers = new globalThis.Headers({
+      'Identity-Attestation': 'token',
+      'Identity-Presentation': 'sd-jwt~kb-jwt',
+      'X-Public': 'value',
+    })
+    const result = Headers.scrub(headers)
+    expect(result.get('identity-attestation')).toBeNull()
+    expect(result.get('identity-presentation')).toBeNull()
+    expect(result.get('x-public')).toBe('value')
+  })
+
+  test('behavior: strips every Identity.Headers request header', () => {
+    const headers = new globalThis.Headers({
+      ...Object.fromEntries(Identity.Headers.request.map((name) => [name, 'token'])),
+      'X-Public': 'value',
+    })
+    const result = Headers.scrub(headers)
+    expect([...result.keys()]).toEqual(['x-public'])
   })
 
   test('behavior: strips cookie header', () => {
@@ -99,6 +121,28 @@ describe('scrub', () => {
 })
 
 describe('scrubResponse', () => {
+  test('behavior: strips an upstream identity attestation requirement', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: { 'Identity-Attestation-Required': 'email;issuer="https://issuer.example"' },
+    })
+    expect(Headers.scrubResponse(response).headers.has('identity-attestation-required')).toBe(false)
+  })
+
+  test('behavior: strips every upstream Identity.Headers response header', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        ...Object.fromEntries(Identity.Headers.response.map((name) => [name, 'kyc'])),
+        'Content-Type': 'text/plain',
+      },
+    })
+    const result = Headers.scrubResponse(response)
+    expect(Identity.Headers.response).toContain('identity-required')
+    for (const name of Identity.Headers.response) expect(result.headers.has(name)).toBe(false)
+    expect(result.headers.get('content-type')).toBe('text/plain')
+  })
+
   test('behavior: strips upstream payment protocol headers', () => {
     const response = new Response('body', {
       headers: {
@@ -145,6 +189,20 @@ describe('scrubResponse', () => {
 
     expect(result.headers.get('www-authenticate')).toBe(
       'Basic realm="example, inc", Bearer realm="api"',
+    )
+  })
+
+  test('behavior: strips upstream identity challenges', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate':
+          'PrivateToken challenge="abc", token-key="def", Identity-Presentation realm="x", Bearer realm="api"',
+      },
+    })
+
+    expect(Headers.scrubResponse(response).headers.get('www-authenticate')).toBe(
+      'Bearer realm="api"',
     )
   })
 

@@ -14,7 +14,9 @@ import {
   type ResolvedSettlementSchedule,
   resolveChannelStore,
   type SessionStoreInput,
+  SettlementCheckpointError,
   type SettlementTransactionOptions,
+  trackSendAttempts,
 } from './Settlement.js'
 
 /** Escrow event every close and withdrawal emits, with the amount paid to the payee. */
@@ -37,7 +39,7 @@ export const defaultCloseSearchMarginBlocks = 2_000n
 export type CloseSupervisionOutcome =
   /** Open with no close request, or not yet open at the pinned block. */
   | 'open'
-  /** Open, and settled because its spend crossed `settlementSchedule`. */
+  /** Open and settled, including reconciliation of an already completed settlement. */
   | 'settled'
   /** Close requested, with nothing above the settled amount to capture; the payer's withdrawal finalizes it. */
   | 'closing'
@@ -108,6 +110,10 @@ export type SuperviseClosesParameters = Pick<
   client: Chain.TransactionClient
   /** Blocks searched before `previousBlock` for a channel no supervision has read open. @default 2_000n */
   closeSearchMarginBlocks?: bigint | undefined
+  /** Closes open channels with unpaid spend but no settleable voucher, bounded by spend and deposit. @default false */
+  closeUnsettled?: boolean | undefined
+  /** Existing settlement lease owned by this caller, when closing unsettled channels. */
+  settlementLeaseOwner?: string | undefined
   /** Widest block range of one log query. @default 100_000n */
   logBlockRange?: bigint | undefined
   /** Callback invoked when a payee close fails. Observer errors are ignored. */
@@ -268,7 +274,7 @@ async function superviseChannel(
         : previous !== undefined && previous > since
           ? previous
           : since
-    const paid = await findSettledToPayee(parameters, channel, {
+    const paid = await findSettledToPayee(parameters, store, channel, {
       fromBlock: fromBlock > 0n ? fromBlock : 0n,
       toBlock: blocks.pinned.number,
     })
@@ -299,7 +305,62 @@ async function superviseChannel(
         : current,
     )
   if (state.closeRequestedAt === 0) {
-    if (channel.closeRequestedAt === 0n) return settleDue(parameters, store, channel)
+    if (channel.closeRequestedAt === 0n) {
+      if (!parameters.closeUnsettled) return settleDue(parameters, store, channel)
+      // Freeze spend atomically before exposing a close transaction. Its expiry bounds how long
+      // an ambiguous send can land, so later supervision can safely clear an expired marker.
+      const now = BigInt(Math.floor(Date.now() / 1000) || 1)
+      let claimed = false
+      const closing = await store.updateChannel(channelId, (current) => {
+        claimed = false
+        if (!current || current.finalized || current.closeRequestedAt !== 0n) return current
+        if (current.settledOnChain > state.settled) return current
+        if (Object.keys(current.prepaidRefunds ?? {}).length > 0) return current
+        const lease = current.scheduledSettlementLease
+        if (
+          (lease &&
+            lease.expiresAt > Date.now() &&
+            lease.owner !== parameters.settlementLeaseOwner) ||
+          (current.pendingSettlement && current.pendingSettlement.expiresAt > Date.now())
+        )
+          return current
+
+        const { pendingSettlement, ...rest } = current
+        const onChain = ChannelStore.mergeActiveOnChainState(current, state)
+        current = {
+          ...rest,
+          ...onChain,
+          ...(pendingSettlement && pendingSettlement.amount > onChain.settledOnChain
+            ? { pendingSettlement }
+            : {}),
+          ...(current.retainedVouchers
+            ? {
+                retainedVouchers: current.retainedVouchers.filter(
+                  (voucher) => voucher.cumulativeAmount > onChain.settledOnChain,
+                ),
+              }
+            : {}),
+        }
+        if (
+          current.spent <= current.settledOnChain ||
+          ChannelStore.resolveSettleableVoucher(current)
+        )
+          return current
+        const next = ChannelStore.markPendingClose({
+          closeRequestedAt: now,
+          cumulativeAmount: current.highestVoucher?.cumulativeAmount ?? 0n,
+          current,
+          onChainDeposit: state.deposit,
+          onChainSettled: state.settled,
+        }).state
+        claimed = true
+        return next
+      })
+      if (!closing || closing.finalized) return { outcome: 'finalized' }
+      if (!claimed || !ChannelStore.isPrecompileState(closing))
+        return { outcome: closing.spent <= closing.settledOnChain ? 'settled' : 'open' }
+      return closeAtSpend(parameters, store, closing, state)
+    }
     // A pinned read without a request means the payer cancelled it, unless the record holds a
     // server close that may still land: those expire before they are cleared.
     const cleared: { channel?: ChannelStore.State | null } = {}
@@ -361,6 +422,8 @@ async function closeAtSpend(
 ): Promise<{ outcome: CloseSupervisionOutcome; txHash?: Hex | undefined }> {
   const { client } = parameters
   const { channelId } = channel
+  const send = trackSendAttempts(client)
+  let reverted = false
   try {
     const voucher = channel.highestVoucher
     if (!voucher) throw new VerificationFailedError({ reason: 'no voucher to close with' })
@@ -379,8 +442,12 @@ async function closeAtSpend(
       payee: channel.payee,
       sender: account?.address,
     })
+    const validity =
+      state.closeRequestedAt !== 0 || channel.pendingCloseAt === undefined
+        ? {}
+        : { validBefore: Number(channel.pendingCloseAt) + ChannelStore.pendingCloseValiditySeconds }
     const txHash = await Chain.closeOnChain(
-      client,
+      send.client,
       channel.descriptor,
       voucher.cumulativeAmount,
       capture,
@@ -389,28 +456,43 @@ async function closeAtSpend(
       account
         ? {
             account,
+            ...validity,
             candidateFeeTokens: parameters.candidateFeeTokens ?? [channel.token],
             ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
             ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
             ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
           }
-        : undefined,
-    )
-    const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
+        : validity,
+    ).catch((error) => {
+      reverted = error instanceof VerificationFailedError
+      throw error
+    })
+    const receipt = await Chain.waitForSuccessfulReceipt(client, txHash).catch((error) => {
+      reverted = error instanceof VerificationFailedError
+      throw error
+    })
     const { refundedToPayer, settledToPayee } = Chain.readChannelClosedReceiptFields(
       Chain.getChannelEvent(receipt, 'ChannelClosed', channelId),
     )
-    if (settledToPayee > capture || settledToPayee + refundedToPayer > state.deposit)
-      throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
-    await store.updateChannel(channelId, (current) =>
-      ChannelStore.finalizeClosedChannelState({
-        captureAmount: settledToPayee,
-        channelId,
-        cumulativeAmount: voucher.cumulativeAmount,
-        current,
-        signature: voucher.signature,
-      }),
+    if (
+      settledToPayee > capture ||
+      (state.closeRequestedAt !== 0 && settledToPayee + refundedToPayer > state.deposit)
     )
+      throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
+    let checkpointError: { cause: unknown } | undefined
+    await store
+      .updateChannel(channelId, (current) =>
+        ChannelStore.finalizeClosedChannelState({
+          captureAmount: settledToPayee,
+          channelId,
+          cumulativeAmount: voucher.cumulativeAmount,
+          current,
+          signature: voucher.signature,
+        }),
+      )
+      .catch((cause) => {
+        checkpointError = { cause }
+      })
     if (parameters.onSessionSettlement) {
       try {
         await parameters.onSessionSettlement(
@@ -426,8 +508,27 @@ async function closeAtSpend(
         // Errors are isolated: observers cannot break the close.
       }
     }
+    if (checkpointError)
+      throw new SettlementCheckpointError({ cause: checkpointError.cause, txHash })
     return { outcome: 'closed', txHash }
   } catch (error) {
+    if (
+      state.closeRequestedAt === 0 &&
+      channel.pendingCloseAt !== undefined &&
+      (!send.tracked.attempted || reverted)
+    ) {
+      await store.updateChannel(channelId, (current) =>
+        current &&
+        current.pendingCloseAt === channel.pendingCloseAt &&
+        current.closeRequestedAt === channel.pendingCloseAt
+          ? {
+              ...current,
+              closeRequestedAt: current.onChainCloseRequestedAt ?? 0n,
+              pendingCloseAt: undefined,
+            }
+          : current,
+      )
+    }
     await reportSessionSettlementFailure(parameters.onSessionSettlementFailure, {
       chainId: channel.chainId,
       channelId,
@@ -441,11 +542,17 @@ async function closeAtSpend(
 /** Amount paid to the payee when the channel closed within the blocks, if it did. */
 async function findSettledToPayee(
   parameters: SuperviseClosesParameters,
+  store: ChannelStore.ChannelStore,
   channel: ChannelStore.StoredPrecompileChannel,
   range: { fromBlock: bigint; toBlock: bigint },
 ): Promise<bigint | undefined> {
   const step = parameters.logBlockRange ?? defaultLogBlockRange
-  for (let from = range.fromBlock; from <= range.toBlock; from += step) {
+  const cursor = channel.closeSearchFromBlock
+  const start =
+    cursor !== undefined && cursor >= range.fromBlock && cursor <= range.toBlock
+      ? cursor
+      : range.fromBlock
+  for (let from = start; from <= range.toBlock; from += step) {
     const to = from + step - 1n < range.toBlock ? from + step - 1n : range.toBlock
     const logs = await getLogs(parameters.client, {
       address: channel.escrowContract,
@@ -456,6 +563,19 @@ async function findSettledToPayee(
     })
     const paid = logs.find((log) => !log.removed)?.args.settledToPayee
     if (paid !== undefined) return paid
+    // Resume after successful empty ranges if a later RPC call fails or the worker is interrupted.
+    await store.updateChannel(channel.channelId, (current) =>
+      current && !current.finalized
+        ? {
+            ...current,
+            closeSearchFromBlock: to + 1n,
+          }
+        : current,
+    )
   }
+  // Empty logs can reflect a lagging RPC index. Retry from the original anchor next time.
+  await store.updateChannel(channel.channelId, (current) =>
+    current && !current.finalized ? { ...current, closeSearchFromBlock: undefined } : current,
+  )
   return undefined
 }

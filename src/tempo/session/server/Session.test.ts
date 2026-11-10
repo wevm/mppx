@@ -2126,6 +2126,7 @@ describe('precompile server session unit guardrails', () => {
       await expect(method.verify(parameters)).rejects.toThrow(/pending close request/)
       expect(await store.getChannel(openPayload.channelId)).toMatchObject({
         closeRequestedAt: 1n,
+        onChainCloseRequestedAt: 1n,
         settledOnChain: 100n,
         highestVoucherAmount: 100n,
       })
@@ -2417,12 +2418,17 @@ describe('precompile server session unit guardrails', () => {
           const result = await route(input(authorization))
           if (result.status === 402) return result.challenge
           calls++
-          expect((await store.getChannel(openPayload.channelId))?.spent).toBe(1n)
+          const charged = await store.getChannel(openPayload.channelId)
+          expect(charged?.spent).toBe(1n)
+          expect(Object.values(charged?.prepaidRefunds ?? {})).toEqual([
+            { amount: '1', units: 1, status: 'pending', createdAt: expect.any(Number) },
+          ])
           return result.withReceipt(new Response('paid work'))
         }
         const paid = await serve()
         expect(await paid.text()).toBe('paid work')
         const before = await store.getChannel(openPayload.channelId)
+        expect(before?.prepaidRefunds).toEqual({})
         expect((await serve()).status).toBe(402)
         expect(calls).toBe(1)
         expect(await store.getChannel(openPayload.channelId)).toEqual({

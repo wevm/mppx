@@ -26,34 +26,53 @@
 // `Mppx` is the server-side payment handler that manages challenges, credential
 // verification, and receipt generation. `tempo` provides the Tempo-specific
 // streaming payment method.
+//
+// The server runs as a Cloudflare Worker (locally in workerd through
+// `pnpm dev`). Channel state lives in Durable Objects through
+// `channels()` from `mppx/cloudflare`, so every request and the close see the
+// same channel from any isolate. Each channel's object also sends it to the
+// settlement queue once enough is unsettled, or once it goes idle, and the
+// Worker's `queue()` handler settles it on-chain.
+import { ChannelStore, channels, settle } from 'mppx/cloudflare'
 import { Mppx, tempo } from 'mppx/server'
-import { createClient, http } from 'viem'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { Actions, Chain } from 'viem/tempo'
+import { createClient, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Chain } from 'viem/tempo'
 
-// Generate a fresh keypair for the server on each start.
-// In production, you'd use a persistent key stored securely.
-// This account serves two purposes:
-//   1. It's the `recipient` — the address that receives payment channel funds
-//   2. It signs the on-chain close/settle transaction when the channel closes
-const account = privateKeyToAccount(generatePrivateKey())
+// The Durable Object class that stores channel state and schedules its
+// settlement, bound as `MPPX_STORE`.
+export class MppxStore extends ChannelStore {}
+
+// Worker bindings and secrets. `pnpm keygen` writes the secrets to
+// `.dev.vars` for local development; deploy them with `wrangler secret put`.
+type Env = {
+  /** Durable Object namespace of {@link MppxStore}. */
+  MPPX_STORE: channels.Namespace
+  /** Queue the channel objects send channels to settle to. */
+  MPPX_SETTLEMENT_QUEUE: ChannelStore.Queue
+  /**
+   * Server account key. This account serves two purposes:
+   *   1. It's the `recipient` — the address that receives payment channel funds
+   *   2. It signs the on-chain close/settle transaction when the channel closes
+   */
+  MPP_PRIVATE_KEY: string
+  /** Secret that binds challenge IDs, so they verify statelessly. */
+  MPP_SECRET_KEY: string
+  /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
+  TEMPO_RPC_URL?: string | undefined
+}
 
 // pathUSD testnet TIP-20 token address on Tempo Moderato.
 // Must match what the client uses — both sides need to agree on the token.
 const currency = '0x20c0000000000000000000000000000000000000' as const
 
-// The viem client MUST have an `account` attached. This is critical because
+// The viem client (created per Worker isolate in `createMppx` below) MUST
+// have an `account` attached. This is critical because
 // the server needs to sign on-chain transactions when closing/settling
 // payment channels. Without an account, `closeOnChain()` in the stream
 // handler will fail, and the server won't be able to claim its funds.
 //
 // `pollingInterval: 1_000` makes block polling faster for demo responsiveness.
-const client = createClient({
-  account,
-  chain: Chain.testnet,
-  pollingInterval: 1_000,
-  transport: http(process.env.MPPX_RPC_URL),
-})
 
 // Payment handler setup
 
@@ -69,7 +88,7 @@ const client = createClient({
 //   - Verifies channel open transactions and initial vouchers
 //   - Validates incrementing cumulative vouchers on each request
 //   - Handles channel close by submitting the final voucher on-chain
-//   - Tracks channel state in memory (or a custom storage backend)
+//   - Tracks channel state in a store (here, Durable Objects)
 //
 // Configuration:
 //   - `currency`: The TIP-20 token address to accept payment in
@@ -82,37 +101,73 @@ const client = createClient({
 //     If you omit the account from the client, channel opens will work (the
 //     client's signed tx is broadcast) but closes will silently fail — the
 //     server can't sign the settle tx without a key.
+//   - `store`: Where channel state lives. Workers isolates share no memory,
+//     so a Durable Object store keeps it consistent across requests.
+//   - `chainId`: Tempo testnet. Without it the server expects mainnet.
 //
 // `Mppx.create()` requires a secret key so challenge IDs can be verified
-// statelessly. The example ships with a default demo key so it works
-// out of the box, but still allows override via `MPP_SECRET_KEY`.
-const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-multi-fetch-secret-key-32'
+// statelessly.
+//
+// Workers allow no I/O outside a request, so the handler is built lazily
+// from `env` on the first request and reused afterwards.
+let mppx: ReturnType<typeof createMppx> | undefined
+function createMppx(env: Env) {
+  const { account, client } = connect(env)
+  return Mppx.create({
+    secretKey: env.MPP_SECRET_KEY,
+    methods: [
+      tempo.session({
+        account,
+        chainId: Chain.testnet.id,
+        currency,
+        feePayer: true,
+        getClient: () => client,
+        // `store` for channel state, and `resolveChannelId` to resume a payer's open channel.
+        // `resolveChannelId` needs the payer identity a HEAD bootstrap proves, so enable it.
+        bootstrap: true,
+        ...channels(env.MPPX_STORE),
+      }),
+    ],
+  })
+}
 
-const mppx = Mppx.create({
-  secretKey,
-  methods: [
-    tempo.session({
-      account,
-      currency,
-      feePayer: true,
-      getClient: () => client,
-    }),
-  ],
-})
+/** The server account and an account-bearing client for Tempo testnet. */
+function connect(env: Env) {
+  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
+  const client = createClient({
+    account,
+    chain: Chain.testnet,
+    pollingInterval: 1_000,
+    transport: http(env.TEMPO_RPC_URL),
+  })
+  return { account, client }
+}
 
 // Request handler
 
 //
-// This is a standard Request → Response handler (works with any framework
-// that uses the Fetch API Request/Response types — Bun, Deno, Vite, etc.).
-export async function handler(request: Request): Promise<Response | null> {
-  const url = new URL(request.url)
+// The Worker's `fetch` is a standard Request → Response handler.
+//
+// The page to scrape is a path segment (`/api/scrape/<encoded url>`), not a
+// query parameter: the client posts its close voucher back to the last URL it
+// fetched, and mppx treats a POST with a query string as a paid content request.
+export default {
+  // Settles the channels the channel objects sent to the settlement queue.
+  async queue(batch: settle.Batch, env: Env): Promise<void> {
+    const { account, client } = connect(env)
+    await settle(batch, { account, getClient: () => client, store: channels(env.MPPX_STORE).store })
+  },
 
-  // Health check endpoint — no payment required.
-  if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
 
-  if (url.pathname === '/api/scrape') {
-    const pageUrl = url.searchParams.get('url') ?? 'https://example.com'
+    // Health check endpoint — no payment required.
+    if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
+
+    const match = url.pathname.match(/^\/api\/scrape(?:\/(.+))?$/)
+    if (!match) return new Response('Not found', { status: 404 })
+    const pageUrl = match[1] ? decodeURIComponent(match[1]) : 'https://example.com'
+    mppx ??= createMppx(env)
 
     // `mppx.session()` returns a curried function:
     //   mppx.session({ amount, unitType }) → (request) → result
@@ -141,6 +196,12 @@ export async function handler(request: Request): Promise<Response | null> {
     // The client's session will automatically parse this, open a channel, and retry.
     if (result.status === 402) return result.challenge
 
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
+
     // If we get here, the credential was valid — the client paid for this request.
     // Generate the content they paid for.
     const content = scrapePage(pageUrl)
@@ -160,10 +221,7 @@ export async function handler(request: Request): Promise<Response | null> {
     //
     // The client can use this receipt to verify the server acknowledged payment.
     return result.withReceipt(Response.json({ content, url: pageUrl }))
-  }
-
-  // Return null for unhandled routes (let the framework handle 404s).
-  return null
+  },
 }
 
 // Simulated scraping function. In a real app, this would fetch and parse
@@ -173,12 +231,12 @@ function scrapePage(url: string): string {
   return `<h1>${url}</h1><p>Scraped content from ${url}</p>`
 }
 
-// Server startup
-
-//
-// Fund the server account from the testnet faucet. The server needs a small
-// amount of native gas to submit close/settle transactions on-chain.
-// It does NOT need pathUSD — it only receives pathUSD from client channels.
-console.log(`Server recipient: ${account.address}`)
-await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
-console.log('Server account funded')
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
+  }
+}

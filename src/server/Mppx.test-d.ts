@@ -255,8 +255,12 @@ describe('Mppx type tests', () => {
     const verifier = {} as Identity.Verifier<{ keyId: string }>
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
     type Options = Parameters<(typeof mppx)['charge']>[0]
-    expectTypeOf<readonly Identity.Verifier[] | undefined>().toEqualTypeOf<Options['identity']>()
+    expectTypeOf<Identity.Route | undefined>().toEqualTypeOf<Options['identity']>()
     expectTypeOf([verifier]).toMatchTypeOf<NonNullable<Options['identity']>>()
+    const check = {} as Identity.PaymentCheck<{ level: string }>
+    expectTypeOf({ request: [verifier], payment: check }).toMatchTypeOf<
+      NonNullable<Options['identity']>
+    >()
 
     Mppx.create({
       // @ts-expect-error identity is configured per route.

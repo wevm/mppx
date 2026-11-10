@@ -1,5 +1,116 @@
 # mppx
 
+## 0.18.0
+
+### Minor Changes
+
+- de802b9: Reworked identity verification around explicit statuses and data.
+
+  - Changed `Identity.Verification` to fixed statuses: `valid`, `missing` (401), `invalid` (401), `forbidden` (403) and `unavailable` (503), exported as `Identity.Status.codes` with the precedence list `Identity.Status.precedence`. When several verifiers (or every `anyOf` member) reject, the status with the highest precedence decides, and the headers of every rejection are merged. **Breaking:** `missing` now answers 401 instead of 403.
+  - Added `status` to `Identity.Rejection` (`invalid`, `forbidden` or `unavailable`).
+  - Marked identity rejections with a `rejection` field (`{ stage, status, reason }`) on the route result's non-200 branch, which `compose` now reads.
+  - Replaced payment-stage verifiers with an experimental payment check, `identity: { request, payment }`: `payment.requires` is listed in every 402's new `Identity-Required` header (merged across composed offers), and `payment.verify` runs once on the paid retry with the Credential. **Breaking:** `stage: 'payment'` verifiers now throw, the identity nonce is no longer added to Challenges, and request verifiers' `verify` receives only the request.
+  - Routes with a payment check reject x402 Credentials and do not offer x402. `compose` requires every payment check in a route to be the same one, and refuses a checked and an unchecked offer with the same payment terms, since a Credential could reach either.
+  - Changed `Prover.prepare` to receive the selected Challenge and the parsed `Identity-Required` requirements, and `Prover.retry` to return headers to resend with.
+  - Deprecated `Verifier.stage`, `Verifier.challenge`, the `code` of `missing` and `invalid` outcomes and `Identity.Rejection`'s `code`, and a `retry` result of `true`. They keep working.
+
+### Patch Changes
+
+- 802a27a: **Behavior change in production:** Changed `tempo.charge()`, `tempo.session()`, `tempo.subscription()` and `tempo()` to throw at construction when no `store` is passed and `NODE_ENV` is `production`, the server runs on a multi-instance platform (Vercel, AWS Lambda, Netlify, Fly.io, Cloud Run, Render, Railway, Heroku, Deno Deploy) or on Cloudflare Workers, instead of silently keeping replay protection and sponsor budgets in per-instance memory. Pass a shared store, or `store: Store.memory()` to keep instance-local state; local development and tests still fall back to memory with a warning. Charges served through `relay` need no store, since the relay enforces single use.
+- 454b9e0: Added `mppx/extensions/identity/attestation` and rebuilt the identity extensions on fixed statuses.
+
+  - Added the attestation module (`Attestation` from `mppx/extensions/identity`): `Attestation.Server.verifier` for any attestation type, `Attestation.Client.prover`, `Attestation.sign`, `decode` and `verify` for issuers, `Attestation.Jwks.resolver` and `Attestation.Constants`. The attestation wire format and the `Identity-Attestation` header are unchanged.
+  - Grouped alternatives in `Identity-Attestation-Required`: `Identity.anyOf` lists its members' requirements as one inner list, and the prover meets each group with one attestation, the first that succeeds in listed order, so a route accepting any of several issuers costs one code. `Attestation.Client.requirements` returns these groups.
+  - Rebuilt `EmailOtp` on it, with the same public API. Deprecated `EmailOtp.Constants.header` and `requiredHeader` in favor of `Attestation.Constants`.
+  - Added `Identity.Headers`, the identity request headers that never cross origins or reach upstream and the identity response headers a proxy drops, and `Prover.headers` for a prover's own sensitive request headers. The client's cross-origin redirect stripping and the proxy now read them instead of hardcoded names.
+  - Added a second `Prover.retry` parameter, `{ request }`: the request that got the rejected response.
+  - Simplified the attestation prover: it caches one attestation per audience, issuer and type, sends every unexpired one on a paid attempt and only those outside the refresh margin (`min(300s, half the lifetime)`) on an unpaid one, and its `retry` returns the attestations to resend with. Fixed a paid retry dropping an attestation close to expiry, and a late 401 on a concurrent request discarding a just-obtained attestation and asking for another code.
+  - Moved the identity extensions to fixed statuses: an untrusted or unresolvable signature key and an attestation the route's policy rejects are `forbidden` (403), an unreachable issuer key set is `unavailable` (503). `Attestation.verify` returns `unavailable` instead of `invalid` with `unavailable: true`.
+  - Deprecated the function form of `audience` in `Attestation.Server.verifier` and `EmailOtp.Server.verifier`: it is only safe where the platform guarantees the request's host.
+
+## 0.17.6
+
+### Patch Changes
+
+- 9bd6ad6: Fixed the email OTP client helpers so they refuse to send an address or code to a plaintext http issuer other than localhost.
+- 0a01b79: Added `mppx/extensions/identity/email-otp`: `EmailOtp.Server.verifier` requires a verified email address, sent as an issuer-signed attestation in `Identity-Attestation` and bound to the server's origin, and `EmailOtp.Client.prover` obtains one with a one-time code when a server answers 401 with `Identity-Attestation-Required`.
+- 9bd6ad6: Fixed the email OTP verifier so an attestation the route's policy rejects no longer hides an allowed one later in the same request.
+- 3d8fe95: Fixed the email OTP verifier so a forged attestation with a later expiry no longer hides a valid one, and a key rotated in during an issuer outage answers 503 instead of 401.
+- 970ac7b: Added `Identity.from` and `Identity.Rejection` to `mppx/identity`: `Identity.from({ verify })` turns a function, such as a lookup in your own database, session store or KYC provider, into a route identity verifier. It returns the caller's identity, `undefined` for a 401, or throws `Identity.Rejection` to reject the request before any payment.
+- db73851: Fixed `mppx stripe address --env` to recognize multiline dotenv values under any key Node accepts, such as one starting with a digit or holding a space, and in files with CRLF line endings, so a line inside one is no longer taken for the deposit address. It also checks the result with Node's dotenv parser and refuses to write when Node would read the address or any other entry differently.
+- 2067b0c: Fixed `mppx stripe address` to reject a deposit address that isn't valid for its network (Solana addresses must decode to 32 bytes), refuse env values with line breaks, and leave exactly one assignment of the key when writing with `--env`.
+
+## 0.17.5
+
+### Patch Changes
+
+- b1d85f0: Added `mppx stripe address`, which creates a Stripe crypto deposit address for machine payments and prints it, or writes it to an env file with `--env`. The Stripe key comes from `--secret-key`, `STRIPE_SECRET_KEY` or the Stripe CLI's login.
+
+## 0.17.4
+
+### Patch Changes
+
+- fa22d95: Fixed `ChannelStore` replacing the immediate send that a close request written during a failed queue send scheduled with the 60-second retry, and resending failed settlements forever when `minUnsettledAmount` is `0n` and the deposit is under 10 raw units: the threshold is now at least 1.
+- 3e44f83: Fixed `ChannelStore` giving up on a channel during the server's cooperative-close marker, which left a payer close request merged into it unsent, and spending watchdog attempts on alarms set for a close marker that a failed close then cleared. `ChannelStore` now rejects non-finite or negative `retryMs`, `staleAfterMs` and `watchdogMs` and a `maxAttempts` that is not a positive integer.
+- d11a756: Added `mppx/cloudflare`: a `ChannelStore` Durable Object that stores Tempo session channels and sends them to a settlement queue by amount or staleness, with a watchdog; `channels()`, the store and reusable-channel lookup for `tempo.session()`; and `settle()`, the queue consumer that settles them on-chain.
+- 48d97fa: Fixed `mppx/cloudflare` settlement and channel lookup: a payer close request stamped at or before the server's own cooperative-close marker is now sent to the settlement queue once that marker can no longer land, with an alarm at the marker's end; and a lookup add skips a channel that no longer resumes, while a full lookup entry drops closed channels before an open one.
+- b964dc4: Fixed `mppx/cloudflare` settlement and channel lookup: the server's own cooperative-close marker (recorded in the new `pendingCloseAt` channel field) no longer queues an immediate settlement, and `settle()` waits while that close may still land; a new payer close request after an earlier one cleared is sent at once; and each lookup entry keeps up to 8 of the payer's open channels, so closing one leaves the others findable.
+- 8e812d3: Fixed `mppx/cloudflare`'s `channels()` lookup returning a channel opened with another operator for a challenge without one, which mppx verifies against the zero operator, and losing a matching channel behind eight newer ones with other operators: lookup entries are now keyed by operator too (`mppx:session-lookup:v3`), so channels written before resume again after their next write. Fixed `ChannelStore` replacing the immediate send that a close request written during a queue send scheduled with a later watchdog alarm.
+- 7255375: Fixed `mppx/cloudflare` so `channels()` skips a channel opened with another operator than the challenge's, `settle()` renews its settlement lease while a settlement runs, and `ChannelStore` resends a closing channel within 2 minutes so every attempt fits in the escrow's close grace period.
+- 4adc283: Fixed follow-ups in `Store.durableObject` replay shards and `mppx/cloudflare`. Replay shards kept their claims in a table named `mppx_replay_claims`, so the shard alarm no longer clears a subclass's own `replay_claims` table. `ChannelStore` sent a channel to the settlement queue at once on a close request or a threshold's worth of new vouchers, instead of waiting for the watchdog after a failed job. `channels()` no longer let a delayed lookup write for a closed channel replace the entry of a channel the payer can still resume, and its lookup skipped entries whose channel had closed.
+- a9b2cbc: Added `onWrite` and `alarm` hooks to `Store.DurableObjectStore`: a subclass sees every applied write with its previous and next values in one storage transaction with the write (so the hook's own writes commit with it, and a hook that throws rolls it back), and can schedule and handle alarms through the protected `storage`, `state` and `env`.
+- 0968d3f: Renamed `Store.DurableObjectStore`'s store operations to `storeGet`, `storePut`, `storeDelete`, `storeSwap` and `storeClaim`, so Workers RPC reaches them on Workers whose Durable Object stubs keep the legacy `get`, `put` and `delete` methods, and `fetch` no longer calls a subclass's own methods of those names. `Store.DurableObjectStore.rpc()` now keeps a subclass's static members.
+
+  Fixed `DurableObjectStore.isReplayShard()` to match a replay shard's whole object name, so an ordinary key that starts with `mppx:replay:` is not taken for a shard, and the base `alarm()` clears claims only in an object that holds them.
+
+- 5ebce56: Added `DurableObjectStore.isReplayShard()`, so a subclass skips its own work (in `alarm`, handlers or its constructor, by the object's name) in the replay shards of `Store.durableObject`'s `replayShards`, which are objects of the same class, and documented that values stored at a key don't block its sharded replay claims.
+- 56e0c8c: Added `replayShards` and `replayShardVersion` options to `Store.durableObject`: replay claims spread over a fixed number of SQLite-backed shard objects, each claimed with one SQL statement and cleared by an alarm once expired, instead of one Durable Object per claimed key.
+- c776057: Added `transport: 'rpc'` and `encoding: 'native'` options to `Store.durableObject`: the store calls the object's methods over Workers RPC (with a class from `Store.DurableObjectStore.rpc(DurableObject)`), and native encoding stores structured-clone values, so bigints stay intact and values a Durable Object wrote with `storage.put` read back.
+- 2f96b5b: Improved the internal SSE parser's throughput on line-dense `text/event-stream` bodies by scanning with `indexOf` instead of a global RegExp.
+- 94d1e36: Fixed `Store.DurableObjectStore`'s native compare-and-swap treating a length-tracking view of a resizable `ArrayBuffer` as equal to a fixed-length one.
+- 5ba7bf5: Fixed `Store.durableObject` native compare-and-swap to compare object keys, map entries and set members in order, compare sparse arrays by their own elements instead of scanning to their length, and tell resizable `ArrayBuffer`s apart.
+- fa22d95: Changed `Store.DurableObjectStore`'s native encoding to reject views of resizable `ArrayBuffer`s, as it rejects other values it cannot compare, instead of probing their length tracking with a copy of the whole buffer resized to its maximum on every compare-and-swap.
+- 8e2f7fe: Fixed `tempo.charge` with `waitForConfirmation: false` to throw `Errors.BroadcastOutcomeUnknownError` with the transaction hash after an ambiguous broadcast failure, instead of the raw RPC error. `stripe.recordPayment` now returns the PaymentIntent's Stripe status as `paymentIntentStatus`.
+- ca6cc56: Fixed `Store.durableObject` storing a key named like a replay shard (`mppx:replay:v<version>:<shard>`) in that shard's object, where `DurableObjectStore.isReplayShard()` then reported it as a shard. Such keys, and keys starting with `mppx:key:`, now live in an object named `mppx:key:<key>`, so values stored at them before are no longer found.
+- d631e07: Fixed `Store.DurableObjectStore.rpc()` throwing when a subclass shadows a static member or method that an ancestor made non-configurable.
+- ed12b58: Added `Errors.BroadcastOutcomeUnknownError`, which `tempo.charge` now throws with the transaction hash and `validBefore` when an ambiguous broadcast leaves no receipt, instead of rethrowing the RPC error (still its `cause`). Added `stripe.recordPayment` to record a settled payment as a Stripe PaymentIntent, idempotent per transaction hash.
+- f54a1c9: Added `Errors.PaymentSimulationError`, which wraps a failed fee-sponsored preflight simulation with its `phase` (`sender` or `sponsored`), `sender`, `feePayer` and `paymentToken`, so callers can tell a payer's insufficient balance from a sponsor's. Fixed the sponsored simulation dropping a zero `maxPriorityFeePerGas`, which broke a hosted fee payer's signature.
+- a89d5f5: Added Zone payments to the `tempo` charge method. A server lists the Zones it accepts with `zones: [3, 7]`, or accepts any Zone with `zones: true`. A client pays from a Zone balance with `zone`: it withdraws to the recipient with a challenge-bound memo, waits for the withdrawal to settle on Tempo, and sends a `zone` credential with the settlement transaction hash, which the server verifies.
+
+  If the wait fails, the client throws `Errors.ZoneSettlementPendingError` and resumes the same withdrawal when the challenge is retried.
+
+- 3f60dcc: Fixed `mppx validate` and paid CLI retries rejecting every mppx server's retry Challenge as changed: the comparison now ignores the per-issuance `_mppx_nonce` and `_mppx_identity` in `opaque`. The malformed-Credential probe now sends the `-H` headers and puts the Credential in the header the server's Challenge names.
+- 64d852c: Fixed `mppx validate` error-handling hints to name the Credential header the server's Challenge uses instead of always `Authorization`.
+- 9ba2807: Fixed Zone ID validation to reject IDs that alias another Zone's portal address.
+
+## 0.17.3
+
+### Patch Changes
+
+- f8852c3: Removed the `eventsource-parser` dependency. The MCP client protocol now reads the first event of a `text/event-stream` response with a small internal SSE parser.
+
+## 0.17.2
+
+### Patch Changes
+
+- 247dc02: Rendered nested problem-details fields (such as `details`) as JSON in the CLI's Payment Rejected output instead of `[object Object]`.
+- d87c8bb: Removed `@stripe/stripe-js` from `dependencies`. The Stripe HTML payment page bundles Stripe.js at build time, and the Stripe Elements option types in `stripe.charge`'s `html.elements` are now inlined, so the published types no longer import `@stripe/stripe-js`.
+- a384733: Added `Store.durableObject()` and `Store.DurableObjectStore`, an atomic store backed by Cloudflare Durable Objects (one object per key, compare-and-swap with jittered retries), for running `tempo.session()` and replay protection on Cloudflare Workers.
+- adaeef7: Fixed Tempo and Stripe server bundles always including their HTML payment page: the page now loads with a dynamic `import()` the first time it is rendered, and `html.content` also accepts an async loader.
+- 2060c5f: Bound automatic session signatures and stored channel reuse to the authorized HTTP origin. Applied `trustedTempoProofRealms` to session challenges and forwarded manager pins. Added `session({ origin })` for direct credentials that will be reused over HTTP; originless stored channels must be explicitly migrated or closed rather than silently rebound. Use separate channel stores per HTTP origin because each payment scope retains a single channel.
+
+  Preserved request swap policies for automatic session top-ups and payment suppression through identity wrappers. Kept MCP adapter approval and payer selection authoritative when global payment fetch is installed. Limited proxy request bodies, including free routes, to 10 MiB by default with a configurable `maxRequestBodySize`.
+
+  Required explicit origin trust for remote snapshot recovery and rejected opaque origins. Preserved explicit CLI closing of legacy channels through validated origin migration. Returned payment challenges before buffering unpaid uploads and rejected oversized tee branches without waiting for sibling cancellation.
+
+- 55a7b62: Credited prepaid SSE items that failed before delivery when their spend remained unsettled. Added an idempotent merchant reconciliation hook for declined or uncertain credits, preserving settled funds and delivered-item charges.
+
+  Automatic prepaid credits are opt-in with `sse: { autoCreditPrepaid: true, onRefundRequired }`; existing merchant refund handlers remain unchanged. Delivery obligations persist in channel state before a managed stream starts, with bounded records and idempotent credit retries. Refund jobs distinguish uncertain writes from definite failures and expose only finalized captured funds as externally refundable. HTTP close receipts accept spend reduced by credits while retaining authorization and scope validation.
+
+- 7a18dac: Fixed sponsored preflight simulation billing the sender's fee token. Tempo nodes recover the fee payer of an `eth_call` only from `feePayerSignature` and ignore a bare `feePayer` address, so the final simulation charged the sender, and payments failed with "insufficient fee token balance" when the sponsor picked a fee token the sender did not hold. The simulation now carries the sponsor's signature: hosted sponsors return it from `eth_fillTransaction` (`fillHostedFeePayerTransaction` now returns `feePayerSignature`), and local fee-payer accounts sign a simulation-only copy with the new `signFeePayerSimulation`, only after the sender simulation passes. The sender simulation now runs at the transaction's exact gas limit with zero fee fields and the fields that set its intrinsic gas, so a transaction whose gas is too low is rejected before broadcast without needing a sender fee balance. The local simulation-only copy adds up to `sponsoredSimulationGasBuffer` (10,000) gas, because a sponsored `eth_call` charges more gas than the mined transaction uses, clamped to the fee payer policy's `maxGas` and `maxTotalFee` (`sponsoredSimulationGas`). When the sponsored simulation runs without the full buffer (hosted signatures, or clamped padding), a failure that is only out of gas no longer rejects the payment; fee balance errors and reverts still do.
+- a4d7a8e: Added `Store.sql()`, an atomic store on SQL databases (single-statement compare-and-swap, no transactions needed, and replay claims in one statement), with `Store.postgres()` for `pg`, Neon, Vercel Postgres, Supabase and PGlite, `Store.sqlite()` for `node:sqlite`, `better-sqlite3` and `bun:sqlite`, and `Store.d1()` for Cloudflare D1.
+- 8be5d55: Fixed esbuild bundles including all of `zod/mini` by importing it as a namespace in `mppx`'s zod helpers, so unused validators tree-shake.
+
 ## 0.17.1
 
 ### Patch Changes

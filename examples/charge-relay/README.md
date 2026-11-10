@@ -1,25 +1,37 @@
 # Hono Charge Relay
 
-A single-file Hono API that accepts pathUSD on Tempo Moderato. Its
-`mppx/hono` middleware issues charges, then calls the Tempo API Moderato relay
-for validation and broadcast.
+A single-file Hono API on Cloudflare Workers that accepts pathUSD on Tempo
+Moderato. Its `mppx/hono` middleware issues charges, then calls the Tempo API
+Moderato relay for validation and broadcast.
 
 ## Setup
 
-Create a Tempo API key with the `mpp:write` scope and provide it only to the
-server process:
+Create a Tempo API key with the `mpp:write` scope, then:
 
 ```bash
-export TEMPO_API_KEY=tempo:sk:...
-export TEMPO_API_URL=https://api.tempo.xyz
-export MPP_SECRET_KEY=$(openssl rand -base64 32)
-pnpm install
+npx gitpick wevm/mppx/examples/charge-relay
+pnpm i
+TEMPO_API_KEY=tempo:sk:... pnpm keygen   # writes .dev.vars
+```
+
+`pnpm keygen` writes the payee key (`MPP_PRIVATE_KEY`), the secret that
+protects server-issued challenges (`MPP_SECRET_KEY`) and `TEMPO_API_KEY` to
+`.dev.vars`, which only the Worker reads. Add `TEMPO_API_URL=...` there to
+target a compatible self-hosted or preview Tempo API.
+
+## Usage
+
+Start the Worker locally:
+
+```bash
 pnpm dev
 ```
 
-`TEMPO_API_URL` can target a compatible self-hosted or preview Tempo API.
-`MPP_SECRET_KEY` protects the server-issued challenges; the example has a
-development-only default so it can run without one locally.
+With the server running, use the `mppx` CLI to make a paid request:
+
+```bash
+pnpm mppx localhost:8787/api/photo
+```
 
 ## Routes
 
@@ -44,7 +56,7 @@ local relay hooks with the Tempo server adapter:
 const method = tempo.charge({
   currency,
   recipient: account.address,
-  relay: { apiBaseUrl: process.env.TEMPO_API_URL, apiKey: process.env.TEMPO_API_KEY! },
+  relay: { apiBaseUrl: env.TEMPO_API_URL, apiKey: env.TEMPO_API_KEY },
   supportedModes: ['pull'],
 })
 ```
@@ -57,3 +69,14 @@ MPPX payment failures without exposing Tempo API details.
 
 The adapter derives broadcast ownership from the submitted credential, so a
 single relay-backed charge may safely advertise both `pull` and `push` modes.
+
+## Deploy
+
+```bash
+wrangler secret put MPP_PRIVATE_KEY   # from .dev.vars
+wrangler secret put MPP_SECRET_KEY    # from .dev.vars
+wrangler secret put TEMPO_API_KEY
+wrangler secret put TEMPO_API_URL     # optional
+wrangler secret put TEMPO_RPC_URL     # optional: a dedicated Tempo RPC
+pnpm deploy
+```

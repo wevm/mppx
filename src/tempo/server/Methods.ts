@@ -199,11 +199,17 @@ function resolveCurrencies(parameters: {
 }
 
 /** Shares sponsor exposure across sibling offers without changing replay-store policy. */
-function sharedSponsorBudget(parameters: Pick<charge_.Parameters, 'store' | 'sponsorBudget'> = {}) {
+function sharedSponsorBudget(
+  parameters: Pick<charge_.Parameters, 'relay' | 'store' | 'sponsorBudget'> = {},
+) {
   if (parameters.sponsorBudget === false) return false
   return {
     ...parameters.sponsorBudget,
-    store: parameters.sponsorBudget?.store ?? parameters.store ?? Store.memory(),
+    // A relay finalizes credentials itself, so it needs no shared local store.
+    store:
+      parameters.sponsorBudget?.store ??
+      parameters.store ??
+      (parameters.relay ? Store.memory() : fallbackStore('tempo.charge')),
   }
 }
 

@@ -1308,6 +1308,14 @@ export declare namespace subscription {
         /** Custom renewal hooks must preserve amount, currency, recipient, period, expiry, and lookup key. */
         subscription: SubscriptionRecord
       }) => Promise<RenewalResult>
+      /**
+       * Atomic store for subscriptions and credential replay protection, shared by every
+       * server instance.
+       *
+       * If omitted, this throws in production (`NODE_ENV=production`), on multi-instance
+       * platforms and on Cloudflare Workers, and otherwise warns and falls back to an in-memory
+       * store. Pass `Store.memory()` explicitly to accept state scoped to one instance.
+       */
       store?: Store.AtomicStore<Record<string, unknown>> | undefined
       /**
        * Prefix prepended to all subscription store keys.

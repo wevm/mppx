@@ -5,9 +5,14 @@ on:
 
 permissions: {}
 
+# A merged version PR publishes to npm, so release runs share a group of
+# their own that never cancels: a later push can't cancel a release, and
+# releases run one at a time in main's order. A release that waits behind
+# another can be replaced by a newer one, which publishes the later version.
+# Other pushes still cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ github.ref }}${{ startsWith(github.event.head_commit.message, 'chore: version packages') && '-release' || '' }}"
+  cancel-in-progress: "${{ !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
 
 jobs:
   verify:
@@ -21,10 +26,12 @@ jobs:
 
   # With pending changesets, the changesets action only opens or updates the
   # version PR and never publishes, so this starts right away instead of
-  # waiting on verify. It has no publish script, so it cannot publish.
+  # waiting on verify. It has no publish script, so it cannot publish. Release
+  # runs skip it: they don't cancel, so a queued one could overwrite the
+  # version PR with an older commit's changesets after a newer push updated it.
   version-pr:
     name: Version PR
-    if: github.repository == 'wevm/mppx'
+    if: "${{ github.repository == 'wevm/mppx' && !startsWith(github.event.head_commit.message, 'chore: version packages') }}"
     permissions:
       contents: write
       pull-requests: write
@@ -50,17 +57,23 @@ jobs:
 
       - name: Open or update version PR
         if: steps.pending.outputs.has-changesets == 'true'
-        uses: wevm/actions/vendor/changesets/action/v2@6d24d44bb98809270f8d2a19d584f29aeb384be5
+        uses: wevm/actions/vendor/changesets/action/v2@31d7c5bc5f75932a367cf341ca5e26818eb9ec9d
         with:
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'
           version-script: pnpm run changeset:version
 
   # Publishes once the version PR is merged (no pending changesets). Gated on
-  # verify; skips itself while changesets are pending.
+  # verify; skips itself while changesets are pending. Any later push without
+  # changesets retries a release that failed, and changeset publish skips
+  # versions already on npm. Publishing runs one job at a time across both
+  # concurrency groups, so a push can't race a release run to npm.
   changesets:
     name: Changesets
     if: github.repository == 'wevm/mppx'
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-publish
+      cancel-in-progress: false
     needs: verify
     permissions:
       contents: write
@@ -92,7 +105,7 @@ jobs:
 
       - name: Publish
         if: steps.pending.outputs.has-changesets != 'true'
-        uses: wevm/actions/vendor/changesets/action/v2@6d24d44bb98809270f8d2a19d584f29aeb384be5
+        uses: wevm/actions/vendor/changesets/action/v2@31d7c5bc5f75932a367cf341ca5e26818eb9ec9d
         with:
           pr-title: 'chore: version packages'
           commit-message: 'chore: version packages'

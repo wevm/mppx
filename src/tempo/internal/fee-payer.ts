@@ -5,6 +5,7 @@ import type { Account, LocalAccount } from 'viem'
 import { decodeFunctionData, encodeFunctionData, maxUint256, toFunctionSelector, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
+import { PaymentSimulationError } from '../../Errors.js'
 import { escrowAbi as legacyEscrowAbi } from '../legacy/session/escrow.abi.js'
 import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as TempoAddress_internal from './address.js'
@@ -334,6 +335,10 @@ export function sponsoredSimulationTransaction(
     feePayer,
     feePayerSignature: feePayerSignature ? Signature.toRpc(feePayerSignature) : undefined,
     ...(feeToken !== undefined ? { feeToken } : {}),
+    // A deserialized envelope omits a zero priority fee, which the signed envelope encodes as 0.
+    // The node rebuilds the fee payer payload from the request, so an absent fee fails signature
+    // recovery (or takes the node's own value) for a hosted sponsor's signature.
+    maxPriorityFeePerGas: transaction.maxPriorityFeePerGas ?? 0n,
     signature: undefined,
   }
 }
@@ -402,11 +407,29 @@ export async function signFeePayerSimulation(
  * gas and cannot be padded, or the padding was clamped), a failure that is only
  * out of gas is tolerated, since the sender simulation already bounded gas at
  * the broadcast limit. Every other failure, such as an insufficient fee balance
- * or a revert, is rethrown.
+ * or a revert, is thrown as a `PaymentSimulationError` that names the failing
+ * phase, sender, fee payer and payment token, with the node's error as `cause`.
  *
  * `complete` runs only after sender-context execution succeeds, so a reverting
  * transaction never reaches a local signer or hosted fee-payer.
  */
+/** viem's errors for an RPC request that never got a node's answer, matched by name so wrapped copies match. */
+const transportErrorNames = new Set([
+  'HttpRequestError',
+  'SocketClosedError',
+  'TimeoutError',
+  'WebSocketRequestError',
+])
+
+/** Whether an error or its cause chain is a transport failure, rather than the node rejecting the call. */
+function isTransportError(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 10; depth++) {
+    if (current instanceof Error && transportErrorNames.has(current.name)) return true
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
+}
+
 export async function preflightSponsorship<sponsorship extends PreflightSponsorship>(parameters: {
   complete: () => Promise<sponsorship>
   /** The fee payer policy the completed transaction was checked against. */
@@ -415,7 +438,23 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
   transaction: SponsoredTransaction
 }): Promise<sponsorship> {
   const { complete, policy, simulate, transaction } = parameters
-  await simulate(simulationTransaction(transaction, { feePayer: true }))
+  const paymentCall = transaction.calls.length === 1 ? transaction.calls[0] : undefined
+  const paymentToken =
+    paymentCall?.data?.startsWith(Selectors.transfer) ||
+    paymentCall?.data?.startsWith(Selectors.transferWithMemo)
+      ? paymentCall.to
+      : undefined
+  try {
+    await simulate(simulationTransaction(transaction, { feePayer: true }))
+  } catch (cause) {
+    if (isTransportError(cause)) throw cause
+    throw new PaymentSimulationError({
+      cause,
+      paymentToken,
+      phase: 'sender',
+      sender: transaction.from,
+    })
+  }
   const completed = await complete()
   const { gas } = completed.transaction as { gas?: bigint | undefined }
   const simulated = await (async () => {
@@ -449,7 +488,15 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
       gas !== undefined &&
       simulatedGas !== undefined &&
       simulatedGas < gas + sponsoredSimulationGasBuffer
-    if (!unpadded || !isOutOfGasError(error)) throw error
+    if (isTransportError(error)) throw error
+    if (!unpadded || !isOutOfGasError(error))
+      throw new PaymentSimulationError({
+        cause: error,
+        feePayer: TempoAddress.resolve(completed.feePayer),
+        paymentToken,
+        phase: 'sponsored',
+        sender: transaction.from,
+      })
   }
   return completed
 }

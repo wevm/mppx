@@ -3,13 +3,16 @@
 //
 // This example demonstrates the server side of a metered WebSocket session
 // using mppx's Tempo `session` method plus the experimental websocket helper.
+// The server is a Cloudflare Worker (locally in workerd through `pnpm dev`):
+// the Worker accepts the upgrade with a `WebSocketPair` and hands its server
+// end to `mppx.session.serveWebSocket()`.
 //
 // The flow is intentionally pragmatic and transport-specific:
 //
-//   1. Client sends a normal HTTP GET to `/ws/chat`
+//   1. Client sends a normal HTTP GET to `/ws/chat/<prompt>`
 //      → server responds `402 Payment Required` with `WWW-Authenticate`
 //
-//   2. Client opens a WebSocket to `/ws/chat`
+//   2. Client opens a WebSocket to the same URL
 //      → first socket frame contains the same signed `Payment` credential
 //
 //   3. Server verifies that credential by routing it back through the normal
@@ -22,23 +25,38 @@
 //   5. Client responds with signed voucher updates over the same socket and
 //      eventually sends a final `close` credential to settle the channel
 //
-import type * as node_http from 'node:http'
-import type * as node_net from 'node:net'
 
 // `Mppx` is the server-side payment handler. `tempo` provides the Tempo
 // payment method plus the websocket helper used for this demo.
 import { Mppx, Store, tempo } from 'mppx/server'
-import { createClient, http } from 'viem'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { Actions, Chain } from 'viem/tempo'
-import { WebSocketServer } from 'ws'
+import { createClient, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Chain } from 'viem/tempo'
 
-// Server Account Setup
+// Shared Channel Store
 
 //
-// Generate a fresh account for the demo server. This account is the payee —
-// the recipient that receives settled channel funds after the stream ends.
-const account = privateKeyToAccount(generatePrivateKey())
+// The websocket stream and the credential verification path must see the same
+// channel state. Workers isolates share no memory, so channel state lives in
+// Durable Objects: this class, bound as `MPPX_STORE`.
+export class MppxStore extends Store.DurableObjectStore {}
+
+// Worker bindings and secrets. `pnpm keygen` writes the secrets to
+// `.dev.vars` for local development; deploy them with `wrangler secret put`.
+type Env = {
+  /** Durable Object namespace of {@link MppxStore}. */
+  MPPX_STORE: Store.durableObject.Namespace
+  /** Payee account key: receives settled channel funds and pays settlement gas. */
+  MPP_PRIVATE_KEY: string
+  /** Secret that binds challenge IDs, so they verify statelessly. */
+  MPP_SECRET_KEY: string
+  /** Optional Tempo RPC URL, such as a dedicated provider. Defaults to the public RPC. */
+  TEMPO_RPC_URL?: string | undefined
+}
+
+// The Workers runtime's WebSocket pair: two connected sockets, one returned to
+// the client in the 101 response, one kept by the Worker.
+declare const WebSocketPair: new () => { 0: WebSocket; 1: WebSocket & { accept(): void } }
 
 // pathUSD — TIP-20 token on Tempo testnet (Moderato).
 // All payment amounts in this example are denominated in pathUSD with 6 decimals.
@@ -48,110 +66,106 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // successful `stream.charge()` call before it is yielded to the client.
 const pricePerToken = '0.000075'
 
-// `Mppx.create()` requires a secret key so challenge IDs can be verified
-// statelessly. The example ships with a default demo key so `pnpm dev` works
-// out of the box, but still allows override via `MPP_SECRET_KEY`.
-const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-websocket-secret-key-32'
-
-// Viem Client
-
-//
-// The server-side viem client carries the payee account because the Tempo
-// session method needs signing capabilities for settlement and close flows.
-const client = createClient({
-  account,
-  chain: Chain.testnet,
-  pollingInterval: 1_000,
-  transport: http(),
-})
-
-// Shared Channel Store
-
-//
-// The websocket stream and the credential verification path must see the same
-// channel state. `Store.memory()` is enough for a local demo because both the
-// route handler and websocket helper run in the same process.
-const store = Store.memory()
-
 // Mppx Server Instance
 
 //
 // `tempo.session()` still owns the actual payment semantics here:
 // challenge issuance, channel open verification, voucher verification, and
 // cooperative close. The websocket helper is only responsible for transport.
-const mppx = Mppx.create({
-  methods: [
-    tempo.session({
-      account,
-      currency,
-      getClient: () => client,
-      store,
-    }),
-  ],
-  secretKey,
-})
-
-// This route is the canonical payment entrypoint. It is used twice:
 //
-//   - directly for the initial HTTP 402 probe
-//   - indirectly by the websocket helper, which constructs synthetic POST
-//     requests carrying the websocket-supplied credentials
-const route = mppx.session({
-  amount: pricePerToken,
-  unitType: 'token',
-})
-
-// WebSocket Upgrade Handler
-
+// The server-side viem client carries the payee account because the Tempo
+// session method needs signing capabilities for settlement and close flows.
 //
-// `mppx.session.serveWebSocket()` does not perform the HTTP upgrade itself. We
-// use `ws` only for the low-level upgrade mechanics, then hand the accepted
-// socket to the session-bound helper for payment-aware streaming.
-const wsServer = new WebSocketServer({ noServer: true })
-wsServer.on('connection', (socket, req) => {
-  const url = new URL(req.url ?? '/ws/chat', `ws://${req.headers.host ?? 'localhost:5173'}`)
-  const prompt = url.searchParams.get('prompt') ?? 'Tell me something interesting'
-
-  // `serveWebSocket()` bridges websocket control frames to the existing Tempo
-  // session lifecycle and reuses its store and settlement policy. When it
-  // receives an in-band authorization frame, it verifies it through `route`.
-  // Once paid, it runs this generator and emits application chunks interleaved
-  // with payment control frames.
-  void mppx.session.serveWebSocket({
-    socket,
-    url,
-    route,
-    generate: async function* (stream) {
-      for await (const token of generateTokens(prompt)) {
-        await stream.charge()
-        yield token
-      }
-    },
+// Workers allow no I/O outside a request, so the handler is built lazily from
+// `env` on the first request and reused afterwards.
+let mppx: ReturnType<typeof createMppx> | undefined
+function createMppx(env: Env) {
+  const account = privateKeyToAccount(env.MPP_PRIVATE_KEY as Hex)
+  const client = createClient({
+    account,
+    chain: Chain.testnet,
+    pollingInterval: 1_000,
+    transport: http(env.TEMPO_RPC_URL),
   })
-})
+  return Mppx.create({
+    methods: [
+      tempo.session({
+        account,
+        chainId: Chain.testnet.id,
+        currency,
+        getClient: () => client,
+        store: Store.durableObject(env.MPPX_STORE),
+      }),
+    ],
+    secretKey: env.MPP_SECRET_KEY,
+  })
+}
 
-// Fund the server account so it can submit settlement transactions during the
-// demo. In production this would be a long-lived account with managed funds.
-console.log(`Server recipient: ${account.address}`)
-await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
-console.log('Server account funded')
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
 
-// HTTP Request Handler
+    if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
-//
-// This handler only needs to cover the HTTP 402 probe endpoint. For actual
-// content streaming, the client must use the websocket upgrade path.
-export async function handler(request: Request): Promise<Response | null> {
-  const url = new URL(request.url)
+    // The prompt is a path segment, not a query parameter: payment frames and
+    // the final close are verified as POSTs to this URL, and mppx bills a POST
+    // with a query string as a content request.
+    const match = url.pathname.match(/^\/ws\/chat(?:\/(.+))?$/)
+    if (!match) return new Response('Not found', { status: 404 })
+    const prompt = match[1] ? decodeURIComponent(match[1]) : 'Tell me something interesting'
 
-  if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
+    mppx ??= createMppx(env)
 
-  if (url.pathname === '/ws/chat') {
-    // The initial client request arrives here without credentials and receives
-    // a 402 challenge. Later, management-style HTTP requests could also be
-    // verified here if you choose to mix transports.
+    // This route is the canonical payment entrypoint. It is used twice:
+    //
+    //   - directly for the initial HTTP 402 probe
+    //   - indirectly by the websocket helper, which constructs synthetic POST
+    //     requests carrying the websocket-supplied credentials
+    const route = mppx.session({
+      amount: pricePerToken,
+      unitType: 'token',
+    })
+
+    // WebSocket Upgrade Handler
+    //
+    // `mppx.session.serveWebSocket()` does not perform the HTTP upgrade itself.
+    // The Worker creates a `WebSocketPair`, accepts the server end and returns
+    // the client end in a 101 response.
+    if (request.headers.get('Upgrade') === 'websocket') {
+      const { 0: client, 1: server } = new WebSocketPair()
+      server.accept()
+
+      // `serveWebSocket()` bridges websocket control frames to the existing
+      // Tempo session lifecycle and reuses its store and settlement policy. When
+      // it receives an in-band authorization frame, it verifies it through
+      // `route`. Once paid, it runs this generator and emits application chunks
+      // interleaved with payment control frames.
+      void mppx.session.serveWebSocket({
+        socket: server,
+        url,
+        route,
+        generate: async function* (stream) {
+          for await (const token of generateTokens(prompt)) {
+            await stream.charge()
+            yield token
+          }
+        },
+      })
+
+      return new Response(null, { status: 101, webSocket: client } as ResponseInit)
+    }
+
+    // HTTP Request Handler
+    //
+    // Over HTTP, the client gets its 402 challenge here. A close sent over HTTP
+    // after the socket ended is a management POST and gets the receipt alone.
     const result = await route(request)
     if (result.status === 402) return result.challenge
+    // Open, voucher, top-up and close POSTs are management requests: they get
+    // the receipt alone. mppx bills any other request, including a POST with a
+    // query string or body, as content, so it falls through and gets content.
+    const managed = await managementResponse(result)
+    if (managed) return managed
 
     // Once a route has already been paid over HTTP, return a simple message so
     // it is obvious that WebSocket is the intended content path for this demo.
@@ -160,27 +174,7 @@ export async function handler(request: Request): Promise<Response | null> {
         'Use the websocket endpoint for streaming. HTTP is only used for the 402 probe.',
       ),
     )
-  }
-
-  return null
-}
-
-// Vite/Node Upgrade Bridge
-
-//
-// Vite gives us the raw Node HTTP server. We intercept upgrade requests for
-// `/ws/chat`, let `ws` turn them into WebSocket connections, and then hand the
-// socket to the `connection` handler above.
-export function handleUpgrade(
-  req: node_http.IncomingMessage,
-  socket: node_net.Socket,
-  head: Buffer,
-) {
-  if (req.url?.startsWith('/ws/chat') !== true) return
-
-  wsServer.handleUpgrade(req, socket, head, (websocket) => {
-    wsServer.emit('connection', websocket, req)
-  })
+  },
 }
 
 // Mock Token Generator
@@ -234,5 +228,15 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
   for (const word of words) {
     yield word
     await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60))
+  }
+}
+
+/** Returns mppx's management response, or `null` for a request billed as content. */
+async function managementResponse(result: { withReceipt: () => Response | Promise<Response> }) {
+  try {
+    return await result.withReceipt()
+  } catch (error) {
+    if (Mppx.isMissingReceiptResponseError(error)) return null
+    throw error
   }
 }

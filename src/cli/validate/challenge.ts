@@ -492,17 +492,26 @@ function validateAmount(
 export async function validateErrorHandling(
   baseUrl: string,
   endpoint: EndpointSpec,
-  options?: { body?: string | undefined; query?: string[] | undefined },
+  options?: {
+    body?: string | undefined
+    /** The Challenge whose Credential header the probe targets. Defaults to `Authorization`. */
+    challenge?: Challenge.Challenge | undefined
+    /** Extra `Name: value` headers (`-H`), such as an API key the endpoint requires. */
+    extraHeaders?: string[] | undefined
+    query?: string[] | undefined
+  },
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = []
   const url = buildUrl(baseUrl, endpoint, options?.query)
-  const fetchHeaders: Record<string, string> = {
-    [Constants.Headers.authorization]: `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`,
-  }
+  const fetchHeaders: Record<string, string> = parseHeaders(options?.extraHeaders)
+  const credentialHeader = options?.challenge
+    ? Challenge.credentialHeader(options.challenge)
+    : Constants.Headers.authorization
+  fetchHeaders[credentialHeader.toLowerCase()] = `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`
   let fetchBody: string | undefined
   if (options?.body) {
     fetchBody = options.body
-    fetchHeaders['content-type'] = 'application/json'
+    if (!fetchHeaders['content-type']) fetchHeaders['content-type'] = 'application/json'
   }
 
   try {
@@ -531,7 +540,7 @@ export async function validateErrorHandling(
         fail(
           'Malformed credential returns 402',
           `Got ${response.status} (server error)`,
-          'When the Authorization header contains an invalid credential, respond with 402 (not 500). Catch credential validation errors and return a fresh challenge.',
+          `When the ${credentialHeader} header contains an invalid credential, respond with 402 (not 500). Catch credential validation errors and return a fresh challenge.`,
         ),
       )
     } else {
@@ -539,7 +548,7 @@ export async function validateErrorHandling(
         warn(
           'Malformed credential returns 402',
           `Got ${response.status}`,
-          `When the Authorization header contains an invalid Payment credential, respond with 402 and a fresh WWW-Authenticate challenge. Returning ${response.status} prevents the client from retrying with a valid payment.`,
+          `When the ${credentialHeader} header contains an invalid Payment credential, respond with 402 and a fresh WWW-Authenticate challenge. Returning ${response.status} prevents the client from retrying with a valid payment.`,
         ),
       )
     }

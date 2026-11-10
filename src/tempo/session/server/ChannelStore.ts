@@ -63,7 +63,7 @@ export type OnChainChannelState = {
 /** Persisted fields that mirror authoritative on-chain channel state. */
 export type ActiveOnChainStateFields = Pick<
   State,
-  'closeRequestedAt' | 'deposit' | 'settledOnChain'
+  'closeRequestedAt' | 'onChainCloseRequestedAt' | 'deposit' | 'settledOnChain'
 >
 
 /** Parameters for selecting the persisted highest accepted voucher. */
@@ -249,6 +249,8 @@ export type VerifyAndAcceptVoucherParameters = {
   voucher: SignedVoucher
   /** Request price to charge in the same store update that accepts the voucher. */
   chargeAmount?: bigint | undefined
+  /** Durable delivery key for an SSE request charged before its first item. */
+  prepaidRefundKey?: string | undefined
   /** Called with the stored channel after `chargeAmount` was charged. */
   onCharged?: ((channel: State) => void) | undefined
 }
@@ -354,6 +356,15 @@ export interface BaseState {
     | undefined
   /** First block at which the close supervisor read this channel open on-chain. */
   closeSupervisedFromBlock?: bigint | undefined
+  /** Next close-event log range to retry after an interrupted search. */
+  closeSearchFromBlock?: bigint | undefined
+  /**
+   * The `closeRequestedAt` this server wrote as its own cooperative-close marker before
+   * broadcasting a close, to tell that marker from a payer's close request on-chain.
+   */
+  pendingCloseAt?: bigint | undefined
+  /** Observed payer close timestamp, separate from a server marker that may hide it. */
+  onChainCloseRequestedAt?: bigint | undefined
 }
 
 /** Expiring ownership claim for one server-scheduled settlement attempt. */
@@ -423,6 +434,14 @@ export function mergeActiveOnChainState(
 ): ActiveOnChainStateFields {
   return {
     closeRequestedAt: keepGreaterTimestamp(current?.closeRequestedAt ?? 0n, state.closeRequestedAt),
+    ...(BigInt(state.closeRequestedAt) !== 0n
+      ? {
+          onChainCloseRequestedAt: keepGreater(
+            current?.onChainCloseRequestedAt ?? 0n,
+            BigInt(state.closeRequestedAt),
+          ),
+        }
+      : {}),
     deposit: keepGreater(current?.deposit ?? 0n, state.deposit),
     settledOnChain: keepGreater(current?.settledOnChain ?? 0n, state.settled),
   }
@@ -665,6 +684,17 @@ export const pendingCloseValiditySeconds = 25
 /** Extra seconds allowed for clock differences between the server and the chain. */
 export const pendingCloseClockSkewSeconds = 30
 
+/** Whether a server close transaction may still land and capture spend. */
+export function hasPendingClose(state: State, now = Date.now()): boolean {
+  if (state.pendingCloseAt === undefined || state.finalized) return false
+  const requestedAt = BigInt(state.closeRequestedAt ?? 0n)
+  if (requestedAt === 0n || requestedAt !== BigInt(state.pendingCloseAt)) return false
+  return (
+    Math.floor(now / 1000) <=
+    Number(state.pendingCloseAt) + pendingCloseValiditySeconds + pendingCloseClockSkewSeconds
+  )
+}
+
 /** Clears a server pending-close marker whose close transaction expired without closing the channel. */
 export function reconcileExpiredPendingClose(parameters: {
   current: State | null
@@ -677,7 +707,12 @@ export function reconcileExpiredPendingClose(parameters: {
   if (BigInt(state.closeRequestedAt) !== 0n || state.deposit === 0n) return current
   const expiresAt = current.closeRequestedAt + BigInt(pendingCloseValiditySeconds)
   if (BigInt(now) <= expiresAt + BigInt(pendingCloseClockSkewSeconds)) return current
-  return { ...current, closeRequestedAt: 0n }
+  return {
+    ...current,
+    closeRequestedAt: 0n,
+    pendingCloseAt: undefined,
+    onChainCloseRequestedAt: undefined,
+  }
 }
 
 /** Marks local channel state as pending close and returns the bounded capture amount. */
@@ -696,7 +731,7 @@ export function markPendingClose(parameters: MarkPendingCloseParameters): Pendin
 
   return {
     captureAmount,
-    state: { ...current, closeRequestedAt },
+    state: { ...current, closeRequestedAt, pendingCloseAt: closeRequestedAt },
   }
 }
 
@@ -810,10 +845,12 @@ export function assertVoucherAmounts(parameters: {
 export function planVoucherAcceptance(parameters: {
   accepted: State
   chargeAmount?: bigint | undefined
+  /** Durable delivery key for an SSE request charged before its first item. */
+  prepaidRefundKey?: string | undefined
 }): { channel: State; charged: boolean } {
   const { accepted, chargeAmount } = parameters
   if (chargeAmount === undefined) return { channel: accepted, charged: false }
-  const deduction = planDeduction(accepted, chargeAmount)
+  const deduction = planDeduction(accepted, chargeAmount, parameters.prepaidRefundKey)
   if (deduction.op !== 'set') return { channel: accepted, charged: false }
   return { channel: deduction.value, charged: true }
 }
@@ -863,6 +900,7 @@ export async function verifyAndAcceptVoucher(
     const acceptance = planVoucherAcceptance({
       accepted: acceptVoucherStateUpdate({ channelState, current, verifiedAt, voucher }),
       chargeAmount,
+      prepaidRefundKey: parameters.prepaidRefundKey,
     })
     charged = acceptance.charged
     return acceptance.channel
@@ -1125,6 +1163,8 @@ export const defaultIdempotencyRetention = 24 * 60 * 60 * 1000
 
 /** Options for charging a channel at most once per key. */
 export type ChargeOptions = {
+  /** Durable delivery key for an SSE request charged before its first item. */
+  prepaidRefundKey?: string | undefined
   /**
    * Key of the operation being charged. A retry with the same key and amount returns the recorded
    * charge without charging again; the same key with a different amount throws
@@ -1235,6 +1275,8 @@ export async function deductFromChannel(
   options?: ChargeOptions,
 ): Promise<DeductResult> {
   const idempotencyKey = options?.idempotencyKey
+  if (idempotencyKey !== undefined && options?.prepaidRefundKey !== undefined)
+    throw new Error('Prepaid deliveries cannot use a replayable charge key')
   if (idempotencyKey !== undefined) {
     assertIdempotencyOptions(options!)
     const now = Date.now()
@@ -1251,7 +1293,7 @@ export async function deductFromChannel(
   if (store.updateChannelResult) {
     const result = await store.updateChannelResult<DeductResult | null>(
       channelId,
-      (current): DeductionChange => planDeduction(current, amount),
+      (current): DeductionChange => planDeduction(current, amount, options?.prepaidRefundKey),
     )
     if (!result) throw new Error('channel not found')
     return result
@@ -1259,7 +1301,7 @@ export async function deductFromChannel(
 
   let result: DeductResult | null = null
   const channel = await store.updateChannel(channelId, (current) => {
-    const change = planDeduction(current, amount)
+    const change = planDeduction(current, amount, options?.prepaidRefundKey)
     result = change.result
     if (change.op === 'set') return change.value
     return current
@@ -1293,7 +1335,11 @@ function planKeyedDeduction(
   return { op: 'set', value: channel, result: { ok: true, channel } }
 }
 
-function planDeduction(current: State | null, amount: bigint): DeductionChange {
+function planDeduction(
+  current: State | null,
+  amount: bigint,
+  prepaidRefundKey?: string,
+): DeductionChange {
   if (!current) return { op: 'noop', result: null }
   if (current.finalized) return { op: 'noop', result: { ok: false, channel: current } }
   if (current.closeRequestedAt !== 0n)
@@ -1302,6 +1348,25 @@ function planDeduction(current: State | null, amount: bigint): DeductionChange {
     return { op: 'noop', result: { ok: false, channel: current } }
 
   const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
+  if (prepaidRefundKey && amount > 0n) {
+    const liveMarkers = Object.values(current.idempotencyMarkers ?? {}).filter(
+      (marker) => marker.expiresAt > Date.now(),
+    ).length
+    if (
+      current.prepaidRefunds?.[prepaidRefundKey] ||
+      Object.keys(current.prepaidRefunds ?? {}).length + liveMarkers >= 128
+    )
+      throw new Error('Prepaid delivery capacity reached; reconcile outstanding deliveries')
+    next.prepaidRefunds = {
+      ...current.prepaidRefunds,
+      [prepaidRefundKey]: {
+        amount: amount.toString(),
+        units: 1,
+        status: 'pending',
+        createdAt: Date.now(),
+      },
+    }
+  }
   return { op: 'set', value: next, result: { ok: true, channel: next } }
 }
 

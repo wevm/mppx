@@ -8,7 +8,7 @@ export type Options = {
   /**
    * Trusted payment-authority identifier. Use the same value only for replicas
    * with identical payment policies and upstream permissions. Never derive it
-   * from request headers. Omitted values isolate replay to this proxy instance.
+   * from request headers. Required when replay is enabled; missing values fail at startup.
    * Changing it invalidates outstanding replay records.
    */
   authority?: string | undefined
@@ -87,10 +87,12 @@ export function resolve(options: Options): Resolved {
     throw new RangeError(
       'replay.ttl must be a positive integer number of milliseconds up to 2147483647.',
     )
-  if (options.authority !== undefined && !options.authority.trim())
-    throw new TypeError('replay.authority must not be empty.')
+  if (!options.authority?.trim())
+    throw new TypeError(
+      'replay.authority must be a stable, explicitly configured payment authority.',
+    )
   return {
-    authority: options.authority ?? globalThis.crypto.randomUUID(),
+    authority: options.authority,
     maxAttempts: options.maxAttempts ?? 3,
     maxBodySize: options.maxBodySize ?? 1_048_576,
     maxRequestBodySize: options.maxRequestBodySize ?? 1_048_576,

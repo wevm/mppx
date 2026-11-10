@@ -3,7 +3,6 @@ import * as Constants from '../../Constants.js'
 import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as IdentityClient from '../../identity/Client.js'
-import type * as Identity from '../../identity/Types.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
@@ -272,11 +271,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const send = async (
     input: RequestInfo | URL,
     init: RequestInit | undefined,
-    context?: Identity.Context,
-  ): Promise<Response> =>
+    context?: IdentityClient.SendContext,
+  ): Promise<{ response: Response; headers: IdentityClient.ResendHeaders }> =>
     identity
-      ? (await identity.send(baseFetch, new Request(input, init), context)).response
-      : baseFetch(input, init)
+      ? identity.send(baseFetch, new Request(input, init), context)
+      : { response: await baseFetch(input, init), headers: [] }
 
   const request = async (
     input: RequestInfo | URL,
@@ -295,7 +294,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
-    let response = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
+    const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
+    let response = first.response
+    // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
+    const identityHeaders = first.headers
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
     if ((init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment])
@@ -476,7 +478,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
           })
         try {
-          response = await send(
+          ;({ response } = await send(
             paymentInput,
             {
               ...transport.setCredential(
@@ -490,8 +492,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               // Runtimes do not strip custom payment headers on cross-origin redirects.
               redirect: 'manual',
             },
-            { challenge: selectedChallenge },
-          )
+            { challenge: selectedChallenge, headers: identityHeaders },
+          ))
         } catch (cause) {
           outcomeUnknown = unknownOutcome(cause)
           throw cause

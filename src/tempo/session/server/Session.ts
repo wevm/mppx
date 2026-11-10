@@ -533,6 +533,9 @@ export function session<const parameters extends session.Parameters>(
       request,
     })
 
+    const prepaidRefundKey = parameters.sse ? `stream:${globalThis.crypto.randomUUID()}` : undefined
+    const markPrepaidReceipt = (receipt: Parameters<typeof Transport.markPrepaidSessionTick>[0]) =>
+      Transport.markPrepaidSessionTick(receipt, prepaidRefundKey)
     const chargeAmount =
       (parameters.chargeOnAcceptance || parameters.sse) &&
       shouldChargeVoucherOnAcceptance({
@@ -560,6 +563,7 @@ export function session<const parameters extends session.Parameters>(
       account,
       challenge,
       chargeAmount,
+      prepaidRefundKey,
       onCharged: (channel) => {
         acceptance.charged = channel
       },
@@ -597,7 +601,7 @@ export function session<const parameters extends session.Parameters>(
         ...sessionReceipt,
         ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
       }
-      return parameters.sse ? Transport.markPrepaidSessionTick(receipt) : receipt
+      return parameters.sse ? markPrepaidReceipt(receipt) : receipt
     }
     return applyVerifiedHttpAccounting({
       capturedRequest: envelope?.capturedRequest,
@@ -605,10 +609,10 @@ export function session<const parameters extends session.Parameters>(
       receipt: sessionReceipt,
       getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
       sseEnabled: Boolean(parameters.sse),
-      markPrepaidReceipt: Transport.markPrepaidSessionTick,
+      markPrepaidReceipt,
       unitType: context.request.unitType,
       charge: (channelId, requestAmount) =>
-        chargeSessionChannel({ store, channelId, amount: requestAmount }),
+        chargeSessionChannel({ store, channelId, amount: requestAmount, prepaidRefundKey }),
       settleCharged: settleAcceptedCharge,
     })
   }
@@ -790,7 +794,11 @@ export namespace session {
      *
      * Session mutations must be linearizable across instances so spent,
      * highest-voucher, top-up, and close/finalization updates cannot race.
-     * Use `Store.memory()` for tests or local single-process usage.
+     *
+     * If omitted, this throws in production (`NODE_ENV=production`), on
+     * multi-instance platforms and on Cloudflare Workers, and otherwise warns
+     * and falls back to an in-memory store. Pass `Store.memory()` explicitly
+     * for tests or local single-process usage.
      */
     store?: Store.AtomicStore | undefined
     /** Enable SSE streaming. Pass `true` for defaults or an options object to configure SSE. */

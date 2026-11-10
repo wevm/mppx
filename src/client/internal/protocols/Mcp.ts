@@ -1,7 +1,6 @@
-import { createParser } from 'eventsource-parser'
-
 import * as Challenge from '../../../Challenge.js'
 import * as Credential from '../../../Credential.js'
+import { createParser } from '../../../internal/sse.js'
 import * as Mcp from '../../../Mcp.js'
 import type { Protocol } from './Protocol.js'
 import { paymentRequiredStatus } from './Shared.js'
@@ -134,15 +133,13 @@ async function parseSseJsonRpcResponse(response: Response): Promise<Mcp.Response
   let received = 0
   let dataEventSeen = false
   let message: Mcp.Response | undefined
-  const parser = createParser({
-    onEvent(event) {
-      if (dataEventSeen || !event.data) return
-      dataEventSeen = true
-      if (event.event && event.event !== 'message') return
-      try {
-        message = parseMessage(JSON.parse(event.data))
-      } catch {}
-    },
+  const parser = createParser((event) => {
+    if (dataEventSeen || !event.data) return
+    dataEventSeen = true
+    if (event.event !== 'message') return
+    try {
+      message = parseMessage(JSON.parse(event.data))
+    } catch {}
   })
 
   try {
@@ -151,7 +148,6 @@ async function parseSseJsonRpcResponse(response: Response): Promise<Mcp.Response
       const { done, value } = await reader.read()
       if (done) {
         parser.feed(decoder.decode())
-        parser.reset({ consume: true })
         return message
       }
       received += value.byteLength

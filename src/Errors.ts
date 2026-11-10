@@ -289,6 +289,144 @@ export declare namespace PaymentOutcomeUnknownError {
 }
 
 /**
+ * A server broadcast a payment transaction, the broadcast failed in a way that does not say whether
+ * the node accepted it, and no receipt appeared before settlement stopped polling. The transaction
+ * may still be included until `validBefore`.
+ *
+ * Settle it by looking up the receipt for `transactionHash`: once `validBefore` has passed, the
+ * transaction can no longer be included, so one lookup after it is final. This is not a
+ * `PaymentError`: HTTP handlers still answer with a generic 500 `InternalPaymentError`, whose
+ * `cause` is this error.
+ */
+export class BroadcastOutcomeUnknownError extends Error {
+  override readonly name = 'BroadcastOutcomeUnknownError'
+
+  /** Hash of the broadcast transaction, as it will appear on chain if it is included. */
+  readonly transactionHash: `0x${string}`
+  /** Unix time in seconds after which the transaction can no longer be included, when it expires. */
+  readonly validBefore: number | undefined
+
+  constructor(options: BroadcastOutcomeUnknownError.Options) {
+    const { cause, transactionHash, validBefore } = options
+    super(
+      `Broadcast outcome is unknown for transaction ${transactionHash}. Look up its receipt before retrying.`,
+    )
+    this.transactionHash = transactionHash
+    this.validBefore = validBefore
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace BroadcastOutcomeUnknownError {
+  type Options = {
+    /** The broadcast error that left the outcome unknown. */
+    cause?: unknown
+    /** Hash of the broadcast transaction. */
+    transactionHash: `0x${string}`
+    /** Unix time in seconds after which the transaction can no longer be included. */
+    validBefore?: number | undefined
+  }
+}
+
+/**
+ * A pre-broadcast simulation of a fee-sponsored payment failed, so the payment was not broadcast.
+ *
+ * `phase` says which simulation failed: `sender` runs the sender's calls before sponsorship, and
+ * `sponsored` runs the final envelope billed to `feePayer`. Callers use it, with `sender`,
+ * `feePayer` and `paymentToken`, to tell a payer's insufficient balance from a sponsor's without
+ * matching node messages. The node's error is the `cause`. This is not a `PaymentError`: HTTP
+ * handlers still answer with a generic 500 `InternalPaymentError`, whose `cause` is this error.
+ */
+export class PaymentSimulationError extends Error {
+  override readonly name = 'PaymentSimulationError'
+
+  /** Fee payer the sponsored simulation billed. Set only in the `sponsored` phase. */
+  readonly feePayer: `0x${string}` | undefined
+  /** TIP-20 token of a single `transfer` or `transferWithMemo` call, when the transaction is one. */
+  readonly paymentToken: `0x${string}` | undefined
+  /** Simulation that failed. */
+  readonly phase: PaymentSimulationError.Phase
+  /** Sender of the simulated transaction. */
+  readonly sender: `0x${string}` | undefined
+
+  constructor(options: PaymentSimulationError.Options) {
+    const { cause, feePayer, paymentToken, phase, sender } = options
+    super('Payment simulation failed')
+    this.feePayer = feePayer
+    this.paymentToken = paymentToken
+    this.phase = phase
+    this.sender = sender
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace PaymentSimulationError {
+  /** `sender`: the sender's calls before sponsorship. `sponsored`: the final sponsored envelope. */
+  type Phase = 'sender' | 'sponsored'
+
+  type Options = {
+    /** The simulation error. */
+    cause?: unknown
+    /** Fee payer of the sponsored simulation. */
+    feePayer?: `0x${string}` | undefined
+    /** TIP-20 token of a single transfer call. */
+    paymentToken?: `0x${string}` | undefined
+    /** Simulation that failed. */
+    phase: Phase
+    /** Sender of the simulated transaction. */
+    sender?: `0x${string}` | undefined
+  }
+}
+
+/**
+ * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
+ * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
+ *
+ * Retry the same challenge with the same `tempo.charge` client to resume waiting without
+ * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ */
+export class ZoneSettlementPendingError extends Error {
+  override readonly name = 'ZoneSettlementPendingError'
+
+  /** ID of the challenge the withdrawal pays. */
+  readonly challengeId: string
+  /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
+  readonly senderTag: `0x${string}`
+  /** ID of the Zone the withdrawal left. */
+  readonly zoneId: number
+
+  constructor(options: ZoneSettlementPendingError.Options) {
+    const { cause, challengeId, senderTag, zoneId } = options
+    super(
+      `Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+    )
+    this.challengeId = challengeId
+    this.senderTag = senderTag
+    this.zoneId = zoneId
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace ZoneSettlementPendingError {
+  type Options = {
+    /** The error that ended the wait. */
+    cause?: unknown
+    /** ID of the challenge the withdrawal pays. */
+    challengeId: string
+    /** Sender tag of the withdrawal. */
+    senderTag: `0x${string}`
+    /** ID of the Zone the withdrawal left. */
+    zoneId: number
+  }
+}
+
+/**
  * No credential was provided but payment is required.
  */
 export class PaymentRequiredError extends PaymentError {

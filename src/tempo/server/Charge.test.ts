@@ -954,6 +954,67 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: instances sharing a store reject a hash replayed on another instance', async () => {
+      async function replay(stores: readonly [Store.AtomicStore, Store.AtomicStore]) {
+        const handlers = stores.map((store) =>
+          Mppx_server.create({
+            methods: [
+              tempo_server.charge({
+                account: accounts[0],
+                currency: asset,
+                getClient: () => client,
+                store,
+              }),
+            ],
+            realm,
+            secretKey,
+          }),
+        )
+        const servers = await Promise.all(
+          handlers.map((server) =>
+            Http.createServer(async (req, res) => {
+              const result = await Mppx_server.toNodeListener(server.charge({ amount: '1' }))(
+                req,
+                res,
+              )
+              if (result.status === 402) return
+              res.end('OK')
+            }),
+          ),
+        )
+
+        const challenge = Challenge.fromResponse(await fetch(servers[0]!.url), {
+          methods: [tempo_client.charge()],
+        })
+        const { receipt } = await Actions.token.transferSync(client, {
+          account: accounts[1],
+          amount: BigInt(challenge.request.amount),
+          memo: Attribution.encode({ challengeId: challenge.id, serverId: realm }) as Hex.Hex,
+          to: challenge.request.recipient as Hex.Hex,
+          token: challenge.request.currency as Hex.Hex,
+        })
+        const authorization = Credential.serialize(
+          Credential.from({
+            challenge,
+            payload: { hash: receipt.transactionHash, type: 'hash' as const },
+          }),
+        )
+
+        const statuses: number[] = []
+        for (const server of servers)
+          statuses.push(
+            (await fetch(server.url, { headers: { Authorization: authorization } })).status,
+          )
+        for (const server of servers) server.close()
+        return statuses
+      }
+
+      const shared = Store.memory()
+      expect(await replay([shared, shared])).toEqual([200, 403])
+      // Instance-local stores cannot see each other's claims, which is why production requires a shared store.
+      expect(await replay([Store.memory(), Store.memory()])).toEqual([200, 200])
+    })
+
     test('behavior: rejects replayed hash with alternating case', async () => {
       const dedupServer = Mppx_server.create({
         methods: [

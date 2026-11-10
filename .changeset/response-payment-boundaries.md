@@ -1,5 +1,5 @@
 ---
-'mppx': patch
+'mppx': minor
 ---
 
-Contained Node response-stream errors, routed all Express output through payment accounting, rejected subscription chain mismatches, and isolated proxy replay by trusted authority and route. Replay replicas can opt into sharing with a stable `replay.authority`; independent authorities must use different values.
+Fixed payment enforcement across Express responses, disconnected streams, subscription signing, and CLI retries. Proxy replay now requires a stable, explicitly configured `replay.authority`, shared only by replicas with identical payment policies and upstream permissions.

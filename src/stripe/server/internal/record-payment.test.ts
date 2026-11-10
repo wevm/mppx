@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import { sdkIdentifier } from '../../../internal/version.js'
 import type { StripeClient } from '../../internal/types.js'
-import { recordCryptoPayment } from './record-payment.js'
+import { recordCryptoPayment, recordPayment } from './record-payment.js'
 
 function createClient(create: (...args: any[]) => Promise<any>): StripeClient {
   return { paymentIntents: { create } }
@@ -122,4 +122,79 @@ describe('recordCryptoPayment', () => {
       expect.any(Error),
     )
   })
+})
+
+describe('recordPayment', () => {
+  const parameters = { amount: '500000', network: 'tempo', reference: '0xtx123' } as const
+
+  test('creates a PaymentIntent keyed by the transaction hash', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'pi_123', status: 'succeeded' })
+
+    await expect(
+      recordPayment(createClient(create), { ...parameters, metadata: { order: 'o_1' } }),
+    ).resolves.toEqual({
+      paymentIntentId: 'pi_123',
+      paymentIntentStatus: 'succeeded',
+      status: 'created',
+    })
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        amount: 50,
+        metadata: { order: 'o_1' },
+        payment_method_options: {
+          crypto: {
+            mode: 'transaction_verification',
+            transaction_verification_options: { network: 'tempo', transaction_hash: '0xtx123' },
+          },
+        },
+      }),
+      expect.objectContaining({ idempotencyKey: '0xtx123' }),
+    )
+  })
+
+  test('reports a replayed PaymentIntent', async () => {
+    const create = vi.fn().mockResolvedValue({
+      id: 'pi_123',
+      status: 'succeeded',
+      lastResponse: { headers: { 'idempotent-replayed': 'true' } },
+    })
+    await expect(recordPayment(createClient(create), parameters)).resolves.toEqual({
+      paymentIntentId: 'pi_123',
+      paymentIntentStatus: 'succeeded',
+      status: 'replayed',
+    })
+  })
+
+  test('reports a reused key with different parameters as a conflict', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Keys reused'), { type: 'StripeIdempotencyError' }),
+      )
+    await expect(recordPayment(createClient(create), parameters)).resolves.toEqual({
+      status: 'key_conflict',
+    })
+  })
+
+  test('skips amounts below one cent', async () => {
+    const create = vi.fn()
+    await expect(
+      recordPayment(createClient(create), { ...parameters, amount: '9999' }),
+    ).resolves.toEqual({ status: 'below_minimum' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  test('throws other Stripe failures', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('Connection reset'))
+    await expect(recordPayment(createClient(create), parameters)).rejects.toThrow(
+      'Connection reset',
+    )
+  })
+})
+
+test('recordPayment reports a PaymentIntent that is still processing', async () => {
+  const create = vi.fn().mockResolvedValue({ id: 'pi_123', status: 'processing' })
+  await expect(
+    recordPayment(createClient(create), { amount: '500000', network: 'tempo', reference: '0xtx' }),
+  ).resolves.toMatchObject({ paymentIntentStatus: 'processing', status: 'created' })
 })

@@ -9,6 +9,18 @@ import { tempoSuites } from './test/runtime/tempo-suites.js'
 // Shared aliases used by both projects
 const alias = {
   'next/server': path.resolve(import.meta.dirname, 'node_modules/next/server.js'),
+  'mppx/extensions/identity/attestation': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/attestation',
+  ),
+  'mppx/extensions/identity/email-otp': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/email-otp',
+  ),
+  'mppx/extensions/identity/link': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/link',
+  ),
   'mppx/extensions/identity/tap': path.resolve(import.meta.dirname, 'src/extensions/identity/tap'),
   'mppx/extensions/identity/web-bot-auth': path.resolve(
     import.meta.dirname,
@@ -17,6 +29,7 @@ const alias = {
   'mppx/extensions/identity': path.resolve(import.meta.dirname, 'src/extensions/identity'),
   'mppx/identity': path.resolve(import.meta.dirname, 'src/identity'),
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
+  'mppx/cloudflare': path.resolve(import.meta.dirname, 'src/cloudflare'),
   'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
   'mppx/mcp/client': path.resolve(import.meta.dirname, 'src/mcp/client'),
   'mppx/mcp/server': path.resolve(import.meta.dirname, 'src/mcp/server'),
@@ -73,6 +86,7 @@ export default defineConfig({
             'src/cli/**/*.test.ts',
             'src/x402/Exact.localnet.test.ts',
             'src/x402/CoinbaseClient.integration.test.ts',
+            'src/tempo/Charge.zones.integration.test.ts',
           ],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
@@ -111,6 +125,19 @@ export default defineConfig({
           retry: 0,
           testTimeout: 60_000,
           hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'zones',
+          alias,
+          include: ['src/tempo/Charge.zones.integration.test.ts'],
+          globalSetup: ['./test/zones/setup.global.ts'],
+          fileParallelism: false,
+          globals: true,
+          retry: 0,
+          testTimeout: 120_000,
+          hookTimeout: 240_000,
         },
       },
       {

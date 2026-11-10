@@ -124,6 +124,21 @@ mppx sessions close --all --yes
 mppx example.com -M allowCustomEscrow=true
 ```
 
+`mppx stripe address` creates a Stripe crypto deposit address for
+`stripe.create({ depositAddresses })` and prints only the address:
+
+```bash
+mppx stripe address                     # print a new Tempo address
+mppx stripe address --env               # write TEMPO_DEPOSIT_ADDRESS to ./.env instead
+mppx stripe address -n base --env .env.local
+mppx stripe address --json              # id, livemode, network and supported tokens too
+```
+
+The key comes from `--secret-key`, then `STRIPE_SECRET_KEY`, then the Stripe CLI's login
+(`stripe login`; `--project-name` or `STRIPE_PROJECT_NAME` picks the project, `--live` its live
+key). The Stripe CLI logs in with a restricted key (`rk_...`); if Stripe refuses it for deposit
+addresses, pass a secret key with `--secret-key`.
+
 `--session auto` is the default. Pass `new` to open another channel or a channel ID to select one
 explicitly.
 

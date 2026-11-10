@@ -36,7 +36,7 @@ import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Actions, Chain } from 'viem/tempo'
 
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8787'
 
 // pathUSD is the testnet TIP-20 token on Tempo Moderato (testnet).
 // Address 0x20c0...0000 is the well-known pathUSD contract address.
@@ -93,6 +93,8 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // 0.01, you can make up to 100 requests before the channel runs out.
 const DEPOSIT = '1'
 const s = tempo.session.manager({
+  // Ask the server for this account's open channel before opening a new one.
+  bootstrap: true,
   client,
   maxDeposit: DEPOSIT,
 })
@@ -141,7 +143,11 @@ console.log(`\n--- Scraping ${PAGE_COUNT} pages @ 0.01 pathUSD each ---`)
 for (const url of urls) {
   // s.fetch() is a drop-in replacement for `fetch()`. It automatically
   // handles 402 responses, channel opening, and voucher signing.
-  const response = await s.fetch(`${BASE_URL}/api/scrape?url=${encodeURIComponent(url)}`)
+  //
+  // The page URL goes in the path, not the query string: `s.close()` posts the
+  // close voucher back to the last URL, and a POST with a query string is
+  // billed as a content request.
+  const response = await s.fetch(`${BASE_URL}/api/scrape/${encodeURIComponent(url)}`)
 
   if (!response.ok) {
     console.error(`Error: ${response.status}`)

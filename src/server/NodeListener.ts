@@ -92,6 +92,7 @@ function waitForDrain(res: http.ServerResponse | http2.Http2ServerResponse): Pro
       res.removeListener('error', onError)
     }
     const onDrain = () => {
+      if (res.writableNeedDrain) return
       cleanup()
       resolve(true)
     }

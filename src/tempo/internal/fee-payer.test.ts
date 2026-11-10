@@ -5,6 +5,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import { PaymentSimulationError } from '../../Errors.js'
 import { escrowAbi as legacyEscrowAbi } from '../legacy/session/escrow.abi.js'
 import { escrowAbi } from '../session/precompile/escrow.abi.js'
 import * as defaults from './defaults.js'
@@ -89,6 +90,16 @@ const sponsor = { address: bogus, type: 'local' } as any
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+/** Awaits a rejected preflight and returns its `PaymentSimulationError`. */
+async function simulationFailure(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+  expect(error).toBeInstanceOf(PaymentSimulationError)
+  return error as PaymentSimulationError & { cause: Error }
+}
 
 describe('callScopes', () => {
   test('has 4 allowed patterns', () => {
@@ -1026,6 +1037,7 @@ describe('simulationTransaction', () => {
       feePayer: swapTokenOut,
       feePayerSignature: undefined,
       feeToken: bogus,
+      maxPriorityFeePerGas: 0n,
       signature: undefined,
     })
   })
@@ -1057,6 +1069,7 @@ describe('sponsoredSimulationTransaction', () => {
       },
       feeToken: swapTokenIn,
       from: bogus,
+      maxPriorityFeePerGas: 0n,
       signature: undefined,
     })
   })
@@ -1179,6 +1192,7 @@ describe('preflightSponsorship', () => {
         calls: transaction.calls,
         feePayer: swapTokenOut,
         feePayerSignature: undefined,
+        maxPriorityFeePerGas: 0n,
         signature: undefined,
       },
     ])
@@ -1325,7 +1339,7 @@ describe('preflightSponsorship', () => {
   test('never signs when the sender simulation fails', async () => {
     const sign = vi.fn()
 
-    await expect(
+    const error = await simulationFailure(
       preflightSponsorship({
         transaction: transaction as any,
         async simulate() {
@@ -1338,8 +1352,157 @@ describe('preflightSponsorship', () => {
           }
         },
       }),
-    ).rejects.toThrow('sender reverted')
+    )
+    expect(error.cause.message).toBe('sender reverted')
     expect(sign).not.toHaveBeenCalled()
+  })
+
+  test('simulates a hosted envelope with its omitted zero priority fee', async () => {
+    const signature = { r: 13n, s: 14n, yParity: 0 }
+    const simulations: Record<string, unknown>[] = []
+    // A deserialized envelope drops a zero priority fee; the hosted signature covers it as 0.
+    const { maxPriorityFeePerGas: _, ...hosted } = {
+      ...transaction,
+      maxFeePerGas: 1n,
+      maxPriorityFeePerGas: 0n,
+    }
+
+    await preflightSponsorship({
+      transaction: transaction as any,
+      async simulate(request) {
+        simulations.push(request)
+      },
+      async complete() {
+        return { feePayer: swapTokenOut, feePayerSignature: signature, transaction: hosted as any }
+      },
+    })
+
+    expect(simulations[1]).toMatchObject({
+      feePayerSignature: Signature.toRpc(signature),
+      maxFeePerGas: 1n,
+      maxPriorityFeePerGas: 0n,
+    })
+  })
+
+  test('tags a sender simulation failure with the payer and payment token', async () => {
+    const cause = new Error('insufficient balance')
+    const transfer = {
+      ...transaction,
+      calls: [
+        {
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transfer',
+            args: [bogus, 1n],
+          }),
+          to: defaults.tokens.pathUsd,
+        },
+      ],
+    }
+    const complete = vi.fn()
+
+    const error = await simulationFailure(
+      preflightSponsorship({
+        transaction: transfer as any,
+        async simulate() {
+          throw cause
+        },
+        complete,
+      }),
+    )
+
+    expect(error.message).toBe('Payment simulation failed')
+    expect(error.name).toBe('PaymentSimulationError')
+    expect(error.cause).toBe(cause)
+    expect(error.phase).toBe('sender')
+    expect(error.sender).toBe(bogus)
+    expect(error.paymentToken).toBe(defaults.tokens.pathUsd)
+    expect(error.feePayer).toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  test('rethrows a transport failure as it is, in either phase', async () => {
+    const timeout = Object.assign(new Error('The request took too long to respond.'), {
+      name: 'TimeoutError',
+    })
+    const wrapped = new Error('call failed', { cause: timeout })
+    const complete = vi.fn()
+
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate() {
+          throw wrapped
+        },
+        complete,
+      }),
+    ).rejects.toBe(wrapped)
+    expect(complete).not.toHaveBeenCalled()
+
+    const unavailable = Object.assign(new Error('HTTP request failed. Status: 503'), {
+      name: 'HttpRequestError',
+    })
+    let calls = 0
+    await expect(
+      preflightSponsorship({
+        transaction: transaction as any,
+        async simulate() {
+          if (calls++ === 1) throw unavailable
+        },
+        async complete() {
+          return { feePayer: transaction.from, transaction } as any
+        },
+      }),
+    ).rejects.toBe(unavailable)
+  })
+
+  test('tags a sponsored simulation failure with the fee payer', async () => {
+    const cause = new Error('insufficient fee token balance')
+    const memoTransfer = {
+      ...transaction,
+      calls: [
+        {
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transferWithMemo',
+            args: [bogus, 1n, `0x${'0'.repeat(64)}`],
+          }),
+          to: defaults.tokens.pathUsd,
+        },
+      ],
+    }
+
+    const error = await simulationFailure(
+      preflightSponsorship({
+        transaction: memoTransfer as any,
+        async simulate(request) {
+          if (request.feePayer) throw cause
+        },
+        async complete() {
+          return { feePayer: swapTokenOut, transaction: memoTransfer as any }
+        },
+      }),
+    )
+
+    expect(error.cause).toBe(cause)
+    expect(error.phase).toBe('sponsored')
+    expect(error.sender).toBe(bogus)
+    expect(error.feePayer).toBe(swapTokenOut)
+    expect(error.paymentToken).toBe(defaults.tokens.pathUsd)
+  })
+
+  test('omits the payment token when the transaction is not a single transfer', async () => {
+    const error = await simulationFailure(
+      preflightSponsorship({
+        transaction: { ...transaction, calls: [{ data: swapData, to: bogus }] } as any,
+        async simulate() {
+          throw new Error('reverted')
+        },
+        complete: vi.fn(),
+      }),
+    )
+
+    expect(error.paymentToken).toBeUndefined()
   })
 })
 
@@ -1376,7 +1539,7 @@ describe('preflightSponsorship gas bounds', () => {
     const complete = vi.fn()
     const simulations: Record<string, any>[] = []
 
-    await expect(
+    const error = await simulationFailure(
       preflightSponsorship({
         transaction: transaction as any,
         async simulate(request) {
@@ -1386,13 +1549,15 @@ describe('preflightSponsorship gas bounds', () => {
         },
         complete,
       }),
-    ).rejects.toThrow('Execution reverted.')
+    )
+    expect(error.phase).toBe('sender')
+    expect(isOutOfGasError(error.cause)).toBe(true)
     expect(simulations[0]).toMatchObject({ gas: 44_069n, maxFeePerGas: 0n, nonceKey: maxUint256 })
     expect(complete).not.toHaveBeenCalled()
   })
 
   test('rejects a local fee payer when the padded sponsored simulation runs out of gas', async () => {
-    await expect(
+    const error = await simulationFailure(
       preflightSponsorship({
         transaction: { ...sender, gas: 50_000n } as any,
         async simulate(request) {
@@ -1402,7 +1567,9 @@ describe('preflightSponsorship gas bounds', () => {
           return { feePayer: feePayer.address, transaction: signed(50_000n) as any }
         },
       }),
-    ).rejects.toThrow('Execution reverted.')
+    )
+    expect(error.phase).toBe('sponsored')
+    expect(isOutOfGasError(error.cause)).toBe(true)
   })
 
   test('clamps the padded simulation copy to the policy maxGas', async () => {
@@ -1484,7 +1651,7 @@ describe('preflightSponsorship gas bounds', () => {
     { case: 'a revert', error: () => rpcError('execution reverted') },
   ])('rejects $case in the hosted sponsored simulation', async ({ error }) => {
     const signature = { r: 9n, s: 10n, yParity: 0 }
-    await expect(
+    const failure = await simulationFailure(
       preflightSponsorship({
         transaction: { ...sender, gas: 50_000n } as any,
         async simulate(request) {
@@ -1498,7 +1665,9 @@ describe('preflightSponsorship gas bounds', () => {
           }
         },
       }),
-    ).rejects.toThrow('Execution reverted.')
+    )
+    expect(failure.phase).toBe('sponsored')
+    expect(failure.cause.message).toBe('Execution reverted.')
   })
 
   test('isOutOfGasError matches only out-of-gas messages', () => {

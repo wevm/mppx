@@ -1,6 +1,4 @@
 import {
-  createClient,
-  custom,
   isAddress,
   isAddressEqual,
   zeroAddress,
@@ -40,6 +38,7 @@ import {
   type OnSessionSettlement,
   type OnSessionSettlementFailure,
   reportSessionSettlementFailure,
+  trackSendAttempts,
 } from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
@@ -375,6 +374,8 @@ export type BroadcastCredentialPayloadParameters = {
   voucherStateMaxAge?: number | undefined
   /** Request price a voucher credential pays in the same store update that accepts it. */
   chargeAmount?: bigint | undefined
+  /** Durable delivery key for an SSE request charged before its first item. */
+  prepaidRefundKey?: string | undefined
   /** Called with the stored channel after `chargeAmount` was charged. */
   onCharged?: ((channel: ChannelStore.State) => void) | undefined
 }
@@ -1064,6 +1065,7 @@ async function handleVoucherCredential(
       channelState: storedChannelState(channel),
       methodDetails: { chainId, escrowContract: escrow },
       chargeAmount,
+      prepaidRefundKey: parameters.prepaidRefundKey,
       onCharged,
     })
   }
@@ -1094,6 +1096,7 @@ async function handleVoucherCredential(
     methodDetails: { chainId, escrowContract: escrow },
     verifiedAt: startedAt,
     chargeAmount,
+    prepaidRefundKey: parameters.prepaidRefundKey,
     onCharged,
   })
 }
@@ -1163,6 +1166,7 @@ async function acceptVoucherInOneUpdate(
     const acceptance = ChannelStore.planVoucherAcceptance({
       accepted: ChannelStore.acceptVoucherStateUpdate({ channelState, current, voucher }),
       chargeAmount,
+      prepaidRefundKey: parameters.prepaidRefundKey,
     })
     return { op: 'set', value: acceptance.channel, result: acceptance }
   })
@@ -1195,14 +1199,7 @@ async function recordPendingClose(
     current
       ? {
           ...current,
-          settledOnChain:
-            channelState.settled > current.settledOnChain
-              ? channelState.settled
-              : current.settledOnChain,
-          closeRequestedAt:
-            BigInt(channelState.closeRequestedAt) > current.closeRequestedAt
-              ? BigInt(channelState.closeRequestedAt)
-              : current.closeRequestedAt,
+          ...ChannelStore.mergeActiveOnChainState(current, channelState),
         }
       : current,
   )
@@ -1245,33 +1242,6 @@ function recordOnChainReadInBackground(
       )
     })
     .catch(() => {})
-}
-
-const sendMethods = new Set([
-  'eth_sendRawTransaction',
-  'eth_sendRawTransactionSync',
-  'eth_sendTransaction',
-])
-
-/** Wraps a client so a failed close can tell whether its transaction was handed to the node. */
-function trackSendAttempts(client: Chain.TransactionClient) {
-  const tracked = { attempted: false }
-  const trackedClient = createClient({
-    account: client.account,
-    chain: client.chain,
-    pollingInterval: client.pollingInterval,
-    transport: custom(
-      {
-        request(parameters) {
-          if (sendMethods.has(parameters.method)) tracked.attempted = true
-          return client.request(parameters as never)
-        },
-      },
-      // The wrapped client already owns retries.
-      { retryCount: 0 },
-    ),
-  })
-  return { client: trackedClient, tracked }
 }
 
 async function handleCloseCredential(
@@ -1394,7 +1364,7 @@ async function handleCloseCredential(
     if (pendingCloseMarked && closeFailed) {
       await store.updateChannel(channelId, (current) =>
         current && current.closeRequestedAt === pendingCloseStartedAt
-          ? { ...current, closeRequestedAt: 0n }
+          ? { ...current, closeRequestedAt: 0n, pendingCloseAt: undefined }
           : current,
       )
     }

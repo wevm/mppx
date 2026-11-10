@@ -1,5 +1,7 @@
 import { afterEach, expect, test, vi } from 'vp/test'
 
+import * as X402Assets from '../x402/Assets.js'
+import * as X402Header from '../x402/Header.js'
 import cli from './cli.js'
 import * as internal from './internal.js'
 
@@ -119,3 +121,43 @@ test('allows non-payment responses over remote HTTP', async () => {
   await cli.serve(['http://example.com', '--silent'], { stdout() {}, exit })
   expect(exit).not.toHaveBeenCalledWith(2)
 })
+
+test.each(['http://payments.example/paid', 'https://other.example/paid'])(
+  'rejects server-selected x402 credential origin before plugin setup: %s',
+  async (resource) => {
+    const asset = X402Assets.baseSepolia.USDC
+    const fetch = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 402,
+          headers: {
+            'Payment-Required': X402Header.encodePaymentRequired({
+              x402Version: 2,
+              resource: { url: resource },
+              accepts: [
+                {
+                  scheme: 'exact',
+                  network: asset.network,
+                  amount: '5000',
+                  asset: asset.address,
+                  extra: { name: asset.transfer.name, version: asset.transfer.version },
+                  maxTimeoutSeconds: 60,
+                  payTo: '0x1234567890AbcdEF1234567890aBcdef12345678',
+                },
+              ],
+            }),
+          },
+        }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    let output = ''
+    await cli.serve(['https://payments.example/start', '--protocol', 'x402', '--silent'], {
+      stdout(value) {
+        output += value
+      },
+      exit() {},
+    })
+    expect(output).toContain('UNSAFE_PAYMENT_REDIRECT')
+    expect(fetch).toHaveBeenCalledOnce()
+  },
+)
