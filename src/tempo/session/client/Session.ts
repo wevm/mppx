@@ -42,6 +42,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
+import { selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -285,7 +286,7 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const resolved = await resolveChallengeContext({
+      const challengeContext = await resolveChallengeContext({
         allowCustomEscrow,
         challenge,
         escrowOverride,
@@ -305,10 +306,14 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        if (automatic) {
-          release = await lockChannel(store, resolved.key)
-          if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
-        }
+        // Opens lock the challenge currency's scope, which a MACH channel for it shares.
+        if (automatic) release = await lockChannel(store, challengeContext.key)
+        const resolved = await selectChannelContext({
+          context,
+          resolved: challengeContext,
+          store,
+        })
+        if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
         if (origin && !entry && resolved.snapshot && !context?.descriptor && !configuredOrigin)
@@ -317,7 +322,7 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannel(store, resolved.key)
+          release = await lockChannel(store, challengeContext.key)
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')
@@ -477,12 +482,16 @@ export function session(parameters: session.Parameters = {}) {
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
     assertSpendingPolicy(policy, challenge.request)
-    const resolved = await resolveChallengeContext({
-      allowCustomEscrow,
-      challenge,
-      escrowOverride,
-      allowedChainIds,
-      getClient,
+    const resolved = await selectChannelContext({
+      context: sessionContext,
+      resolved: await resolveChallengeContext({
+        allowCustomEscrow,
+        challenge,
+        escrowOverride,
+        allowedChainIds,
+        getClient,
+      }),
+      store,
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
@@ -539,12 +548,16 @@ export function session(parameters: session.Parameters = {}) {
       }
 
       const channelKey = (
-        await resolveChallengeContext({
-          allowCustomEscrow,
-          challenge,
-          escrowOverride,
-          allowedChainIds,
-          getClient,
+        await selectChannelContext({
+          context: sessionContextSchema.safeParse(context).data,
+          resolved: await resolveChallengeContext({
+            allowCustomEscrow,
+            challenge,
+            escrowOverride,
+            allowedChainIds,
+            getClient,
+          }),
+          store,
         })
       ).key
       let channel = await store.get(channelKey)

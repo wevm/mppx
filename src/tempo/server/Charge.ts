@@ -44,6 +44,7 @@ import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
+import * as RecipientPolicy from '../internal/recipient-policy.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Zone from '../internal/zone.js'
@@ -168,6 +169,9 @@ export function charge<const parameters extends charge.Parameters>(
     const settlementSender = machineTokenEnabled
       ? MachineTokenCharge.getSettlementSender(chainId)
       : undefined
+    // Direct MACH payments go straight to the recipient, so they need no settlement sender.
+    const machineToken =
+      methodDetails?.machineTokenDirect === true ? MachineTokenCharge.getToken(chainId) : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -185,6 +189,7 @@ export function charge<const parameters extends charge.Parameters>(
       allowedFeeTokens,
       amount,
       machineTokenEnabled,
+      machineToken,
       chainId,
       challenge,
       client: await getClient({ chainId }),
@@ -223,10 +228,17 @@ export function charge<const parameters extends charge.Parameters>(
           transfers,
         })
       : undefined
+    // A direct MACH payment transfers MACH 1:1 to the same recipients instead of the currency.
+    const paymentCurrency =
+      !machineRoute &&
+      context.machineToken &&
+      calls.some((call) => call.to && TempoAddress.isEqual(call.to, context.machineToken!))
+        ? context.machineToken
+        : currency
     const matchedCalls =
       machineRoute?.transfers ??
       assertTransferCalls(calls, {
-        currency,
+        currency: paymentCurrency,
         exactCount: isFeePayerTx,
         transfers,
       })
@@ -244,8 +256,8 @@ export function charge<const parameters extends charge.Parameters>(
     try {
       const fundingCurrency = FeePayer.validateCalls(
         calls,
-        { amount, currency, recipient },
-        { currency, expectedTransfers: transfers },
+        { amount, currency: paymentCurrency, recipient },
+        { currency: paymentCurrency, expectedTransfers: transfers },
       )
       return { settlementSenders: [], fundingCurrency }
     } catch (error) {
@@ -283,14 +295,14 @@ export function charge<const parameters extends charge.Parameters>(
       hash: payload.hash as `0x${string}`,
     })
     const sender = source?.address ?? receipt.from
-    const matchedLogs = await assertTransferLogs(receipt, {
-      currency,
-      sender,
-      settlementSenders,
-      source,
-      transfers,
-      validateSender,
-    })
+    const logParameters = { sender, settlementSenders, source, transfers, validateSender }
+    const matchedLogs = await assertTransferLogs(receipt, { ...logParameters, currency }).catch(
+      (error) => {
+        // A direct MACH payment pays the same transfers in MACH.
+        if (!context.machineToken) throw error
+        return assertTransferLogs(receipt, { ...logParameters, currency: context.machineToken })
+      },
+    )
     assertChallengeBoundMemo(matchedLogs, {
       challengeId: challenge.id,
       realm: challenge.realm,
@@ -663,6 +675,17 @@ export function charge<const parameters extends charge.Parameters>(
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
+      // Only approved merchants can receive MACH; a forbidden recipient could never be paid.
+      if (request.machineTokenEnabled && !credential)
+        await RecipientPolicy.assertRecipientsAuthorized(client, {
+          chainId,
+          currency: MachineTokenCharge.getToken(chainId)!,
+          recipients: [
+            request.recipient,
+            ...(request.splits ?? []).map((split) => split.recipient),
+          ],
+        })
+
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
         const account = Account.is(request.feePayer) ? request.feePayer : feePayer
@@ -688,7 +711,10 @@ export function charge<const parameters extends charge.Parameters>(
 
       return {
         ...request,
+        // `machineTokenEnabled` keeps legacy swapper clients working during the transition;
+        // `machineTokenDirect` tells current clients they may pay MACH directly.
         machineTokenEnabled: request.machineTokenEnabled || undefined,
+        machineTokenDirect: request.machineTokenEnabled || undefined,
         chainId,
         feePayer: resolvedFeePayer,
       }
@@ -1136,7 +1162,11 @@ export declare namespace charge {
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
-    /** Enables first-party machine-token funding through the canonical swapper. */
+    /**
+     * Accepts MACH 1:1 for this charge: payers may transfer MACH directly to the recipient instead
+     * of the challenge currency. The recipient must be an approved MACH merchant; issuing a
+     * challenge throws otherwise. Payments made through the legacy swapper are still accepted.
+     */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
@@ -1307,6 +1337,7 @@ function chargeBinding(request: ChargeRequest) {
     chainId,
     feePayer,
     machineTokenEnabled,
+    machineTokenDirect,
     splits,
     supportedModes,
     zones,
@@ -1317,6 +1348,7 @@ function chargeBinding(request: ChargeRequest) {
 
   return {
     machineTokenEnabled,
+    machineTokenDirect,
     amount,
     chainId,
     currency,

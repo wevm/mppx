@@ -138,6 +138,38 @@ function credentialWithFeeToken(credential: string, feeToken: `0x${string}`) {
   })
 }
 
+function directMachineTokenReceipt(parameters: {
+  amount: bigint
+  from: Hex.Hex
+  hash: Hex.Hex
+  memo: Hex.Hex
+  recipient: Hex.Hex
+}) {
+  const receipt = machineTokenReceipt(parameters)
+  const blockHash = receipt.blockHash
+  return {
+    ...receipt,
+    logs: [
+      {
+        address: defaults.machineToken[defaults.chainId.testnet].token,
+        blockHash,
+        blockNumber: '0x1',
+        data: encodeAbiParameters([{ type: 'uint256' }], [parameters.amount]),
+        logIndex: '0x0',
+        removed: false,
+        topics: encodeEventTopics({
+          abi: Abis.tip20,
+          args: { from: parameters.from, memo: parameters.memo, to: parameters.recipient },
+          eventName: 'TransferWithMemo',
+        }),
+        transactionHash: parameters.hash,
+        transactionIndex: '0x0',
+      },
+    ],
+    to: defaults.machineToken[defaults.chainId.testnet].token,
+  }
+}
+
 function machineTokenReceipt(parameters: {
   amount: bigint
   from: Hex.Hex
@@ -1871,6 +1903,9 @@ describe('tempo', () => {
       expect(
         (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
       ).toBe(true)
+      expect(
+        (challenge.request.methodDetails as { machineTokenDirect?: boolean })?.machineTokenDirect,
+      ).toBe(true)
       const credential = Credential.from({
         challenge,
         payload: { hash, type: 'hash' as const },
@@ -1885,6 +1920,107 @@ describe('tempo', () => {
       expect(receipt.fundingCurrency).toBe(defaults.machineToken[defaults.chainId.testnet].token)
 
       httpServer.close()
+    })
+
+    test('behavior: accepts a pushed direct MACH payment only when MACH is accepted', async () => {
+      const hash = `0x${'34'.repeat(32)}` as Hex.Hex
+      const mach = defaults.machineToken[defaults.chainId.testnet].token
+      let challenge: Challenge.Challenge | undefined
+      const memo = () =>
+        Attribution.encode({ challengeId: challenge!.id, serverId: challenge!.realm })
+      const directClient = createClient({
+        chain: { ...chain, id: defaults.chainId.testnet },
+        transport: custom(
+          {
+            async request({ method }) {
+              if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+              if (method === 'eth_getTransactionByHash' && challenge)
+                return {
+                  hash,
+                  from: accounts[1].address,
+                  type: '0x76',
+                  calls: [
+                    {
+                      to: mach,
+                      data: encodeFunctionData({
+                        abi: Abis.tip20,
+                        functionName: 'transferWithMemo',
+                        args: [
+                          accounts[0].address,
+                          BigInt(String(challenge.request.amount)),
+                          memo(),
+                        ],
+                      }),
+                    },
+                  ],
+                }
+              if (method === 'eth_getTransactionReceipt' && challenge)
+                return directMachineTokenReceipt({
+                  amount: BigInt(String(challenge.request.amount)),
+                  from: accounts[1].address,
+                  hash,
+                  memo: memo(),
+                  recipient: accounts[0].address,
+                })
+              throw new Error(`Unexpected direct MACH test RPC method: ${method}`)
+            },
+          },
+          { retryCount: 0 },
+        ),
+      })
+      const issue = async (machineTokenEnabled: boolean) => {
+        const server = Mppx_server.create({
+          methods: [
+            tempo_server.charge({
+              ...(machineTokenEnabled ? { machineTokenEnabled } : {}),
+              account: accounts[0],
+              currency: asset,
+              getClient: () => directClient,
+              supportedModes: ['push'],
+              testnet: true,
+            }),
+          ],
+          realm,
+          secretKey,
+        })
+        const result = await server.charge({
+          amount: '1',
+          decimals: 6,
+          recipient: accounts[0].address,
+        })(new Request('https://example.com'))
+        if (result.status !== 402) throw new Error('Expected challenge')
+        challenge = Challenge.fromResponse(result.challenge)
+        return server
+      }
+
+      const server = await issue(true)
+      expect(challenge!.request.methodDetails).toMatchObject({
+        machineTokenDirect: true,
+        machineTokenEnabled: true,
+      })
+      const credential = Credential.from({
+        challenge: challenge!,
+        payload: { hash, type: 'hash' as const },
+        source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+      })
+      await expect(server.validateCredential(credential)).resolves.toMatchObject({
+        payer: accounts[1].address.toLowerCase(),
+      })
+      const receipt = await server.verifyCredential(Credential.serialize(credential))
+      expect(receipt.reference).toBe(hash)
+      expect(receipt.fundingCurrency).toBe(mach)
+
+      const plainServer = await issue(false)
+      expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')
+      await expect(
+        plainServer.validateCredential(
+          Credential.from({
+            challenge: challenge!,
+            payload: { hash, type: 'hash' as const },
+            source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+          }),
+        ),
+      ).rejects.toThrow()
     })
 
     test('behavior: broadcasts a hosted fee-sponsored machine-token settlement', async () => {

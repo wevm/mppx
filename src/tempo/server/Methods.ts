@@ -39,12 +39,8 @@ function createChargeMethod<const parameters extends SharedParameters>(
 function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
-  // These options apply only to charge, even when configured at the family level.
-  const {
-    allowedFeeTokens: _allowedFeeTokens,
-    machineTokenEnabled: _machineTokenEnabled,
-    ...sessionParameters
-  } = parameters ?? {}
+  // This option applies only to charge, even when configured at the family level.
+  const { allowedFeeTokens: _allowedFeeTokens, ...sessionParameters } = parameters ?? {}
   return sessionServer(
     sessionParameters as NoExtraKeys<parameters, session_.Parameters> | undefined,
   )
@@ -108,7 +104,7 @@ export function tempo<const parameters extends tempo.Parameters>(
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
-    /** Enables MACH funding for compatible Tempo methods. Currently applies to `charge`. */
+    /** Enables MACH funding for compatible Tempo methods: `charge` and `session`. */
     machineTokenEnabled?: boolean | undefined
   }
 

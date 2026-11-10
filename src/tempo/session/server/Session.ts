@@ -37,8 +37,10 @@ import * as ChannelStore from './ChannelStore.js'
 import { broadcastCredentialPayload, validateCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload, validateChannelState } from './CredentialVerification.js'
 import {
+  getMachineToken,
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
+  resolveMachineTokenCredential,
   resolveSessionChannelId,
   resolveSessionSnapshot,
   resolveSessionPaymentRequest,
@@ -133,6 +135,7 @@ type BootstrapPreflightParameters = {
     chainId?: number | undefined
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
+  machineTokenEnabled?: boolean | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
@@ -318,12 +321,14 @@ async function handleBootstrapPreflight(
     source: parameters.credential.source,
     store: parameters.store,
   })
+  const chainId = readBootstrapChainId(request.chainId)
   const snapshot = await resolveSessionSnapshot({
     amount: 0n,
     channelId,
     expected: {
-      chainId: readBootstrapChainId(request.chainId),
+      chainId,
       currency: readBootstrapAddress(request.currency, 'currency'),
+      machineToken: parameters.machineTokenEnabled ? getMachineToken(chainId) : undefined,
       escrowContract: resolveBootstrapEscrowContract(
         parameters.paymentRequest,
         parameters.parameterEscrowContract,
@@ -472,12 +477,18 @@ export function session<const parameters extends session.Parameters>(
     request,
   }) => {
     const payload = requireSessionCredentialPayload(credential.payload)
-    const context = await resolveCredentialVerificationContext({
-      decimals,
-      feePayer: configuredFeePayer,
-      getClient,
-      minVoucherDelta: parameters.minVoucherDelta,
-      request,
+    // Mppx verified the challenge's HMAC before calling this hook.
+    const { challenge, context, sponsoredFeeToken } = await resolveMachineTokenCredential({
+      challenge: credential.challenge,
+      context: await resolveCredentialVerificationContext({
+        decimals,
+        feePayer: configuredFeePayer,
+        getClient,
+        minVoucherDelta: parameters.minVoucherDelta,
+        request,
+      }),
+      payload,
+      store,
     })
 
     // A broadcast voucher is checked against the stored channel by the update that accepts it.
@@ -490,7 +501,7 @@ export function session<const parameters extends session.Parameters>(
         : await validateCredentialPayload({
             account,
             allowPendingClose: operation === 'broadcast',
-            challenge: credential.challenge,
+            challenge,
             channelStateTtl,
             chainId: context.chainId,
             client: context.client,
@@ -503,6 +514,7 @@ export function session<const parameters extends session.Parameters>(
             lastOnChainVerified,
             minVoucherDelta: context.minVoucherDelta,
             payload,
+            sponsoredFeeToken,
             store,
             voucherStateMaxAge: parameters.voucherStateMaxAge,
           })
@@ -523,14 +535,19 @@ export function session<const parameters extends session.Parameters>(
     envelope,
     request,
   }) => {
-    const { challenge } = credential
     const payload = requireSessionCredentialPayload(credential.payload)
-    const context = await resolveCredentialVerificationContext({
-      decimals,
-      feePayer: configuredFeePayer,
-      getClient,
-      minVoucherDelta: parameters.minVoucherDelta,
-      request,
+    // Mppx verified the challenge's HMAC before calling this hook.
+    const { challenge, context, sponsoredFeeToken } = await resolveMachineTokenCredential({
+      challenge: credential.challenge,
+      context: await resolveCredentialVerificationContext({
+        decimals,
+        feePayer: configuredFeePayer,
+        getClient,
+        minVoucherDelta: parameters.minVoucherDelta,
+        request,
+      }),
+      payload,
+      store,
     })
 
     const prepaidRefundKey = parameters.sse ? `stream:${globalThis.crypto.randomUUID()}` : undefined
@@ -586,6 +603,7 @@ export function session<const parameters extends session.Parameters>(
       onSessionSettlement,
       onSessionSettlementFailure,
       payload,
+      sponsoredFeeToken,
       requireVoucherAdvance: shouldApplyVerifiedHttpAccounting({
         capturedRequest: envelope?.capturedRequest,
         payloadAction: payload.action,
@@ -594,6 +612,10 @@ export function session<const parameters extends session.Parameters>(
       store,
       voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
+
+    // A MACH channel accepted for a machineTokenDirect challenge reports the token it debits.
+    if (challenge !== credential.challenge)
+      Object.assign(sessionReceipt, { fundingCurrency: challenge.request.currency })
 
     if (acceptance.charged) {
       const settlementTxHash = await settleAcceptedCharge(acceptance.charged)
@@ -650,6 +672,7 @@ export function session<const parameters extends session.Parameters>(
             credential,
             input,
             charge: bootstrapCharge,
+            machineTokenEnabled: parameters.machineTokenEnabled,
             decimals,
             defaultRecipient: recipient,
             expires,
@@ -672,6 +695,7 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
+        machineTokenEnabled: parameters.machineTokenEnabled,
         minVoucherDelta: parameters.minVoucherDelta,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
@@ -816,6 +840,13 @@ export namespace session {
 
     /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
+    /**
+     * Also accepts channels funded in MACH, 1:1 with the session currency. Challenges stay priced in
+     * the session currency and carry `machineTokenDirect: true`, so clients holding MACH may open
+     * the channel in MACH instead. Challenges first check that MACH's transfer policy lets the
+     * recipient receive it. Throws on chains without MACH; ignored for sessions priced in MACH.
+     */
+    machineTokenEnabled?: boolean | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
      * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never

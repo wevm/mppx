@@ -7,6 +7,7 @@ import {
   isAddress,
   isAddressEqual,
   parseAbi,
+  type Account,
   type Address,
   type Client,
 } from 'viem'
@@ -16,7 +17,7 @@ import { Abis, Actions } from 'viem/tempo'
 import * as Errors from '../../Errors.js'
 import * as defaults from './defaults.js'
 
-/** ABI for the first-party machine-token settlement swapper. */
+/** ABI for the legacy machine-token settlement swapper, still verified for older clients. */
 export const machineTokenSwapperAbi = parseAbi([
   'function swapTo(address inputToken,uint256 amount,address targetToken,address recipient,bytes32 memo)',
 ])
@@ -67,7 +68,7 @@ export function isMachineToken(parameters: {
   )
 }
 
-/** Resolves the canonical first-party settlement route for a compatible charge. */
+/** Resolves the legacy swapper route for a compatible charge, which servers still accept. */
 export function getRoute(parameters: {
   chainId: number | undefined
   currency: Address
@@ -133,7 +134,7 @@ export async function findRoute(
   }
 }
 
-/** Matches an exact first-party settlement route. */
+/** Matches an exact legacy swapper route. */
 export function matchRoute(parameters: {
   calls: readonly Call[]
   chainId: number | undefined
@@ -170,6 +171,11 @@ export function matchRoute(parameters: {
   } catch {
     return undefined
   }
+}
+
+/** Returns the canonical machine token on a chain, if one is deployed. */
+export function getToken(chainId: number | undefined): Address | undefined {
+  return getDeployment(chainId)?.token
 }
 
 /** Returns the trusted sender that settles the configured charge route on a chain. */
@@ -284,4 +290,50 @@ export async function getInsufficientBalanceError(
     fundingUrl: shortfall.fundingUrl,
     reason: shortfall.reason,
   })
+}
+
+/**
+ * Returns whether an account can pay a charge directly in the machine token: its MACH balance
+ * covers the total, an access key's remaining MACH limit covers it when the key limits spending,
+ * and a simulation of the transfer calls succeeds. Any failed read returns false, so the caller
+ * pays in the challenge currency instead.
+ */
+export async function canPayDirect(
+  client: Client,
+  parameters: {
+    account: Account
+    amount: bigint
+    calls: readonly Call[]
+    token: Address
+  },
+): Promise<boolean> {
+  const { account, amount, calls, token } = parameters
+  try {
+    const balance = (await readContract(
+      client,
+      Actions.token.getBalance.call(client, { account: account.address, token }) as never,
+    )) as bigint
+    if (balance < amount) return false
+
+    if ('accessKeyAddress' in account && typeof account.accessKeyAddress === 'string') {
+      const accessKey = account.accessKeyAddress as Address
+      const metadata = await Actions.accessKey.getMetadata(client, {
+        account: account.address,
+        accessKey,
+      })
+      if (metadata.spendPolicy === 'limited') {
+        const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
+          account: account.address,
+          accessKey,
+          token,
+        })
+        if (remaining < amount) return false
+      }
+    }
+
+    await call(client, { account: account.address, calls } as never)
+    return true
+  } catch {
+    return false
+  }
 }

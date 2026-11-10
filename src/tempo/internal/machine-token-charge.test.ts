@@ -9,11 +9,13 @@ const deployment = defaults.machineToken[chainId]
 const targetToken = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x2222222222222222222222222222222222222222'
 const payer = '0x1111111111111111111111111111111111111111'
+const accessKey = '0x3333333333333333333333333333333333333333'
 const memo = `0x${'ab'.repeat(32)}` as const
 const client = createClient({
   transport: custom({ request: async () => undefined as never }),
 })
 const transfers = [{ amount: 1_000_000n, memo, recipient }] as const
+const calls = [{ data: '0x1234', to: deployment.token }] as const
 
 describe('Tempo machine-token charges', () => {
   test('builds and validates the exact first-party approve + swapTo calls', async () => {
@@ -276,5 +278,76 @@ describe('MACH funding', () => {
       vi.doUnmock('viem/actions')
       vi.resetModules()
     }
+  })
+})
+
+describe('canPayDirect', () => {
+  async function load(options: {
+    balance: bigint
+    remaining?: bigint | undefined
+    simulate?: 'ok' | 'revert' | undefined
+    spendPolicy?: 'limited' | 'unlimited' | undefined
+  }) {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(async () => {
+        if (options.simulate === 'revert') throw new Error('PolicyForbids')
+      }),
+      readContract: vi.fn(async () => options.balance),
+    }))
+    vi.doMock('viem/tempo', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('viem/tempo')>()
+      return {
+        ...actual,
+        Actions: {
+          ...actual.Actions,
+          accessKey: {
+            ...actual.Actions.accessKey,
+            getMetadata: vi.fn(async () => ({ spendPolicy: options.spendPolicy ?? 'limited' })),
+            getRemainingLimit: vi.fn(async () => ({ remaining: options.remaining ?? 0n })),
+          },
+        },
+      }
+    })
+    return import('./machine-token-charge.js')
+  }
+
+  async function canPay(
+    options: Parameters<typeof load>[0],
+    account: Record<string, unknown> = { address: payer, type: 'local' },
+  ) {
+    try {
+      const MachineToken = await load(options)
+      return await MachineToken.canPayDirect({} as never, {
+        account: account as never,
+        amount: 1_000_000n,
+        calls,
+        token: deployment.token,
+      })
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  }
+
+  test('pays directly when the balance covers the amount and the transfer simulates', async () => {
+    expect(await canPay({ balance: 1_000_000n })).toBe(true)
+  })
+
+  test('falls back when the balance is short', async () => {
+    expect(await canPay({ balance: 999_999n })).toBe(false)
+  })
+
+  test('falls back when the transfer cannot be simulated', async () => {
+    expect(await canPay({ balance: 1_000_000n, simulate: 'revert' })).toBe(false)
+  })
+
+  test('checks the remaining limit of a limited access key', async () => {
+    const keyAccount = { accessKeyAddress: accessKey, address: payer, type: 'local' }
+
+    expect(await canPay({ balance: 1_000_000n, remaining: 999_999n }, keyAccount)).toBe(false)
+    expect(await canPay({ balance: 1_000_000n, remaining: 1_000_000n }, keyAccount)).toBe(true)
+    expect(await canPay({ balance: 1_000_000n, spendPolicy: 'unlimited' }, keyAccount)).toBe(true)
   })
 })
