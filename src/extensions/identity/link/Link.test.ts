@@ -680,3 +680,35 @@ test('Link outages back off and never leak upstream error text', async () => {
     vi.useRealTimers()
   }
 })
+
+test('claims prover answers the anyOf challenge it can, not only the first', async () => {
+  const { credential, fetch } = await createLink()
+  const server = await createServer((origin) => {
+    const verifier = Link.Server.presentationVerifier({ audience: origin, fetch })
+    return [
+      Identity.anyOf(
+        Link.Server.claims({ audience: origin, claims: ['phone'], secretKey, verifier }),
+        Link.Server.claims({ audience: origin, claims: ['email'], secretKey, verifier }),
+      ),
+    ]
+  })
+  const unproved = await globalThis.fetch(server.url)
+  expect((await Link.Client.claimsChallenges(unproved)).length).toBeGreaterThanOrEqual(2)
+  const asked: (readonly string[])[] = []
+  const client = ClientMppx.create({
+    identity: [
+      Link.Client.claims({
+        claims: ['email'],
+        present({ audience, claims, nonce }: Parameters<Link.Present>[0]) {
+          asked.push(claims)
+          return credential.present({ aud: audience, disclose: [...claims], nonce })
+        },
+        scope: [server.origin],
+      }),
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  expect((await client.fetch(server.url)).status).toBe(200)
+  expect(asked).toEqual([['email']])
+})

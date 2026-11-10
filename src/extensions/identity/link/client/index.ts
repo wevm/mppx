@@ -140,13 +140,16 @@ export function claims(config: claims.Config): Identity.Prover {
       if (attached && !owns(sent, presentations, attached)) return undefined
       const origin = new URL(request.url).origin
       presentations.delete(origin)
-      const challenge = await claimsChallenge(response)
+      // anyOf can send several challenges: answer the first this prover may.
+      const challenge = (await claimsChallenges(response)).find(
+        (challenge) =>
+          // Bound to this origin only: a server can't relay another audience's challenge.
+          trimSlashes(challenge.aud) === origin &&
+          challenge.trusted_issuers.some((issuer) => issuers.includes(issuer)) &&
+          challenge.formats.includes(Constants.format) &&
+          challenge.claims.every((claim) => allowed.has(claim)),
+      )
       if (!challenge) return undefined
-      // Bound to this origin only: a server can't relay another audience's challenge.
-      if (trimSlashes(challenge.aud) !== origin) return undefined
-      if (!challenge.trusted_issuers.some((issuer) => issuers.includes(issuer))) return undefined
-      if (!challenge.formats.includes(Constants.format)) return undefined
-      if (!challenge.claims.every((claim) => allowed.has(claim))) return undefined
       const presentation = await config.present({
         audience: challenge.aud,
         claims: challenge.claims,
@@ -175,38 +178,47 @@ export declare namespace claims {
 }
 
 /**
- * Parses a claims challenge from the `Identity-Presentation` header's `challenge` parameter,
- * else from the problem body; `undefined` when neither has one.
+ * Parses the first claims challenge: see {@link claimsChallenges}.
  */
 export async function claimsChallenge(
   response: Response,
 ): Promise<Types.ClaimsChallenge | undefined> {
-  return (
-    parseChallenge(headerChallenge(response)) ??
+  return (await claimsChallenges(response))[0]
+}
+
+/**
+ * Parses every claims challenge: each `Identity-Presentation` header challenge's `challenge`
+ * parameter (`anyOf` can send several), then the problem body.
+ */
+export async function claimsChallenges(response: Response): Promise<Types.ClaimsChallenge[]> {
+  const challenges = headerChallenges(response).map(parseChallenge)
+  challenges.push(
     parseChallenge(
       await response
         .clone()
         .json()
         .catch(() => undefined),
-    )
+    ),
   )
+  return challenges.filter((challenge) => challenge !== undefined)
 }
 
-/** The decoded `challenge` parameter of an `Identity-Presentation` challenge, if any. */
-function headerChallenge(response: Response): unknown {
+/** The decoded `challenge` parameters of the `Identity-Presentation` challenges. */
+function headerChallenges(response: Response): unknown[] {
   const header = response.headers.get('WWW-Authenticate') ?? ''
-  const match = new RegExp(
+  const pattern = new RegExp(
     `(?:^|,)\\s*${Constants.presentationHeader}\\s+challenge="([A-Za-z0-9_-]{1,16384})"`,
-    'i',
-  ).exec(header)
-  if (!match) return undefined
-  try {
-    const binary = atob(match[1]!.replace(/-/g, '+').replace(/_/g, '/'))
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-    return JSON.parse(new TextDecoder().decode(bytes))
-  } catch {
-    return undefined
-  }
+    'gi',
+  )
+  return [...header.matchAll(pattern)].slice(0, 8).map((match) => {
+    try {
+      const binary = atob(match[1]!.replace(/-/g, '+').replace(/_/g, '/'))
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      return JSON.parse(new TextDecoder().decode(bytes))
+    } catch {
+      return undefined
+    }
+  })
 }
 
 function parseChallenge(value: unknown): Types.ClaimsChallenge | undefined {
