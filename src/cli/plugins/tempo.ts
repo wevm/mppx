@@ -887,7 +887,11 @@ async function scoreTempoChargeChallenge(
   if (typeof currency !== 'string' || typeof amount !== 'string') return 'unsupported'
 
   const methodDetails = request.methodDetails as
-    | { chainId?: number | undefined; machineTokenEnabled?: boolean | undefined }
+    | {
+        chainId?: number | undefined
+        machineTokenEnabled?: boolean | undefined
+        splits?: readonly unknown[] | undefined
+      }
     | undefined
   const requiredChainId = methodDetails?.chainId
   if (requiredChainId && probe.client.chain?.id && requiredChainId !== probe.client.chain.id) {
@@ -906,8 +910,9 @@ async function scoreTempoChargeChallenge(
     .catch(() => undefined)
   if (balance === undefined) return 'unknownBalance'
   if (balance >= amountRaw) return 'payable'
-  // A MACH-enabled charge is also payable from a MACH balance.
-  if (methodDetails?.machineTokenEnabled === true) {
+  // A MACH-enabled charge is also payable from a MACH balance, but only without splits:
+  // the MACH route takes a single transfer, so a split charge pays in its currency.
+  if (methodDetails?.machineTokenEnabled === true && !methodDetails.splits?.length) {
     const machineTokenBalance = await MachineTokenCharge.getBalance(probe.client as never, {
       account: probe.account,
       chainId: requiredChainId ?? probe.client.chain?.id,
