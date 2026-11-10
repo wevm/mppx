@@ -49,6 +49,9 @@ export function create(config: create.Config): Persona {
     timeout = Constants.timeout,
   } = config
   if (!apiKey) throw new TypeError('Persona.Server.create needs an apiKey.')
+  // AbortSignal.timeout throws on these at request time, which would read as a Persona outage.
+  if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 4_294_967_295)
+    throw new TypeError('Persona.Server.create needs a positive integer timeout in milliseconds.')
 
   // A digest of the API origin and key: identifies the Persona organization without storing the key.
   const scope = digest(`${new URL(apiUrl).origin}\n${apiKey}`)
