@@ -120,10 +120,13 @@ export function claims(config: claims.Config): Identity.Prover {
   const allowed = new Set(config.claims)
   const issuers = config.issuers ?? [Constants.issuer]
   const presentations = new Map<string, string>()
+  // Every presentation this prover attached, so it never answers for one the caller set.
+  const sent = new Set<string>()
   return {
     scope: config.scope,
     headers: [Constants.presentationHeader.toLowerCase()],
     prove(request) {
+      if (request.headers.has(Constants.presentationHeader)) return request
       const presentation = presentations.get(new URL(request.url).origin)
       if (!presentation) return request
       const headers = new Headers(request.headers)
@@ -133,6 +136,9 @@ export function claims(config: claims.Config): Identity.Prover {
     async retry(response, { request }) {
       if (response.status !== 401) return undefined
       if (!hasChallenge(response, Constants.presentationHeader)) return undefined
+      const attached = request.headers.get(Constants.presentationHeader)
+      // The caller's own presentation: leave the challenge to them.
+      if (attached && !sent.has(attached)) return undefined
       const origin = new URL(request.url).origin
       presentations.delete(origin)
       const challenge = await claimsChallenge(response)
@@ -150,6 +156,8 @@ export function claims(config: claims.Config): Identity.Prover {
       })
       if (!presentation) return undefined
       presentations.set(origin, presentation)
+      sent.add(presentation)
+      if (sent.size > 64) sent.delete(sent.values().next().value!)
       return {}
     },
   }

@@ -533,6 +533,43 @@ test('concurrent rejections of one token share a single refresh', async () => {
   expect(await prover.retry!(challenge(), { request: foreign } as never)).toBeUndefined()
 })
 
+test('claims prover leaves a caller-supplied presentation alone', async () => {
+  let presented = 0
+  const prover = Link.Client.claims({
+    claims: ['email'],
+    present: async () => `p${++presented}`,
+    scope: ['https://api.example'],
+  })
+  const own = new Request('https://api.example/a', {
+    headers: { 'Identity-Presentation': 'callers-own' },
+  })
+  expect((await prover.prove(own, {} as never)).headers.get('Identity-Presentation')).toBe(
+    'callers-own',
+  )
+  const challenge = new Response(
+    JSON.stringify({
+      type: Link.Constants.claimsRequiredType,
+      aud: 'https://api.example',
+      nonce: 'n',
+      claims: ['email'],
+      formats: [Link.Constants.format],
+      trusted_issuers: [Link.Constants.issuer],
+    }),
+    { status: 401, headers: { 'WWW-Authenticate': 'Identity-Presentation' } },
+  )
+  expect(await prover.retry!(challenge.clone(), { request: own } as never)).toBeUndefined()
+  expect(presented).toBe(0)
+  // Its own stale presentation is replaced.
+  expect(
+    await prover.retry!(challenge.clone(), {
+      request: new Request('https://api.example/a'),
+    } as never),
+  ).toEqual({})
+  const ours = await prover.prove(new Request('https://api.example/a'), {} as never)
+  expect(await prover.retry!(challenge.clone(), { request: ours } as never)).toEqual({})
+  expect(presented).toBe(2)
+})
+
 test('throws on an empty claims list', () => {
   expect(() =>
     Link.Server.claims({
