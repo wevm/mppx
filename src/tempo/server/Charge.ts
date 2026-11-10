@@ -1180,8 +1180,9 @@ export declare namespace charge {
     confirmationTimeoutMs?: number | undefined
     /**
      * Accepts MACH 1:1 for this charge: payers may transfer MACH directly to the recipient instead
-     * of the challenge currency. The recipient must be an approved MACH merchant; issuing a
-     * challenge throws otherwise. Payments made through the legacy swapper are still accepted.
+     * of the challenge currency. Challenges advertise direct MACH only when MACH's transfer policy
+     * authorizes every recipient and can be read; otherwise they offer only the legacy swapper
+     * route. Payments made through the legacy swapper are still accepted.
      */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
