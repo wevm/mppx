@@ -77,6 +77,10 @@ function nextPage(url: URL, after: number) {
   return next.pathname + next.search
 }
 
+/** Reads the payer from the Credential's source: safe here, where the test method trusts it. */
+const fromSource = ({ credential }: Persona.Server.create.PaymentParameters) =>
+  credential?.source ? Persona.normalize(credential.source) : undefined
+
 function approved(id: string, reference = payer, decisionedAt = new Date().toISOString()): Inquiry {
   return {
     id,
@@ -118,7 +122,7 @@ test('links a wallet, starts an inquiry, and accepts the payer once approved', a
   })
 
   const nonce = 'n-123'
-  const message = `Link this wallet to KYC on api.example. Nonce: ${nonce}`
+  const message = `Link ${payer} to KYC on api.example. Nonce: ${nonce}`
   const referenceId = await Persona.Server.verifyWallet({
     address: account.address,
     chainId: 4217,
@@ -135,7 +139,10 @@ test('links a wallet, starts an inquiry, and accepts the payer once approved', a
   })
   expect(api.calls[0]!.headers.get('Authorization')).toBe('Bearer persona_key')
 
-  const kyc = persona.paymentCheck({ onboarding: 'https://api.example/kyc' })
+  const kyc = persona.paymentCheck({
+    onboarding: 'https://api.example/kyc',
+    referenceId: fromSource,
+  })
   const pending = await pay(kyc, payer)
   expect(pending.response?.status).toBe(403)
   expect(pending.response?.headers.get('Link')).toBe('<https://api.example/kyc>; rel="kyc"')
@@ -153,27 +160,46 @@ test('links a wallet, starts an inquiry, and accepts the payer once approved', a
   expect(lookup.get('filter[status]')).toBe('approved')
 })
 
-test('rejects a wallet signature without the nonce or from another address', async () => {
-  const message = 'Nonce: n-1'
+test('rejects a wallet signature without the nonce, for another chain, or from another address', async () => {
+  const other = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
+  const message =
+    'Link ' + payer + ' and ' + Persona.did({ address: other, chainId: 4217 }) + '. Nonce: n-1'
   const signature = await account.signMessage({ message })
-  await expect(
-    Persona.Server.verifyWallet({
-      address: account.address,
-      chainId: 4217,
-      message,
-      nonce: 'n-2',
-      signature,
-    }),
-  ).rejects.toThrow('nonce')
-  await expect(
-    Persona.Server.verifyWallet({
-      address: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-      chainId: 4217,
-      message,
-      nonce: 'n-1',
-      signature,
-    }),
-  ).rejects.toThrow('does not match')
+  const base = {
+    address: account.address,
+    chainId: 4217,
+    message,
+    nonce: 'n-1',
+    signature,
+  } as const
+  await expect(Persona.Server.verifyWallet({ ...base, nonce: 'n-2' })).rejects.toThrow('nonce')
+  // The signer committed to chain 4217 only.
+  await expect(Persona.Server.verifyWallet({ ...base, chainId: 1 })).rejects.toThrow("wallet's DID")
+  await expect(Persona.Server.verifyWallet({ ...base, address: other })).rejects.toThrow(
+    'does not match',
+  )
+  const chains: number[] = []
+  await Persona.Server.verifyWallet({
+    ...base,
+    async verify({ chainId }) {
+      chains.push(chainId)
+      return true
+    },
+  })
+  expect(chains).toEqual([4217])
+})
+
+test('never follows a pagination link to another origin', async () => {
+  const urls: string[] = []
+  const fetch = (async (input: RequestInfo | URL) => {
+    urls.push(new URL(String(input)).origin)
+    return Response.json({ data: [], links: { next: 'https://evil.example/api/v1/inquiries' } })
+  }) as typeof globalThis.fetch
+  await pay(
+    Persona.Server.create({ apiKey: 'k', fetch }).paymentCheck({ referenceId: fromSource }),
+    payer,
+  )
+  expect(urls).toEqual(['https://api.withpersona.com'])
 })
 
 test('rejects without settling, as missing or forbidden, with the onboarding link', async () => {
@@ -182,6 +208,7 @@ test('rejects without settling, as missing or forbidden, with the onboarding lin
   ])
   const persona = Persona.Server.create({ apiKey: 'k', fetch: api.fetch })
   const kyc = persona.paymentCheck({
+    referenceId: fromSource,
     onboarding: ({ referenceId }) => `/kyc?for=${referenceId ?? ''}`,
   })
   const before = settlements
@@ -205,7 +232,9 @@ test('rejects without settling, as missing or forbidden, with the onboarding lin
 test('maps a Persona API failure to unavailable without its body', async () => {
   const api = fakePersona([], { status: 500 })
   const { result, response } = await pay(
-    Persona.Server.create({ apiKey: 'k', fetch: api.fetch }).paymentCheck(),
+    Persona.Server.create({ apiKey: 'k', fetch: api.fetch }).paymentCheck({
+      referenceId: fromSource,
+    }),
     payer,
   )
   expect(result.status === 402 && result.rejection).toEqual({
@@ -219,7 +248,7 @@ test('maps a Persona API failure to unavailable without its body', async () => {
 test('caches approvals only', async () => {
   const api = fakePersona([approved('inq_1')])
   const persona = Persona.Server.create({ apiKey: 'k', fetch: api.fetch })
-  const kyc = persona.paymentCheck({ cache: Store.memory() })
+  const kyc = persona.paymentCheck({ cache: Store.memory(), referenceId: fromSource })
   expect((await pay(kyc, payer)).result.status).toBe(200)
   expect((await pay(kyc, payer)).result.status).toBe(200)
   expect(api.calls).toHaveLength(1)
@@ -239,9 +268,11 @@ test('does not share cached approvals across Persona organizations', async () =>
   const emptyApi = fakePersona([])
   const a = Persona.Server.create({ apiKey: 'org-a', fetch: approvedApi.fetch }).paymentCheck({
     cache,
+    referenceId: fromSource,
   })
   const b = Persona.Server.create({ apiKey: 'org-b', fetch: emptyApi.fetch }).paymentCheck({
     cache,
+    referenceId: fromSource,
   })
   expect((await pay(a, payer)).result.status).toBe(200)
   expect((await pay(b, payer)).response?.status).toBe(403)
@@ -272,7 +303,10 @@ test('applies maxAge across pages, and a custom referenceId', async () => {
 test('ignores inquiries the API returns outside its filters', async () => {
   const fetch = (async () =>
     Response.json({ data: [approved('inq_wrong', 'someone-else')] })) as typeof globalThis.fetch
-  const { result } = await pay(Persona.Server.create({ apiKey: 'k', fetch }).paymentCheck(), payer)
+  const { result } = await pay(
+    Persona.Server.create({ apiKey: 'k', fetch }).paymentCheck({ referenceId: fromSource }),
+    payer,
+  )
   expect(result.status === 402 && result.rejection).toMatchObject({ status: 'forbidden' })
 })
 

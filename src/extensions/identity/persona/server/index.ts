@@ -31,7 +31,11 @@ import type * as Types from '../Types.js'
  *   return Response.json(await persona.startInquiry({ referenceId }))
  * })
  *
- * const kyc = persona.paymentCheck({ onboarding: 'https://api.example/kyc', cache: Store.memory() })
+ * const kyc = persona.paymentCheck({
+ *   referenceId: ({ request }) => session(request)?.wallet, // a DID from verifyWallet
+ *   onboarding: 'https://api.example/kyc',
+ *   cache: Store.memory(),
+ * })
  * mppx.charge({ amount: '1', identity: { payment: kyc } })
  * ```
  */
@@ -93,7 +97,7 @@ export function create(config: create.Config): Persona {
         if (!fresh(verifiedAt, options.maxAge, now)) continue
         return Object.freeze({ inquiryId: inquiry.id, referenceId, status, verifiedAt })
       }
-      next = typeof body.links?.next === 'string' ? body.links.next : undefined
+      next = sameOrigin(body.links?.next, apiUrl)
     }
     return undefined
   }
@@ -179,11 +183,8 @@ export function create(config: create.Config): Persona {
       return Object.freeze({ inquiryId, url })
     },
 
-    paymentCheck(options = {}) {
-      const referenceId =
-        options.referenceId ??
-        (({ credential }: create.PaymentParameters) =>
-          credential?.source ? Did.normalize(credential.source) : undefined)
+    paymentCheck(options) {
+      const { referenceId } = options
       return Object.freeze({
         requires: Object.freeze([
           Object.freeze({ type: Constants.type, issuer: Constants.issuer }),
@@ -244,20 +245,21 @@ export type Persona = {
    *
    * Every 402 of the route advertises `Identity-Required: kyc;issuer="https://api.withpersona.com"`.
    * On the paid retry, before the Credential settles, it accepts the most recent inquiry whose
-   * reference ID is the payer's: by default the Credential's `source` DID (`Persona.did`). That
-   * default trusts `source`, so use it with methods that reject a `source` other than the
-   * actual payer, such as `tempo.charge`. On a route with `authorize`, which runs the check
-   * without a Credential, pass a `referenceId` that reads your own session.
+   * reference ID `referenceId` returns. Derive it from something your server authenticated, such
+   * as your own session, or a payer address your payment method verified. A Credential's
+   * `source` is client-supplied and some payment flows do not check it against the payer, so
+   * returning it as is lets a payer present another wallet's KYC. On a route with `authorize`,
+   * the check runs without a Credential.
    *
    * No payer is `missing` (401), no accepted inquiry `forbidden` (403), both with `onboarding`
    * in a `Link` header; a Persona API failure is `unavailable` (503).
    */
   readonly paymentCheck: (
-    options?: LookupOptions & {
-      /** Returns the payer's reference ID, or `undefined` when there is none. */
-      readonly referenceId?:
-        | ((parameters: create.PaymentParameters) => MaybePromise<string | undefined>)
-        | undefined
+    options: LookupOptions & {
+      /** Returns the payer's authenticated reference ID, or `undefined` when there is none. */
+      readonly referenceId: (
+        parameters: create.PaymentParameters,
+      ) => MaybePromise<string | undefined>
     },
   ) => Identity.PaymentCheck<Types.VerifiedInquiry>
   /**
@@ -297,20 +299,26 @@ export type LookupOptions = {
 
 /**
  * Verifies that the signer of `message` owns `address` and returns the wallet's reference ID
- * (`Persona.did`), to start an inquiry with. `message` must contain `nonce`: a single-use
- * value your server issued for this person, so a signature cannot be replayed.
+ * (`Persona.did`), to start an inquiry with. `message` must contain `nonce`, a single-use
+ * value your server issued for this person, so a signature cannot be replayed, and the wallet's
+ * DID, so the signer commits to the chain.
  *
  * Without `verify`, it accepts EOA signatures only. Pass `verify` for smart accounts, such as
- * viem's `publicClient.verifyMessage`, which supports ERC-1271 and ERC-6492.
+ * viem's `publicClient.verifyMessage` on `chainId`, which supports ERC-1271 and ERC-6492.
  */
 export async function verifyWallet(parameters: verifyWallet.Parameters): Promise<string> {
   const { address, chainId, message, nonce, signature } = parameters
   if (!nonce || !message.includes(nonce))
     throw new TypeError('The signed message must contain the nonce.')
+  const referenceId = Did.did({ address, chainId })
+  // The signer commits to the chain as well as the address: the same address can have different
+  // owners on different chains.
+  if (!message.toLowerCase().includes(referenceId.toLowerCase()))
+    throw new TypeError(`The signed message must contain the wallet's DID, ${referenceId}.`)
   const verify = parameters.verify ?? verifyMessage
-  const valid = await verify({ address, message, signature }).catch(() => false)
+  const valid = await verify({ address, chainId, message, signature }).catch(() => false)
   if (!valid) throw new TypeError('The signature does not match the address.')
-  return Did.did({ address, chainId })
+  return referenceId
 }
 
 export declare namespace verifyWallet {
@@ -319,7 +327,7 @@ export declare namespace verifyWallet {
     readonly address: Address
     /** Chain ID of the wallet, such as `4217` for Tempo mainnet. */
     readonly chainId: number
-    /** Message the wallet signed, containing `nonce`. */
+    /** Message the wallet signed, containing `nonce` and the wallet's DID (`Persona.did`). */
     readonly message: string
     /** Signature over `message`. */
     readonly signature: Hex
@@ -327,7 +335,12 @@ export declare namespace verifyWallet {
     readonly nonce: string
     /** Verifies the signature. Defaults to viem's `verifyMessage` (EOA only). */
     readonly verify?:
-      | ((parameters: { address: Address; message: string; signature: Hex }) => Promise<boolean>)
+      | ((parameters: {
+          address: Address
+          chainId: number
+          message: string
+          signature: Hex
+        }) => Promise<boolean>)
       | undefined
   }
 }
@@ -378,4 +391,16 @@ async function digest(value: string): Promise<string> {
   return Array.from(new Uint8Array(hash).slice(0, 16), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('')
+}
+
+/**
+ * Returns a pagination link as a path, or `undefined` unless it is on the Persona API origin, so
+ * the API key is never sent to an origin a response names.
+ */
+function sameOrigin(link: unknown, apiUrl: string): string | undefined {
+  if (typeof link !== 'string') return undefined
+  const base = new URL(apiUrl)
+  const url = new URL(link, base)
+  if (url.origin !== base.origin) return undefined
+  return url.pathname + url.search
 }

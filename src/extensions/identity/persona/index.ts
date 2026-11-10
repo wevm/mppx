@@ -6,5 +6,5 @@
 /** Server helpers that start Persona inquiries and require a Persona-verified payer. */
 export * as Server from './server/index.js'
 export * from './Constants.js'
-export { did } from './Did.js'
+export { did, normalize } from './Did.js'
 export type * from './Types.js'
