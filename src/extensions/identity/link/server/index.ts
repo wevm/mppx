@@ -50,6 +50,7 @@ export function attestation(
   }
 
   return {
+    authorization: true,
     async verify(request) {
       const authorization = request.headers.get('Authorization')
       if (!authorization || !hasScheme(authorization, Constants.attestationScheme))
@@ -111,7 +112,13 @@ export function claims(config: claims.Config): Identity.Verifier<Types.VerifiedC
   const { allow, purpose } = config
   // One audience for the challenge and the verifier, whatever trailing slash the config has.
   const audience = normalizeAudience(config.audience)
-  const verifier = config.verifier ?? presentationVerifier({ audience, issuer: config.issuer })
+  const verifier =
+    config.verifier ??
+    presentationVerifier({
+      audience,
+      issuer: config.issuer,
+      maxAge: config.nonceTtl ?? Constants.nonceTtl,
+    })
   const required = [...config.claims]
   if (required.length === 0) throw new TypeError('Link claims needs at least one claim.')
   const ttl = config.nonceTtl ?? Constants.nonceTtl
@@ -306,7 +313,7 @@ type Key = {
 export function tokenVerifier(config: tokenVerifier.Config = {}): Types.AttestationVerifier {
   const issuer = (config.issuer ?? Constants.issuer).replace(/\/+$/, '')
   const issuerOrigin = new URL(issuer).origin
-  const maxKeyAge = (config.maxKeyAge ?? 900) * 1_000
+  const maxKeyAge = (config.maxKeyAge ?? 300) * 1_000
   // Unwrapped: fetching issuer documents must never pay a Payment challenge.
   const fetch = unwrapFetch(
     (config.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
@@ -314,7 +321,6 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
   let cache: { at: number; keys: ReadonlyMap<string, Key> } | undefined
   let loading: Promise<ReadonlyMap<string, Key>> | undefined
   // An unknown key ID is free to mint: refresh for one at most every 30 seconds.
-  let refreshedForUnknown = 0
 
   const get = (url: string) =>
     getJson(url, { fetch, origin: issuerOrigin, timeout: config.timeout ?? 3_000 })
@@ -384,11 +390,9 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
       const keyId = toBase64(raw.slice(inputSize - sizes.keyId, inputSize))
       let key: Key | undefined
       try {
+        // No refresh for an unknown key id, which anyone can send: the short cache picks up
+        // keys Link publishes ahead of their activation.
         key = (await keys()).get(keyId)
-        if (!key && Date.now() - refreshedForUnknown > 30_000) {
-          refreshedForUnknown = Date.now()
-          key = (await keys(true)).get(keyId)
-        }
       } catch (error) {
         return failure('issuer_unavailable', error instanceof Error ? error.message : String(error))
       }
@@ -413,7 +417,7 @@ export declare namespace tokenVerifier {
     readonly fetch?: ((input: string, init: RequestInit) => MaybePromise<Response>) | undefined
     /** Issuer URL. Override only for staging and tests. @default 'https://api.link.com' */
     readonly issuer?: string | undefined
-    /** Seconds before the token keys are fetched again. @default 900 */
+    /** Seconds before the token keys are fetched again. @default 300 */
     readonly maxKeyAge?: number | undefined
     /** Milliseconds each issuer request may take. @default 3000 */
     readonly timeout?: number | undefined
@@ -515,6 +519,7 @@ export function presentationVerifier(config: presentationVerifier.Config): Types
   const issuer = (config.issuer ?? Constants.issuer).replace(/\/+$/, '')
   const audience = normalizeAudience(config.audience)
   const timeout = config.timeout ?? 3_000
+  const maxAge = config.maxAge ?? Constants.nonceTtl
   const base = unwrapFetch(
     (config.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
   ) as unknown as Fetch
@@ -537,6 +542,9 @@ export function presentationVerifier(config: presentationVerifier.Config): Types
         issuer: { issuer, getMetadata: () => getMetadata() } as never,
         // The SDK never refetches Link's credential keys for an unknown key id, so a short
         // cache bounds how long a rotated key is refused, without fetches a caller can trigger.
+        // The nonce bounds freshness; the presentation is resent on the paid retry, so it stays
+        // valid as long as its nonce rather than the SDK's 60 s default.
+        clockSkewSeconds: maxAge,
         jwksTtlSeconds: 300,
         nonce: options.nonce,
         presentation,
@@ -551,6 +559,8 @@ export declare namespace presentationVerifier {
   type Config = {
     /** This server's public origin: the presentation's audience. */
     readonly audience: string
+    /** Seconds a presentation is accepted after it is signed. @default 300, the nonce lifetime */
+    readonly maxAge?: number | undefined
     /** Fetch used for Link's issuer documents. @default globalThis.fetch */
     readonly fetch?: ((input: string, init: RequestInit) => MaybePromise<Response>) | undefined
     /** Issuer URL. Override only for staging and tests. @default 'https://api.link.com' */

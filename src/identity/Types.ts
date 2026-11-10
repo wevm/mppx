@@ -82,6 +82,11 @@ export type Verifier<value = unknown> = {
   readonly challenge?:
     | ((request: Request, context: { readonly nonce: string }) => unknown)
     | undefined
+  /**
+   * The verifier reads its credential from `Authorization`. A route that uses it needs a server
+   * created with `requiresAuth: true`, so Payment Credentials travel in `Payment-Authorization`.
+   */
+  readonly authorization?: boolean | undefined
   /** Returns the protocol's verification outcome for the request. */
   readonly verify: (request: Request) => MaybePromise<Verification<value>>
 }

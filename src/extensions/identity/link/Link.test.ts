@@ -206,19 +206,17 @@ test.each([
   expect(accepted.status).toBe(402)
 })
 
-test('explains requiresAuth when Authorization holds a Payment credential', async () => {
-  const { fetch } = await createLink()
-  const server = await createServer(
-    (origin) => [
-      Link.Server.attestation({ verifier: new LinkVerifier({ fetchImpl: fetch, origin }) }),
-    ],
-    { requiresAuth: false },
+test('refuses an attestation route on a server without requiresAuth', () => {
+  const mppx = Mppx.create({ methods: [serverMethod], realm: 'localhost', secretKey })
+  expect(() => mppx.charge({ ...charge, identity: [Link.Server.attestation()] })).toThrow(
+    /requiresAuth: true/,
   )
-  const response = await globalThis.fetch(server.url, {
-    headers: { Authorization: 'Payment e30' },
+  const claims = Link.Server.claims({
+    audience: 'https://api.example',
+    claims: ['email'],
+    secretKey,
   })
-  expect(response.status).toBe(401)
-  expect(await response.text()).toMatch(/requiresAuth: true/)
+  expect(() => mppx.charge({ ...charge, identity: [claims] })).not.toThrow()
 })
 
 test('rejects a presentation for a nonce it did not issue', async () => {
@@ -345,10 +343,19 @@ test('tokenVerifier verifies tokens like the Link SDK', async () => {
   expect(await ours.verifyAttestation(token.authorization)).toEqual(
     await sdk.verifyAttestation(token.authorization),
   )
-  // A key Link added after the keys were cached is fetched for the token that names it.
+  // A key Link added after the keys were cached is used once the cache expires, and an unknown
+  // key id never forces a fetch.
   const rotated = await link.addKey()
   const fresh = await link.mint({ keyIndex: rotated })
-  expect((await ours.verifyAttestation(fresh.authorization)).valid).toBe(true)
+  expect(await ours.verifyAttestation(fresh.authorization)).toMatchObject({
+    failures: [{ code: 'unknown_issuer' }],
+  })
+  vi.useFakeTimers({ now: Date.now() + 301_000, toFake: ['Date'] })
+  try {
+    expect((await ours.verifyAttestation(fresh.authorization)).valid).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
   // A key Link publishes ahead of its activation is not advertised, and its tokens are refused.
   const pending = await link.addKey({ notBefore: Math.floor(Date.now() / 1_000) + 86_400 })
   const early = await link.mint({ keyIndex: pending })
@@ -390,6 +397,9 @@ test('presentationVerifier verifies presentations like the Link SDK', async () =
   const expected = await sdk.verifyClaims(valid, options)
   expect(expected.valid).toBe(true)
   expect(await ours.verifyClaims(valid, options)).toEqual(expected)
+  // A presentation is accepted for the nonce's lifetime, so a slow paid retry still passes.
+  const slow = await present({ iat: Math.floor(Date.now() / 1_000) - 120 })
+  expect((await ours.verifyClaims(slow, options)).valid).toBe(true)
   // An audience configured with a trailing slash is the same origin.
   const slashed = Link.Server.presentationVerifier({ audience: audience + '/', fetch })
   expect((await slashed.verifyClaims(valid, options)).valid).toBe(true)
