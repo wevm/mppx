@@ -755,10 +755,17 @@ describe('tempo.charge client', () => {
     const machineTokenAccount = privateKeyToAccount(
       '0x0000000000000000000000000000000000000000000000000000000000000003',
     )
-    const readContract = vi.fn(async (_client: unknown, parameters: { address: Address }) =>
-      parameters.address.toLowerCase() === defaults.machineToken[chainId].token.toLowerCase()
-        ? 250_000n
-        : 0n,
+    // Only the MACH-route account holds the charge currency, so reading it from that account
+    // instead of the direct-payment one would hide the shortfall.
+    const balances: Record<string, Record<string, bigint>> = {
+      [machineTokenAccount.address.toLowerCase()]: {
+        [currency.toLowerCase()]: 1_500_000n,
+        [defaults.machineToken[chainId].token.toLowerCase()]: 250_000n,
+      },
+    }
+    const readContract = vi.fn(
+      async (_client: unknown, parameters: { address: Address; args: readonly [Address] }) =>
+        balances[parameters.args[0].toLowerCase()]?.[parameters.address.toLowerCase()] ?? 0n,
     )
     const prepareTransactionRequest = vi.fn(async () => ({}))
     vi.doMock('viem/actions', () => ({
