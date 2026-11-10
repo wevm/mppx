@@ -231,10 +231,9 @@ export function charge(parameters: charge.Parameters = {}) {
         : undefined
       let account = defaultAccount
       let machineTokenRoute: typeof machineTokenCandidate
-      // Whether the account could run the MACH route but lacked the MACH or the route reverted.
-      let machineTokenUnpayable = false
-      // The account a per-operation resolver picked for the MACH route, which may hold the MACH.
-      let machineTokenPayer: Address | undefined
+      // The account resolved for the MACH route when it could run the route but lacked the MACH or
+      // the route reverted. A per-operation resolver may pick it apart from the direct-payment one.
+      let machineTokenUnpayableAccount: Address | undefined
       if (machineTokenCandidate) {
         const machineTokenAccount = await (async () => {
           try {
@@ -256,10 +255,7 @@ export function charge(parameters: charge.Parameters = {}) {
             transfers,
           })
           if (machineTokenRoute) account = machineTokenAccount
-          else {
-            machineTokenUnpayable = true
-            machineTokenPayer = machineTokenAccount.address
-          }
+          else machineTokenUnpayableAccount = machineTokenAccount.address
         }
       }
 
@@ -281,11 +277,11 @@ export function charge(parameters: charge.Parameters = {}) {
           : undefined
 
         // Without MACH or the charge currency the payment can only revert, so say where to buy MACH.
-        if (machineTokenUnpayable && !autoSwap) {
+        if (machineTokenUnpayableAccount && !autoSwap) {
           const error = await getMachineTokenFundingError(client, {
             account: account.address,
             amount: BigInt(amount),
-            machineTokenAccount: machineTokenPayer ?? account.address,
+            machineTokenAccount: machineTokenUnpayableAccount,
             chainId,
             currency,
           })
