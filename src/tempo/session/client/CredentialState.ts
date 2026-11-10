@@ -13,6 +13,7 @@ import * as Account from '../../../viem/Account.js'
 import { assertAllowedChainId, assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
@@ -720,6 +721,24 @@ async function resolveAutoSwapCalls(
   })) as readonly TempoChannelCall[] | undefined
 }
 
+/**
+ * Throws an error that links to the MACH onramp when a MACH channel deposit exceeds the
+ * account's MACH balance, rather than signing a transaction that can only revert.
+ */
+async function assertMachineTokenDeposit(
+  autoSwap: AutoSwap.resolve.Resolved | false,
+  parameters: { account: Address; amount: bigint; chainId: number; client: Client; token: Address },
+): Promise<void> {
+  const { account, amount, chainId, client, token } = parameters
+  if (autoSwap || !MachineTokenCharge.isMachineToken({ chainId, currency: token })) return
+  const error = await MachineTokenCharge.getInsufficientBalanceError(client, {
+    account,
+    amount,
+    chainId,
+  })
+  if (error) throw error
+}
+
 async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
   sink: ChannelSink,
@@ -731,6 +750,13 @@ async function open(
     maxDeposit: plan.maxDeposit,
     requestAmount: resolved.amount,
     suggestedDepositRaw: resolved.suggestedDepositRaw,
+  })
+  await assertMachineTokenDeposit(autoSwap, {
+    account: account.address,
+    amount: deposit,
+    chainId: resolved.chainId,
+    client: resolved.client,
+    token: resolved.token,
   })
   const payload = await createOpenPayload(resolved.client, account, {
     chainId: resolved.chainId,
@@ -929,6 +955,13 @@ async function manualTopUp(
       additionalDeposit: additionalDeposit.toString(),
     }
   }
+  await assertMachineTokenDeposit(autoSwap, {
+    account: account.address,
+    amount: additionalDeposit,
+    chainId: resolved.chainId,
+    client: resolved.client,
+    token: resolved.token,
+  })
   return createTopUpPayload(
     resolved.client,
     account,

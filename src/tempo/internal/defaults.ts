@@ -40,6 +40,15 @@ export const machineToken = Object.freeze({
 >
 
 /**
+ * Tempo Wallet page that buys MACH on Tempo mainnet, the only chain it sells MACH on.
+ *
+ * Add `address` (the payer) and `amount` (USD, at most two decimals) query parameters to
+ * prefill it, or build the link with `machineTokenFundingUrl`.
+ */
+export const machineTokenFundingBaseUrl =
+  'https://wallet.tempo.xyz/agent?action=fund&intent=mach&chainId=4217'
+
+/**
  * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).
  *
  * All TIP-20 tokens on Tempo use 6 decimals, so there is no risk of

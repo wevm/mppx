@@ -177,3 +177,104 @@ describe('Tempo machine-token charges', () => {
     ).resolves.toBeUndefined()
   })
 })
+
+describe('MACH funding', () => {
+  const mainnet = defaults.chainId.mainnet
+
+  test('builds the MACH onramp link on Tempo mainnet', async () => {
+    const MachineTokenCharge = await import('./machine-token-charge.js')
+    expect(MachineTokenCharge.fundingUrl()).toBe(
+      'https://wallet.tempo.xyz/agent?action=fund&intent=mach&chainId=4217',
+    )
+    expect(MachineTokenCharge.fundingUrl({ address: payer, amount: 1_250_000n })).toBe(
+      `https://wallet.tempo.xyz/agent?action=fund&intent=mach&chainId=4217&address=${payer}&amount=1.25`,
+    )
+  })
+
+  test('rounds the amount up to whole cents', async () => {
+    const MachineTokenCharge = await import('./machine-token-charge.js')
+    const amount = (value: bigint) =>
+      new URL(MachineTokenCharge.fundingUrl({ amount: value })!).searchParams.get('amount')
+    expect(amount(1_000_000n)).toBe('1')
+    expect(amount(1_500_000n)).toBe('1.5')
+    expect(amount(1_250_001n)).toBe('1.26')
+    expect(amount(50_000n)).toBe('0.05')
+    expect(amount(1n)).toBe('0.01')
+    expect(amount(100_000_000n)).toBe('100')
+    expect(amount(0n)).toBeNull()
+  })
+
+  test('omits an invalid address', async () => {
+    const MachineTokenCharge = await import('./machine-token-charge.js')
+    const url = MachineTokenCharge.fundingUrl({ address: '0x1234' as never })!
+    expect(new URL(url).searchParams.has('address')).toBe(false)
+  })
+
+  test('returns no link off Tempo mainnet', async () => {
+    const MachineTokenCharge = await import('./machine-token-charge.js')
+    expect(MachineTokenCharge.fundingUrl({ chainId: defaults.chainId.testnet })).toBeUndefined()
+    expect(MachineTokenCharge.fundingUrl({ chainId: 69420 })).toBeUndefined()
+  })
+
+  test('reports a MACH shortfall with the onramp link', async () => {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async () => 250_000n),
+    }))
+
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const Errors = await import('../../Errors.js')
+      const error = await MachineTokenCharge.getInsufficientBalanceError(client, {
+        account: payer,
+        amount: 1_500_000n,
+        chainId: mainnet,
+      })
+      expect(error).toBeInstanceOf(Errors.InsufficientBalanceError)
+      expect(error?.fundingUrl).toBe(
+        `${defaults.machineTokenFundingBaseUrl}&address=${payer}&amount=1.25`,
+      )
+      expect(error?.message).toBe(
+        `Insufficient balance: requested 1.5 MACH, available 0.25 MACH. Add funds at ${error?.fundingUrl}`,
+      )
+      expect(error?.toProblemDetails().fundingUrl).toBe(error?.fundingUrl)
+
+      const testnet = await MachineTokenCharge.getInsufficientBalanceError(client, {
+        account: payer,
+        amount: 1_500_000n,
+        chainId: defaults.chainId.testnet,
+      })
+      expect(testnet?.fundingUrl).toBeUndefined()
+      expect(testnet?.message).toBe(
+        'Insufficient balance: requested 1.5 MACH, available 0.25 MACH.',
+      )
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
+  test('reports no shortfall when the payer holds enough MACH or the balance is unknown', async () => {
+    vi.resetModules()
+    let balance: Promise<bigint> = Promise.resolve(2_000_000n)
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(() => balance),
+    }))
+
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const parameters = { account: payer, amount: 1_500_000n, chainId: mainnet } as const
+      await expect(MachineTokenCharge.getShortfall(client, parameters)).resolves.toBeUndefined()
+      balance = Promise.reject(new Error('rpc down'))
+      await expect(MachineTokenCharge.getShortfall(client, parameters)).resolves.toBeUndefined()
+      await expect(
+        MachineTokenCharge.getShortfall(client, { ...parameters, chainId: 69420 }),
+      ).resolves.toBeUndefined()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+})

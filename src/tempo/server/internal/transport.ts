@@ -5,9 +5,10 @@
  *
  * @internal
  */
+import type { Address } from 'viem'
+
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
-import * as Errors from '../../../Errors.js'
 import * as Transport from '../../../server/Transport.js'
 import type { SessionReceipt } from '../../session/precompile/Protocol.js'
 import { requireSessionCredentialContext } from '../../session/precompile/Protocol.js'
@@ -182,10 +183,17 @@ export function sse(
       if (hasPrepaidSessionTick(currentReceipt)) {
         return baseResponse
       }
+      const sessionRequest = verifiedCredential.challenge.request as {
+        currency: Address
+        methodDetails?: { chainId?: number | undefined } | undefined
+      }
+      const insufficientBalance = (available: bigint) =>
+        ChannelStore.insufficientBalance(
+          { chainId: sessionRequest.methodDetails?.chainId, token: sessionRequest.currency },
+          `requested ${tickCost}, available ${available}`,
+        )
       const paymentRequired = (available: bigint) => {
-        const error = new Errors.InsufficientBalanceError({
-          reason: `requested ${tickCost}, available ${available}`,
-        })
+        const error = insufficientBalance(available)
         return new Response(
           JSON.stringify(error.toProblemDetails(verifiedCredential.challenge.id)),
           {
@@ -239,11 +247,7 @@ export function sse(
           const result = await chargePlainResponse()
           if (!result.ok) {
             controller.error(
-              new Errors.InsufficientBalanceError({
-                reason: `requested ${tickCost}, available ${
-                  result.channel.highestVoucherAmount - result.channel.spent
-                }`,
-              }),
+              insufficientBalance(result.channel.highestVoucherAmount - result.channel.spent),
             )
             return
           }

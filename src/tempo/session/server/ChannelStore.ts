@@ -11,6 +11,7 @@ import {
   VerificationFailedError,
 } from '../../../Errors.js'
 import type * as Store from '../../../Store.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import type * as Chain from '../precompile/Chain.js'
 import type * as PrecompileChannel from '../precompile/Channel.js'
 import { createSessionReceipt } from '../precompile/Protocol.js'
@@ -855,13 +856,31 @@ export function planVoucherAcceptance(parameters: {
   return { channel: deduction.value, charged: true }
 }
 
+/**
+ * Reports a channel balance that can't cover a charge. On a MACH channel on Tempo mainnet, the
+ * error also links to the MACH onramp, where the payer can get MACH to top up the channel.
+ */
+export function insufficientBalance(
+  channel: { chainId: number | undefined; payer?: Address | undefined; token: Address },
+  reason: string,
+) {
+  const fundingUrl = MachineTokenCharge.isMachineToken({
+    chainId: channel.chainId,
+    currency: channel.token,
+  })
+    ? MachineTokenCharge.fundingUrl({ address: channel.payer, chainId: channel.chainId })
+    : undefined
+  return new InsufficientBalanceError({ fundingUrl, reason })
+}
+
 /** Reports a request charge that the channel's available balance could not cover. */
 export function insufficientBalanceForCharge(channel: State, chargeAmount: bigint) {
-  return new InsufficientBalanceError({
-    reason: `requested ${chargeAmount}, available ${
+  return insufficientBalance(
+    channel,
+    `requested ${chargeAmount}, available ${
       channel.highestVoucherAmount - channel.spent - reservedStreamAmount(channel)
     }`,
-  })
+  )
 }
 
 /** Verifies a cumulative voucher and returns a session receipt after store reconciliation. */

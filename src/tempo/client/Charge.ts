@@ -9,6 +9,7 @@ import {
 } from 'viem'
 import {
   prepareTransactionRequest,
+  readContract,
   sendCallsSync,
   sendRawTransactionSync,
   sendTransactionSync,
@@ -230,6 +231,8 @@ export function charge(parameters: charge.Parameters = {}) {
         : undefined
       let account = defaultAccount
       let machineTokenRoute: typeof machineTokenCandidate
+      // Whether the account could run the MACH route but lacked the MACH or the route reverted.
+      let machineTokenUnpayable = false
       if (machineTokenCandidate) {
         const machineTokenAccount = await (async () => {
           try {
@@ -251,6 +254,7 @@ export function charge(parameters: charge.Parameters = {}) {
             transfers,
           })
           if (machineTokenRoute) account = machineTokenAccount
+          else machineTokenUnpayable = true
         }
       }
 
@@ -270,6 +274,17 @@ export function charge(parameters: charge.Parameters = {}) {
               maxAmountIn: autoSwap.maxAmountIn,
             })
           : undefined
+
+        // Without MACH or the charge currency the payment can only revert, so say where to buy MACH.
+        if (machineTokenUnpayable && !autoSwap) {
+          const error = await getMachineTokenFundingError(client, {
+            account: account.address,
+            amount: BigInt(amount),
+            chainId,
+            currency,
+          })
+          if (error) throw error
+        }
       }
 
       const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
@@ -403,6 +418,23 @@ export function charge(parameters: charge.Parameters = {}) {
     return promise
   }
   return MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash)
+}
+
+/**
+ * Returns an error that links to the MACH onramp when a machine-token-enabled charge can't be paid:
+ * the account holds less than `amount` of both the charge currency and MACH.
+ */
+async function getMachineTokenFundingError(
+  client: viem_Client,
+  parameters: { account: Address; amount: bigint; chainId: number; currency: Address },
+): Promise<Errors.InsufficientBalanceError | undefined> {
+  const { account, amount, chainId, currency } = parameters
+  const balance = await readContract(
+    client,
+    Actions.token.getBalance.call(client, { account, token: currency }) as never,
+  ).catch(() => undefined)
+  if (typeof balance !== 'bigint' || balance >= amount) return undefined
+  return MachineTokenCharge.getInsufficientBalanceError(client, { account, amount, chainId })
 }
 
 /**

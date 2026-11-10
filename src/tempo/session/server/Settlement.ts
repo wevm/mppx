@@ -26,7 +26,6 @@ import {
   BadRequestError,
   ChannelClosedError,
   ChannelNotFoundError,
-  InsufficientBalanceError,
   VerificationFailedError,
 } from '../../../Errors.js'
 import type { MaybePromise } from '../../../internal/types.js'
@@ -444,9 +443,10 @@ export async function chargeSessionChannel(
     if (result.channel.closeRequestedAt !== 0n)
       throw new ChannelClosedError({ reason: 'channel has a pending close request' })
     const available = result.channel.highestVoucherAmount - result.channel.spent
-    throw new InsufficientBalanceError({
-      reason: `requested ${amount}, available ${available}`,
-    })
+    throw ChannelStore.insufficientBalance(
+      result.channel,
+      `requested ${amount}, available ${available}`,
+    )
   }
   return result.channel
 }

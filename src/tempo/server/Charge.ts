@@ -1,5 +1,7 @@
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
+  type Address,
+  type Client as viem_Client,
   decodeFunctionData,
   formatUnits,
   keccak256,
@@ -469,7 +471,15 @@ export function charge<const parameters extends charge.Parameters>(
       await viem_call(
         client,
         FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
-      )
+      ).catch(async (error: unknown) => {
+        throw await explainMachineTokenFailure(error, {
+          amount,
+          chainId: chainId ?? client.chain?.id,
+          client,
+          fundingCurrency,
+          payer: transaction.from as Address | undefined,
+        })
+      })
     }
 
     return {
@@ -1044,7 +1054,14 @@ export function charge<const parameters extends charge.Parameters>(
             // and recovers the receipt instead of being rejected as a replay.
             if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
             await releaseHashUse(store, hash)
-            throw error
+            if (broadcastAttempted) throw error
+            throw await explainMachineTokenFailure(error, {
+              amount,
+              chainId: chainId ?? client.chain?.id,
+              client,
+              fundingCurrency,
+              payer: transaction.from as Address | undefined,
+            })
           }
         }
       }
@@ -1231,6 +1248,37 @@ export declare namespace charge {
 }
 
 type ChargeRequest = z.output<typeof Methods.charge.schema.request>
+
+/**
+ * Explains why a MACH-route payment failed before broadcast. When the payer holds too little MACH,
+ * returns a `VerificationFailedError` that links to the MACH onramp (on Tempo mainnet); otherwise
+ * returns `error` unchanged. Typed payment errors are kept as they are.
+ */
+async function explainMachineTokenFailure(
+  error: unknown,
+  parameters: {
+    amount: string
+    chainId: number | undefined
+    client: viem_Client
+    fundingCurrency: string | undefined
+    payer: Address | undefined
+  },
+): Promise<unknown> {
+  const { amount, chainId, client, fundingCurrency, payer } = parameters
+  if (error instanceof PaymentError || !payer || !fundingCurrency) return error
+  if (!MachineTokenCharge.isMachineToken({ chainId, currency: fundingCurrency as Address }))
+    return error
+  const shortfall = await MachineTokenCharge.getShortfall(client, {
+    account: payer,
+    amount: BigInt(amount),
+    chainId,
+  })
+  if (!shortfall) return error
+  return new VerificationFailedError({
+    fundingUrl: shortfall.fundingUrl,
+    reason: `insufficient MACH balance (${shortfall.reason})`,
+  })
+}
 
 function chargeBinding(request: ChargeRequest) {
   // Exhaustively destructure so new charge request fields require an explicit binding decision.
