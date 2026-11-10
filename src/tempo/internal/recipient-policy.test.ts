@@ -60,11 +60,11 @@ describe('areRecipientsAuthorized', () => {
     ).resolves.toBe(false)
   })
 
-  test('does not block when the policy cannot be read', async () => {
+  test('is false when the policy cannot be read', async () => {
     const { client } = policyClient({ allowed: [], fail: true })
     await expect(
-      areRecipientsAuthorized(client, { chainId: 3, currency, recipients: [stranger] }),
-    ).resolves.toBe(true)
+      areRecipientsAuthorized(client, { chainId: 3, currency, recipients: [merchant] }),
+    ).resolves.toBe(false)
   })
 
   test('caches authorized recipients but rechecks rejected ones', async () => {

@@ -227,11 +227,16 @@ export function charge(parameters: charge.Parameters = {}) {
       const machineTokenDirect = methodDetails?.machineTokenDirect === true
       const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
 
-      // `machineTokenDirect`: the payee accepts MACH 1:1, so pay the same transfers in MACH.
-      const machineToken =
-        machineTokenDirect && !isMachineTokenCurrency
-          ? MachineTokenCharge.getToken(chainId)
+      // `machineTokenDirect`: the payee accepts MACH 1:1, so pay the same transfers in MACH, unless
+      // the client's `currencies` allowlist leaves MACH out.
+      const machineToken = (() => {
+        if (!machineTokenDirect || isMachineTokenCurrency) return undefined
+        const token = MachineTokenCharge.getToken(chainId)
+        if (!token || !parameters.currencies) return token
+        return parameters.currencies.some((c) => c.toLowerCase() === token.toLowerCase())
+          ? token
           : undefined
+      })()
       const machineTokenCalls = machineToken
         ? transfers.map((transfer): AccountResolution.ResolveAccountCall =>
             Actions.token.transfer.call(client, {

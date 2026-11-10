@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -229,6 +230,14 @@ export function session(parameters: session.Parameters = {}) {
     resolveAccount,
   } = parameters
   const policy = resolveSpendingPolicy(parameters)
+  // A `currencies` allowlist without MACH keeps channels in the advertised currency.
+  const machineTokenAllowed =
+    !policy.currencies ||
+    Object.values(defaults.machineToken).some((deployment) =>
+      policy.currencies!.includes(deployment.token.toLowerCase()),
+    )
+  const withAllowedFunding = <challenge extends Challenge.Challenge>(challenge: challenge) =>
+    machineTokenAllowed ? challenge : withoutMachineTokenDirect(challenge)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
@@ -297,7 +306,7 @@ export function session(parameters: session.Parameters = {}) {
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
       const challengeContext = await resolveChallengeContext({
         allowCustomEscrow,
-        challenge,
+        challenge: withAllowedFunding(challenge),
         escrowOverride,
         allowedChainIds,
         getClient,
@@ -496,7 +505,7 @@ export function session(parameters: session.Parameters = {}) {
       context: sessionContext,
       resolved: await resolveChallengeContext({
         allowCustomEscrow,
-        challenge,
+        challenge: withAllowedFunding(challenge),
         escrowOverride,
         allowedChainIds,
         getClient,
@@ -562,7 +571,7 @@ export function session(parameters: session.Parameters = {}) {
           context: sessionContextSchema.safeParse(context).data,
           resolved: await resolveChallengeContext({
             allowCustomEscrow,
-            challenge,
+            challenge: withAllowedFunding(challenge),
             escrowOverride,
             allowedChainIds,
             getClient,
@@ -685,4 +694,14 @@ function resolveInputOrigin(input: RequestInfo | URL): string {
   if (!['http:', 'https:'].includes(url.protocol))
     throw new Error('Session payments require an HTTP or HTTPS origin')
   return url.origin
+}
+
+/** Returns a challenge without `machineTokenDirect`, so its channel opens in the advertised currency. */
+function withoutMachineTokenDirect<challenge extends Challenge.Challenge>(
+  challenge: challenge,
+): challenge {
+  const methodDetails = challenge.request.methodDetails
+  if (typeof methodDetails !== 'object' || methodDetails === null) return challenge
+  const { machineTokenDirect: _, ...rest } = methodDetails as Record<string, unknown>
+  return { ...challenge, request: { ...challenge.request, methodDetails: rest } }
 }

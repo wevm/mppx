@@ -197,6 +197,21 @@ describe('session machineTokenDirect', () => {
     expect(calls).toEqual([])
   })
 
+  test('opens in the challenge currency when the currencies allowlist leaves MACH out', async () => {
+    const method = session({
+      account,
+      currencies: [currency],
+      decimals: 0,
+      getClient: () => createTestClient({ machBalance: 1_000n }),
+    })
+
+    const open = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+
+    expect(open.descriptor.token).toBe(currency)
+  })
+
   test('keeps using an existing channel in the challenge currency', async () => {
     const channelStore = createChannelStore()
     const poor = session({
