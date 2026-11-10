@@ -5,6 +5,7 @@ import * as Challenge from '../../Challenge.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as Credential from '../../Credential.js'
+import { ChallengeUnpayableError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import * as core_Mcp from '../../Mcp.js'
@@ -221,9 +222,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
     const orderedCandidates = config.orderChallenges
       ? await config.orderChallenges(candidates)
       : candidates
-    const selected = orderedCandidates[0]
-
-    if (!selected) {
+    if (!orderedCandidates[0]) {
       const available = challenges.map((challenge) => `${challenge.method}.${challenge.intent}`)
       const installed = methods.map((method) => `${method.name}.${method.intent}`)
       throw new Error(
@@ -232,19 +231,30 @@ function createPaymentAwareCallTool<methods extends Methods>(
       )
     }
 
-    if (selected.challenge.expires)
-      Expires.assert(selected.challenge.expires, selected.challenge.id)
-    ProofRealm.assertWithoutOrigin(selected.challenge, config.trustedTempoProofRealms)
+    let credential: string | undefined
+    for (const [index, selected] of orderedCandidates.entries()) {
+      if (selected.challenge.expires)
+        Expires.assert(selected.challenge.expires, selected.challenge.id)
+      ProofRealm.assertWithoutOrigin(selected.challenge, config.trustedTempoProofRealms)
 
-    if (call.onPaymentRequired) {
-      const approved = await call.onPaymentRequired(selected.challenge)
-      if (!approved) throw new Error('Payment declined.', { cause })
+      if (call.onPaymentRequired) {
+        const approved = await call.onPaymentRequired(selected.challenge)
+        if (!approved) throw new Error('Payment declined.', { cause })
+      }
+
+      try {
+        credential = await createCredential(selected.challenge, {
+          context: call.context,
+          method: selected.method,
+        })
+        break
+      } catch (error) {
+        // Nothing was signed or sent for an offer the client cannot pay, so try the next one.
+        if (!(error instanceof ChallengeUnpayableError) || index === orderedCandidates.length - 1)
+          throw error
+      }
     }
-
-    const credential = await createCredential(selected.challenge, {
-      context: call.context,
-      method: selected.method,
-    })
+    if (credential === undefined) throw new Error('No payment credential was created.', { cause })
     const parsed = Credential.deserialize(credential)
 
     try {

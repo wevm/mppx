@@ -1,6 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
-import { Challenge, Credential, Mcp as core_Mcp, Method } from 'mppx'
+import { Challenge, Credential, Errors, Mcp as core_Mcp, Method } from 'mppx'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
@@ -183,5 +183,50 @@ describe('MCP client zero-amount Tempo proofs', () => {
     const result = await mcp.callTool({ name: 'auth_tool' })
     expect(result.content).toEqual([{ type: 'text', text: 'ok' }])
     expect(createCredential).toHaveBeenCalledOnce()
+  })
+})
+
+describe('MCP client unpayable offers', () => {
+  test('tries the next offer when one cannot be paid', async () => {
+    const challenges = ['mach', 'usdc'].map((id) =>
+      Challenge.from({
+        id,
+        intent: 'charge',
+        method: 'tempo',
+        realm: 'api.example.com',
+        request: {},
+      }),
+    )
+    const sent: string[] = []
+    const client = {
+      async callTool(params: { _meta?: Record<string, { challenge: { id: string } }> }) {
+        const credential = params._meta?.[core_Mcp.credentialMetaKey]
+        if (!credential)
+          throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+            challenges,
+            httpStatus: 402,
+          })
+        sent.push(credential.challenge.id)
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    }
+    const tried: string[] = []
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) => {
+      tried.push(challenge.id)
+      if (challenge.id === 'mach') throw new Errors.ChallengeUnpayableError()
+      return Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      })
+    })
+    const mcp = McpClient.wrap(client as unknown as Pick<Client, 'callTool'>, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+
+    const result = await mcp.callTool({ name: 'paid_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }])
+    expect(tried).toEqual(['mach', 'usdc'])
+    expect(sent).toEqual(['usdc'])
   })
 })

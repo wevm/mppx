@@ -313,6 +313,17 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       if (mode === 'push') {
+        // Sending broadcasts at once, so simulate first: a revert, such as for a missing balance,
+        // means this offer cannot be paid and nothing has been sent.
+        await Simulation.simulate(() =>
+          prepareTransactionRequest(client, {
+            account: account.type === 'local' ? account : account.address,
+            calls,
+            ...(feeToken ? { feeToken } : {}),
+            nonceKey: 'expiring',
+            validBefore,
+          } as never),
+        )
         const { receipts } =
           account.type === 'local'
             ? {
