@@ -344,7 +344,8 @@ describe('tempo.charge client', () => {
     const sendCallsSync = vi.fn(async () => ({ receipts: [{ transactionHash: hash }] }))
     const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
     vi.doMock('viem/actions', () => ({
-      prepareTransactionRequest: vi.fn(),
+      // The prepared request is what gets sent.
+      prepareTransactionRequest: vi.fn(async (_client: unknown, parameters: object) => parameters),
       sendCallsSync,
       sendTransactionSync,
       signTransaction: vi.fn(),
@@ -695,6 +696,60 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('links to the MACH onramp when the payer lacks MACH and the charge currency', async () => {
+    vi.resetModules()
+    const chainId = defaults.chainId.mainnet
+    let balances: Record<string, bigint> = {}
+    const readContract = vi.fn(async (_client: unknown, parameters: { address: Address }) => {
+      return balances[parameters.address.toLowerCase()] ?? 0n
+    })
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      prepareTransactionRequest,
+      readContract,
+      sendCallsSync: vi.fn(),
+      signTransaction: vi.fn(async () => '0xdeadbeef'),
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedBalances } = await import('./Charge.js')
+      const Errors = await import('../../Errors.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedBalances({ account, getClient: () => client })
+      const challenge = createChallenge({
+        amount: '1.5',
+        chainId,
+        machineTokenEnabled: true,
+        supportedModes: ['pull'],
+      })
+      balances = { [defaults.machineToken[chainId].token.toLowerCase()]: 250_000n }
+
+      const error = await method.createCredential({ challenge, context: {} }).catch((e) => e)
+      expect(error).toBeInstanceOf(Errors.InsufficientBalanceError)
+      expect(error.fundingUrl).toBe(
+        `${defaults.machineTokenFundingBaseUrl}&address=${account.address}&amount=1.25`,
+      )
+      expect(error.message).toBe(
+        `Insufficient balance: requested 1.5 MACH, available 0.25 MACH. Add funds at ${error.fundingUrl}`,
+      )
+      expect(prepareTransactionRequest).not.toHaveBeenCalled()
+
+      // A payer that holds the charge currency pays it directly.
+      balances[currency.toLowerCase()] = 1_500_000n
+      await method.createCredential({ challenge, context: {} })
+      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   test('uses direct calls when a scoped account rejects the machine route', async () => {
     vi.resetModules()
     const chainId = 42431
@@ -786,7 +841,8 @@ describe('tempo.charge client', () => {
     const sendCallsSync = vi.fn()
     const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
     vi.doMock('viem/actions', () => ({
-      prepareTransactionRequest: vi.fn(),
+      // The prepared request is what gets sent.
+      prepareTransactionRequest: vi.fn(async (_client: unknown, parameters: object) => parameters),
       sendCallsSync,
       sendTransactionSync,
       signTransaction: vi.fn(),

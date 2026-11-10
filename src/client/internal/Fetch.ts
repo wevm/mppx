@@ -21,6 +21,14 @@ const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
 const MPPX_FETCH_IDENTITY = Symbol.for('mppx.fetch.identity')
 /** Per-request payment opt-out preserved by forwarding fetch layers. @internal */
 export const skipPayment = Symbol.for('mppx.fetch.skipPayment')
+/**
+ * Disables automatic payments for a request, including through identity wrappers.
+ * Custom forwarding layers must preserve the returned init's symbol properties.
+ */
+export function withoutPayment(init: RequestInit = {}): RequestInit {
+  return { ...init, [skipPayment]: true } as RequestInit
+}
+
 const defaultMaxPaymentRetries = 3
 const maxErrorBodyBytes = 64 * 1024
 const errorBodyTimeoutMs = 2_000

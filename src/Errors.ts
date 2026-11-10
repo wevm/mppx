@@ -10,6 +10,11 @@ export const Hints = {
     'Use a supported wallet to pay for this resource using one of the supported payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md',
 } as const
 
+/** Appends where to get funds to an error message. */
+function withFundingUrl(message: string, fundingUrl: string | undefined) {
+  return fundingUrl ? `${message} Add funds at ${fundingUrl}` : message
+}
+
 /**
  * Base class for all payment-related errors.
  */
@@ -29,9 +34,16 @@ export abstract class PaymentError extends Error {
   /** Actionable hint for resolving the error (RFC 9457 extension member). */
   readonly hint: string | undefined
 
+  /**
+   * Page where the payer can get the funds this payment needs, such as the MACH onramp
+   * (RFC 9457 extension member).
+   */
+  readonly fundingUrl: string | undefined
+
   protected constructor(message: string, options: PaymentError.Options = {}) {
     super(message)
     this.details = options.details
+    this.fundingUrl = options.fundingUrl
     // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
     if (options.cause !== undefined)
       Object.defineProperty(this, 'cause', {
@@ -50,6 +62,7 @@ export abstract class PaymentError extends Error {
       detail: this.message,
       ...(this.details && Object.keys(this.details).length > 0 && { details: this.details }),
       ...(this.hint && { hint: this.hint }),
+      ...(this.fundingUrl && { fundingUrl: this.fundingUrl }),
       ...(challengeId && { challengeId }),
     }
   }
@@ -60,6 +73,8 @@ export declare namespace PaymentError {
     /** Underlying error. Never serialized into Problem Details. */
     cause?: unknown
     details?: Record<string, unknown> | undefined
+    /** Page where the payer can get the funds this payment needs. */
+    fundingUrl?: string | undefined
   }
 
   type ProblemDetails = {
@@ -75,6 +90,8 @@ export declare namespace PaymentError {
     details?: Readonly<Record<string, unknown>>
     /** Actionable hint for resolving the error (RFC 9457 extension member). */
     hint?: string
+    /** Page where the payer can get the funds this payment needs (RFC 9457 extension member). */
+    fundingUrl?: string
     /** Associated challenge ID, if applicable. */
     challengeId?: string
   }
@@ -138,10 +155,14 @@ export class VerificationFailedError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/verification-failed'
 
   constructor(options: VerificationFailedError.Options = {}) {
-    const { details, reason } = options
-    super(reason ? `Payment verification failed: ${reason}.` : 'Payment verification failed.', {
-      details,
-    })
+    const { details, fundingUrl, reason } = options
+    super(
+      withFundingUrl(
+        reason ? `Payment verification failed: ${reason}.` : 'Payment verification failed.',
+        fundingUrl,
+      ),
+      { details, fundingUrl },
+    )
   }
 }
 
@@ -149,6 +170,8 @@ export declare namespace VerificationFailedError {
   type Options = {
     /** Safe method-specific diagnostic context. */
     details?: Record<string, unknown> | undefined
+    /** Page where the payer can get the funds the payment lacked. */
+    fundingUrl?: string | undefined
     /** Reason verification failed (e.g., "invalid signature", "insufficient amount"). */
     reason?: string
   }
@@ -583,13 +606,21 @@ export class InsufficientBalanceError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/session/insufficient-balance'
 
   constructor(options: InsufficientBalanceError.Options = {}) {
-    const { reason } = options
-    super(reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.')
+    const { fundingUrl, reason } = options
+    super(
+      withFundingUrl(
+        reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.',
+        fundingUrl,
+      ),
+      { fundingUrl },
+    )
   }
 }
 
 export declare namespace InsufficientBalanceError {
   type Options = {
+    /** Page where the payer can get the funds, such as the MACH onramp. */
+    fundingUrl?: string | undefined
     /** Reason for insufficient balance. */
     reason?: string
   }
