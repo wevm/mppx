@@ -344,7 +344,8 @@ describe('tempo.charge client', () => {
     const sendCallsSync = vi.fn(async () => ({ receipts: [{ transactionHash: hash }] }))
     const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
     vi.doMock('viem/actions', () => ({
-      prepareTransactionRequest: vi.fn(),
+      // The prepared request is what gets sent.
+      prepareTransactionRequest: vi.fn(async (_client: unknown, parameters: object) => parameters),
       sendCallsSync,
       sendTransactionSync,
       signTransaction: vi.fn(),
@@ -840,7 +841,8 @@ describe('tempo.charge client', () => {
     const sendCallsSync = vi.fn()
     const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
     vi.doMock('viem/actions', () => ({
-      prepareTransactionRequest: vi.fn(),
+      // The prepared request is what gets sent.
+      prepareTransactionRequest: vi.fn(async (_client: unknown, parameters: object) => parameters),
       sendCallsSync,
       sendTransactionSync,
       signTransaction: vi.fn(),
@@ -1231,7 +1233,8 @@ describe('tempo.charge client', () => {
         supportedModes: ['push'],
       })
       expect(result).toBeUndefined()
-      expect(prepareTransactionRequest).not.toHaveBeenCalled()
+      // Simulated once before broadcasting.
+      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
       expect(sendTransactionSync).toHaveBeenCalledOnce()
     })
 
@@ -1859,6 +1862,48 @@ describe('zero-amount recipient policy', () => {
       } else {
         await expect(pending).rejects.toThrow('Unexpected primary recipient')
         expect(signTypedData).not.toHaveBeenCalled()
+      }
+    },
+  )
+})
+
+describe('unpayable offers', () => {
+  test.each(['pull', 'push'] as const)(
+    'reports a reverted %s simulation as unpayable without signing or sending',
+    async (mode) => {
+      vi.resetModules()
+      const { ExecutionRevertedError } = await import('viem')
+      const prepareTransactionRequest = vi.fn(async () => {
+        throw new ExecutionRevertedError({ message: 'InsufficientBalance' })
+      })
+      const sendTransactionSync = vi.fn()
+      const signTransaction = vi.fn()
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest,
+        sendCallsSync: vi.fn(),
+        sendTransactionSync,
+        signTransaction,
+        signTypedData: vi.fn(),
+      }))
+      try {
+        const { charge: mockedCharge } = await import('./Charge.js')
+        const { ChallengeUnpayableError } = await import('../../Errors.js')
+        const client = createClient({
+          account,
+          chain: { ...tempoLocalnet, id: 42431 },
+          transport: http('http://127.0.0.1'),
+        })
+        const result = mockedCharge({ account, getClient: () => client, mode }).createCredential({
+          challenge: createChallenge({ amount: '1', chainId: 42431, supportedModes: [mode] }),
+          context: {},
+        })
+        await expect(result).rejects.toBeInstanceOf(ChallengeUnpayableError)
+        await expect(result).rejects.toThrow('InsufficientBalance')
+        expect(signTransaction).not.toHaveBeenCalled()
+        expect(sendTransactionSync).not.toHaveBeenCalled()
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
       }
     },
   )

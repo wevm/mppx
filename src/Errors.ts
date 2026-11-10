@@ -406,6 +406,40 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * The client cannot pay a challenge as offered, and nothing was signed or sent: for example, a
+ * simulation before signing reverted because the payer lacks the currency. Automatic payment
+ * (`fetch`) then tries the next offered challenge from the same response.
+ *
+ * Methods throw it only before anything that could move funds, so trying another offer cannot
+ * pay twice.
+ */
+export class ChallengeUnpayableError extends Error {
+  override readonly name = 'ChallengeUnpayableError'
+
+  constructor(options: ChallengeUnpayableError.Options = {}) {
+    const { cause, reason = describe(cause) } = options
+    super(reason ? `Challenge cannot be paid: ${reason}` : 'Challenge cannot be paid.')
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+function describe(cause: unknown): string | undefined {
+  if (!(cause instanceof Error)) return undefined
+  return (cause as { shortMessage?: string }).shortMessage ?? cause.message
+}
+
+export declare namespace ChallengeUnpayableError {
+  type Options = {
+    /** The error that showed the challenge cannot be paid, such as a reverted simulation. */
+    cause?: unknown
+    /** Short description of why. Defaults to the cause's message. */
+    reason?: string | undefined
+  }
+}
+
+/**
  * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *
