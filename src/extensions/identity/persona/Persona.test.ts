@@ -389,6 +389,22 @@ test('normalizes DIDs per chain', () => {
   )
 })
 
+test('calls Persona through the unwrapped fetch, never a payment-aware wrapper', async () => {
+  const api = fakePersona([approved('inq_1')])
+  let wrapped = 0
+  const wrapper = (async (...args: Parameters<typeof globalThis.fetch>) => {
+    wrapped++
+    return api.fetch(...args)
+  }) as typeof globalThis.fetch
+  ;(wrapper as unknown as Record<symbol, unknown>)[Symbol.for('mppx.fetch.wrapper')] = api.fetch
+  const kyc = Persona.Server.create({ apiKey: 'k', fetch: wrapper }).paymentCheck({
+    referenceId: fromSource,
+  })
+  expect((await pay(kyc, payer)).result.status).toBe(200)
+  expect(api.calls).toHaveLength(1)
+  expect(wrapped).toBe(0)
+})
+
 test('validates its config', () => {
   expect(() => Persona.Server.create({ apiKey: '' })).toThrow('needs an apiKey')
   for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31])

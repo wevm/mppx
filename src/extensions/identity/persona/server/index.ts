@@ -2,6 +2,7 @@ import { verifyMessage } from 'viem'
 import type { Address, Hex } from 'viem'
 
 import type * as Challenge from '../../../../Challenge.js'
+import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Credential from '../../../../Credential.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
@@ -44,7 +45,6 @@ export function create(config: create.Config): Persona {
     apiKey,
     apiUrl = Constants.apiUrl,
     apiVersion = Constants.apiVersion,
-    fetch = globalThis.fetch,
     templateId,
     timeout = Constants.timeout,
   } = config
@@ -58,6 +58,9 @@ export function create(config: create.Config): Persona {
   const scope = digest(`${new URL(apiUrl).origin}\n${apiKey}`)
 
   async function call(path: string, init: RequestInit = {}): Promise<unknown> {
+    // Unwrapped, and resolved per call: a Persona request must never pay a Payment Challenge,
+    // even when an mppx client polyfilled globalThis.fetch.
+    const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
     const response = await fetch(new URL(path, apiUrl), {
       ...init,
       headers: {
