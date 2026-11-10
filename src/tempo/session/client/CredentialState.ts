@@ -37,6 +37,11 @@ import {
   deleteChannel,
   type ChannelSink,
 } from './ChannelStore.js'
+import {
+  isMachineToken,
+  resolveMachineTokenFeeToken,
+  resolveMachineTokenOpen,
+} from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -706,11 +711,13 @@ async function resolveAutoSwapCalls(
   parameters: {
     account: Address
     amountOut: bigint
+    chainId: number
     client: Client
     tokenOut: Address
   },
 ): Promise<readonly TempoChannelCall[] | undefined> {
-  if (!autoSwap) return undefined
+  // MACH is never acquired by swapping: a session funds a MACH channel only from MACH already held.
+  if (!autoSwap || isMachineToken(parameters.chainId, parameters.tokenOut)) return undefined
   return (await AutoSwap.findCalls(parameters.client, {
     account: parameters.account,
     amountOut: parameters.amountOut,
@@ -744,13 +751,16 @@ async function open(
   sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
-  const { account, resolved } = plan
+  const { account } = plan
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
     maxDeposit: plan.maxDeposit,
-    requestAmount: resolved.amount,
-    suggestedDepositRaw: resolved.suggestedDepositRaw,
+    requestAmount: plan.resolved.amount,
+    suggestedDepositRaw: plan.resolved.suggestedDepositRaw,
   })
+  // A machineTokenDirect challenge also accepts a channel in MACH, preferred when MACH covers it.
+  const resolved =
+    (await resolveMachineTokenOpen({ account, deposit, resolved: plan.resolved })) ?? plan.resolved
   await assertMachineTokenDeposit(autoSwap, {
     account: account.address,
     amount: deposit,
@@ -770,6 +780,7 @@ async function open(
     prefixCalls: await resolveAutoSwapCalls(autoSwap, {
       account: account.address,
       amountOut: deposit,
+      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),
@@ -973,10 +984,12 @@ async function manualTopUp(
     await resolveAutoSwapCalls(autoSwap, {
       account: account.address,
       amountOut: additionalDeposit,
+      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),
-    resolved.feeToken,
+    // A reused MACH channel pays fees in a token the payer holds, as its open did.
+    await resolveMachineTokenFeeToken({ account, resolved }),
   )
 }
 

@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added a MACH session offer to `tempo({ machineTokenEnabled: true })` and `tempo.session({ machineTokenEnabled: true })`, after the configured currencies. MACH channels work like any other token's; since MACH cannot pay fees, the MACH offer pays them in `feeToken` or the first configured currency.
+Added direct MACH payments for Tempo sessions. `machineTokenEnabled` now applies to sessions: session offers carry `machineTokenDirect: true`, and servers accept a channel funded in MACH 1:1 alongside the session currency. Clients open the channel in MACH when they hold enough of it and fall back to the session currency otherwise.

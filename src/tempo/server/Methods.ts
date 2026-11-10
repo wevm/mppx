@@ -40,12 +40,8 @@ function createChargeMethod<const parameters extends SharedParameters>(
 function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
-  // These options apply only to charge, even when configured at the family level.
-  const {
-    allowedFeeTokens: _allowedFeeTokens,
-    machineTokenEnabled: _machineTokenEnabled,
-    ...sessionParameters
-  } = parameters ?? {}
+  // This option applies only to charge, even when configured at the family level.
+  const { allowedFeeTokens: _allowedFeeTokens, ...sessionParameters } = parameters ?? {}
   return sessionServer(
     sessionParameters as NoExtraKeys<parameters, session_.Parameters> | undefined,
   )
@@ -85,18 +81,7 @@ export function tempo<const parameters extends tempo.Parameters>(
   if (parameters?.currency !== undefined) {
     if (parameters.currencies !== undefined)
       throw new Error('Specify either `currency` or `currencies`, not both.')
-    const machineToken = parameters.machineTokenEnabled
-      ? resolveMachineTokenSession({
-          chainId: parameters.chainId ?? defaultChainId(parameters),
-          currencies: [parameters.currency],
-          feeToken: parameters.feeToken,
-        })
-      : undefined
-    return [
-      createChargeMethod(parameters),
-      createSessionMethod(parameters),
-      ...(machineToken ? [createSessionMethod({ ...parameters, ...machineToken })] : []),
-    ] as const
+    return [createChargeMethod(parameters), createSessionMethod(parameters)] as const
   }
   const { currencies: _currencies, ...shared } = parameters ?? {}
   const [first, ...rest] = Currencies.resolve(parameters ?? {})
@@ -115,17 +100,12 @@ export function tempo<const parameters extends tempo.Parameters>(
   return [
     ...createMethods(first, 0),
     ...rest.flatMap((currency, index) => createMethods(currency, index + 1)),
-    // `machineTokenEnabled` adds a MACH session offer after the configured currencies.
-    ...sessions.slice(rest.length + 1),
   ] as const
 }
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
-    /**
-     * Enables MACH for Tempo methods: charges accept MACH 1:1, and a MACH session offer follows the
-     * configured currencies.
-     */
+    /** Enables MACH funding for compatible Tempo methods: `charge` and `session`. */
     machineTokenEnabled?: boolean | undefined
   }
 
@@ -249,21 +229,11 @@ function chargeOffers<const parameters extends CurrencyParameters<charge_.Parame
 }
 
 /** Creates OUSD-first session offers with shared storage and currency-aware settlement helpers. */
-function sessionOffers<const parameters extends SessionOfferParameters>(
-  parameters?: NoExtraKeys<parameters, SessionOfferParameters>,
+function sessionOffers<const parameters extends CurrencyParameters<session_.Parameters>>(
+  parameters?: NoExtraKeys<parameters, CurrencyParameters<session_.Parameters>>,
 ) {
-  const { currencies: _currencies, machineTokenEnabled, ...shared } = parameters ?? {}
-  const resolved = resolveCurrencies(parameters ?? {})
-  const machineToken = machineTokenEnabled
-    ? resolveMachineTokenSession({
-        chainId: resolved[0]!.chainId,
-        currencies: resolved.map(({ currency }) => currency),
-        feeToken: parameters?.feeToken,
-      })
-    : undefined
-  const [first, ...rest]: readonly [SessionCurrency, ...SessionCurrency[]] = machineToken
-    ? [...resolved, machineToken]
-    : resolved
+  const { currencies: _currencies, ...shared } = parameters ?? {}
+  const [first, ...rest] = resolveCurrencies(parameters ?? {})
   const store = parameters?.store ?? fallbackStore('tempo.session')
   const settlements = new Map<string, session_.Extensions['settleScheduled']>()
   const verifiers = new Map<string, (channelId: `0x${string}`) => Promise<void>>()
@@ -299,54 +269,18 @@ function sessionOffers<const parameters extends SessionOfferParameters>(
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
-    settlements.set(key(currency.chainId, currency.currency), method.extensions!.settleScheduled)
-    verifiers.set(key(currency.chainId, currency.currency), (channelId) =>
-      verifyStream_(method, channelId),
-    )
+    // `machineTokenEnabled` offers also accept MACH channels; the first offer settles them.
+    const machineToken = parameters?.machineTokenEnabled
+      ? defaults.machineToken[currency.chainId as keyof typeof defaults.machineToken]?.token
+      : undefined
+    for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
+      if (settlements.has(key(currency.chainId, token))) continue
+      settlements.set(key(currency.chainId, token), method.extensions!.settleScheduled)
+      verifiers.set(key(currency.chainId, token), (channelId) => verifyStream_(method, channelId))
+    }
     return { ...method, extensions }
   }
   return [create(first), ...rest.map(create)] as const
-}
-
-/** Session offer parameters: a currency list plus `machineTokenEnabled`. */
-type SessionOfferParameters = CurrencyParameters<session_.Parameters> & {
-  /** Adds a MACH session offer after the configured currencies. */
-  machineTokenEnabled?: boolean | undefined
-}
-
-/** A resolved session currency; MACH's carries the stablecoin it pays fees in. */
-type SessionCurrency = {
-  chainId: number
-  currency: string
-  decimals: number
-  feeToken?: `0x${string}` | undefined
-}
-
-/**
- * Returns the MACH session currency for `machineTokenEnabled`, or `undefined` when MACH is already
- * listed. MACH channels work like any other token's, but MACH cannot pay fees, so they pay them in
- * `feeToken` or else the first configured currency.
- */
-function resolveMachineTokenSession(parameters: {
-  chainId: number
-  currencies: readonly string[]
-  feeToken: `0x${string}` | undefined
-}): SessionCurrency | undefined {
-  const { chainId, currencies, feeToken } = parameters
-  const token = defaults.machineToken[chainId as keyof typeof defaults.machineToken]?.token
-  if (!token) throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
-  if (currencies.some((currency) => currency.toLowerCase() === token.toLowerCase()))
-    return undefined
-  return {
-    chainId,
-    currency: token,
-    decimals: defaults.decimals,
-    feeToken: feeToken ?? (currencies[0] as `0x${string}`),
-  }
-}
-
-function defaultChainId(parameters: { testnet?: boolean | undefined }) {
-  return parameters.testnet ? defaults.chainId.testnet : defaults.chainId.mainnet
 }
 
 /** Offers currencies for new subscriptions; stored subscriptions retain their authorized currency. */

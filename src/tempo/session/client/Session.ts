@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -42,6 +43,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
+import { getOpenScopes, selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -72,6 +74,15 @@ async function lockChannel(store: ChannelStore, key: string) {
   return () => {
     unlock()
     if (tails.get(key) === current) tails.delete(key)
+  }
+}
+
+/** Locks several payment scopes in a fixed order, so overlapping lock sets cannot deadlock. */
+async function lockChannels(store: ChannelStore, keys: readonly string[]) {
+  const releases: (() => void)[] = []
+  for (const key of [...new Set(keys)].sort()) releases.push(await lockChannel(store, key))
+  return () => {
+    for (const release of releases.reverse()) release()
   }
 }
 
@@ -219,6 +230,14 @@ export function session(parameters: session.Parameters = {}) {
     resolveAccount,
   } = parameters
   const policy = resolveSpendingPolicy(parameters)
+  // A `currencies` allowlist without MACH keeps channels in the advertised currency.
+  const machineTokenAllowed =
+    !policy.currencies ||
+    Object.values(defaults.machineToken).some((deployment) =>
+      policy.currencies!.includes(deployment.token.toLowerCase()),
+    )
+  const withAllowedFunding = <challenge extends Challenge.Challenge>(challenge: challenge) =>
+    machineTokenAllowed ? challenge : withoutMachineTokenDirect(challenge)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
@@ -285,9 +304,9 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const resolved = await resolveChallengeContext({
+      const challengeContext = await resolveChallengeContext({
         allowCustomEscrow,
-        challenge,
+        challenge: withAllowedFunding(challenge),
         escrowOverride,
         allowedChainIds,
         getClient,
@@ -305,10 +324,15 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        if (automatic) {
-          release = await lockChannel(store, resolved.key)
-          if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
-        }
+        // Opens lock the challenge currency's scope and, when MACH is accepted, the MACH channel's,
+        // which offers in other currencies share.
+        if (automatic) release = await lockChannels(store, getOpenScopes(challengeContext))
+        const resolved = await selectChannelContext({
+          context,
+          resolved: challengeContext,
+          store,
+        })
+        if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
         if (origin && !entry && resolved.snapshot && !context?.descriptor && !configuredOrigin)
@@ -317,7 +341,7 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannel(store, resolved.key)
+          release = await lockChannels(store, getOpenScopes(challengeContext))
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')
@@ -477,12 +501,16 @@ export function session(parameters: session.Parameters = {}) {
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
     assertSpendingPolicy(policy, challenge.request)
-    const resolved = await resolveChallengeContext({
-      allowCustomEscrow,
-      challenge,
-      escrowOverride,
-      allowedChainIds,
-      getClient,
+    const resolved = await selectChannelContext({
+      context: sessionContext,
+      resolved: await resolveChallengeContext({
+        allowCustomEscrow,
+        challenge: withAllowedFunding(challenge),
+        escrowOverride,
+        allowedChainIds,
+        getClient,
+      }),
+      store,
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
@@ -539,12 +567,16 @@ export function session(parameters: session.Parameters = {}) {
       }
 
       const channelKey = (
-        await resolveChallengeContext({
-          allowCustomEscrow,
-          challenge,
-          escrowOverride,
-          allowedChainIds,
-          getClient,
+        await selectChannelContext({
+          context: sessionContextSchema.safeParse(context).data,
+          resolved: await resolveChallengeContext({
+            allowCustomEscrow,
+            challenge: withAllowedFunding(challenge),
+            escrowOverride,
+            allowedChainIds,
+            getClient,
+          }),
+          store,
         })
       ).key
       let channel = await store.get(channelKey)
@@ -662,4 +694,14 @@ function resolveInputOrigin(input: RequestInfo | URL): string {
   if (!['http:', 'https:'].includes(url.protocol))
     throw new Error('Session payments require an HTTP or HTTPS origin')
   return url.origin
+}
+
+/** Returns a challenge without `machineTokenDirect`, so its channel opens in the advertised currency. */
+function withoutMachineTokenDirect<challenge extends Challenge.Challenge>(
+  challenge: challenge,
+): challenge {
+  const methodDetails = challenge.request.methodDetails
+  if (typeof methodDetails !== 'object' || methodDetails === null) return challenge
+  const { machineTokenDirect: _, ...rest } = methodDetails as Record<string, unknown>
+  return { ...challenge, request: { ...challenge.request, methodDetails: rest } }
 }
