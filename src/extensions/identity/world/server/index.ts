@@ -1,5 +1,6 @@
 import { Base64 } from 'ox'
 import { createPublicClient, http, toHex, verifyMessage, type Address, type Hex } from 'viem'
+import { base, tempo, worldchain } from 'viem/chains'
 
 import type * as Identity from '../../../../identity/Types.js'
 import * as Store from '../../../../Store.js'
@@ -34,6 +35,7 @@ const abi = [
 export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedAgent> {
   const maxAge = config.maxAge ?? Constants.maxAge
   const lookup = agentBook(config.agentBook)
+  const clients = signingClients(config)
   return {
     async verify(request) {
       const header = request.headers.get(Constants.header)
@@ -49,17 +51,28 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const reason = check(payload, url, maxAge)
       if (reason) return { status: 'invalid', reason }
 
+      const chainId = Number(payload.chainId.slice('eip155:'.length))
+      const parameters = {
+        address: payload.address as Address,
+        message: message(payload),
+        signature: payload.signature as Hex,
+      }
       let valid = false
+      // An EOA signature recovers locally, without an RPC call.
       try {
-        const client = config.clients?.[Number(payload.chainId.slice('eip155:'.length))]
-        const parameters = {
-          address: payload.address as Address,
-          message: message(payload),
-          signature: payload.signature as Hex,
-        }
-        // A public client also verifies ERC-1271 and ERC-6492 smart-account signatures.
-        valid = client ? await client.verifyMessage(parameters) : await verifyMessage(parameters)
+        valid = await verifyMessage(parameters)
       } catch {}
+      // Otherwise it may be a smart account's: ERC-1271, or ERC-6492 before deployment.
+      const client = !valid ? clients.get(chainId) : undefined
+      if (client)
+        try {
+          valid = await client.verifyMessage(parameters)
+        } catch {
+          return {
+            status: 'unavailable',
+            reason: 'Smart-account signature verification is unavailable.',
+          }
+        }
       if (!valid) return { status: 'invalid', reason: 'The agentkit signature is invalid.' }
 
       try {
@@ -81,7 +94,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         return {
           status: 'forbidden',
           headers: { Link: `<${Constants.registration}>; rel="register"` },
-          reason: `The agent wallet is not registered in AgentBook. Register it with \`npx @worldcoin/agentkit-cli register ${payload.address}\`.`,
+          reason: `The agent wallet is not registered in AgentBook. Register it with: npx @worldcoin/agentkit-cli register ${payload.address}`,
         }
       return {
         status: 'valid',
@@ -97,22 +110,46 @@ export declare namespace verifier {
     nonceStore: Store.AtomicStore
     /** Where to read AgentBook. Defaults to the canonical World Chain deployment. */
     agentBook?: agentBook.Config | undefined
-    /** Public clients by signing chain ID, to verify smart-account (ERC-1271/6492) signatures. */
-    clients?:
-      | Record<
-          number,
-          {
-            verifyMessage: (parameters: {
-              address: Address
-              message: string
-              signature: Hex
-            }) => Promise<boolean>
-          }
-        >
-      | undefined
+    /**
+     * RPC URLs by signing chain ID, to verify smart-account (ERC-1271 and ERC-6492) signatures.
+     * World Chain (480), Base (8453) and Tempo (4217) use their public RPCs unless set here.
+     * Smart accounts on other chains are rejected.
+     */
+    rpcUrls?: Record<number, string> | undefined
+    /** Clients by signing chain ID, taking precedence over `rpcUrls`, such as for tests. */
+    clients?: Record<number, SigningClient> | undefined
     /** Maximum age, in seconds, of a signed message. @default 300 */
     maxAge?: number | undefined
   }
+}
+
+/** Verifies a message signature on chain, including ERC-1271 and ERC-6492 smart accounts. */
+type SigningClient = {
+  verifyMessage: (parameters: {
+    address: Address
+    message: string
+    signature: Hex
+  }) => Promise<boolean>
+}
+
+/** Public RPCs for the chains agents commonly sign on. */
+const defaultRpcUrls: Record<number, string> = {
+  [worldchain.id]: worldchain.rpcUrls.default.http[0],
+  [base.id]: base.rpcUrls.default.http[0],
+  [tempo.id]: tempo.rpcUrls.default.http[0],
+}
+
+/** One client per allowed signing chain: never an RPC the request names. */
+function signingClients(config: verifier.Config): Map<number, SigningClient> {
+  const urls = { ...defaultRpcUrls, ...config.rpcUrls }
+  const clients = new Map<number, SigningClient>()
+  for (const [id, url] of Object.entries(urls))
+    clients.set(
+      Number(id),
+      createPublicClient({ chain: { id: Number(id) } as never, transport: http(url) }),
+    )
+  for (const [id, client] of Object.entries(config.clients ?? {})) clients.set(Number(id), client)
+  return clients
 }
 
 /**

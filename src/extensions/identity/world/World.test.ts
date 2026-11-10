@@ -25,6 +25,9 @@ function agentBook(registered: Record<string, bigint>, options: { fail?: boolean
   }
 }
 
+/** Smart-account clients that never reach the network and accept nothing. */
+const offline = { 480: { verifyMessage: async () => false } }
+
 const registered = () => agentBook({ [account.address.toLowerCase()]: humanId })
 
 let attempt = 0
@@ -38,7 +41,11 @@ async function signed(url = 'https://api.example/report', signer = account) {
 
 test('accepts a registered agent and returns its human', async () => {
   const book = registered()
-  const verifier = World.Server.verifier({ agentBook: book, nonceStore: Store.memory() })
+  const verifier = World.Server.verifier({
+    clients: offline,
+    agentBook: book,
+    nonceStore: Store.memory(),
+  })
   const result = await verifier.verify(await signed())
   expect(result).toEqual({
     status: 'valid',
@@ -63,7 +70,11 @@ test('sends the AgentKit payload in the agentkit header', async () => {
 
 test('rejects a missing, unregistered, replayed, tampered or misdirected message', async () => {
   const nonceStore = Store.memory()
-  const verifier = World.Server.verifier({ agentBook: agentBook({}), nonceStore })
+  const verifier = World.Server.verifier({
+    clients: offline,
+    agentBook: agentBook({}),
+    nonceStore,
+  })
   expect(await verifier.verify(new Request('https://api.example'))).toMatchObject({
     status: 'missing',
   })
@@ -74,7 +85,11 @@ test('rejects a missing, unregistered, replayed, tampered or misdirected message
     'agentkit-cli register',
   )
 
-  const once = World.Server.verifier({ agentBook: registered(), nonceStore: Store.memory() })
+  const once = World.Server.verifier({
+    clients: offline,
+    agentBook: registered(),
+    nonceStore: Store.memory(),
+  })
   const request = await signed()
   expect((await once.verify(request.clone())).status).toBe('valid')
   expect(await once.verify(request)).toMatchObject({
@@ -116,13 +131,18 @@ test('rejects a stale message and maps an AgentBook outage to unavailable', asyn
     created: Math.floor(Date.now() / 1000) - 600,
     nonce: 'stale-attempt',
   })
-  const verifier = World.Server.verifier({ agentBook: registered(), nonceStore: Store.memory() })
+  const verifier = World.Server.verifier({
+    clients: offline,
+    agentBook: registered(),
+    nonceStore: Store.memory(),
+  })
   expect(await verifier.verify(stale)).toMatchObject({
     status: 'invalid',
     reason: expect.stringContaining('too old'),
   })
 
   const down = World.Server.verifier({
+    clients: offline,
     agentBook: agentBook({}, { fail: true }),
     nonceStore: Store.memory(),
   })
@@ -155,7 +175,11 @@ test('gates a paid route before its 402', async () => {
     realm: 'api.example',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
-  const human = World.Server.verifier({ agentBook: registered(), nonceStore: Store.memory() })
+  const human = World.Server.verifier({
+    clients: offline,
+    agentBook: registered(),
+    nonceStore: Store.memory(),
+  })
   const route = mppx.charge({
     amount: '1',
     currency: 'USD',
@@ -167,4 +191,75 @@ test('gates a paid route before its 402', async () => {
   expect(anonymous.status === 402 && anonymous.challenge.status).toBe(401)
   const agent = await route(await signed())
   expect(agent.status === 402 && agent.challenge.status).toBe(402)
+})
+
+test('verifies smart-account signatures on the signing chain only', async () => {
+  // A smart account's signature does not recover to its address: the chain decides.
+  const owner = privateKeyToAccount(('0x' + '11'.repeat(32)) as `0x${string}`)
+  const smartAccount = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C' as const
+  const book = agentBook({ [smartAccount.toLowerCase()]: humanId })
+  const checked: unknown[] = []
+  const prover = World.Client.prover({
+    account: { address: smartAccount, signMessage: owner.signMessage },
+    chainId: 8453,
+    scope: '*',
+    type: 'eip1271',
+  })
+  const prove = (nonce: string) =>
+    prover.prove(new Request('https://api.example'), {
+      created: Math.floor(Date.now() / 1000),
+      nonce,
+    })
+
+  const verifier = World.Server.verifier({
+    agentBook: book,
+    clients: {
+      8453: {
+        async verifyMessage(parameters) {
+          checked.push(parameters.address)
+          return parameters.address === smartAccount
+        },
+      },
+    },
+    nonceStore: Store.memory(),
+  })
+  expect(await verifier.verify(await prove('smart-1'))).toMatchObject({
+    status: 'valid',
+    value: { address: smartAccount, chainId: 'eip155:8453' },
+  })
+  expect(checked).toEqual([smartAccount])
+
+  // No client for the signing chain: rejected without an RPC call.
+  const elsewhere = World.Server.verifier({
+    agentBook: book,
+    clients: {},
+    nonceStore: Store.memory(),
+    rpcUrls: {},
+  })
+  const onMainnet = World.Client.prover({
+    account: { address: smartAccount, signMessage: owner.signMessage },
+    chainId: 1,
+    scope: '*',
+  })
+  expect(
+    await elsewhere.verify(
+      await onMainnet.prove(new Request('https://api.example'), {
+        created: Math.floor(Date.now() / 1000),
+        nonce: 'smart-2',
+      }),
+    ),
+  ).toMatchObject({ status: 'invalid' })
+
+  const down = World.Server.verifier({
+    agentBook: book,
+    clients: {
+      8453: {
+        verifyMessage: async () => {
+          throw new Error('rpc down')
+        },
+      },
+    },
+    nonceStore: Store.memory(),
+  })
+  expect(await down.verify(await prove('smart-3'))).toMatchObject({ status: 'unavailable' })
 })

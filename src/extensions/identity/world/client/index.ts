@@ -34,7 +34,7 @@ export function prover(config: prover.Config): Identity.Prover {
         uri: url.href,
         version: '1',
         chainId: `eip155:${chainId}`,
-        type: 'eip191',
+        type: config.type ?? 'eip191',
         // SIWE nonces are alphanumeric: derive one from the attempt's random nonce.
         nonce: Hex.fromString(context.nonce).slice(2, 34),
         issuedAt: issuedAt.toISOString(),
@@ -60,8 +60,10 @@ export declare namespace prover {
     }
     /** Origins that receive AgentKit signatures, or `'*'` for any origin. */
     scope: Identity.Prover['scope']
-    /** Signing chain ID. Only matters for smart-account signatures. @default 480 (World Chain) */
+    /** Chain the account signs for: a smart account's chain, where servers verify its signature. @default 480 (World Chain) */
     chainId?: number | undefined
+    /** Signature type: `eip1271` for a smart account, such as a Coinbase Smart Wallet or Safe. @default 'eip191' */
+    type?: 'eip191' | 'eip1271' | undefined
     /** SIWE statement. @default 'Verify your agent is backed by a real human' */
     statement?: string | undefined
   }
