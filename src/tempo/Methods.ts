@@ -286,6 +286,8 @@ export const session = Method.from({
             ),
           ),
           feeToken: z.optional(z.address()),
+          // The payee accepts a channel in MACH 1:1 instead of the challenge currency.
+          machineTokenDirect: z.optional(z.boolean()),
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
@@ -311,6 +313,7 @@ export const session = Method.from({
           escrowContract,
           feePayer,
           feeToken,
+          machineTokenDirect,
           minVoucherDelta,
           operator,
           sessionProtocol,
@@ -334,6 +337,7 @@ export const session = Method.from({
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
             ...(feeToken !== undefined && { feeToken }),
+            ...(machineTokenDirect !== undefined && { machineTokenDirect }),
             ...(operator !== undefined && { operator }),
             ...(sessionProtocol !== undefined && {
               [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,

@@ -255,6 +255,32 @@ export function charge(parameters: charge.Parameters = {}) {
           : undefined
       const machineTokenRouteCalls = machineTokenCalls ?? machineTokenCandidate?.calls
 
+      const resolveMode = (payer: { type: string }) => {
+        const explicitMode = context?.mode ?? parameters.mode
+        if (explicitMode) {
+          if (!supportedModes.includes(explicitMode))
+            throw new Error(`Challenge does not support ${explicitMode} mode.`)
+          return explicitMode
+        }
+
+        const preferredMode = payer.type === 'json-rpc' ? 'push' : 'pull'
+        if (supportedModes.includes(preferredMode)) return preferredMode
+        return supportedModes[0]!
+      }
+      // MACH cannot pay fees, so paying in MACH needs a sponsored pull transaction or a stablecoin
+      // the payer holds for gas.
+      const canPayMachineTokenGas = async (payer: { address: Address; type: string }) =>
+        Boolean(context?.feeToken ?? parameters.feeToken) ||
+        (methodDetails?.feePayer === true && resolveMode(payer) === 'pull') ||
+        (await resolveFeeToken({
+          account: payer.address,
+          allowedTokens: defaultFeeTokens(chainId),
+          candidateTokens: defaultFeeTokens(chainId),
+          client,
+          prioritizeCandidates: true,
+          requireBalance: true,
+        })) !== undefined
+
       let account = defaultAccount
       let machineTokenPaymentCalls: readonly AccountResolution.ResolveAccountCall[] | undefined
       // Whether the account could pay in MACH but lacked the MACH or the payment reverted.
@@ -289,8 +315,11 @@ export function charge(parameters: charge.Parameters = {}) {
             })
             machineTokenPaymentCalls = route?.calls
           }
-          if (machineTokenPaymentCalls) account = machineTokenAccount
-          else machineTokenUnpayable = true
+          if (!machineTokenPaymentCalls) machineTokenUnpayable = true
+          // Without gas for a MACH payment, pay the challenge currency instead.
+          else if (!(await canPayMachineTokenGas(machineTokenAccount)))
+            machineTokenPaymentCalls = undefined
+          else account = machineTokenAccount
         }
       }
 
@@ -338,18 +367,7 @@ export function charge(parameters: charge.Parameters = {}) {
             })
           : undefined
 
-      const mode = (() => {
-        const explicitMode = context?.mode ?? parameters.mode
-        if (explicitMode) {
-          if (!supportedModes.includes(explicitMode))
-            throw new Error(`Challenge does not support ${explicitMode} mode.`)
-          return explicitMode
-        }
-
-        const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull'
-        if (supportedModes.includes(preferredMode)) return preferredMode
-        return supportedModes[0]!
-      })()
+      const mode = resolveMode(account)
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds

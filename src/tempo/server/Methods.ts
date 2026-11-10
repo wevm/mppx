@@ -1,6 +1,7 @@
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
+import * as defaults from '../internal/defaults.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
@@ -39,12 +40,8 @@ function createChargeMethod<const parameters extends SharedParameters>(
 function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
-  // These options apply only to charge, even when configured at the family level.
-  const {
-    allowedFeeTokens: _allowedFeeTokens,
-    machineTokenEnabled: _machineTokenEnabled,
-    ...sessionParameters
-  } = parameters ?? {}
+  // This option applies only to charge, even when configured at the family level.
+  const { allowedFeeTokens: _allowedFeeTokens, ...sessionParameters } = parameters ?? {}
   return sessionServer(
     sessionParameters as NoExtraKeys<parameters, session_.Parameters> | undefined,
   )
@@ -108,7 +105,7 @@ export function tempo<const parameters extends tempo.Parameters>(
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
-    /** Enables MACH funding for compatible Tempo methods. Currently applies to `charge`. */
+    /** Enables MACH funding for compatible Tempo methods: `charge` and `session`. */
     machineTokenEnabled?: boolean | undefined
   }
 
@@ -272,10 +269,15 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
-    settlements.set(key(currency.chainId, currency.currency), method.extensions!.settleScheduled)
-    verifiers.set(key(currency.chainId, currency.currency), (channelId) =>
-      verifyStream_(method, channelId),
-    )
+    // `machineTokenEnabled` offers also accept MACH channels; the first offer settles them.
+    const machineToken = parameters?.machineTokenEnabled
+      ? defaults.machineToken[currency.chainId as keyof typeof defaults.machineToken]?.token
+      : undefined
+    for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
+      if (settlements.has(key(currency.chainId, token))) continue
+      settlements.set(key(currency.chainId, token), method.extensions!.settleScheduled)
+      verifiers.set(key(currency.chainId, token), (channelId) => verifyStream_(method, channelId))
+    }
     return { ...method, extensions }
   }
   return [create(first), ...rest.map(create)] as const

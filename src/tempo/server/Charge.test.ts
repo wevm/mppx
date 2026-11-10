@@ -7453,9 +7453,11 @@ describe('direct MACH pull payments', () => {
             if (method === 'eth_call') {
               const [{ data, input }] = params as [{ data?: Hex.Hex; input?: Hex.Hex }]
               const calldata = data ?? input
-              // MACH balance reads cover the payment; simulations succeed.
+              // Balance reads cover the payment and a stablecoin for gas; simulations succeed.
               if (calldata?.startsWith('0x70a08231'))
                 return encodeAbiParameters([{ type: 'uint256' }], [10_000_000n])
+              if (calldata?.startsWith('0x313ce567'))
+                return encodeAbiParameters([{ type: 'uint8' }], [6])
               return '0x'
             }
             if (method === 'eth_sendRawTransactionSync') {

@@ -9,7 +9,7 @@ import * as Credential from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Mppx from '../../server/Mppx.js'
 import * as Store from '../../Store.js'
-import { tokens } from '../internal/defaults.js'
+import { machineToken, tokens } from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Chain from '../session/precompile/Chain.js'
 import type * as ChannelStore from '../session/server/ChannelStore.js'
@@ -204,6 +204,34 @@ test.each(
     }
   },
 )
+
+test('machineTokenEnabled sessions settle MACH channels', async () => {
+  const settle = vi.spyOn(Settlement, 'maybeSettleScheduled').mockResolvedValue('0x01')
+  try {
+    const channel = {
+      backend: 'precompile',
+      chainId: 4217,
+      token: machineToken[4217].token,
+      spent: 1_000_000n,
+      settledOnChain: 0n,
+      units: 1,
+      createdAt: new Date().toISOString(),
+      highestVoucher: { cumulativeAmount: 1_000_000n },
+    } as unknown as ChannelStore.State
+    const create = (machineTokenEnabled: boolean) =>
+      Mppx.create({
+        methods: [tempo({ ...config, machineTokenEnabled, settlementSchedule: { amount: '1' } })],
+        secretKey,
+      })
+
+    expect(await create(true).tempo.session.settleScheduled(channel)).toBe('0x01')
+    expect(() => create(false).tempo.session.settleScheduled(channel)).toThrow(
+      'Channel currency is not configured',
+    )
+  } finally {
+    settle.mockRestore()
+  }
+})
 
 describe('common currency offers', () => {
   test('exports common as an alias and supports omitted parameters', () => {

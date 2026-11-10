@@ -41,8 +41,10 @@ function createChallenge(
 }
 
 function mockMachFeeSelection() {
+  // The payer's pathUSD, the only stablecoin it can pay gas with.
+  const balances = { pathUsd: 1n }
   const getBalance = vi.fn(async (_client: unknown, parameters: { token: Address }) => ({
-    amount: isAddressEqual(parameters.token, Addresses.pathUsd) ? 1n : 0n,
+    amount: isAddressEqual(parameters.token, Addresses.pathUsd) ? balances.pathUsd : 0n,
   }))
   const getUserToken = vi.fn(async () => ({ address: defaults.machineToken[42431].token }))
 
@@ -58,7 +60,7 @@ function mockMachFeeSelection() {
     }
   })
 
-  return { getBalance, getUserToken }
+  return { balances, getBalance, getUserToken }
 }
 
 describe('tempo.charge client', () => {
@@ -621,6 +623,7 @@ describe('tempo.charge client', () => {
 
   test('passes machine-token calls to a scoped account resolver', async () => {
     vi.resetModules()
+    mockMachFeeSelection()
     const chainId = 42431
     const selectedAccount = privateKeyToAccount(
       '0x0000000000000000000000000000000000000000000000000000000000000002',
@@ -689,6 +692,7 @@ describe('tempo.charge client', () => {
       )
       expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${selectedAccount.address}`)
     } finally {
+      vi.doUnmock('viem/tempo')
       vi.doUnmock('viem/actions')
       vi.doUnmock('../internal/machine-token-charge.js')
       vi.resetModules()
@@ -1867,7 +1871,7 @@ describe('zero-amount recipient policy', () => {
 describe('tempo.charge client: machineTokenDirect', () => {
   test('pays MACH directly when the account can, without the swapper', async () => {
     vi.resetModules()
-    mockMachFeeSelection()
+    const fees = mockMachFeeSelection()
     const chainId = 42431
     const mach = defaults.machineToken[chainId].token
     let canPay = true
@@ -1928,6 +1932,28 @@ describe('tempo.charge client: machineTokenDirect', () => {
       await allowlisted.createCredential({ challenge: challenge(), context: {} })
       expect(prepareTransactionRequest.mock.calls[2]?.[1].calls).toEqual([
         expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+      ])
+
+      // MACH cannot pay gas: an unsponsored payer without a stablecoin pays the charge currency.
+      fees.balances.pathUsd = 0n
+      await method.createCredential({ challenge: challenge(), context: {} })
+      expect(prepareTransactionRequest.mock.calls[3]?.[1].calls).toEqual([
+        expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+      ])
+      // A sponsored pull payment still pays MACH.
+      await method.createCredential({
+        challenge: createChallenge({
+          amount: '1',
+          chainId,
+          feePayer: true,
+          machineTokenDirect: true,
+          machineTokenEnabled: true,
+          supportedModes: ['pull'],
+        }),
+        context: {},
+      })
+      expect(prepareTransactionRequest.mock.calls[4]?.[1].calls).toEqual([
+        expect.objectContaining({ address: mach, functionName: 'transferWithMemo' }),
       ])
     } finally {
       vi.doUnmock('viem/actions')
