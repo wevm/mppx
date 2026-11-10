@@ -8,7 +8,7 @@ const currency = '0x20c000000000000000000000f37de3740ADec032'
 const merchant = '0x40def0Cf3B5d28B6e9a7976BA10591e515AfECFE'
 const stranger = '0x1111111111111111111111111111111111111111'
 
-function policyClient(options: { allowed: readonly string[]; fail?: boolean }) {
+function policyClient(options: { allowed: readonly string[]; fail?: boolean; policyId?: bigint }) {
   let calls = 0
   const client = createClient({
     transport: custom(
@@ -30,7 +30,7 @@ function policyClient(options: { allowed: readonly string[]; fail?: boolean }) {
             return encodeFunctionResult({
               abi: Abis.tip20,
               functionName: 'transferPolicyId',
-              result: 583n,
+              result: options.policyId ?? 583n,
             })
           }
         },
@@ -67,17 +67,47 @@ describe('areRecipientsAuthorized', () => {
     ).resolves.toBe(false)
   })
 
-  test('caches authorized recipients but rechecks rejected ones', async () => {
+  test('caches authorized recipients and rejected ones for a minute', async () => {
     const allowed: string[] = []
     const { client, calls } = policyClient({ allowed })
     await expect(
       areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] }),
     ).resolves.toBe(false)
     allowed.push(merchant)
-    await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
-    const afterApproval = calls()
-    await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
-    expect(calls()).toBe(afterApproval)
+    const afterRejection = calls()
+    await expect(
+      areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] }),
+    ).resolves.toBe(false)
+    expect(calls()).toBe(afterRejection)
+
+    vi.useFakeTimers({ now: Date.now() + 60_000 + 1, toFake: ['Date'] })
+    try {
+      await expect(
+        areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] }),
+      ).resolves.toBe(true)
+      const afterApproval = calls()
+      await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
+      expect(calls()).toBe(afterApproval)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('treats built-in policy 0 as rejecting and 1 as allowing every recipient', async () => {
+    await expect(
+      areRecipientsAuthorized(policyClient({ allowed: [merchant], policyId: 0n }).client, {
+        chainId: 6,
+        currency,
+        recipients: [merchant],
+      }),
+    ).resolves.toBe(false)
+    await expect(
+      areRecipientsAuthorized(policyClient({ allowed: [], policyId: 1n }).client, {
+        chainId: 7,
+        currency,
+        recipients: [stranger],
+      }),
+    ).resolves.toBe(true)
   })
 
   test('reads the policy again once a cached authorization expires', async () => {
