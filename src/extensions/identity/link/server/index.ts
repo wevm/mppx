@@ -647,8 +647,9 @@ async function getJson(
 
 /**
  * The `Identity-Presentation` challenge, carrying the claims challenge too (anyOf and precedence
- * can replace the body, never the challenges) unless it would make headers too large for common
- * HTTP clients, such as Node's 16 KiB limit: then the body alone carries it.
+ * can replace the body, never the challenges) unless it is long: then the body alone carries it.
+ * The cap keeps headers under common client limits (Node's is 16 KiB) even when `anyOf` merges
+ * several alternatives' challenges; a typical challenge is well under it.
  */
 function headerChallenge(body: object): string {
   const encoded = toBase64(new TextEncoder().encode(JSON.stringify(body)))
@@ -656,8 +657,8 @@ function headerChallenge(body: object): string {
   return `${Constants.presentationHeader} challenge="${encoded}"`
 }
 
-/** Longest `challenge` parameter sent in `WWW-Authenticate`. */
-const maxHeaderChallenge = 8_192
+/** Longest `challenge` parameter sent in `WWW-Authenticate`: 2 KiB leaves room for 6 alternatives. */
+const maxHeaderChallenge = 2_048
 
 /** Milliseconds a failed issuer fetch is reused before Link is asked again. */
 const failureBackoff = 30_000
