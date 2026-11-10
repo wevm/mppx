@@ -8,7 +8,6 @@ import {
   type Address,
   type Hex,
 } from 'viem'
-import { worldchain } from 'viem/chains'
 
 import type * as Identity from '../../../../identity/Types.js'
 import * as Store from '../../../../Store.js'
@@ -36,15 +35,19 @@ const abi = [
  *
  * @example
  * ```ts
- * const human = World.Server.verifier({ nonceStore: Store.memory() })
+ * const human = World.Server.verifier({
+ *   nonceStore: Store.redis(redis),
+ *   origins: ['https://api.example'],
+ *   rpcUrl: process.env.WORLD_CHAIN_RPC_URL,
+ * })
  * mppx.charge({ amount: '0.01', identity: [human] })
  * ```
  */
 export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedAgent> {
   const maxAge = config.maxAge ?? Constants.maxAge
-  const lookup = cached(agentBook(config.agentBook))
+  const lookup = cached(agentBook({ rpcUrl: config.rpcUrl, ...config.agentBook }))
   const clients = signingClients(config)
-  const origins = config.origins?.map((origin) => new URL(origin).origin)
+  const origins = config.origins.map((origin) => new URL(origin).origin)
   return {
     async verify(request) {
       const header = request.headers.get(Constants.header)
@@ -56,7 +59,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       const payload = parse(header)
       if (!payload) return { status: 'invalid', reason: 'The agentkit header is malformed.' }
 
-      const reason = check(payload, new URL(request.url), origins, maxAge)
+      const reason = check(payload, origins, maxAge)
       if (reason) return { status: 'invalid', reason }
 
       const chainId = Number(payload.chainId.slice('eip155:'.length))
@@ -127,26 +130,30 @@ export declare namespace verifier {
   type Config = {
     /** Atomically claims each message nonce, shared across instances. */
     nonceStore: Store.AtomicStore
-    /** Where to read AgentBook. Defaults to the canonical World Chain deployment. */
-    agentBook?: agentBook.Config | undefined
     /**
-     * RPC URLs by signing chain ID, to verify smart-account (ERC-1271 and ERC-6492) signatures
-     * from payloads typed `eip1271`.
-     * World Chain (480), where AgentBook lives, uses its public RPC unless set here. Add another
-     * chain only if its accounts are controlled as on World Chain: the same address can belong to
-     * someone else on another chain, and AgentBook does not record which chain registered it.
-     * Smart accounts on other chains are rejected.
+     * The server's public origins, such as `['https://api.example']`. The signed domain and URI
+     * must match one of them. The request's own URL is never used: its host comes from the
+     * `Host` header, so a header signed for another site could be replayed here.
+     */
+    origins: readonly string[]
+    /**
+     * Your World Chain RPC URL, for AgentBook lookups and World Chain smart-account signatures.
+     * Any request can trigger a lookup, so use a provider you control and rate-limit, not a
+     * shared public endpoint.
+     */
+    rpcUrl: string
+    /** Overrides for AgentBook, such as its address or a client for tests. */
+    agentBook?: Omit<agentBook.Config, 'rpcUrl'> | undefined
+    /**
+     * RPC URLs for other signing chains, to verify smart-account (ERC-1271 and ERC-6492)
+     * signatures from payloads typed `eip1271`. World Chain uses `rpcUrl`. Add a chain only if
+     * its accounts are controlled as on World Chain: the same address can belong to someone else
+     * on another chain, and AgentBook does not record which chain registered it. Smart accounts
+     * on other chains are rejected.
      */
     rpcUrls?: Record<number, string> | undefined
     /** Clients by signing chain ID, taking precedence over `rpcUrls`, such as for tests. */
     clients?: Record<number, SigningClient> | undefined
-    /**
-     * The server's public origins, such as `['https://api.example']`. The signed domain and URI
-     * must match one of them. When unset, they are compared with the request's URL, whose host
-     * comes from the `Host` header: then a header the agent signed for another site, sent with
-     * that site's `Host`, is accepted here. Set it in production.
-     */
-    origins?: readonly string[] | undefined
     /** Maximum age, in seconds, of a signed message. @default 300 */
     maxAge?: number | undefined
   }
@@ -161,14 +168,9 @@ type SigningClient = {
   }) => Promise<boolean>
 }
 
-/** Public RPC for World Chain, where AgentBook resolves the human. */
-const defaultRpcUrls: Record<number, string> = {
-  [worldchain.id]: worldchain.rpcUrls.default.http[0],
-}
-
 /** One client per allowed signing chain: never an RPC the request names. */
 function signingClients(config: verifier.Config): Map<number, SigningClient> {
-  const urls = { ...defaultRpcUrls, ...config.rpcUrls }
+  const urls = { [Constants.worldChainId]: config.rpcUrl, ...config.rpcUrls }
   const clients = new Map<number, SigningClient>()
   for (const [id, url] of Object.entries(urls))
     clients.set(
@@ -216,24 +218,36 @@ export declare namespace agentBook {
 /** How long, in milliseconds, an AgentBook answer is reused, so floods of requests share calls. */
 const lookupTtl = { registered: 60_000, unregistered: 10_000 }
 
-/** Caches AgentBook answers briefly and shares in-flight lookups for the same wallet. */
+/** The most wallets each cache holds; the oldest entry goes first. */
+const lookupLimit = 10_000
+
+/**
+ * Caches AgentBook answers briefly and shares in-flight lookups for the same wallet. Registered
+ * and unregistered wallets are kept apart, so a flood of fresh wallets never evicts real agents.
+ */
 function cached(lookup: (agent: Address) => Promise<string | undefined>) {
-  const entries = new Map<string, { expires: number; value: Promise<string | undefined> }>()
+  type Entry = { expires: number; value: Promise<string | undefined> }
+  const registered = new Map<string, Entry>()
+  const other = new Map<string, Entry>()
+  const put = (entries: Map<string, Entry>, key: string, entry: Entry) => {
+    entries.delete(key)
+    if (entries.size >= lookupLimit) entries.delete(entries.keys().next().value!)
+    entries.set(key, entry)
+  }
   return (agent: Address) => {
     const key = agent.toLowerCase()
     const now = Date.now()
-    const entry = entries.get(key)
+    const entry = registered.get(key) ?? other.get(key)
     if (entry && entry.expires > now) return entry.value
-    if (entries.size >= 10_000) entries.clear()
     const value = lookup(agent)
-    entries.set(key, { expires: Number.POSITIVE_INFINITY, value })
+    put(other, key, { expires: Number.POSITIVE_INFINITY, value })
     value.then(
-      (humanId) =>
-        entries.set(key, {
-          expires: Date.now() + (humanId ? lookupTtl.registered : lookupTtl.unregistered),
-          value,
-        }),
-      () => entries.delete(key),
+      (humanId) => {
+        other.delete(key)
+        if (humanId) put(registered, key, { expires: Date.now() + lookupTtl.registered, value })
+        else put(other, key, { expires: Date.now() + lookupTtl.unregistered, value })
+      },
+      () => other.delete(key),
     )
     return value
   }
@@ -280,8 +294,7 @@ function parse(header: string): Types.Payload | undefined {
 /** Returns why a message does not fit the request, or `undefined` when it does. */
 function check(
   payload: Types.Payload,
-  url: URL,
-  origins: readonly string[] | undefined,
+  origins: readonly string[],
   maxAge: number,
 ): string | undefined {
   let uri: URL
@@ -290,13 +303,8 @@ function check(
   } catch {
     return 'The agentkit message URI is invalid.'
   }
-  if (origins) {
-    if (!origins.includes(uri.origin)) return 'The agentkit message is for another URI.'
-    if (payload.domain !== uri.hostname) return 'The agentkit message is for another domain.'
-  } else {
-    if (payload.domain !== url.hostname) return 'The agentkit message is for another domain.'
-    if (uri.host !== url.host) return 'The agentkit message is for another URI.'
-  }
+  if (!origins.includes(uri.origin)) return 'The agentkit message is for another URI.'
+  if (payload.domain !== uri.hostname) return 'The agentkit message is for another domain.'
   const now = Date.now()
   const issuedAt = Date.parse(payload.issuedAt)
   if (Number.isNaN(issuedAt)) return 'The agentkit message has no valid issuedAt.'

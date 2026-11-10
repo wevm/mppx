@@ -32,6 +32,9 @@ function agentBook(registered: Record<string, bigint>, options: { fail?: boolean
 /** Smart-account clients that never reach the network and accept nothing. */
 const offline = { 480: { verifyMessage: async () => false } }
 
+/** Required settings: the test origin and an RPC no test reaches. */
+const base = { origins: ['https://api.example'], rpcUrl: 'http://127.0.0.1:1' }
+
 const registered = () => agentBook({ [account.address.toLowerCase()]: humanId })
 
 let attempt = 0
@@ -46,6 +49,7 @@ async function signed(url = 'https://api.example/report', signer = account) {
 test('accepts a registered agent and returns its human', async () => {
   const book = registered()
   const verifier = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: book,
     nonceStore: Store.memory(),
@@ -75,6 +79,7 @@ test('sends the AgentKit payload in the agentkit header', async () => {
 test('rejects a missing, unregistered, replayed, tampered or misdirected message', async () => {
   const nonceStore = Store.memory()
   const verifier = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: agentBook({}),
     nonceStore,
@@ -90,6 +95,7 @@ test('rejects a missing, unregistered, replayed, tampered or misdirected message
   )
 
   const once = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: registered(),
     nonceStore: Store.memory(),
@@ -119,7 +125,7 @@ test('rejects a missing, unregistered, replayed, tampered or misdirected message
   const moved = new Request('https://api.example/report', { headers: elsewhere.headers })
   expect(await once.verify(moved)).toMatchObject({
     status: 'invalid',
-    reason: expect.stringContaining('domain'),
+    reason: expect.stringContaining('another URI'),
   })
 
   expect(
@@ -136,6 +142,7 @@ test('rejects a stale message and maps an AgentBook outage to unavailable', asyn
     nonce: 'stale-attempt',
   })
   const verifier = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: registered(),
     nonceStore: Store.memory(),
@@ -146,6 +153,7 @@ test('rejects a stale message and maps an AgentBook outage to unavailable', asyn
   })
 
   const down = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: agentBook({}, { fail: true }),
     nonceStore: Store.memory(),
@@ -180,6 +188,7 @@ test('gates a paid route before its 402', async () => {
     secretKey: 'test-secret-key-test-secret-key-32',
   })
   const human = World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: registered(),
     nonceStore: Store.memory(),
@@ -216,6 +225,7 @@ test('verifies smart-account signatures on the signing chain only', async () => 
     })
 
   const verifier = World.Server.verifier({
+    ...base,
     agentBook: book,
     clients: {
       8453: {
@@ -235,6 +245,7 @@ test('verifies smart-account signatures on the signing chain only', async () => 
 
   // No client for the signing chain: rejected without an RPC call.
   const elsewhere = World.Server.verifier({
+    ...base,
     agentBook: book,
     clients: {},
     nonceStore: Store.memory(),
@@ -255,6 +266,7 @@ test('verifies smart-account signatures on the signing chain only', async () => 
   ).toMatchObject({ status: 'invalid' })
 
   const down = World.Server.verifier({
+    ...base,
     agentBook: book,
     clients: {
       8453: {
@@ -302,6 +314,7 @@ async function craft(
 
 const verifierFor = (config: Partial<World.Server.verifier.Config> = {}) =>
   World.Server.verifier({
+    ...base,
     clients: offline,
     agentBook: registered(),
     nonceStore: Store.memory(),
@@ -368,13 +381,15 @@ test('enforces the message lifetime', async () => {
   }
 })
 
-test('binds the message to the host, including its port', async () => {
-  const verifier = verifierFor()
-  const url = 'http://localhost:8787/report'
-  expect((await verifier.verify(await craft({}, { url }))).status).toBe('valid')
+test('binds the message to the origin, including its port', async () => {
+  const local = verifierFor({ origins: ['http://localhost:8787'] })
   expect(
-    await verifier.verify(await craft({}, { url, target: 'http://localhost:9999/report' })),
+    (await local.verify(await craft({}, { url: 'http://localhost:8787/report' }))).status,
+  ).toBe('valid')
+  expect(
+    await local.verify(await craft({}, { url: 'http://localhost:9999/report' })),
   ).toMatchObject({ status: 'invalid', reason: expect.stringContaining('URI') })
+  const verifier = verifierFor()
   // Another path on the same host is accepted: AgentKit binds the host, not the path.
   expect(
     (await verifier.verify(await craft({}, { target: 'https://api.example/other' }))).status,
@@ -540,7 +555,7 @@ test('runs the full client flow: signs each attempt and binds the paid retry', a
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',
   })
-  const human = verifierFor()
+  let human = verifierFor()
   const payloads: World.Payload[] = []
   const issued: string[] = []
   const listener = ServerRequest.toNodeListener(async (request) => {
@@ -560,6 +575,7 @@ test('runs the full client flow: signs each attempt and binds the paid retry', a
   })
   const server = await Http.createServer(((request, response) =>
     listener(request, response)) as RequestListener)
+  human = verifierFor({ origins: [server.url] })
 
   try {
     const client = ClientMppx.create({
@@ -600,7 +616,11 @@ test('runs the full client flow: signs each attempt and binds the paid retry', a
 
 test('verifies smart accounts on World Chain only unless configured', async () => {
   // A smart account typed eip1271 on Base, with no Base RPC configured, is rejected locally.
-  const verifier = World.Server.verifier({ agentBook: registered(), nonceStore: Store.memory() })
+  const verifier = World.Server.verifier({
+    ...base,
+    agentBook: registered(),
+    nonceStore: Store.memory(),
+  })
   expect(
     await verifier.verify(
       await craft(
@@ -611,11 +631,10 @@ test('verifies smart accounts on World Chain only unless configured', async () =
   ).toMatchObject({ status: 'invalid', reason: expect.stringContaining('signature') })
 })
 
-test('binds the message to configured origins instead of the Host header', async () => {
+test('binds the message to its origins, never the Host header', async () => {
   // Signed for another site the agent talks to, then sent here with that site's Host.
   const elsewhere = await craft({}, { url: 'https://evil.example/api/report' })
-  expect((await verifierFor().verify(elsewhere.clone())).status).toBe('valid')
-  const pinned = verifierFor({ origins: ['https://api.example'] })
+  const pinned = verifierFor()
   expect(await pinned.verify(elsewhere)).toMatchObject({
     status: 'invalid',
     reason: expect.stringContaining('URI'),

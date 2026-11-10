@@ -42,7 +42,8 @@ const mppx = Mppx.create({
 
 // Verifies the `agentkit` header and resolves the agent to its human in AgentBook.
 const human = World.Server.verifier({
-  agentBook: { rpcUrl: process.env.WORLD_RPC_URL },
+  // Use your own World Chain RPC in production: any request can trigger a lookup.
+  rpcUrl: process.env.WORLD_RPC_URL ?? World.Constants.rpcUrl,
   nonceStore: store,
   // The origin agents sign for. Without it, the Host header decides, so a header signed for
   // another site could be replayed here.
