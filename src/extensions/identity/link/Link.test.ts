@@ -7,7 +7,7 @@ import { Mppx as ClientMppx } from 'mppx/client'
 import * as Link from 'mppx/extensions/identity/link'
 import type * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
-import { afterEach, expect, test } from 'vp/test'
+import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 const method = Method.from({
@@ -459,18 +459,18 @@ test('presentationVerifier fetches rotated credential keys', async () => {
   const present = (holder: CredentialFixture) =>
     holder.present({ aud: audience, disclose: ['email', 'email_verified'], nonce: 'n1' })
   expect((await verifier.verifyClaims(await present(credential), options)).valid).toBe(true)
-  // Link rotates its credential key: the cached keys no longer verify the new credential.
+  // Link rotates its credential key: refused while the cached keys are fresh, then accepted.
   current = await CredentialFixture.create({
     claims: { email: 'a@b.c', email_verified: true },
     issuerUrl: link.issuer,
   })
-  expect((await verifier.verifyClaims(await present(current), options)).valid).toBe(true)
-  // A forged credential right after does not trigger another fetch, and fails.
-  const forged = await CredentialFixture.create({
-    claims: { email: 'x@y.z' },
-    issuerUrl: link.issuer,
-  })
-  expect((await verifier.verifyClaims(await present(forged), options)).valid).toBe(false)
+  expect((await verifier.verifyClaims(await present(current), options)).valid).toBe(false)
+  vi.useFakeTimers({ now: Date.now() + 301_000, toFake: ['Date'] })
+  try {
+    expect((await verifier.verifyClaims(await present(current), options)).valid).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 test('eager sends a token on the first request', async () => {
