@@ -1,9 +1,13 @@
-import { Method, Receipt, Store, z } from 'mppx'
+import type { RequestListener } from 'node:http'
+
+import { Challenge, Credential, Method, Receipt, Store, z } from 'mppx'
+import { Mppx as ClientMppx } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
-import { Mppx } from 'mppx/server'
+import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { Base64 } from 'ox'
 import { privateKeyToAccount } from 'viem/accounts'
 import { expect, test } from 'vp/test'
+import * as Http from '~test/Http.js'
 
 const account = privateKeyToAccount(
   '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
@@ -262,4 +266,329 @@ test('verifies smart-account signatures on the signing chain only', async () => 
     nonceStore: Store.memory(),
   })
   expect(await down.verify(await prove('smart-3'))).toMatchObject({ status: 'unavailable' })
+})
+
+/** Signs an AgentKit payload as @worldcoin/agentkit's client does, with fields overridden. */
+async function craft(
+  overrides: Record<string, unknown> = {},
+  options: { url?: string; target?: string; signer?: typeof account; signature?: string } = {},
+) {
+  const url = options.url ?? 'https://api.example/report'
+  const fields = {
+    domain: new URL(url).hostname,
+    address: (options.signer ?? account).address,
+    statement: World.Constants.statement,
+    uri: url,
+    version: '1',
+    chainId: 'eip155:480',
+    type: 'eip191',
+    nonce: 'n' + ++attempt + Math.random().toString(36).slice(2),
+    issuedAt: new Date().toISOString(),
+    ...overrides,
+  } as World.Payload
+  let signature = options.signature
+  if (!signature)
+    try {
+      signature = await (options.signer ?? account).signMessage({
+        message: World.Client.message(fields),
+      })
+    } catch {
+      signature = '0x'
+    }
+  return new Request(options.target ?? url, {
+    headers: { agentkit: Base64.fromString(JSON.stringify({ ...fields, signature })) },
+  })
+}
+
+const verifierFor = (config: Partial<World.Server.verifier.Config> = {}) =>
+  World.Server.verifier({
+    clients: offline,
+    agentBook: registered(),
+    nonceStore: Store.memory(),
+    ...config,
+  })
+
+const key = (byte: string) => privateKeyToAccount(('0x' + byte.repeat(32)) as never)
+
+test('builds the same SIWE message as @worldcoin/agentkit', () => {
+  // Generated with formatSIWEMessage from @worldcoin/agentkit 0.2.1.
+  const expected =
+    'api.example wants you to sign in with your Ethereum account:\n0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1\n\nVerify your agent is backed by a real human\n\nURI: https://api.example/report\nVersion: 1\nChain ID: 480\nNonce: 0123456789abcdef\nIssued At: 2026-11-10T00:00:00.000Z\nRequest ID: chal_1\nResources:\n- https://api.example/a'
+  expect(
+    World.Client.message({
+      domain: 'api.example',
+      address: '0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1',
+      statement: 'Verify your agent is backed by a real human',
+      uri: 'https://api.example/report',
+      version: '1',
+      chainId: 'eip155:480',
+      type: 'eip191',
+      nonce: '0123456789abcdef',
+      issuedAt: '2026-11-10T00:00:00.000Z',
+      requestId: 'chal_1',
+      resources: ['https://api.example/a'],
+    }),
+  ).toBe(expected)
+})
+
+test('accepts payloads with the optional AgentKit fields', async () => {
+  const verifier = verifierFor()
+  for (const overrides of [
+    { statement: undefined },
+    { expirationTime: new Date(Date.now() + 60_000).toISOString() },
+    { notBefore: new Date(Date.now() - 1_000).toISOString() },
+    { requestId: 'chal_1', resources: ['https://api.example/a'] },
+    // Unknown fields, such as AgentKit's signatureScheme, are ignored.
+    { signatureScheme: 'eip191' },
+  ])
+    expect((await verifier.verify(await craft(overrides))).status).toBe('valid')
+})
+
+test('enforces the message lifetime', async () => {
+  const verifier = verifierFor({ maxAge: 60 })
+  const at = (offset: number) => new Date(Date.now() + offset).toISOString()
+  const cases: [Record<string, unknown>, string][] = [
+    [{ issuedAt: at(-55_000) }, 'valid'],
+    [{ issuedAt: at(-65_000) }, 'too old'],
+    [{ issuedAt: at(20_000) }, 'valid'],
+    [{ issuedAt: at(40_000) }, 'future'],
+    [{ issuedAt: 'yesterday' }, 'issuedAt'],
+    [{ expirationTime: at(-1) }, 'expired'],
+    [{ expirationTime: 'never' }, 'expired'],
+    [{ notBefore: at(60_000) }, 'not valid yet'],
+  ]
+  for (const [overrides, expected] of cases) {
+    const result = await verifier.verify(await craft(overrides))
+    if (expected === 'valid') expect(result.status).toBe('valid')
+    else
+      expect(result).toMatchObject({
+        status: 'invalid',
+        reason: expect.stringContaining(expected),
+      })
+  }
+})
+
+test('binds the message to the host, including its port', async () => {
+  const verifier = verifierFor()
+  const url = 'http://localhost:8787/report'
+  expect((await verifier.verify(await craft({}, { url }))).status).toBe('valid')
+  expect(
+    await verifier.verify(await craft({}, { url, target: 'http://localhost:9999/report' })),
+  ).toMatchObject({ status: 'invalid', reason: expect.stringContaining('URI') })
+  // Another path on the same host is accepted: AgentKit binds the host, not the path.
+  expect(
+    (await verifier.verify(await craft({}, { target: 'https://api.example/other' }))).status,
+  ).toBe('valid')
+  expect(await verifier.verify(await craft({ uri: 'not a url' }))).toMatchObject({
+    status: 'invalid',
+  })
+  expect(await verifier.verify(await craft({ domain: 'evil.example' }))).toMatchObject({
+    status: 'invalid',
+    reason: expect.stringContaining('domain'),
+  })
+})
+
+test('rejects malformed headers without throwing', async () => {
+  const verifier = verifierFor()
+  for (const value of [
+    'nope',
+    Base64.fromString('null'),
+    Base64.fromString('[]'),
+    Base64.fromString('{"domain":1}'),
+  ])
+    expect(
+      await verifier.verify(new Request('https://api.example', { headers: { agentkit: value } })),
+    ).toMatchObject({ status: 'invalid' })
+
+  for (const overrides of [
+    { chainId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' },
+    { chainId: '480' },
+    { address: '0x1234' },
+    { address: 'So11111111111111111111111111111111111111112' },
+    { type: 'ed25519' },
+    { version: 2 },
+    { resources: {} },
+    { resources: [1] },
+    { requestId: 7 },
+    { statement: ['x'] },
+    // Fields viem refuses to put in a SIWE message.
+    { nonce: 'short' },
+    { nonce: 'not-alphanumeric!' },
+    { statement: 'line\nbreak' },
+  ])
+    expect(await verifier.verify(await craft(overrides))).toMatchObject({ status: 'invalid' })
+})
+
+test('derives a valid SIWE nonce from any attempt nonce', async () => {
+  const verifier = verifierFor()
+  const prover = World.Client.prover({ account, scope: '*' })
+  for (const nonce of ['a', '-_', 'x'.repeat(200)]) {
+    const request = await prover.prove(new Request('https://api.example'), {
+      created: Math.floor(Date.now() / 1000),
+      nonce,
+    })
+    expect((await verifier.verify(request)).status).toBe('valid')
+  }
+})
+
+test('claims nonces per agent, shared across verifiers on one store', async () => {
+  const nonceStore = Store.memory()
+  const other = key('22')
+  const book = agentBook({
+    [account.address.toLowerCase()]: humanId,
+    [other.address.toLowerCase()]: 7n,
+  })
+  const a = verifierFor({ agentBook: book, nonceStore })
+  const b = verifierFor({ agentBook: book, nonceStore })
+  const first = await craft({ nonce: 'sharednonce1' })
+  expect((await a.verify(first.clone())).status).toBe('valid')
+  expect((await b.verify(first)).status).toBe('invalid')
+  // The same nonce from another agent is a different claim.
+  expect(await a.verify(await craft({ nonce: 'sharednonce1' }, { signer: other }))).toMatchObject({
+    status: 'valid',
+    value: { humanId: '0x7' },
+  })
+})
+
+test('maps a nonce store failure to unavailable before reading AgentBook', async () => {
+  const book = registered()
+  const fail = async () => {
+    throw new Error('store down')
+  }
+  const nonceStore = { ...Store.memory(), update: fail, tryClaim: fail } as never
+  const verifier = verifierFor({ agentBook: book, nonceStore })
+  expect(await verifier.verify(await craft())).toMatchObject({ status: 'unavailable' })
+  expect(book.calls).toHaveLength(0)
+})
+
+test('checks the signature before claiming the nonce or reading AgentBook', async () => {
+  const book = registered()
+  const verifier = verifierFor({ agentBook: book })
+  const intruder = key('33')
+  // Signed by another key for the registered address.
+  const forged = await craft(
+    { nonce: 'forgednonce1' },
+    { signer: { ...intruder, address: account.address } as typeof account },
+  )
+  expect(await verifier.verify(forged)).toMatchObject({ status: 'invalid' })
+  expect(book.calls).toHaveLength(0)
+  // The forgery did not use up the agent's nonce.
+  expect((await verifier.verify(await craft({ nonce: 'forgednonce1' }))).status).toBe('valid')
+})
+
+test('skips the smart-account check for a valid EOA signature', async () => {
+  const calls: unknown[] = []
+  const verifier = verifierFor({
+    clients: {
+      480: {
+        async verifyMessage(parameters) {
+          calls.push(parameters)
+          return false
+        },
+      },
+    },
+  })
+  expect((await verifier.verify(await craft())).status).toBe('valid')
+  expect(calls).toHaveLength(0)
+  const bad = await craft({}, { signature: '0x' + '00'.repeat(65) })
+  expect((await verifier.verify(bad)).status).toBe('invalid')
+  expect(calls).toHaveLength(1)
+})
+
+test('reads a custom AgentBook deployment', async () => {
+  const book = registered()
+  const address = '0x000000000000000000000000000000000000dEaD'
+  const verifier = verifierFor({ agentBook: { ...book, address } })
+  expect((await verifier.verify(await craft())).status).toBe('valid')
+  expect(book.calls[0]).toMatchObject({ address, functionName: 'lookupHuman' })
+  expect(await World.Server.agentBook({ client: agentBook({}).client })(account.address)).toBe(
+    undefined,
+  )
+})
+
+test('runs the full client flow: signs each attempt and binds the paid retry', async () => {
+  const testMethod = Method.from({
+    name: 'test',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
+    },
+  })
+  const serverMethod = Method.toServer(testMethod, {
+    async verify() {
+      return Receipt.from({
+        method: 'test',
+        reference: 'r',
+        status: 'success',
+        timestamp: new Date().toISOString(),
+      })
+    },
+  })
+  const clientMethod = Method.toClient(testMethod, {
+    async createCredential({ challenge }) {
+      return Credential.serialize({ challenge, payload: { token: 'paid' } })
+    },
+  })
+  const mppx = Mppx.create({
+    methods: [serverMethod],
+    realm: 'localhost',
+    secretKey: 'test-secret-key-test-secret-key-32',
+  })
+  const human = verifierFor()
+  const payloads: World.Payload[] = []
+  const issued: string[] = []
+  const listener = ServerRequest.toNodeListener(async (request) => {
+    const header = request.headers.get('agentkit')
+    if (header) payloads.push(JSON.parse(Base64.toString(header)))
+    const result = await mppx.charge({
+      amount: '1',
+      currency: 'USD',
+      recipient: 'merchant',
+      identity: [human],
+    })(request)
+    if (result.status === 402) {
+      if (result.challenge.status === 402) issued.push(Challenge.fromResponse(result.challenge).id)
+      return result.challenge
+    }
+    return result.withReceipt(new Response(result.identity?.get(human)?.humanId))
+  })
+  const server = await Http.createServer(((request, response) =>
+    listener(request, response)) as RequestListener)
+
+  try {
+    const client = ClientMppx.create({
+      identity: [World.Client.prover({ account, scope: [server.url] })],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    const response = await client.fetch(server.url + '/report')
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('0x2a5')
+    expect(payloads).toHaveLength(2)
+    expect(payloads[0]!.requestId).toBeUndefined()
+    expect(payloads[1]!.nonce).not.toBe(payloads[0]!.nonce)
+    // The paid retry is signed over the Challenge it answers.
+    expect(issued).toHaveLength(1)
+    expect(payloads[1]!.requestId).toBe(issued[0])
+
+    // Out of scope: no signature, so the route asks for one.
+    const anonymous = ClientMppx.create({
+      identity: [World.Client.prover({ account, scope: ['https://elsewhere.example'] })],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    expect((await anonymous.fetch(server.url)).status).toBe(401)
+
+    const stranger = ClientMppx.create({
+      identity: [World.Client.prover({ account: key('44'), scope: '*' })],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    const forbidden = await stranger.fetch(server.url)
+    expect(forbidden.status).toBe(403)
+    expect(forbidden.headers.get('Link')).toContain('rel="register"')
+  } finally {
+    server.close()
+  }
 })

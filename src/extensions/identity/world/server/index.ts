@@ -52,9 +52,15 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       if (reason) return { status: 'invalid', reason }
 
       const chainId = Number(payload.chainId.slice('eip155:'.length))
+      let text: string
+      try {
+        text = message(payload)
+      } catch {
+        return { status: 'invalid', reason: 'The agentkit message is not a valid SIWE message.' }
+      }
       const parameters = {
         address: payload.address as Address,
-        message: message(payload),
+        message: text,
         signature: payload.signature as Hex,
       }
       let valid = false
@@ -200,6 +206,14 @@ function parse(header: string): Types.Payload | undefined {
       'signature',
     ]
     if (!value || strings.some((name) => typeof value[name] !== 'string')) return undefined
+    const optional = ['statement', 'expirationTime', 'notBefore', 'requestId']
+    if (optional.some((name) => value[name] !== undefined && typeof value[name] !== 'string'))
+      return undefined
+    if (
+      value.resources !== undefined &&
+      !(Array.isArray(value.resources) && value.resources.every((r) => typeof r === 'string'))
+    )
+      return undefined
     if (value.type !== 'eip191' && value.type !== 'eip1271') return undefined
     if (!/^eip155:\d+$/.test(value.chainId as string)) return undefined
     if (!/^0x[0-9a-fA-F]{40}$/.test(value.address as string)) return undefined

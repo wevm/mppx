@@ -1,4 +1,4 @@
-import { Base64, Hex } from 'ox'
+import { Base64, Hash, Hex } from 'ox'
 import type { Address } from 'viem'
 import { createSiweMessage } from 'viem/siwe'
 
@@ -35,8 +35,8 @@ export function prover(config: prover.Config): Identity.Prover {
         version: '1',
         chainId: `eip155:${chainId}`,
         type: config.type ?? 'eip191',
-        // SIWE nonces are alphanumeric: derive one from the attempt's random nonce.
-        nonce: Hex.fromString(context.nonce).slice(2, 34),
+        // SIWE nonces are alphanumeric and at least 8 characters: hash the attempt's nonce.
+        nonce: Hash.sha256(Hex.fromString(context.nonce)).slice(2, 34),
         issuedAt: issuedAt.toISOString(),
         ...(context.challenge && { requestId: context.challenge.id }),
       } as const
