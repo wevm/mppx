@@ -443,6 +443,36 @@ test('presentationVerifier verifies presentations like the Link SDK', async () =
   })
 })
 
+test('presentationVerifier fetches rotated credential keys', async () => {
+  clearJwksCache()
+  const link = await LinkFixture.create()
+  const audience = 'https://api.example'
+  const credential = (await CredentialFixture.create({
+    claims: { email: 'a@b.c', email_verified: true },
+    issuerUrl: link.issuer,
+  })) as CredentialFixture
+  let current = credential
+  const fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    combineFetch(link.fetchImpl(), current.fetchImpl())(input, init)) as typeof globalThis.fetch
+  const verifier = Link.Server.presentationVerifier({ audience, fetch })
+  const options = { nonce: 'n1', requiredClaims: ['email'] }
+  const present = (holder: CredentialFixture) =>
+    holder.present({ aud: audience, disclose: ['email', 'email_verified'], nonce: 'n1' })
+  expect((await verifier.verifyClaims(await present(credential), options)).valid).toBe(true)
+  // Link rotates its credential key: the cached keys no longer verify the new credential.
+  current = await CredentialFixture.create({
+    claims: { email: 'a@b.c', email_verified: true },
+    issuerUrl: link.issuer,
+  })
+  expect((await verifier.verifyClaims(await present(current), options)).valid).toBe(true)
+  // A forged credential right after does not trigger another fetch, and fails.
+  const forged = await CredentialFixture.create({
+    claims: { email: 'x@y.z' },
+    issuerUrl: link.issuer,
+  })
+  expect((await verifier.verifyClaims(await present(forged), options)).valid).toBe(false)
+})
+
 test('eager sends a token on the first request', async () => {
   const { fetch, link } = await createLink()
   const server = await createServer((origin) => [

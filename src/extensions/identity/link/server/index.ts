@@ -522,6 +522,7 @@ export function presentationVerifier(config: presentationVerifier.Config): Types
   const fetch = (input: string, init: RequestInit) =>
     base(input, init.redirect === 'error' ? { ...init, redirect: 'manual' } : init)
   const getMetadata = metadata({ fetch, issuer, maxAge: 3_600_000, timeout })
+  let refreshed = 0
 
   return {
     async verifyClaims(presentation, options) {
@@ -531,15 +532,28 @@ export function presentationVerifier(config: presentationVerifier.Config): Types
           failures: [{ code: 'incomplete_protocol_request', message: 'No Identity-Presentation.' }],
         }
       const { verifyClaimsPresentation } = await import('@stripe/agent-identity')
-      return verifyClaimsPresentation({
-        audience,
-        fetchImpl: fetch as typeof globalThis.fetch,
-        issuer: { issuer, getMetadata: () => getMetadata() } as never,
-        nonce: options.nonce,
-        presentation,
-        requiredClaims: [...options.requiredClaims],
-        timeoutMs: timeout,
-      })
+      const verify = (jwksTtlSeconds = 3_600) =>
+        verifyClaimsPresentation({
+          audience,
+          fetchImpl: fetch as typeof globalThis.fetch,
+          issuer: { issuer, getMetadata: () => getMetadata() } as never,
+          jwksTtlSeconds,
+          nonce: options.nonce,
+          presentation,
+          requiredClaims: [...options.requiredClaims],
+          timeoutMs: timeout,
+        })
+      const result = await verify()
+      // The SDK caches Link's credential keys for an hour and never refetches them for an
+      // unknown key, so after Link rotates its key, fetch them again (at most every 30 s).
+      if (
+        result.valid ||
+        !result.failures.some((failure) => failure.message.includes('issuer JWT signature')) ||
+        Date.now() - refreshed < 30_000
+      )
+        return result
+      refreshed = Date.now()
+      return verify(0)
     },
   }
 }

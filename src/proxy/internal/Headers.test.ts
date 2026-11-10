@@ -192,6 +192,20 @@ describe('scrubResponse', () => {
     )
   })
 
+  test('behavior: strips upstream identity challenges', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate':
+          'PrivateToken challenge="abc", token-key="def", Identity-Presentation realm="x", Bearer realm="api"',
+      },
+    })
+
+    expect(Headers.scrubResponse(response).headers.get('www-authenticate')).toBe(
+      'Bearer realm="api"',
+    )
+  })
+
   test('behavior: preserves non-payment authorization responses', () => {
     const result = Headers.scrubResponse(
       new Response('body', { headers: { Authorization: 'Bearer refreshed-token' } }),

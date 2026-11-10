@@ -11,6 +11,12 @@
 export const request = Object.freeze(['identity-attestation', 'identity-presentation'] as const)
 
 /**
+ * `WWW-Authenticate` schemes that ask for an identity, lowercased. A proxy removes them from
+ * upstream responses: the proxy, not the upstream, decides which identity the client presents.
+ */
+export const challenges = Object.freeze(['privatetoken', 'identity-presentation'] as const)
+
+/**
  * Identity response headers a proxy must not pass on from upstream: they ask the client for an
  * identity the proxy, not the upstream, decides on.
  */
