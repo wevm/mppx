@@ -6,6 +6,7 @@ import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   createClient,
   custom,
+  decodeFunctionData,
   encodeAbiParameters,
   encodeEventTopics,
   encodeFunctionData,
@@ -7427,5 +7428,90 @@ describe('tempo', () => {
 
       httpServer.close()
     })
+  })
+})
+
+describe('direct MACH pull payments', () => {
+  test('confirms a broadcast direct MACH transfer against MACH logs', async () => {
+    const mach = defaults.machineToken[defaults.chainId.testnet].token
+    const payer = privateKeyToAccount(generatePrivateKey())
+    const seen: string[] = []
+    let broadcast: Hex.Hex | undefined
+    const rpc = createClient({
+      chain: { ...chain, id: defaults.chainId.testnet },
+      transport: custom(
+        {
+          async request({ method, params }) {
+            seen.push(method)
+            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+            if (method === 'eth_getTransactionCount') return '0x0'
+            if (method === 'eth_estimateGas') return '0x30000'
+            if (method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (method === 'eth_gasPrice') return '0x1'
+            if (method === 'eth_getBlockByNumber')
+              return { baseFeePerGas: '0x1', number: '0x1', timestamp: '0x1' }
+            if (method === 'eth_call') {
+              const [{ data, input }] = params as [{ data?: Hex.Hex; input?: Hex.Hex }]
+              const calldata = data ?? input
+              // MACH balance reads cover the payment; simulations and policy reads succeed.
+              if (calldata?.startsWith('0x70a08231'))
+                return encodeAbiParameters([{ type: 'uint256' }], [10_000_000n])
+              return '0x'
+            }
+            if (method === 'eth_sendRawTransactionSync') {
+              const [serialized] = params as [Hex.Hex]
+              broadcast = keccak256(serialized)
+              const transaction = Transaction.deserialize(serialized as never) as {
+                calls: readonly { data: Hex.Hex }[]
+              }
+              const { args } = decodeFunctionData({
+                abi: Abis.tip20,
+                data: transaction.calls[0]!.data,
+              })
+              const [to, amount, memo] = args as readonly [Hex.Hex, bigint, Hex.Hex]
+              return directMachineTokenReceipt({
+                amount,
+                from: payer.address,
+                hash: broadcast,
+                memo,
+                recipient: to,
+              })
+            }
+            throw new Error(`Unexpected direct MACH pull RPC method: ${method}`)
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const server = Mppx_server.create({
+      methods: [
+        tempo_server.charge({
+          account: accounts[0],
+          currency: asset,
+          getClient: () => rpc,
+          machineTokenEnabled: true,
+          store: Store.memory(),
+          supportedModes: ['pull'],
+          testnet: true,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const result = await server.charge({ amount: '1', decimals: 6 })(
+      new Request('https://example.com'),
+    )
+    if (result.status !== 402) throw new Error('Expected challenge')
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request.methodDetails).toMatchObject({ machineTokenDirect: true })
+
+    const credential = await tempo_client
+      .charge({ account: payer, getClient: () => rpc, mode: 'pull' })
+      .createCredential({ challenge: challenge as never, context: {} })
+    const receipt = await server.verifyCredential(credential)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.reference).toBe(broadcast)
+    expect(receipt.fundingCurrency).toBe(mach)
   })
 })

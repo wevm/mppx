@@ -245,3 +245,83 @@ describe('session machineTokenDirect', () => {
     }
   })
 })
+
+describe('MACH channel funding', () => {
+  const resolvedFor = async (balances: Record<string, bigint>, methodDetails = {}) => {
+    const client = createClient({
+      account,
+      chain: { id: chainId } as never,
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (args.method === 'eth_call') {
+              const { data, to } = (args.params as [{ data: Hex; to?: Address }])[0]
+              const balanceOf = (() => {
+                try {
+                  return decodeFunctionData({ abi: erc20Abi, data }).functionName === 'balanceOf'
+                } catch {
+                  return false
+                }
+              })()
+              if (!balanceOf) return `0x${'00'.repeat(32)}`
+              return encodeFunctionResult({
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                result: balances[to?.toLowerCase() ?? ''] ?? 0n,
+              })
+            }
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const { resolveChallengeContext } = await import('./CredentialState.js')
+    return resolveChallengeContext({
+      allowCustomEscrow: false,
+      challenge: makeChallenge({ machineTokenDirect: true, ...methodDetails }),
+      escrowOverride: undefined,
+      allowedChainIds: undefined,
+      getClient: async () => client,
+    })
+  }
+
+  test('pays MACH channel fees in a stablecoin the payer holds', async () => {
+    const { resolveMachineTokenContext, resolveMachineTokenFeeToken } =
+      await import('./MachineToken.js')
+    const pathUsd = defaults.tokens.pathUsd as Address
+    const resolved = await resolvedFor({ [pathUsd.toLowerCase()]: 1_000_000n })
+    const machine = resolveMachineTokenContext(resolved)!
+
+    // The payer holds no challenge currency, so a reused channel's top-up must not pay fees in it.
+    const feeToken = await resolveMachineTokenFeeToken({ account, resolved: machine })
+
+    expect(feeToken?.toLowerCase()).toBe(pathUsd.toLowerCase())
+  })
+
+  test('keeps the server fee token for MACH channels', async () => {
+    const { resolveMachineTokenContext, resolveMachineTokenFeeToken } =
+      await import('./MachineToken.js')
+    const advertised = '0x20c0000000000000000000000000000000000009' as Address
+    const resolved = await resolvedFor({}, { feeToken: advertised })
+
+    expect(
+      await resolveMachineTokenFeeToken({
+        account,
+        resolved: resolveMachineTokenContext(resolved)!,
+      }),
+    ).toBe(advertised)
+  })
+
+  test('locks the MACH channel scope with the challenge currency scope', async () => {
+    const { getOpenScopes, resolveMachineTokenContext } = await import('./MachineToken.js')
+    const resolved = await resolvedFor({})
+
+    expect(getOpenScopes(resolved)).toEqual([
+      resolved.key,
+      resolveMachineTokenContext(resolved)!.key,
+    ])
+    expect(getOpenScopes({ ...resolved, challenge: makeChallenge({}) })).toEqual([resolved.key])
+  })
+})

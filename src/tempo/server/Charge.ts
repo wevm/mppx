@@ -1040,11 +1040,21 @@ export function charge<const parameters extends charge.Parameters>(
                 receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
-              const matchedLogs = await assertTransferLogs(receipt, {
-                currency,
+              const logParameters = {
                 sender: transaction.from! as `0x${string}`,
                 settlementSenders,
                 transfers,
+              }
+              const matchedLogs = await assertTransferLogs(receipt, {
+                ...logParameters,
+                currency,
+              }).catch((error) => {
+                // A direct MACH payment pays the same transfers in MACH.
+                if (!context.machineToken) throw error
+                return assertTransferLogs(receipt, {
+                  ...logParameters,
+                  currency: context.machineToken,
+                })
               })
               assertChallengeBoundMemo(matchedLogs, {
                 challengeId: challenge.id,

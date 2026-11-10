@@ -42,7 +42,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { selectChannelContext } from './MachineToken.js'
+import { getOpenScopes, selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -73,6 +73,15 @@ async function lockChannel(store: ChannelStore, key: string) {
   return () => {
     unlock()
     if (tails.get(key) === current) tails.delete(key)
+  }
+}
+
+/** Locks several payment scopes in a fixed order, so overlapping lock sets cannot deadlock. */
+async function lockChannels(store: ChannelStore, keys: readonly string[]) {
+  const releases: (() => void)[] = []
+  for (const key of [...new Set(keys)].sort()) releases.push(await lockChannel(store, key))
+  return () => {
+    for (const release of releases.reverse()) release()
   }
 }
 
@@ -306,8 +315,9 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        // Opens lock the challenge currency's scope, which a MACH channel for it shares.
-        if (automatic) release = await lockChannel(store, challengeContext.key)
+        // Opens lock the challenge currency's scope and, when MACH is accepted, the MACH channel's,
+        // which offers in other currencies share.
+        if (automatic) release = await lockChannels(store, getOpenScopes(challengeContext))
         const resolved = await selectChannelContext({
           context,
           resolved: challengeContext,
@@ -322,7 +332,7 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannel(store, challengeContext.key)
+          release = await lockChannels(store, getOpenScopes(challengeContext))
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')

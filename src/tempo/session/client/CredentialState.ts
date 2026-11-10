@@ -37,7 +37,11 @@ import {
   deleteChannel,
   type ChannelSink,
 } from './ChannelStore.js'
-import { isMachineToken, resolveMachineTokenOpen } from './MachineToken.js'
+import {
+  isMachineToken,
+  resolveMachineTokenFeeToken,
+  resolveMachineTokenOpen,
+} from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -984,7 +988,8 @@ async function manualTopUp(
       client: resolved.client,
       tokenOut: resolved.token,
     }),
-    resolved.feeToken,
+    // A reused MACH channel pays fees in a token the payer holds, as its open did.
+    await resolveMachineTokenFeeToken({ account, resolved }),
   )
 }
 

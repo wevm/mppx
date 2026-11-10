@@ -88,9 +88,32 @@ export async function resolveMachineTokenOpen(parameters: {
   const machine = resolveMachineTokenContext(resolved)
   if (!machine) return undefined
   if (!(await canSpend(resolved.client, account, machine.token, deposit))) return undefined
-  if (resolved.feeToken || resolved.feePayer) return machine
-  // The payer pays its own fees: prefer the challenge currency, then a funded default stablecoin.
-  const feeTokens = [resolved.token, ...defaultFeeTokens(resolved.chainId)]
+  return { ...machine, feeToken: await resolveMachineTokenFeeToken({ account, resolved: machine }) }
+}
+
+/**
+ * Returns the fee token for a transaction funding a MACH channel accepted for a
+ * `machineTokenDirect` challenge. MACH cannot pay fees, so an unsponsored payer pays them in the
+ * server's fee token, or else in the challenge currency or a default stablecoin it holds. Other
+ * channels keep their resolved fee token.
+ */
+export async function resolveMachineTokenFeeToken(parameters: {
+  account: Account
+  resolved: ChallengeContext
+}): Promise<Address | undefined> {
+  const { account, resolved } = parameters
+  const currency = resolved.challenge.request.currency as Address
+  if (
+    !isMachineToken(resolved.chainId, resolved.token) ||
+    isMachineToken(resolved.chainId, currency)
+  )
+    return resolved.feeToken
+  if (resolved.feePayer) return resolved.feeToken
+  const methodDetails = resolved.challenge.request.methodDetails as
+    | { feeToken?: unknown }
+    | undefined
+  if (typeof methodDetails?.feeToken === 'string') return methodDetails.feeToken as Address
+  const feeTokens = [currency, ...defaultFeeTokens(resolved.chainId)]
   const feeToken = await resolveFeeToken({
     account: account.address,
     allowedTokens: feeTokens,
@@ -98,7 +121,16 @@ export async function resolveMachineTokenOpen(parameters: {
     client: resolved.client,
     prioritizeCandidates: true,
   })
-  return { ...machine, feeToken: feeToken ?? resolved.token }
+  return feeToken ?? currency
+}
+
+/**
+ * Returns the payment-scope keys an automatic open must hold: the challenge currency's and, for a
+ * `machineTokenDirect` challenge, the MACH channel's, which offers in other currencies share.
+ */
+export function getOpenScopes(resolved: ChallengeContext): readonly string[] {
+  const machine = resolveMachineTokenContext(resolved)
+  return machine ? [resolved.key, machine.key] : [resolved.key]
 }
 
 async function canSpend(
