@@ -1,6 +1,6 @@
 import { Base64 } from 'ox'
 import { createPublicClient, http, toHex, verifyMessage, type Address, type Hex } from 'viem'
-import { base, tempo, worldchain } from 'viem/chains'
+import { worldchain } from 'viem/chains'
 
 import type * as Identity from '../../../../identity/Types.js'
 import * as Store from '../../../../Store.js'
@@ -68,8 +68,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       try {
         valid = await verifyMessage(parameters)
       } catch {}
-      // Otherwise it may be a smart account's: ERC-1271, or ERC-6492 before deployment.
-      const client = !valid ? clients.get(chainId) : undefined
+      // Otherwise it may be a smart account's: ERC-1271, or ERC-6492 before deployment. Only
+      // payloads that declare one reach the RPC, so a forged EOA signature costs no call.
+      const client = !valid && payload.type === 'eip1271' ? clients.get(chainId) : undefined
       if (client)
         try {
           valid = await client.verifyMessage(parameters)
@@ -117,8 +118,11 @@ export declare namespace verifier {
     /** Where to read AgentBook. Defaults to the canonical World Chain deployment. */
     agentBook?: agentBook.Config | undefined
     /**
-     * RPC URLs by signing chain ID, to verify smart-account (ERC-1271 and ERC-6492) signatures.
-     * World Chain (480), Base (8453) and Tempo (4217) use their public RPCs unless set here.
+     * RPC URLs by signing chain ID, to verify smart-account (ERC-1271 and ERC-6492) signatures
+     * from payloads typed `eip1271`.
+     * World Chain (480), where AgentBook lives, uses its public RPC unless set here. Add another
+     * chain only if its accounts are controlled as on World Chain: the same address can belong to
+     * someone else on another chain, and AgentBook does not record which chain registered it.
      * Smart accounts on other chains are rejected.
      */
     rpcUrls?: Record<number, string> | undefined
@@ -138,11 +142,9 @@ type SigningClient = {
   }) => Promise<boolean>
 }
 
-/** Public RPCs for the chains agents commonly sign on. */
+/** Public RPC for World Chain, where AgentBook resolves the human. */
 const defaultRpcUrls: Record<number, string> = {
   [worldchain.id]: worldchain.rpcUrls.default.http[0],
-  [base.id]: base.rpcUrls.default.http[0],
-  [tempo.id]: tempo.rpcUrls.default.http[0],
 }
 
 /** One client per allowed signing chain: never an RPC the request names. */

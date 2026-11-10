@@ -476,7 +476,7 @@ test('checks the signature before claiming the nonce or reading AgentBook', asyn
   expect((await verifier.verify(await craft({ nonce: 'forgednonce1' }))).status).toBe('valid')
 })
 
-test('skips the smart-account check for a valid EOA signature', async () => {
+test('calls the chain only for an invalid signature typed eip1271', async () => {
   const calls: unknown[] = []
   const verifier = verifierFor({
     clients: {
@@ -490,8 +490,13 @@ test('skips the smart-account check for a valid EOA signature', async () => {
   })
   expect((await verifier.verify(await craft())).status).toBe('valid')
   expect(calls).toHaveLength(0)
+  // An invalid signature typed eip191 is rejected locally, without an RPC call.
   const bad = await craft({}, { signature: '0x' + '00'.repeat(65) })
   expect((await verifier.verify(bad)).status).toBe('invalid')
+  expect(calls).toHaveLength(0)
+  // Only a payload typed eip1271 falls back to the chain.
+  const smart = await craft({ type: 'eip1271' }, { signature: '0x' + '00'.repeat(65) })
+  expect((await verifier.verify(smart)).status).toBe('invalid')
   expect(calls).toHaveLength(1)
 })
 
@@ -591,4 +596,17 @@ test('runs the full client flow: signs each attempt and binds the paid retry', a
   } finally {
     server.close()
   }
+})
+
+test('verifies smart accounts on World Chain only unless configured', async () => {
+  // A smart account typed eip1271 on Base, with no Base RPC configured, is rejected locally.
+  const verifier = World.Server.verifier({ agentBook: registered(), nonceStore: Store.memory() })
+  expect(
+    await verifier.verify(
+      await craft(
+        { type: 'eip1271', chainId: 'eip155:8453' },
+        { signature: '0x' + '00'.repeat(65) },
+      ),
+    ),
+  ).toMatchObject({ status: 'invalid', reason: expect.stringContaining('signature') })
 })
