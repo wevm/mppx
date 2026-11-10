@@ -233,6 +233,21 @@ test('caches approvals only', async () => {
   expect(api.calls).toHaveLength(3)
 })
 
+test('does not share cached approvals across Persona organizations', async () => {
+  const cache = Store.memory()
+  const approvedApi = fakePersona([approved('inq_1')])
+  const emptyApi = fakePersona([])
+  const a = Persona.Server.create({ apiKey: 'org-a', fetch: approvedApi.fetch }).paymentCheck({
+    cache,
+  })
+  const b = Persona.Server.create({ apiKey: 'org-b', fetch: emptyApi.fetch }).paymentCheck({
+    cache,
+  })
+  expect((await pay(a, payer)).result.status).toBe(200)
+  expect((await pay(b, payer)).response?.status).toBe(403)
+  expect(emptyApi.calls).toHaveLength(1)
+})
+
 test('applies maxAge across pages, and a custom referenceId', async () => {
   const old = new Date(Date.now() - 7_200_000).toISOString()
   const api = fakePersona(

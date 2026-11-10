@@ -46,6 +46,9 @@ export function create(config: create.Config): Persona {
   } = config
   if (!apiKey) throw new TypeError('Persona.Server.create needs an apiKey.')
 
+  // A digest of the API origin and key: identifies the Persona organization without storing the key.
+  const scope = digest(`${new URL(apiUrl).origin}\n${apiKey}`)
+
   async function call(path: string, init: RequestInit = {}): Promise<unknown> {
     const response = await fetch(new URL(path, apiUrl), {
       ...init,
@@ -106,7 +109,9 @@ export function create(config: create.Config): Persona {
     const headers = await onboardingHeaders(options.onboarding, request, referenceId)
     if (!referenceId) return { status: 'missing', headers, reason: 'Persona KYC requires a payer.' }
 
-    const key = `mppx:persona:${templateId ?? ''}:${referenceId}`
+    // Scoped to the Persona organization and environment, so clients sharing a Store never
+    // accept each other's approvals.
+    const key = `mppx:persona:${await scope}:${templateId ?? ''}:${referenceId}`
     const now = Date.now()
     const cached = cache ? ((await cache.get(key)) as CacheEntry | null) : null
     if (
@@ -366,4 +371,11 @@ function date(value: unknown): Date | undefined {
   if (typeof value !== 'string') return undefined
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+async function digest(value: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(hash).slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')
 }
