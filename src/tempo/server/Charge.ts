@@ -474,7 +474,15 @@ export function charge<const parameters extends charge.Parameters>(
       ).catch(async (error: unknown) => {
         // A settled transaction that is sent again fails simulation too: answer it as the
         // replay it is, before any MACH shortfall is read off the payer's spent balance.
-        if (await isHashUsed(store, keccak256(serializedTransaction)))
+        // The chain is checked too: replay-sharded stores keep markers that `get` can't read.
+        const hash = keccak256(serializedTransaction)
+        if (
+          (await isHashUsed(store, hash)) ||
+          (await getTransactionReceipt(client, { hash }).then(
+            () => true,
+            () => false,
+          ))
+        )
           throw new CredentialReplayedError({ reason: 'Transaction hash has already been used' })
         throw await explainMachineTokenFailure(error, {
           amount,

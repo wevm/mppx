@@ -32,7 +32,8 @@ const secretKey = 'test-secret-key-that-is-at-least-32-bytes'
 test.each([
   { machineTokenBalance: 250_000n, fundingUrl: true, replayed: false },
   { machineTokenBalance: 2_000_000n, fundingUrl: false, replayed: false },
-  { machineTokenBalance: 250_000n, fundingUrl: false, replayed: true },
+  { machineTokenBalance: 250_000n, fundingUrl: false, replayed: 'store' },
+  { machineTokenBalance: 250_000n, fundingUrl: false, replayed: 'chain' },
 ])(
   'links a pull MACH payment that fails simulation to the MACH onramp (balance $machineTokenBalance, replayed $replayed)',
   async ({ machineTokenBalance, fundingUrl, replayed }) => {
@@ -44,6 +45,25 @@ test.each([
         {
           async request({ method, params }) {
             if (method === 'eth_chainId') return `0x${chainId.toString(16)}`
+            if (method === 'eth_getTransactionReceipt')
+              return replayed === 'chain'
+                ? {
+                    blockHash: `0x${'11'.repeat(32)}`,
+                    blockNumber: '0x1',
+                    contractAddress: null,
+                    cumulativeGasUsed: '0x5208',
+                    effectiveGasPrice: '0x3b9aca00',
+                    from: payer.address,
+                    gasUsed: '0x5208',
+                    logs: [],
+                    logsBloom: `0x${'00'.repeat(256)}`,
+                    status: '0x1',
+                    to: null,
+                    transactionHash: (params as [Hex])[0],
+                    transactionIndex: '0x0',
+                    type: '0x76',
+                  }
+                : null
             if (method === 'eth_call') {
               const data = (params as [{ data?: Hex; input?: Hex }])[0]
               const input = data.data ?? data.input
@@ -112,7 +132,7 @@ test.each([
     })
 
     // A transaction that already settled holds its replay marker when it is sent again.
-    if (replayed)
+    if (replayed === 'store')
       await Store.tryClaim(
         store,
         `mppx:charge:${keccak256(signature).toLowerCase()}`,
