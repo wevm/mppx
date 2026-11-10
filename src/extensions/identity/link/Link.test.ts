@@ -5,7 +5,7 @@ import { combineFetch, CredentialFixture, LinkFixture } from '@stripe/agent-iden
 import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Link from 'mppx/extensions/identity/link'
-import type * as Identity from 'mppx/identity'
+import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -211,6 +211,8 @@ test('refuses an attestation route on a server without requiresAuth', () => {
   expect(() => mppx.charge({ ...charge, identity: [Link.Server.attestation()] })).toThrow(
     /requiresAuth: true/,
   )
+  const either = Identity.anyOf(Link.Server.attestation(), Link.Server.attestation())
+  expect(() => mppx.charge({ ...charge, identity: [either] })).toThrow(/requiresAuth: true/)
   const claims = Link.Server.claims({
     audience: 'https://api.example',
     claims: ['email'],
