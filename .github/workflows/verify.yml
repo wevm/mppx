@@ -141,7 +141,6 @@ jobs:
               --dev.block-time 200ms \
               --dev.mnemonic 'test test test test test test test test test test test junk' \
               --engine.disable-precompile-cache \
-              --engine.legacy-state-root \
               --faucet.address 0x20c0000000000000000000000000000000000000 0x20c0000000000000000000000000000000000001 0x20c0000000000000000000000000000000000002 0x20c0000000000000000000000000000000000003 \
               --faucet.amount 1000000000000 \
               --faucet.enabled \
