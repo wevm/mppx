@@ -606,3 +606,77 @@ test('throws on an empty claims list', () => {
     }),
   ).toThrow(/at least one claim/)
 })
+
+test('claims challenge rides in the WWW-Authenticate header too', async () => {
+  const { fetch } = await createLink()
+  const server = await createServer((origin) => [
+    Link.Server.claims({
+      audience: origin,
+      claims: ['email'],
+      secretKey,
+      verifier: Link.Server.presentationVerifier({ audience: origin, fetch }),
+    }),
+  ])
+  const response = await globalThis.fetch(server.url)
+  const header = response.headers.get('WWW-Authenticate')!
+  expect(header).toMatch(/^Identity-Presentation challenge="[A-Za-z0-9_-]+"$/)
+  const fromBody = await Link.Client.claimsChallenge(response)
+  // A body anyOf or precedence replaced still leaves the header's challenge.
+  const replaced = new Response('{"type":"other"}', {
+    headers: { 'WWW-Authenticate': header },
+    status: 401,
+  })
+  expect(await Link.Client.claimsChallenge(replaced)).toEqual(fromBody)
+  expect(fromBody).toMatchObject({ aud: server.origin, claims: ['email'] })
+  // Neither header nor body: no challenge.
+  const bare = new Response('{}', {
+    headers: { 'WWW-Authenticate': 'Identity-Presentation challenge="!!"' },
+    status: 401,
+  })
+  expect(await Link.Client.claimsChallenge(bare)).toBeUndefined()
+})
+
+test('verifiers call fetch unbound, as Workers require', async () => {
+  const { fetch, link } = await createLink()
+  const strict = function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    if (this !== undefined) throw new TypeError('Illegal invocation')
+    return fetch(input, init)
+  } as typeof globalThis.fetch
+  const token = await link.mint()
+  expect(
+    (await Link.Server.tokenVerifier({ fetch: strict }).verifyAttestation(token.authorization))
+      .valid,
+  ).toBe(true)
+})
+
+test('Link outages back off and never leak upstream error text', async () => {
+  const { link } = await createLink()
+  const token = await link.mint()
+  let calls = 0
+  const down = (async () => {
+    calls++
+    throw new Error('connect ECONNREFUSED internal.example:443')
+  }) as typeof globalThis.fetch
+  const tokens = Link.Server.tokenVerifier({ fetch: down })
+  const verifier = Link.Server.attestation({ verifier: tokens })
+  const request = new Request('https://api.example', {
+    headers: { Authorization: token.authorization },
+  })
+  const first = await verifier.verify(request)
+  expect(first).toMatchObject({ reason: 'Link is unavailable.', status: 'unavailable' })
+  expect(JSON.stringify(first)).not.toMatch(/internal\.example/)
+  expect(JSON.stringify(await tokens.verifyAttestation(token.authorization))).not.toMatch(
+    /internal\.example/,
+  )
+  // Within the backoff no request reaches Link; after it, Link is asked again.
+  const seen = calls
+  await verifier.verify(request)
+  expect(calls).toBe(seen)
+  vi.useFakeTimers({ now: Date.now() + 31_000, toFake: ['Date'] })
+  try {
+    await verifier.verify(request)
+    expect(calls).toBeGreaterThan(seen)
+  } finally {
+    vi.useRealTimers()
+  }
+})

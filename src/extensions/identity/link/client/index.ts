@@ -143,7 +143,7 @@ export function claims(config: claims.Config): Identity.Prover {
       const challenge = await claimsChallenge(response)
       if (!challenge) return undefined
       // Bound to this origin only: a server can't relay another audience's challenge.
-      if (challenge.aud.replace(/\/+$/, '') !== origin) return undefined
+      if (trimSlashes(challenge.aud) !== origin) return undefined
       if (!challenge.trusted_issuers.some((issuer) => issuers.includes(issuer))) return undefined
       if (!challenge.formats.includes(Constants.format)) return undefined
       if (!challenge.claims.every((claim) => allowed.has(claim))) return undefined
@@ -174,15 +174,45 @@ export declare namespace claims {
   }
 }
 
-/** Parses a claims challenge's problem body, or returns `undefined` when it is not one. */
+/**
+ * Parses a claims challenge from the `Identity-Presentation` header's `challenge` parameter,
+ * else from the problem body; `undefined` when neither has one.
+ */
 export async function claimsChallenge(
   response: Response,
 ): Promise<Types.ClaimsChallenge | undefined> {
-  const body = (await response
-    .clone()
-    .json()
-    .catch(() => undefined)) as Partial<Types.ClaimsChallenge> | undefined
-  if (!body || body.type !== Constants.claimsRequiredType) return undefined
+  return (
+    parseChallenge(headerChallenge(response)) ??
+    parseChallenge(
+      await response
+        .clone()
+        .json()
+        .catch(() => undefined),
+    )
+  )
+}
+
+/** The decoded `challenge` parameter of an `Identity-Presentation` challenge, if any. */
+function headerChallenge(response: Response): unknown {
+  const header = response.headers.get('WWW-Authenticate') ?? ''
+  const match = new RegExp(
+    `(?:^|,)\\s*${Constants.presentationHeader}\\s+challenge="([A-Za-z0-9_-]{1,16384})"`,
+    'i',
+  ).exec(header)
+  if (!match) return undefined
+  try {
+    const binary = atob(match[1]!.replace(/-/g, '+').replace(/_/g, '/'))
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return undefined
+  }
+}
+
+function parseChallenge(value: unknown): Types.ClaimsChallenge | undefined {
+  const body = value as Partial<Types.ClaimsChallenge> | null | undefined
+  if (!body || typeof body !== 'object' || body.type !== Constants.claimsRequiredType)
+    return undefined
   const strings = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((item) => typeof item === 'string')
   if (typeof body.aud !== 'string' || typeof body.nonce !== 'string' || !body.nonce)
@@ -226,4 +256,11 @@ function track(sent: Set<string>, current: Map<string, string>, value: string) {
     if (sent.size <= 64) break
     if (!live.has(old)) sent.delete(old)
   }
+}
+
+/** Drops trailing slashes in linear time: the audience comes from the server. */
+function trimSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--
+  return value.slice(0, end)
 }

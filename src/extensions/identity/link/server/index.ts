@@ -21,8 +21,10 @@ import type * as Types from '../Constants.js'
  *
  * @example
  * ```ts
+ * // Create it once: each verifier caches Link's keys.
+ * const link = Link.Server.attestation()
  * const mppx = Mppx.create({ methods, requiresAuth: true })
- * const result = await mppx.charge({ amount: '1', identity: [Link.Server.attestation()] })(request)
+ * const result = await mppx.charge({ amount: '1', identity: [link] })(request)
  * ```
  */
 export function attestation(
@@ -41,11 +43,8 @@ export function attestation(
         reason,
         headers: wwwAuthenticate.map((value) => ['WWW-Authenticate', value]),
       }
-    } catch (error) {
-      return {
-        status: 'unavailable',
-        reason: `Link is unavailable: ${error instanceof Error ? error.message : error}`,
-      }
+    } catch {
+      return { status: 'unavailable', reason: 'Link is unavailable.' }
     }
   }
 
@@ -67,7 +66,7 @@ export function attestation(
           value: Object.freeze({ issuer: result.issuer, tokenKeyId: result.tokenKeyId }),
         }
       if (unavailable(result.failures))
-        return { status: 'unavailable', reason: reason(result.failures, 'Link is unavailable.') }
+        return { status: 'unavailable', reason: 'Link is unavailable.' }
       return challenge('invalid', reason(result.failures, 'The Link attestation is invalid.'))
     },
   }
@@ -183,7 +182,11 @@ export function claims(config: claims.Config): Identity.Verifier<Types.VerifiedC
       status,
       reason: JSON.stringify(body),
       headers: [
-        ['WWW-Authenticate', Constants.presentationHeader],
+        // Also in the header: anyOf and precedence can replace the body, never the challenges.
+        [
+          'WWW-Authenticate',
+          `${Constants.presentationHeader} challenge="${toBase64(new TextEncoder().encode(JSON.stringify(body)))}"`,
+        ],
         ['Content-Type', 'application/problem+json'],
       ],
     }
@@ -201,7 +204,7 @@ export function claims(config: claims.Config): Identity.Verifier<Types.VerifiedC
       })
       if (!result.valid) {
         if (unavailable(result.failures))
-          return { status: 'unavailable', reason: reason(result.failures, 'Link is unavailable.') }
+          return { status: 'unavailable', reason: 'Link is unavailable.' }
         return challenge('invalid', reason(result.failures, 'The Link presentation is invalid.'))
       }
       const disclosed = result.claims
@@ -311,13 +314,13 @@ type Key = {
  * signature verifies. {@link attestation} uses it unless given another verifier.
  */
 export function tokenVerifier(config: tokenVerifier.Config = {}): Types.AttestationVerifier {
-  const issuer = (config.issuer ?? Constants.issuer).replace(/\/+$/, '')
+  const issuer = trimSlashes(config.issuer ?? Constants.issuer)
   const issuerOrigin = new URL(issuer).origin
   const maxKeyAge = (config.maxKeyAge ?? 300) * 1_000
   // Unwrapped: fetching issuer documents must never pay a Payment challenge.
-  const fetch = unwrapFetch(
-    (config.fetch ?? globalThis.fetch) as typeof globalThis.fetch,
-  ) as unknown as Fetch
+  const base = unwrapFetch((config.fetch ?? globalThis.fetch) as typeof globalThis.fetch)
+  // Called unbound: Workers' fetch throws when called as another object's method.
+  const fetch: Fetch = (input, init) => base(input, init)
   let cache: { at: number; keys: ReadonlyMap<string, Key> } | undefined
   let loading: Promise<ReadonlyMap<string, Key>> | undefined
   // An unknown key ID is free to mint: refresh for one at most every 30 seconds.
@@ -327,7 +330,7 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
 
   async function load(): Promise<ReadonlyMap<string, Key>> {
     const metadata = await get(`${issuer}/.well-known/aap-issuer`)
-    if (typeof metadata.issuer !== 'string' || metadata.issuer.replace(/\/+$/, '') !== issuer)
+    if (typeof metadata.issuer !== 'string' || trimSlashes(metadata.issuer) !== issuer)
       throw new Error('The issuer metadata names another issuer.')
     if (typeof metadata.token_keys !== 'string')
       throw new Error('The issuer metadata has no token_keys.')
@@ -347,11 +350,26 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
     return keys
   }
 
+  let failed: { at: number; error: unknown } | undefined
+
   function keys(force = false): Promise<ReadonlyMap<string, Key>> {
     if (!force && cache && Date.now() - cache.at < maxKeyAge) return Promise.resolve(cache.keys)
-    loading ??= load().finally(() => {
-      loading = undefined
-    })
+    // During an outage, fail fast instead of asking Link again on every request.
+    if (failed && Date.now() - failed.at < failureBackoff) return Promise.reject(failed.error)
+    loading ??= load()
+      .then(
+        (keys) => {
+          failed = undefined
+          return keys
+        },
+        (error: unknown) => {
+          failed = { at: Date.now(), error }
+          throw error
+        },
+      )
+      .finally(() => {
+        loading = undefined
+      })
     return loading
   }
 
@@ -393,8 +411,9 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
         // No refresh for an unknown key id, which anyone can send: the short cache picks up
         // keys Link publishes ahead of their activation.
         key = (await keys()).get(keyId)
-      } catch (error) {
-        return failure('issuer_unavailable', error instanceof Error ? error.message : String(error))
+      } catch {
+        // Upstream error text stays out of responses: it can name internal hosts.
+        return failure('issuer_unavailable', 'Link is unavailable.')
       }
       if (!key) return failure('unknown_issuer', 'Link does not publish the token key.')
       if (key.notBefore !== undefined && Date.now() / 1_000 < key.notBefore)
@@ -516,7 +535,7 @@ function pad(value: string): string {
  * Node-only token key import never runs. {@link claims} uses it unless given another verifier.
  */
 export function presentationVerifier(config: presentationVerifier.Config): Types.ClaimsVerifier {
-  const issuer = (config.issuer ?? Constants.issuer).replace(/\/+$/, '')
+  const issuer = trimSlashes(config.issuer ?? Constants.issuer)
   const audience = normalizeAudience(config.audience)
   const timeout = config.timeout ?? 3_000
   const maxAge = config.maxAge ?? Constants.nonceTtl
@@ -572,7 +591,14 @@ export declare namespace presentationVerifier {
 
 /** The audience as challenged and verified: the origin, without a trailing slash. */
 function normalizeAudience(audience: string): string {
-  return audience.replace(/\/+$/, '')
+  return trimSlashes(audience)
+}
+
+/** Drops trailing slashes in linear time (a `/\/+$/` regex is quadratic on hostile input). */
+function trimSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--
+  return value.slice(0, end)
 }
 
 /** Decodes base64 or base64url, padded or not; `undefined` when it is neither. */
@@ -623,6 +649,9 @@ async function getJson(
   return body as Record<string, unknown>
 }
 
+/** Milliseconds a failed issuer fetch is reused before Link is asked again. */
+const failureBackoff = 30_000
+
 /** Fetch as the Link verifiers call it. */
 type Fetch = (input: string, init: RequestInit) => Response | Promise<Response>
 
@@ -634,15 +663,16 @@ function metadata(options: { issuer: string; fetch: Fetch; timeout: number; maxA
     if (!force && cache && Date.now() - cache.at < options.maxAge) return cache.value
     const value = getJson(`${options.issuer}/.well-known/aap-issuer`, { ...options, origin }).then(
       (body) => {
-        if (typeof body.issuer !== 'string' || body.issuer.replace(/\/+$/, '') !== options.issuer)
+        if (typeof body.issuer !== 'string' || trimSlashes(body.issuer) !== options.issuer)
           throw new Error('The issuer metadata names another issuer.')
         return body
       },
     )
     cache = { at: Date.now(), value }
-    // A failed fetch is retried on the next call.
+    // A failed fetch is retried after a short backoff, not on every call during an outage.
     value.catch(() => {
-      if (cache?.value === value) cache = undefined
+      if (cache?.value === value)
+        cache = { at: Date.now() - options.maxAge + failureBackoff, value }
     })
     return value
   }
