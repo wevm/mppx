@@ -242,6 +242,9 @@ importers:
       '@playwright/test':
         specifier: ^1.62.1
         version: 1.62.1
+      '@stripe/agent-identity':
+        specifier: 0.3.0
+        version: 0.3.0
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -2671,6 +2674,10 @@ packages:
 
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
+
+  '@stripe/agent-identity@0.3.0':
+    resolution: {integrity: sha512-tGaiUa8ylSeaLbQ5VuV9UP9y8n8GAuaG/Hl8tc5zp5qI5i3Bv7f9bYaptpN7BrddMUMbViOQj7g73fzatCJ4jw==}
+    engines: {node: '>=22.0.0'}
 
   '@stripe/stripe-js@9.17.0':
     resolution: {integrity: sha512-uidL4OJum5kivsOAQnVfQmYLJ2zdgirtmT0zWgskASZ4TPXxpXQ0MNrzW4NsXB90uEqmPHpSEtciLFbF1QQvNA==}
@@ -7002,6 +7009,10 @@ snapshots:
   '@socket.io/component-emitter@3.1.2': {}
 
   '@speed-highlight/core@1.2.24': {}
+
+  '@stripe/agent-identity@0.3.0':
+    dependencies:
+      jose: 6.2.12
 
   '@stripe/stripe-js@9.17.0': {}
 
