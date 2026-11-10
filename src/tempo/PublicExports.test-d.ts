@@ -42,6 +42,8 @@ test('tempo session public barrels expose manager and schedule interfaces', () =
   expectTypeOf(Tempo.machineTokenDeployments).toBeObject()
   expectTypeOf(Tempo.machineTokenDeployments[4217].swap).toMatchTypeOf<`0x${string}`>()
   expectTypeOf(Tempo.machineTokenDeployments[4217].token).toMatchTypeOf<`0x${string}`>()
+  expectTypeOf(Tempo.machineTokenFundingBaseUrl).toBeString()
+  expectTypeOf(Tempo.machineTokenFundingUrl).returns.toEqualTypeOf<string | undefined>()
   expectTypeOf(Tempo.Session).toBeObject()
   expectTypeOf(Tempo.Session.Client).toBeObject()
   expectTypeOf(Tempo.Session.Precompile).toBeObject()

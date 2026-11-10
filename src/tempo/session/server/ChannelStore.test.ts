@@ -9,7 +9,12 @@ import {
   VerificationFailedError,
 } from '../../../Errors.js'
 import * as Store from '../../../Store.js'
-import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
+import {
+  chainId,
+  escrowContract as escrowContractDefaults,
+  machineToken,
+  machineTokenFundingBaseUrl,
+} from '../../internal/defaults.js'
 import * as PrecompileChannel from '../precompile/Channel.js'
 import type { SessionSignedVoucher } from '../precompile/Protocol.js'
 import type { SignedVoucher } from '../precompile/Protocol.js'
@@ -1476,5 +1481,35 @@ describe('ChannelStore settleable vouchers', () => {
     expect(channel.highestVoucherAmount - channel.spent).toBe(4_000n)
     expect(settlements).toBeGreaterThan(25)
     expect(channel.spent - channel.settledOnChain).toBeLessThan(250n)
+  })
+})
+
+describe('ChannelStore.insufficientBalance', () => {
+  const payer = '0x1111111111111111111111111111111111111111' as Address
+  const mach = machineToken[chainId.mainnet].token
+
+  test('links a MACH channel on Tempo mainnet to the MACH onramp', () => {
+    const error = ChannelStore.insufficientBalance(
+      { chainId: chainId.mainnet, payer, token: mach },
+      'requested 2, available 1',
+    )
+    expect(error.fundingUrl).toBe(`${machineTokenFundingBaseUrl}&address=${payer}`)
+    expect(error.toProblemDetails().fundingUrl).toBe(error.fundingUrl)
+    expect(error.message).toContain(error.fundingUrl!)
+  })
+
+  test('adds no link to other channels', () => {
+    for (const channel of [
+      { chainId: chainId.testnet, payer, token: mach },
+      {
+        chainId: chainId.mainnet,
+        payer,
+        token: '0x20c0000000000000000000000000000000000000' as Address,
+      },
+    ]) {
+      const error = ChannelStore.insufficientBalance(channel, 'requested 2, available 1')
+      expect(error.fundingUrl).toBeUndefined()
+      expect(error.message).toBe('Insufficient balance: requested 2, available 1.')
+    }
   })
 })

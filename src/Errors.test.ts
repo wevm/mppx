@@ -106,6 +106,15 @@ describe('InvalidChallengeError', () => {
 })
 
 describe('VerificationFailedError', () => {
+  test('with funding URL', () => {
+    const fundingUrl = 'https://wallet.tempo.xyz/agent?action=fund&intent=mach&chainId=4217'
+    const error = new VerificationFailedError({ fundingUrl, reason: 'insufficient MACH balance' })
+    expect(error.message).toBe(
+      `Payment verification failed: insufficient MACH balance. Add funds at ${fundingUrl}`,
+    )
+    expect(error.toProblemDetails().fundingUrl).toBe(fundingUrl)
+  })
+
   test('default', () => {
     expect(errorSnapshot(new VerificationFailedError())).toMatchInlineSnapshot(`
       {
@@ -416,6 +425,24 @@ describe('PaymentMethodUnsupportedError', () => {
 })
 
 describe('InsufficientBalanceError', () => {
+  test('with funding URL', () => {
+    const fundingUrl = 'https://wallet.tempo.xyz/agent?action=fund&intent=mach&chainId=4217'
+    const error = new InsufficientBalanceError({ fundingUrl, reason: 'requested 2, available 1' })
+    expect(error.fundingUrl).toBe(fundingUrl)
+    expect(error.message).toBe(
+      `Insufficient balance: requested 2, available 1. Add funds at ${fundingUrl}`,
+    )
+    expect(error.toProblemDetails('challenge')).toEqual({
+      challengeId: 'challenge',
+      detail: error.message,
+      fundingUrl,
+      status: 402,
+      title: 'Insufficient Balance',
+      type: 'https://paymentauth.org/problems/session/insufficient-balance',
+    })
+    expect(new InsufficientBalanceError().toProblemDetails()).not.toHaveProperty('fundingUrl')
+  })
+
   test('default', () => {
     expect(errorSnapshot(new InsufficientBalanceError())).toMatchInlineSnapshot(`
       {

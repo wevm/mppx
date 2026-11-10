@@ -15,6 +15,7 @@ import { normalizeHeaders } from '../../client/internal/Fetch.js'
 import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
+import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import { tip20ChannelEscrow } from '../../tempo/session/precompile/Protocol.js'
 import type {
   ChannelDescriptor,
@@ -885,7 +886,14 @@ async function scoreTempoChargeChallenge(
   const amount = request.amount
   if (typeof currency !== 'string' || typeof amount !== 'string') return 'unsupported'
 
-  const requiredChainId = (request.methodDetails as { chainId?: number } | undefined)?.chainId
+  const methodDetails = request.methodDetails as
+    | {
+        chainId?: number | undefined
+        machineTokenEnabled?: boolean | undefined
+        splits?: readonly unknown[] | undefined
+      }
+    | undefined
+  const requiredChainId = methodDetails?.chainId
   if (requiredChainId && probe.client.chain?.id && requiredChainId !== probe.client.chain.id) {
     return 'unsupported'
   }
@@ -902,6 +910,15 @@ async function scoreTempoChargeChallenge(
     .catch(() => undefined)
   if (balance === undefined) return 'unknownBalance'
   if (balance >= amountRaw) return 'payable'
+  // A MACH-enabled charge is also payable from a MACH balance, but only without splits:
+  // the MACH route takes a single transfer, so a split charge pays in its currency.
+  if (methodDetails?.machineTokenEnabled === true && !methodDetails.splits?.length) {
+    const machineTokenBalance = await MachineTokenCharge.getBalance(probe.client as never, {
+      account: probe.account,
+      chainId: requiredChainId ?? probe.client.chain?.id,
+    })
+    if (machineTokenBalance !== undefined && machineTokenBalance >= amountRaw) return 'payable'
+  }
   return 'insufficientBalance'
 }
 

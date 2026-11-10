@@ -1,5 +1,7 @@
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
+  type Address,
+  type Client as viem_Client,
   decodeFunctionData,
   formatUnits,
   keccak256,
@@ -469,7 +471,32 @@ export function charge<const parameters extends charge.Parameters>(
       await viem_call(
         client,
         FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
-      )
+      ).catch(async (error: unknown) => {
+        // A settled transaction that is sent again fails simulation too: answer it as the
+        // replay it is, before any MACH shortfall is read off the payer's spent balance.
+        // The chain is checked too: replay-sharded stores keep markers that `get` can't read.
+        // Settlement broadcasts the canonical envelope (below), so the chain knows that hash.
+        const hash = keccak256(serializedTransaction)
+        const canonicalHash = keccak256(
+          await Transaction.serialize(Transaction.deserialize(serializedTransaction)),
+        )
+        if (
+          (await isHashUsed(store, hash)) ||
+          (await isHashUsed(store, canonicalHash)) ||
+          (await getTransactionReceipt(client, { hash: canonicalHash }).then(
+            () => true,
+            () => false,
+          ))
+        )
+          throw new CredentialReplayedError({ reason: 'Transaction hash has already been used' })
+        throw await explainMachineTokenFailure(error, {
+          amount,
+          chainId: chainId ?? client.chain?.id,
+          client,
+          fundingCurrency,
+          payer: transaction.from as Address | undefined,
+        })
+      })
     }
 
     return {
@@ -1044,7 +1071,14 @@ export function charge<const parameters extends charge.Parameters>(
             // and recovers the receipt instead of being rejected as a replay.
             if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
             await releaseHashUse(store, hash)
-            throw error
+            if (broadcastAttempted) throw error
+            throw await explainMachineTokenFailure(error, {
+              amount,
+              chainId: chainId ?? client.chain?.id,
+              client,
+              fundingCurrency,
+              payer: transaction.from as Address | undefined,
+            })
           }
         }
       }
@@ -1231,6 +1265,37 @@ export declare namespace charge {
 }
 
 type ChargeRequest = z.output<typeof Methods.charge.schema.request>
+
+/**
+ * Explains why a MACH-route payment failed before broadcast. When the payer holds too little MACH,
+ * returns a `VerificationFailedError` that links to the MACH onramp (on Tempo mainnet); otherwise
+ * returns `error` unchanged. Typed payment errors are kept as they are.
+ */
+async function explainMachineTokenFailure(
+  error: unknown,
+  parameters: {
+    amount: string
+    chainId: number | undefined
+    client: viem_Client
+    fundingCurrency: string | undefined
+    payer: Address | undefined
+  },
+): Promise<unknown> {
+  const { amount, chainId, client, fundingCurrency, payer } = parameters
+  if (error instanceof PaymentError || !payer || !fundingCurrency) return error
+  if (!MachineTokenCharge.isMachineToken({ chainId, currency: fundingCurrency as Address }))
+    return error
+  const shortfall = await MachineTokenCharge.getShortfall(client, {
+    account: payer,
+    amount: BigInt(amount),
+    chainId,
+  })
+  if (!shortfall) return error
+  return new VerificationFailedError({
+    fundingUrl: shortfall.fundingUrl,
+    reason: `insufficient MACH balance (${shortfall.reason})`,
+  })
+}
 
 function chargeBinding(request: ChargeRequest) {
   // Exhaustively destructure so new charge request fields require an explicit binding decision.
@@ -1610,6 +1675,17 @@ async function tryClaimHash(
   expires: number,
 ): Promise<boolean> {
   return Store.tryClaim(store, getHashStoreKey(hash), expires)
+}
+
+/** Whether a live replay marker holds `hash`, read without claiming it. */
+async function isHashUsed(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  hash: `0x${string}`,
+): Promise<boolean> {
+  const current: unknown = await store.get(getHashStoreKey(hash))
+  if (current === null || current === undefined) return false
+  const expires = typeof current === 'object' && 'expires' in current ? current.expires : undefined
+  return typeof expires !== 'number' || expires > Date.now()
 }
 
 /** @internal */
