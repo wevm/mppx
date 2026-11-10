@@ -2,7 +2,11 @@ import { isAddress, type Address, type Client } from 'viem'
 import { readContract } from 'viem/actions'
 import { Abis, Addresses } from 'viem/tempo'
 
-const authorized = new Set<string>()
+/** How long an authorized recipient is cached before its policy is read again. */
+const authorizedTtlMs = 5 * 60_000
+
+/** Authorized recipients by chain, currency and recipient, with when each check expires. */
+const authorized = new Map<string, number>()
 
 /**
  * Returns whether a currency's TIP-403 transfer policy lets every recipient receive it, such as
@@ -11,8 +15,9 @@ const authorized = new Set<string>()
  *
  * Only custom policies (ID 2 and above) restrict recipients, and only a definitive `false` from
  * the chain returns false. Unreadable policies count as authorized.
- * Authorized recipients are cached for the process; rejected ones are checked again so a newly
- * approved recipient starts working without a restart.
+ * Authorized recipients are cached for five minutes, so a revoked one stops being offered MACH
+ * soon after; until then a client's pre-signing simulation fails and it pays the challenge
+ * currency instead. Rejected recipients are checked again on every call.
  */
 export async function areRecipientsAuthorized(
   client: Client,
@@ -33,7 +38,7 @@ export async function areRecipientsAuthorized(
         )
         .map((recipient) => recipient.toLowerCase() as Address),
     ),
-  ].filter((recipient) => !authorized.has(key(chainId, currency, recipient)))
+  ].filter((recipient) => !((authorized.get(key(chainId, currency, recipient)) ?? 0) > Date.now()))
   if (recipients.length === 0) return true
 
   let policyId: bigint
@@ -62,7 +67,7 @@ export async function areRecipientsAuthorized(
       continue
     }
     if (!allowed) return false
-    authorized.add(key(chainId, currency, recipient))
+    authorized.set(key(chainId, currency, recipient), Date.now() + authorizedTtlMs)
   }
   return true
 }

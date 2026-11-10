@@ -1,6 +1,6 @@
 import { createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { Abis } from 'viem/tempo'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { areRecipientsAuthorized } from './recipient-policy.js'
 
@@ -78,5 +78,22 @@ describe('areRecipientsAuthorized', () => {
     const afterApproval = calls()
     await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
     expect(calls()).toBe(afterApproval)
+  })
+
+  test('reads the policy again once a cached authorization expires', async () => {
+    const allowed = [merchant]
+    const { client, calls } = policyClient({ allowed })
+    await areRecipientsAuthorized(client, { chainId: 5, currency, recipients: [merchant] })
+    allowed.pop()
+    vi.useFakeTimers({ now: Date.now() + 5 * 60_000 + 1, toFake: ['Date'] })
+    try {
+      const before = calls()
+      await expect(
+        areRecipientsAuthorized(client, { chainId: 5, currency, recipients: [merchant] }),
+      ).resolves.toBe(false)
+      expect(calls()).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
