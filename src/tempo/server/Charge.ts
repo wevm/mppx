@@ -475,10 +475,15 @@ export function charge<const parameters extends charge.Parameters>(
         // A settled transaction that is sent again fails simulation too: answer it as the
         // replay it is, before any MACH shortfall is read off the payer's spent balance.
         // The chain is checked too: replay-sharded stores keep markers that `get` can't read.
+        // Settlement broadcasts the canonical envelope (below), so the chain knows that hash.
         const hash = keccak256(serializedTransaction)
+        const canonicalHash = keccak256(
+          await Transaction.serialize(Transaction.deserialize(serializedTransaction)),
+        )
         if (
           (await isHashUsed(store, hash)) ||
-          (await getTransactionReceipt(client, { hash }).then(
+          (await isHashUsed(store, canonicalHash)) ||
+          (await getTransactionReceipt(client, { hash: canonicalHash }).then(
             () => true,
             () => false,
           ))

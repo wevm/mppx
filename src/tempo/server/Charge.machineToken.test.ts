@@ -11,7 +11,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
-import { Abis } from 'viem/tempo'
+import { Abis, Transaction } from 'viem/tempo'
 import { tempo as tempoChain } from 'viem/tempo/chains'
 import { expect, test } from 'vp/test'
 
@@ -38,6 +38,8 @@ test.each([
   'links a pull MACH payment that fails simulation to the MACH onramp (balance $machineTokenBalance, replayed $replayed)',
   async ({ machineTokenBalance, fundingUrl, replayed }) => {
     const store = Store.memory()
+    // The hash of the canonical envelope settlement broadcasts, which the chain knows.
+    let canonicalHash: Hex | undefined
     const client = createClient({
       account: payer,
       chain: { ...tempoChain, id: chainId },
@@ -46,7 +48,7 @@ test.each([
           async request({ method, params }) {
             if (method === 'eth_chainId') return `0x${chainId.toString(16)}`
             if (method === 'eth_getTransactionReceipt')
-              return replayed === 'chain'
+              return replayed === 'chain' && (params as [Hex])[0] === canonicalHash
                 ? {
                     blockHash: `0x${'11'.repeat(32)}`,
                     blockNumber: '0x1',
@@ -131,6 +133,9 @@ test.each([
       source: `did:pkh:eip155:${chainId}:${payer.address}`,
     })
 
+    canonicalHash = keccak256(
+      await Transaction.serialize(Transaction.deserialize(signature as never)),
+    )
     // A transaction that already settled holds its replay marker when it is sent again.
     if (replayed === 'store')
       await Store.tryClaim(
