@@ -675,16 +675,22 @@ export function charge<const parameters extends charge.Parameters>(
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
-      // Only approved merchants can receive MACH; a forbidden recipient could never be paid.
-      if (request.machineTokenEnabled && !credential)
-        await RecipientPolicy.assertRecipientsAuthorized(client, {
-          chainId,
-          currency: MachineTokenCharge.getToken(chainId)!,
-          recipients: [
-            request.recipient,
-            ...(request.splits ?? []).map((split) => split.recipient),
-          ],
-        })
+      // Only approved merchants can receive MACH directly, so offer direct MACH payments only to
+      // them; the legacy swapper route pays others in the charge currency. A credential echoes the
+      // HMAC-bound challenge, so verification keeps what the challenge offered.
+      const machineTokenDirect = !request.machineTokenEnabled
+        ? false
+        : credential
+          ? (credential.challenge.request as { methodDetails?: { machineTokenDirect?: unknown } })
+              .methodDetails?.machineTokenDirect === true
+          : await RecipientPolicy.areRecipientsAuthorized(client, {
+              chainId,
+              currency: MachineTokenCharge.getToken(chainId)!,
+              recipients: [
+                request.recipient,
+                ...(request.splits ?? []).map((split) => split.recipient),
+              ],
+            })
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -714,7 +720,7 @@ export function charge<const parameters extends charge.Parameters>(
         // `machineTokenEnabled` keeps legacy swapper clients working during the transition;
         // `machineTokenDirect` tells current clients they may pay MACH directly.
         machineTokenEnabled: request.machineTokenEnabled || undefined,
-        machineTokenDirect: request.machineTokenEnabled || undefined,
+        machineTokenDirect: machineTokenDirect || undefined,
         chainId,
         feePayer: resolvedFeePayer,
       }

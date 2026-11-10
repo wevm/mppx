@@ -2,7 +2,7 @@ import { createClient, custom, decodeFunctionData, encodeFunctionResult } from '
 import { Abis } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
-import { assertRecipientsAuthorized } from './recipient-policy.js'
+import { areRecipientsAuthorized } from './recipient-policy.js'
 
 const currency = '0x20c000000000000000000000f37de3740ADec032'
 const merchant = '0x40def0Cf3B5d28B6e9a7976BA10591e515AfECFE'
@@ -41,42 +41,42 @@ function policyClient(options: { allowed: readonly string[]; fail?: boolean }) {
   return { client, calls: () => calls }
 }
 
-describe('assertRecipientsAuthorized', () => {
+describe('areRecipientsAuthorized', () => {
   test('passes for a recipient the policy authorizes', async () => {
     const { client } = policyClient({ allowed: [merchant] })
     await expect(
-      assertRecipientsAuthorized(client, { chainId: 1, currency, recipients: [merchant] }),
-    ).resolves.toBeUndefined()
+      areRecipientsAuthorized(client, { chainId: 1, currency, recipients: [merchant] }),
+    ).resolves.toBe(true)
   })
 
-  test('throws for a recipient the policy forbids', async () => {
+  test('is false for a recipient the policy forbids', async () => {
     const { client } = policyClient({ allowed: [merchant] })
     await expect(
-      assertRecipientsAuthorized(client, {
+      areRecipientsAuthorized(client, {
         chainId: 2,
         currency,
         recipients: [merchant, stranger],
       }),
-    ).rejects.toThrow('transfer policy forbids it')
+    ).resolves.toBe(false)
   })
 
   test('does not block when the policy cannot be read', async () => {
     const { client } = policyClient({ allowed: [], fail: true })
     await expect(
-      assertRecipientsAuthorized(client, { chainId: 3, currency, recipients: [stranger] }),
-    ).resolves.toBeUndefined()
+      areRecipientsAuthorized(client, { chainId: 3, currency, recipients: [stranger] }),
+    ).resolves.toBe(true)
   })
 
   test('caches authorized recipients but rechecks rejected ones', async () => {
     const allowed: string[] = []
     const { client, calls } = policyClient({ allowed })
     await expect(
-      assertRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] }),
-    ).rejects.toThrow()
+      areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] }),
+    ).resolves.toBe(false)
     allowed.push(merchant)
-    await assertRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
+    await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
     const afterApproval = calls()
-    await assertRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
+    await areRecipientsAuthorized(client, { chainId: 4, currency, recipients: [merchant] })
     expect(calls()).toBe(afterApproval)
   })
 })

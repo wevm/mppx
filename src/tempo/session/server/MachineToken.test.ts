@@ -321,13 +321,16 @@ describe('session machineTokenEnabled', () => {
     expect(policyCalls).toHaveLength(1)
   })
 
-  test('rejects a recipient MACH may not pay', async () => {
+  test('offers only the session currency to a recipient MACH may not pay', async () => {
     const { method } = createServer({
       client: createServerClient({ policy: { id: 7n, authorized: false } }),
       machineTokenEnabled: true,
     })
 
-    await expect(issueRequest(method)).rejects.toThrow('transfer policy forbids it')
+    const request = await issueRequest(method)
+
+    expect(request.currency).toBe(token)
+    expect(request.methodDetails.machineTokenDirect).toBeUndefined()
   })
 
   test('does not flag challenges or read policies when disabled', async () => {

@@ -444,16 +444,26 @@ export async function resolveSessionPaymentRequest(
   )
   const currency = readChallengeAddress(request.currency, 'currency')
   const recipient = readChallengeAddress(request.recipient, 'recipient')
-  const machineToken = machineTokenEnabled
+  const offeredMachineToken = machineTokenEnabled
     ? resolveMachineTokenOffer({ chainId, currency })
     : undefined
-  // A payee MACH's transfer policy forbids could not be paid, so it must not be offered.
-  if (machineToken && !credential)
-    await RecipientPolicy.assertRecipientsAuthorized(client as never, {
-      chainId,
-      currency: machineToken,
-      recipients: [recipient],
-    })
+  // Only payees MACH's transfer policy authorizes can be paid in MACH, so others are offered the
+  // session currency alone. A credential echoes the HMAC-bound challenge, so verification keeps
+  // what the challenge offered.
+  const machineToken = !offeredMachineToken
+    ? undefined
+    : (
+          credential
+            ? isObject(credential.challenge.request.methodDetails) &&
+              credential.challenge.request.methodDetails.machineTokenDirect === true
+            : await RecipientPolicy.areRecipientsAuthorized(client as never, {
+                chainId,
+                currency: offeredMachineToken,
+                recipients: [recipient],
+              })
+        )
+      ? offeredMachineToken
+      : undefined
   const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
   const isContentRequest = capturedRequest ? isSessionContentRequest(capturedRequest) : false
@@ -473,7 +483,7 @@ export async function resolveSessionPaymentRequest(
     requireVoucherAdvance: Boolean(capturedRequest) && !sseEnabled && isContentRequest,
     store,
   })
-  // `machineTokenDirect` is set only by `machineTokenEnabled`, which checks the recipient first.
+  // `machineTokenDirect` is set only by `machineTokenEnabled`, for recipients MACH authorizes.
   const {
     machineTokenDirect: _machineTokenDirect,
     operator: _operator,
