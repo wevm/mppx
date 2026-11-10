@@ -301,6 +301,7 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
+    "@stripe/agent-identity": ">=0.3.0",
     "@x402/core": ">=2.22.0",
     "@x402/express": ">=2.22.0",
     "@x402/hono": ">=2.22.0",
@@ -314,6 +315,9 @@
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@stripe/agent-identity": {
       "optional": true
     },
     "@x402/core": {

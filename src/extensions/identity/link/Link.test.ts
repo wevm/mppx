@@ -349,6 +349,17 @@ test('tokenVerifier verifies tokens like the Link SDK', async () => {
   const rotated = await link.addKey()
   const fresh = await link.mint({ keyIndex: rotated })
   expect((await ours.verifyAttestation(fresh.authorization)).valid).toBe(true)
+  // A key Link publishes ahead of its activation is not advertised, and its tokens are refused.
+  const pending = await link.addKey({ notBefore: Math.floor(Date.now() / 1_000) + 86_400 })
+  const early = await link.mint({ keyIndex: pending })
+  const later = Link.Server.tokenVerifier({ fetch })
+  expect((await later.attestationChallenge()).wwwAuthenticate).toHaveLength(
+    (await ours.attestationChallenge()).wwwAuthenticate.length,
+  )
+  expect(await later.verifyAttestation(early.authorization)).toMatchObject({
+    failures: [{ code: 'unknown_issuer' }],
+    valid: false,
+  })
   for (const bad of [
     await link.mint({ challengeDigestOverride: new Uint8Array(32) }),
     { authorization: 'PrivateToken token="AAIA"' },
@@ -379,6 +390,9 @@ test('presentationVerifier verifies presentations like the Link SDK', async () =
   const expected = await sdk.verifyClaims(valid, options)
   expect(expected.valid).toBe(true)
   expect(await ours.verifyClaims(valid, options)).toEqual(expected)
+  // An audience configured with a trailing slash is the same origin.
+  const slashed = Link.Server.presentationVerifier({ audience: audience + '/', fetch })
+  expect((await slashed.verifyClaims(valid, options)).valid).toBe(true)
   // Each tampered presentation fails both ways.
   const other = await createLink()
   for (const [why, presentation, opts] of [
@@ -418,7 +432,7 @@ test('presentationVerifier verifies presentations like the Link SDK', async () =
   expect(
     await expiredVerifier.verifyClaims(stale, { nonce: 'n1', requiredClaims: [] }),
   ).toMatchObject({
-    failures: [{ message: 'The credential has expired.' }],
+    failures: [{ code: 'invalid_claims_presentation', message: 'credential has expired' }],
   })
   const down = Link.Server.presentationVerifier({
     audience,
@@ -449,6 +463,32 @@ test('eager sends a token on the first request', async () => {
   // The unpaid attempt already carried the token: no 401 round trip.
   expect(server.requests).toHaveLength(2)
   expect(server.requests[0]!.headers.get('Authorization')).toMatch(/^PrivateToken /)
+})
+
+test('concurrent rejections of one token share a single refresh', async () => {
+  let minted = 0
+  const prover = Link.Client.attestation({
+    eager: true,
+    scope: ['https://api.example'],
+    token: async () => `token${++minted}`,
+  })
+  const first = await prover.prove(new Request('https://api.example/a'), {} as never)
+  const second = await prover.prove(new Request('https://api.example/b'), {} as never)
+  expect(first.headers.get('Authorization')).toBe(second.headers.get('Authorization'))
+  const challenge = () =>
+    new Response(null, {
+      status: 401,
+      headers: { 'WWW-Authenticate': 'PrivateToken challenge="x"' },
+    })
+  const retries = await Promise.all([
+    prover.retry!(challenge(), { request: first } as never),
+    prover.retry!(challenge(), { request: second } as never),
+  ])
+  expect(retries).toEqual([{}, {}])
+  expect(minted).toBe(2)
+  // Someone else's Authorization is left alone.
+  const foreign = new Request('https://api.example/c', { headers: { Authorization: 'Bearer x' } })
+  expect(await prover.retry!(challenge(), { request: foreign } as never)).toBeUndefined()
 })
 
 test('throws on an empty claims list', () => {

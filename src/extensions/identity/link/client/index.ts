@@ -1,7 +1,7 @@
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import { Constants } from '../Constants.js'
-import type * as Types from '../Types.js'
+import type * as Types from '../Constants.js'
 
 /**
  * Creates a prover that answers Link attestation challenges with an Agent Attestation Token.
@@ -27,6 +27,15 @@ import type * as Types from '../Types.js'
  */
 export function attestation(config: attestation.Config): Identity.Prover {
   const tokens = new Map<string, string>()
+  // Every token this prover attached, so a request carrying an older one still retries.
+  const sent = new Set<string>()
+  // One refresh per origin, shared by concurrent rejections.
+  const refreshes = new Map<string, Promise<string | undefined>>()
+  const remember = (origin: string, authorization: string) => {
+    tokens.set(origin, authorization)
+    sent.add(authorization)
+    if (sent.size > 64) sent.delete(sent.values().next().value!)
+  }
   return {
     scope: config.scope,
     async prove(request) {
@@ -34,7 +43,7 @@ export function attestation(config: attestation.Config): Identity.Prover {
       const origin = new URL(request.url).origin
       if (config.eager && !tokens.has(origin)) {
         const token = await config.token({ origin })
-        if (token) tokens.set(origin, toAuthorization(token))
+        if (token) remember(origin, toAuthorization(token))
       }
       const token = tokens.get(origin)
       if (!token) return request
@@ -46,14 +55,26 @@ export function attestation(config: attestation.Config): Identity.Prover {
       if (response.status !== 401) return undefined
       if (!hasChallenge(response, Constants.attestationScheme)) return undefined
       const origin = new URL(request.url).origin
-      const sent = request.headers.get('Authorization')
+      const authorization = request.headers.get('Authorization')
       // Someone else's Authorization: the token can't be sent alongside it.
-      if (sent && sent !== tokens.get(origin)) return undefined
-      tokens.delete(origin)
-      const token = await config.token({ origin })
-      if (!token) return undefined
-      tokens.set(origin, toAuthorization(token))
-      return {}
+      if (authorization && !sent.has(authorization)) return undefined
+      const current = tokens.get(origin)
+      // Another request already replaced the rejected token: retry with the new one.
+      if (current && current !== authorization) return {}
+      let refresh = refreshes.get(origin)
+      if (!refresh) {
+        tokens.delete(origin)
+        refresh = Promise.resolve(config.token({ origin }))
+          .then((token) => {
+            if (!token) return undefined
+            const value = toAuthorization(token)
+            remember(origin, value)
+            return value
+          })
+          .finally(() => refreshes.delete(origin))
+        refreshes.set(origin, refresh)
+      }
+      return (await refresh) ? {} : undefined
     },
   }
 }

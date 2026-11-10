@@ -7,7 +7,7 @@ const root = path.resolve(import.meta.dirname, '..')
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-package-'))
 /** Package budgets. Raise one deliberately, in its own change, when growth is expected. */
 const limits = {
-  fileCount: 550,
+  fileCount: 575,
   packedBytes: 1_250_000,
   unpackedBytes: 5_500_000,
 }

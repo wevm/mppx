@@ -10,4 +10,3 @@ export * as Client from './client/index.js'
 /** Server verifiers that require a Link attestation or Link-signed claims. */
 export * as Server from './server/index.js'
 export * from './Constants.js'
-export type * from './Types.js'
