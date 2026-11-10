@@ -202,6 +202,21 @@ test('never follows a pagination link to another origin', async () => {
   expect(urls).toEqual(['https://api.withpersona.com'])
 })
 
+test('never follows a protocol-relative pagination path to another origin', async () => {
+  const urls: string[] = []
+  const fetch = (async (input: RequestInfo | URL) => {
+    urls.push(new URL(String(input)).origin)
+    const next = urls.length < 3 ? 'https://api.withpersona.com//evil.example/x' : null
+    return Response.json({ data: [], links: { next } })
+  }) as typeof globalThis.fetch
+  await pay(
+    Persona.Server.create({ apiKey: 'k', fetch }).paymentCheck({ referenceId: fromSource }),
+    payer,
+  )
+  expect(urls.length).toBeGreaterThan(1)
+  expect(new Set(urls)).toEqual(new Set(['https://api.withpersona.com']))
+})
+
 test('rejects without settling, as missing or forbidden, with the onboarding link', async () => {
   const api = fakePersona([
     { id: 'inq_1', attributes: { status: 'declined', 'reference-id': payer } },
@@ -277,6 +292,18 @@ test('does not share cached approvals across Persona organizations', async () =>
   expect((await pay(a, payer)).result.status).toBe(200)
   expect((await pay(b, payer)).response?.status).toBe(403)
   expect(emptyApi.calls).toHaveLength(1)
+})
+
+test("applies each check's own cacheTtl to a shared cache", async () => {
+  const cache = Store.memory()
+  const api = fakePersona([approved('inq_1')])
+  const persona = Persona.Server.create({ apiKey: 'k', fetch: api.fetch })
+  const lenient = persona.paymentCheck({ cache, cacheTtl: 3600, referenceId: fromSource })
+  const strict = persona.paymentCheck({ cache, cacheTtl: 0, referenceId: fromSource })
+  expect((await pay(lenient, payer)).result.status).toBe(200)
+  api.inquiries.length = 0
+  expect((await pay(lenient, payer)).result.status).toBe(200)
+  expect((await pay(strict, payer)).response?.status).toBe(403)
 })
 
 test('applies maxAge across pages, and a custom referenceId', async () => {

@@ -120,7 +120,9 @@ export function create(config: create.Config): Persona {
     const cached = cache ? ((await cache.get(key)) as CacheEntry | null) : null
     if (
       cached &&
-      cached.expires > now &&
+      // Each check applies its own lifetime, so a longer-lived check sharing the Store never
+      // extends a stricter one's revalidation window.
+      cached.cachedAt + cacheTtl * 1_000 > now &&
       statuses.includes(cached.status) &&
       fresh(date(cached.verifiedAt), maxAge, now)
     )
@@ -145,7 +147,7 @@ export function create(config: create.Config): Persona {
     // Only approvals are cached, so a person who just passed KYC is never kept waiting.
     if (cache)
       await cache.put(key, {
-        expires: now + cacheTtl * 1_000,
+        cachedAt: now,
         inquiryId: inquiry.inquiryId,
         status: inquiry.status,
         verifiedAt: inquiry.verifiedAt?.toISOString(),
@@ -356,7 +358,7 @@ type Inquiry = {
 }
 
 type CacheEntry = {
-  readonly expires: number
+  readonly cachedAt: number
   readonly inquiryId: string
   readonly status: Types.InquiryStatus
   readonly verifiedAt?: string | undefined
@@ -402,5 +404,6 @@ function sameOrigin(link: unknown, apiUrl: string): string | undefined {
   const base = new URL(apiUrl)
   const url = new URL(link, base)
   if (url.origin !== base.origin) return undefined
-  return url.pathname + url.search
+  // The absolute URL, not its path: a path such as '//host/x' would resolve to another origin.
+  return url.href
 }
