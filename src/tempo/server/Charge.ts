@@ -472,6 +472,10 @@ export function charge<const parameters extends charge.Parameters>(
         client,
         FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
       ).catch(async (error: unknown) => {
+        // A settled transaction that is sent again fails simulation too: answer it as the
+        // replay it is, before any MACH shortfall is read off the payer's spent balance.
+        if (await isHashUsed(store, keccak256(serializedTransaction)))
+          throw new CredentialReplayedError({ reason: 'Transaction hash has already been used' })
         throw await explainMachineTokenFailure(error, {
           amount,
           chainId: chainId ?? client.chain?.id,
@@ -1658,6 +1662,17 @@ async function tryClaimHash(
   expires: number,
 ): Promise<boolean> {
   return Store.tryClaim(store, getHashStoreKey(hash), expires)
+}
+
+/** Whether a live replay marker holds `hash`, read without claiming it. */
+async function isHashUsed(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  hash: `0x${string}`,
+): Promise<boolean> {
+  const current: unknown = await store.get(getHashStoreKey(hash))
+  if (current === null || current === undefined) return false
+  const expires = typeof current === 'object' && 'expires' in current ? current.expires : undefined
+  return typeof expires !== 'number' || expires > Date.now()
 }
 
 /** @internal */

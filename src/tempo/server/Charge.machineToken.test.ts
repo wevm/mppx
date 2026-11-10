@@ -5,6 +5,7 @@ import {
   custom,
   decodeFunctionData,
   encodeAbiParameters,
+  keccak256,
   maxUint256,
   type Hex,
 } from 'viem'
@@ -29,11 +30,13 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key-that-is-at-least-32-bytes'
 
 test.each([
-  { machineTokenBalance: 250_000n, fundingUrl: true },
-  { machineTokenBalance: 2_000_000n, fundingUrl: false },
+  { machineTokenBalance: 250_000n, fundingUrl: true, replayed: false },
+  { machineTokenBalance: 2_000_000n, fundingUrl: false, replayed: false },
+  { machineTokenBalance: 250_000n, fundingUrl: false, replayed: true },
 ])(
-  'links a pull MACH payment that fails simulation to the MACH onramp (balance $machineTokenBalance)',
-  async ({ machineTokenBalance, fundingUrl }) => {
+  'links a pull MACH payment that fails simulation to the MACH onramp (balance $machineTokenBalance, replayed $replayed)',
+  async ({ machineTokenBalance, fundingUrl, replayed }) => {
+    const store = Store.memory()
     const client = createClient({
       account: payer,
       chain: { ...tempoChain, id: chainId },
@@ -66,7 +69,7 @@ test.each([
           currency: defaults.tokens.usdc,
           getClient: () => client,
           machineTokenEnabled: true,
-          store: Store.memory(),
+          store,
           supportedModes: ['pull'],
         }),
       ],
@@ -108,6 +111,14 @@ test.each([
       source: `did:pkh:eip155:${chainId}:${payer.address}`,
     })
 
+    // A transaction that already settled holds its replay marker when it is sent again.
+    if (replayed)
+      await Store.tryClaim(
+        store,
+        `mppx:charge:${keccak256(signature).toLowerCase()}`,
+        Date.now() + 60_000,
+      )
+
     const response = await mppx.charge({ amount: '1.5', decimals: 6 })(
       new Request('https://api.example.com/resource', {
         headers: { Authorization: credential },
@@ -116,7 +127,11 @@ test.each([
     expect(response.status).toBe(402)
     if (response.status !== 402) throw new Error('expected a rejection')
     const problem = (await response.challenge.json()) as Record<string, unknown>
-    if (fundingUrl) {
+    if (replayed) {
+      expect(response.challenge.status).toBe(403)
+      expect(problem.detail).toContain('Transaction hash has already been used')
+      expect(problem).not.toHaveProperty('fundingUrl')
+    } else if (fundingUrl) {
       expect(response.challenge.status).toBe(402)
       expect(problem.type).toBe('https://paymentauth.org/problems/verification-failed')
       expect(problem.fundingUrl).toBe(
