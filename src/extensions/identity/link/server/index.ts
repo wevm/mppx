@@ -411,9 +411,8 @@ export function tokenVerifier(config: tokenVerifier.Config = {}): Types.Attestat
         // No refresh for an unknown key id, which anyone can send: the short cache picks up
         // keys Link publishes ahead of their activation.
         key = (await keys()).get(keyId)
-      } catch (error) {
+      } catch {
         // Upstream error text stays out of responses: it can name internal hosts.
-        void error
         return failure('issuer_unavailable', 'Link is unavailable.')
       }
       if (!key) return failure('unknown_issuer', 'Link does not publish the token key.')

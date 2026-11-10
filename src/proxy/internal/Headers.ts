@@ -74,7 +74,7 @@ export function scrubResponse(response: Response): Response {
   if (authorization && /^\s*Payment(?:\s|$)/i.test(authorization)) headers.delete('authorization')
   const authenticate = headers.get('www-authenticate')
   if (authenticate) {
-    const remaining = removePaymentChallenges(authenticate)
+    const remaining = removeChallenges(authenticate)
     if (remaining) headers.set('www-authenticate', remaining)
     else headers.delete('www-authenticate')
   }
@@ -85,8 +85,8 @@ export function scrubResponse(response: Response): Response {
   })
 }
 
-/** Removes Payment authentication challenges while preserving other schemes. */
-function removePaymentChallenges(value: string): string {
+/** Removes Payment and identity authentication challenges while preserving other schemes. */
+function removeChallenges(value: string): string {
   const starts: { index: number; scheme: string }[] = []
   let inQuotes = false
   let escaped = false
@@ -118,7 +118,10 @@ function removePaymentChallenges(value: string): string {
   }
 
   return starts
-    .filter(({ scheme }) => scheme !== 'payment')
+    .filter(
+      ({ scheme }) =>
+        scheme !== 'payment' && !(IdentityHeaders.challenges as readonly string[]).includes(scheme),
+    )
     .map(({ index }) => {
       const originalPosition = starts.findIndex((start) => start.index === index)
       const end = starts[originalPosition + 1]?.index ?? value.length

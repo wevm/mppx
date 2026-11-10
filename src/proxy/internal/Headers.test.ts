@@ -36,10 +36,15 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
-  test('behavior: strips identity attestation header', () => {
-    const headers = new globalThis.Headers({ 'Identity-Attestation': 'token', 'X-Public': 'value' })
+  test('behavior: strips identity attestation and presentation headers', () => {
+    const headers = new globalThis.Headers({
+      'Identity-Attestation': 'token',
+      'Identity-Presentation': 'sd-jwt~kb-jwt',
+      'X-Public': 'value',
+    })
     const result = Headers.scrub(headers)
     expect(result.get('identity-attestation')).toBeNull()
+    expect(result.get('identity-presentation')).toBeNull()
     expect(result.get('x-public')).toBe('value')
   })
 
@@ -184,6 +189,20 @@ describe('scrubResponse', () => {
 
     expect(result.headers.get('www-authenticate')).toBe(
       'Basic realm="example, inc", Bearer realm="api"',
+    )
+  })
+
+  test('behavior: strips upstream identity challenges', () => {
+    const response = new Response('body', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate':
+          'PrivateToken challenge="abc", token-key="def", Identity-Presentation realm="x", Bearer realm="api"',
+      },
+    })
+
+    expect(Headers.scrubResponse(response).headers.get('www-authenticate')).toBe(
+      'Bearer realm="api"',
     )
   })
 
