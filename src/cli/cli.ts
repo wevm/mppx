@@ -395,6 +395,16 @@ export function resolveMppCredentialTarget(
   return resolveFetchTarget(response.href)
 }
 
+/** Accepts only the challenge origin or its exact local development transport mapping. */
+export function resolveX402CredentialTarget(initialUrl: string, resourceUrl: string) {
+  const initial = new URL(initialUrl)
+  const resource = new URL(resourceUrl || initialUrl)
+  const transport = new URL(resolveFetchTarget(initialUrl).url)
+  if (resource.origin !== initial.origin && resource.origin !== transport.origin)
+    throwUnsafePaymentRedirect(resource)
+  return resolveFetchTarget(resource.href)
+}
+
 function throwUnsafePaymentRedirect(target: URL): never {
   throw new Errors.IncurError({
     code: 'UNSAFE_PAYMENT_REDIRECT',
@@ -700,13 +710,12 @@ const cli = Cli.create('mppx', {
 
       const { challenge, plugin, method: configMethod } = selected
       const isX402Challenge = x402_ChallengeBrand.is(challenge)
-      const credentialTarget = resolveMppCredentialTarget(
-        isX402Challenge ? challengeRequest.logicalUrl : url,
-        initialTarget,
-        isX402Challenge
-          ? (x402ResourceUrl(challenge) ?? challengeResponse.url) || challengeRequest.logicalUrl
-          : challengeRequest.logicalUrl,
-      )
+      const credentialTarget = isX402Challenge
+        ? resolveX402CredentialTarget(
+            challengeRequest.logicalUrl,
+            (x402ResourceUrl(challenge) ?? challengeResponse.url) || challengeRequest.logicalUrl,
+          )
+        : resolveMppCredentialTarget(url, initialTarget, challengeRequest.logicalUrl)
       // A zero-amount Tempo proof authenticates the payer at the challenge realm, so sign one only
       // for the server that owns that realm.
       if (!isX402Challenge) {

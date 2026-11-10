@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vp/test'
 
 import * as X402Assets from '../x402/Assets.js'
 import * as X402Header from '../x402/Header.js'
-import cli from './cli.js'
+import cli, { resolveX402CredentialTarget } from './cli.js'
 import * as internal from './internal.js'
 
 afterEach(() => {
@@ -161,3 +161,16 @@ test.each(['http://payments.example/paid', 'https://other.example/paid'])(
     expect(fetch).toHaveBeenCalledOnce()
   },
 )
+
+test.each([
+  ['http://app.localhost:3000/start', 'http://127.0.0.1:3000/paid', true],
+  ['http://app.localhost:3000/start', 'http://app.localhost:3000/paid', true],
+  ['http://app.localhost:3000/start', 'http://127.0.0.1:3001/paid', false],
+  ['http://app.localhost:3000/start', 'http://other.localhost:3000/paid', false],
+  ['https://payments.example/start', 'http://127.0.0.1:3000/paid', false],
+  ['https://app.localhost:3000/start', 'http://127.0.0.1:3000/paid', false],
+])('validates exact x402 transport mapping from %s to %s', (initial, resource, allowed) => {
+  const resolve = () => resolveX402CredentialTarget(initial, resource)
+  if (allowed) expect(resolve().url).toBe('http://127.0.0.1:3000/paid')
+  else expect(resolve).toThrow('Refusing to send a payment credential')
+})
