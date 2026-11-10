@@ -327,7 +327,10 @@ describe('session machineTokenEnabled', () => {
       machineTokenEnabled: true,
     })
 
-    const request = await issueRequest(method)
+    // A payee no other test authorizes, since policy results are cached.
+    const request = await issueRequest(method, {
+      recipient: '0x0000000000000000000000000000000000000007',
+    })
 
     expect(request.currency).toBe(token)
     expect(request.methodDetails.machineTokenDirect).toBeUndefined()
