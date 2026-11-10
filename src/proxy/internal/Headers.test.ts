@@ -36,10 +36,15 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
-  test('behavior: strips identity attestation header', () => {
-    const headers = new globalThis.Headers({ 'Identity-Attestation': 'token', 'X-Public': 'value' })
+  test('behavior: strips identity attestation and presentation headers', () => {
+    const headers = new globalThis.Headers({
+      'Identity-Attestation': 'token',
+      'Identity-Presentation': 'sd-jwt~kb-jwt',
+      'X-Public': 'value',
+    })
     const result = Headers.scrub(headers)
     expect(result.get('identity-attestation')).toBeNull()
+    expect(result.get('identity-presentation')).toBeNull()
     expect(result.get('x-public')).toBe('value')
   })
 

@@ -500,6 +500,7 @@ describe('prepareRequest', () => {
         Authorization: 'Bearer secret',
         Cookie: 'session=secret',
         'Identity-Attestation': 'secret',
+        'Identity-Presentation': 'secret',
         'Payment-Authorization': 'secret',
         'PAYMENT-SIGNATURE': 'secret',
         'X-Alternate-Credential': 'Payment secret',
@@ -512,6 +513,7 @@ describe('prepareRequest', () => {
     expect(prepared.request.headers.get('authorization')).toBeNull()
     expect(prepared.request.headers.get('cookie')).toBeNull()
     expect(prepared.request.headers.get('identity-attestation')).toBeNull()
+    expect(prepared.request.headers.get('identity-presentation')).toBeNull()
     expect(prepared.request.headers.get('payment-authorization')).toBeNull()
     expect(prepared.request.headers.get('payment-signature')).toBeNull()
     expect(prepared.request.headers.get('x-alternate-credential')).toBeNull()
