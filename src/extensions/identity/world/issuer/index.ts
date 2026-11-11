@@ -94,22 +94,23 @@ export function create(config: create.Config): Issuer {
   /** Indexes a record under the minute it expires, so {@link sweep} can delete it. */
   async function track(key: string, expires: number) {
     const minute = Math.ceil(expires / bucketMs)
+    // The minute is registered before its shard gets the key, so a failure between the two writes
+    // leaves at most an empty minute, which a sweep drops, never a key no sweep can find. Once the
+    // minute is listed this writes nothing.
+    await store.update<string, undefined>(`${prefix}expiry:minutes`, (current) => {
+      const minutes = (current as number[] | null) ?? []
+      if (minutes.includes(minute)) return { op: 'noop', result: undefined }
+      return { op: 'set', value: [...minutes, minute].sort((a, b) => a - b), result: undefined }
+    })
     // Sharded, so concurrent starts rarely contend on one index key.
-    const created = await store.update<string, boolean>(
+    await store.update<string, undefined>(
       `${prefix}expiry:${minute}:${shardOf(key)}`,
       (current) => {
         const keys = (current as string[] | null) ?? []
-        if (keys.includes(key)) return { op: 'noop', result: false }
-        return { op: 'set', value: [...keys, key], result: keys.length === 0 }
+        if (keys.includes(key)) return { op: 'noop', result: undefined }
+        return { op: 'set', value: [...keys, key], result: undefined }
       },
     )
-    // The list of minutes with records changes only when one of its shards gets its first key.
-    if (created)
-      await store.update<string, undefined>(`${prefix}expiry:minutes`, (current) => {
-        const minutes = (current as number[] | null) ?? []
-        if (minutes.includes(minute)) return { op: 'noop', result: undefined }
-        return { op: 'set', value: [...minutes, minute].sort((a, b) => a - b), result: undefined }
-      })
   }
 
   /**
