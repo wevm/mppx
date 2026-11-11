@@ -271,6 +271,34 @@ describe('session machineTokenDirect', () => {
     expect(open.descriptor.token).toBe(currency)
   })
 
+  test('closes an existing MACH channel even when the currencies allowlist leaves MACH out', async () => {
+    const method = session({
+      account,
+      currencies: [currency],
+      decimals: 0,
+      getClient: () => createTestClient({ machBalance: 1_000n }),
+    })
+    const descriptor = {
+      authorizedSigner: account.address,
+      expiringNonceHash: `0x${'11'.repeat(32)}`,
+      operator: '0x0000000000000000000000000000000000000000',
+      payee,
+      payer: account.address,
+      salt: `0x${'22'.repeat(32)}`,
+      token: mach,
+    } as const
+
+    const close = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge({ machineTokenDirect: true }),
+        context: { action: 'close', cumulativeAmountRaw: '100', descriptor },
+      }),
+    )
+
+    expect(close.action).toBe('close')
+    expect(close.descriptor.token).toBe(mach)
+  })
+
   test('keeps using an existing channel in the challenge currency', async () => {
     const channelStore = createChannelStore()
     const poor = session({

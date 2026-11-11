@@ -248,11 +248,15 @@ export function session(parameters: session.Parameters = {}) {
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
   /**
-   * Resolves a challenge's context. A `currencies` allowlist without the chain's MACH keeps
-   * channels in the advertised currency, so MACH funding and a server snapshot of a MACH channel
-   * are ignored.
+   * Resolves a challenge's context. A `currencies` allowlist without the chain's MACH keeps new
+   * spending in the advertised currency, so MACH funding and a server snapshot of a MACH channel
+   * are ignored. A close only settles what a channel already spent, so it still reaches an
+   * existing MACH channel and its refund.
    */
-  const resolveContext = async (challenge: Challenge.Challenge): Promise<ChallengeContext> => {
+  const resolveContext = async (
+    challenge: Challenge.Challenge,
+    options: { close?: boolean | undefined } = {},
+  ): Promise<ChallengeContext> => {
     const resolved = await resolveChallengeContext({
       allowCustomEscrow,
       challenge,
@@ -261,7 +265,7 @@ export function session(parameters: session.Parameters = {}) {
       getClient,
     })
     const { chainId, snapshot } = resolved
-    if (MachineTokenCharge.isAllowed(policy.currencies, chainId)) return resolved
+    if (options.close || MachineTokenCharge.isAllowed(policy.currencies, chainId)) return resolved
     const machineSnapshot =
       snapshot &&
       MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
@@ -322,7 +326,9 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const challengeContext = await resolveContext(challenge)
+      const challengeContext = await resolveContext(challenge, {
+        close: context?.action === 'close',
+      })
       const attempt = MethodResponse.getAttempt(parameters)
       const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
       if (
