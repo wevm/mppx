@@ -223,7 +223,6 @@ test('machineTokenEnabled sessions settle MACH channels', async () => {
         methods: [
           tempo({
             ...config,
-            machineTokenDirect: machineTokenEnabled,
             machineTokenEnabled,
             settlementSchedule: { amount: '1' },
           }),

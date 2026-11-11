@@ -22,7 +22,6 @@ import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
 import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
-import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
@@ -382,7 +381,8 @@ export function session<const parameters extends session.Parameters>(
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   // Sessions accept MACH channels only when the payee opts in to direct MACH.
-  const machineTokenDirect = MachineTokenCharge.acceptsDirect(parameters)
+  // Sessions have no swapper route, so enabling MACH means accepting MACH channels directly.
+  const machineTokenDirect = parameters.machineTokenEnabled === true
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
@@ -842,14 +842,13 @@ export namespace session {
     /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
     /**
-     * With `machineTokenEnabled`, also accepts channels funded in MACH, 1:1 with the session
-     * currency. Challenges stay priced in the session currency and carry `machineTokenDirect: true`,
-     * so clients holding MACH may open the channel in MACH instead and fall back to the session
-     * currency otherwise. MACH channels pay fees in `feeToken` or the session currency. Throws on
-     * chains without MACH; ignored for sessions priced in MACH.
+     * Also accepts channels funded in MACH, 1:1 with the session currency. Sessions have no swapper
+     * route, so enabling MACH always means accepting it directly: the payee must be on MACH's
+     * merchant list. Challenges stay priced in the session currency and carry
+     * `machineTokenDirect: true`, so clients holding MACH may open the channel in MACH instead and
+     * older clients keep paying the session currency. MACH channels pay fees in `feeToken` or the
+     * session currency. Throws on chains without MACH; ignored for sessions priced in MACH.
      */
-    machineTokenDirect?: boolean | undefined
-    /** Enables MACH for this session. Sessions accept MACH only with `machineTokenDirect`. */
     machineTokenEnabled?: boolean | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC

@@ -285,7 +285,6 @@ describe('session machineTokenEnabled', () => {
     const calls: RpcCall[] = []
     const { method } = createServer({
       client: createServerClient({ calls }),
-      machineTokenDirect: true,
       machineTokenEnabled: true,
     })
 
@@ -306,18 +305,9 @@ describe('session machineTokenEnabled', () => {
     expect(calls.filter(({ method }) => method === 'eth_call')).toEqual([])
   })
 
-  test('does not flag challenges without machineTokenDirect', async () => {
-    const { method } = createServer({ machineTokenEnabled: true })
-
-    const request = await issueRequest(method)
-
-    expect(request.methodDetails.machineTokenDirect).toBeUndefined()
-  })
-
   test('does not flag sessions priced in MACH', async () => {
     const { method } = createServer({
       currency: mach,
-      machineTokenDirect: true,
       machineTokenEnabled: true,
     })
 
@@ -339,7 +329,6 @@ describe('session machineTokenEnabled', () => {
     const { method } = createServer({
       chainId: 1337,
       client: client as never,
-      machineTokenDirect: true,
       machineTokenEnabled: true,
     })
 
@@ -349,7 +338,7 @@ describe('session machineTokenEnabled', () => {
   })
 
   test('accepts a MACH channel for a flagged challenge', async () => {
-    const { method } = createServer({ machineTokenDirect: true, machineTokenEnabled: true })
+    const { method } = createServer({ machineTokenEnabled: true })
     const request = await issueRequest(method)
     const payload = await createOpenPayload(mach)
 
@@ -375,7 +364,7 @@ describe('session machineTokenEnabled', () => {
   })
 
   test('rejects a MACH channel when the route no longer offers MACH', async () => {
-    const { method } = createServer({ machineTokenDirect: true, machineTokenEnabled: true })
+    const { method } = createServer({ machineTokenEnabled: true })
     const request = await issueRequest(method)
     const { machineTokenDirect: _, ...methodDetails } = request.methodDetails
     const payload = await createOpenPayload(mach)
@@ -389,7 +378,7 @@ describe('session machineTokenEnabled', () => {
   })
 
   test('rejects channels in other tokens for a flagged challenge', async () => {
-    const { method } = createServer({ machineTokenDirect: true, machineTokenEnabled: true })
+    const { method } = createServer({ machineTokenEnabled: true })
     const request = await issueRequest(method)
     const payload = await createOpenPayload(otherToken)
 
@@ -407,7 +396,6 @@ describe('session machineTokenEnabled', () => {
     const { method } = createServer({
       client: createServerClient({ calls, open: payload }),
       feePayer: payer,
-      machineTokenDirect: true,
       machineTokenEnabled: true,
     })
     const request = await issueRequest(method)
@@ -428,7 +416,6 @@ describe('session machineTokenEnabled', () => {
     const payload = await createOpenPayload(mach)
     const { method, store } = createServer({
       client: createServerClient({ open: payload }),
-      machineTokenDirect: true,
       machineTokenEnabled: true,
     })
     const request = await issueRequest(method)
