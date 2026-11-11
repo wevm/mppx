@@ -2,10 +2,11 @@
 //
 // `/api/report` requires an agent approved by a World ID-verified human. Each human's first
 // report is free, however many agents they run; later ones cost 0.01 pathUSD on Tempo testnet.
-// A shared World ID issuer runs World IdP's device flow and attests the human, so this server
-// only checks the attestation: it holds no World IdP credentials and hosts no extra routes.
+// A World ID issuer runs World IdP's device flow and attests the human. With World IdP
+// credentials, this server runs one itself (self-hosted); otherwise it names a shared one.
 //
-//   WORLD_ID_ISSUER=https://world-id.issuer.example pnpm server
+//   WORLD_CLIENT_ID=... WORLD_CLIENT_SECRET=... pnpm server      # self-hosted issuer
+//   WORLD_ID_ISSUER=https://world-id.issuer.example pnpm server  # shared issuer
 import * as http from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -42,10 +43,37 @@ const mppx = Mppx.create({
   ],
 })
 
+// Self-hosted: this app is the issuer for its own origin. Register a confidential client at
+// https://auth.world.org/portal. The signing key is per process here; persist one in production
+// so attestations survive restarts.
+const issuer = process.env.WORLD_CLIENT_ID
+  ? World.Issuer.create({
+      audiences: [ORIGIN],
+      clientId: process.env.WORLD_CLIENT_ID,
+      clientSecret: process.env.WORLD_CLIENT_SECRET!,
+      // One attempt start per minute per client IP. Trust x-forwarded-for only behind your proxy.
+      limit: {
+        key: (request) => request.headers.get('x-forwarded-for') ?? 'local',
+        max: 1,
+        window: 60,
+      },
+      secretKey,
+      signingKey: (await crypto.subtle.generateKey({ name: 'Ed25519' }, false, [
+        'sign',
+        'verify',
+      ])) as CryptoKeyPair,
+      store,
+      url: ORIGIN,
+      worldIssuer: process.env.WORLD_ISSUER ?? World.Constants.worldIssuer,
+    })
+  : undefined
+
 const human = World.Server.verifier({
   acr: [World.Constants.acr.orb, World.Constants.acr.orbFace],
   audience: ORIGIN,
-  issuer: process.env.WORLD_ID_ISSUER!,
+  issuer: issuer?.url ?? process.env.WORLD_ID_ISSUER!,
+  // Self-hosted, the key resolves in process instead of from the JWKS route.
+  keyResolver: issuer?.keyResolver,
 })
 
 /** Atomically uses one of a human's free reports: false once they are all used. */
@@ -58,6 +86,9 @@ async function useFreeReport(subject: string): Promise<boolean> {
 }
 
 async function handle(request: globalThis.Request): Promise<Response> {
+  // The issuer's routes (device, token, JWKS) when self-hosted.
+  const answered = await issuer?.handle(request)
+  if (answered) return answered
   const url = new URL(request.url)
   if (url.pathname !== '/api/report') return new Response('Not found', { status: 404 })
 
@@ -69,9 +100,9 @@ async function handle(request: globalThis.Request): Promise<Response> {
       status: Identity.Status.codes[identity.status],
       headers: identity.headers,
     })
-  const { issuer, subject } = identity.value
+  const { issuer: attestedBy, subject } = identity.value
   const report = 'Q3 cross-border volume: $41.2M (+18%)'
-  if (await useFreeReport(`${issuer} ${subject}`)) return Response.json({ report, paid: false })
+  if (await useFreeReport(`${attestedBy} ${subject}`)) return Response.json({ report, paid: false })
 
   const result = await mppx.charge({ amount: '0.01', description: 'Market report' })(request)
   if (result.status === 402) return result.challenge

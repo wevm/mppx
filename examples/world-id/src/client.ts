@@ -5,7 +5,7 @@
 // testnet funds from the faucet.
 //
 //   pnpm client
-//   WORLD_ID_ISSUER=https://world-id.issuer.example BASE_URL=https://api.example pnpm client
+//   WORLD_ID_ISSUER=https://world-id.issuer.example pnpm client  # shared issuer
 import { Receipt } from 'mppx'
 import { Mppx, tempo } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
@@ -28,7 +28,8 @@ await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 const mppx = Mppx.create({
   identity: [
     World.Client.prover({
-      issuers: [process.env.WORLD_ID_ISSUER!],
+      // The shared issuer, or the server itself when it self-hosts one.
+      issuers: [process.env.WORLD_ID_ISSUER ?? new URL(BASE_URL).origin],
       scope: [new URL(BASE_URL).origin],
       verification: ({ url, userCode }) =>
         console.log(`\nApprove this agent with World ID: ${url}\n  code: ${userCode}\n`),

@@ -1,7 +1,7 @@
 /**
  * World ID attestation values. Values every attestation shares are in `Attestation.Constants`.
  *
- * A World ID issuer is an external service holding a confidential World IdP client. It runs World
+ * A World ID issuer (`World.Issuer`, shared or self-hosted) holds a confidential World IdP client. It runs World
  * IdP's OpenID Connect device flow for the agent's human, verifies the ID token, and signs an
  * `Identity-Attestation` of type `world-id` bound to the server's origin. Its API:
  *
@@ -13,6 +13,10 @@
  * - `GET {issuer}/.well-known/jwks.json`: its attestation keys.
  */
 export const Constants = {
+  /** World IdP issuer, which `World.Issuer` calls as a confidential client. */
+  worldIssuer: 'https://auth.world.org',
+  /** World IdP sandbox issuer, for testing with sandbox client credentials. */
+  worldSandboxIssuer: 'https://sandbox.auth.world.org',
   /** Attestation type for a human verified with World ID. */
   type: 'world-id',
   /** Issuer path that starts a device attempt. */
@@ -36,6 +40,10 @@ export const Constants = {
   slowDown: 5,
   /** Seconds a client waits after a failed or declined attempt before starting another for the same origin. */
   retryDelay: 60,
-  /** Milliseconds a client waits for each issuer call. */
+  /** Default lifetime, in seconds, of an attestation `World.Issuer` signs. */
+  attestationTtl: 3_600,
+  /** Allowed clock skew, in seconds, for ID token times. */
+  clockTolerance: 60,
+  /** Milliseconds a client waits for each issuer call, and an issuer for each World IdP call. */
   requestTimeout: 10_000,
 } as const
