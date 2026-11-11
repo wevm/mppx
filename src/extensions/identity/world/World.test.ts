@@ -733,7 +733,7 @@ test('tells a smart-account RPC outage from an invalid signature', async () => {
   expect((await down.verify(await proof())).status).toBe('unavailable')
 })
 
-test('tells a default client RPC outage from a reverted signature check', async () => {
+test('tells a default client RPC outage from a failed signature check', async () => {
   let reply: (id: unknown) => { status: number; body: unknown } = () => ({ status: 500, body: '' })
   const server = await Http.createServer((request, response) => {
     let raw = ''
@@ -754,6 +754,16 @@ test('tells a default client RPC outage from a reverted signature check', async 
       body: { jsonrpc: '2.0', id, error: { code: 3, message: 'execution reverted' } },
     })
     expect((await verifier.verify(await proof())).status).toBe('invalid')
+    reply = (id) => ({
+      status: 200,
+      body: { jsonrpc: '2.0', id, error: { code: -32000, message: 'out of gas' } },
+    })
+    expect((await verifier.verify(await proof())).status).toBe('invalid')
+    reply = (id) => ({
+      status: 200,
+      body: { jsonrpc: '2.0', id, error: { code: -32005, message: 'rate limited' } },
+    })
+    expect((await verifier.verify(await proof())).status).toBe('unavailable')
   } finally {
     server.close()
   }

@@ -206,7 +206,7 @@ function signingClient(id: number, url: string): SigningClient {
                 outage = undefined
                 return result
               } catch (error) {
-                outage = reverted(error) ? undefined : error
+                outage = unreachable(error) ? error : undefined
                 throw error
               }
             },
@@ -220,14 +220,21 @@ function signingClient(id: number, url: string): SigningClient {
   }
 }
 
-/** Whether an RPC error is the call reverting, which means the signature is invalid. */
-function reverted(error: unknown): boolean {
-  const { code, details, message } = (error ?? {}) as {
+/**
+ * Whether an RPC error means the node could not answer: a network error, a timeout, HTTP 429 or
+ * 5xx, or a JSON-RPC internal or rate-limit error. Anything else, such as a revert or out of gas,
+ * is the call failing, which means the signature is invalid.
+ */
+function unreachable(error: unknown): boolean {
+  const { name, status, code } = (error ?? {}) as {
+    name?: unknown
+    status?: unknown
     code?: unknown
-    details?: unknown
-    message?: unknown
   }
-  return code === 3 || /revert/i.test(String(details ?? message ?? ''))
+  if (name === 'TimeoutError') return true
+  if (name === 'HttpRequestError')
+    return typeof status !== 'number' || status === 429 || status >= 500
+  return code === -32603 || code === -32005 || code === 429
 }
 
 /**
