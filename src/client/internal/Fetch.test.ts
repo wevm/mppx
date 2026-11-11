@@ -2506,13 +2506,13 @@ describe('Fetch.from: 402 retry path', () => {
       payments: 1,
     },
     {
-      // A replay gets 402 with a fresh challenge (invalid-challenge), which the client answers.
+      // A replay gets 402 invalid-challenge with a fresh challenge; paying it would pay twice.
       name: 'replayed credential',
       error: new Errors.CredentialReplayedError({
         reason: 'Transaction hash has already been used',
       }),
       status: 402,
-      payments: 3,
+      payments: 1,
     },
     {
       name: 'verification failure',

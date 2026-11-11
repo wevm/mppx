@@ -331,6 +331,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
         challenges = await transport.getChallenges(response, transportRequest as never)
+        // invalid-challenge answering a sent credential can mean it was already settled
+        // (a replay): paying the fresh Challenge would pay twice, so the 402 is final.
+        if (retry > 0 && (await isInvalidChallengeProblem(response))) {
+          await settleAttempt(preparedCredential, { challenges, response, status: 'rejected' })
+          return response
+        }
 
         const candidates = AcceptPayment.selectChallengeCandidates(
           challenges,
@@ -1347,4 +1353,16 @@ async function resolvePaymentRetryInput(
   }
 
   return response.url
+}
+
+/** Whether an HTTP response carries an `invalid-challenge` problem, read without consuming it. */
+async function isInvalidChallengeProblem(response: unknown): Promise<boolean> {
+  if (!(response instanceof globalThis.Response)) return false
+  if (!response.headers.get('Content-Type')?.includes('application/problem+json')) return false
+  try {
+    const problem = (await response.clone().json()) as { type?: unknown }
+    return problem.type === 'https://paymentauth.org/problems/invalid-challenge'
+  } catch {
+    return false
+  }
 }
