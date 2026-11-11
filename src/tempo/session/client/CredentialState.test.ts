@@ -1,10 +1,19 @@
-import { createClient, custom, type Address, type Client, type Hex } from 'viem'
+import {
+  createClient,
+  custom,
+  encodeAbiParameters,
+  type Address,
+  type Client,
+  type Hex,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
+import { InsufficientBalanceError } from '../../../Errors.js'
 import type * as z from '../../../zod.js'
+import { machineToken, machineTokenFundingBaseUrl } from '../../internal/defaults.js'
 import * as Channel from '../precompile/Channel.js'
 import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
 import type { SessionSnapshot } from '../Snapshot.js'
@@ -525,6 +534,40 @@ describe('CredentialPlan', () => {
           resolved: challengeContext(),
         }),
       ).toThrow('descriptor required for TIP-1034 session action')
+    })
+
+    test('links to the MACH onramp when a MACH channel deposit exceeds the MACH balance', async () => {
+      const machineTokenClient = createClient({
+        transport: custom(
+          {
+            async request({ method }) {
+              if (method === 'eth_call')
+                return encodeAbiParameters([{ type: 'uint256' }], [250_000n])
+              throw new Error(`Unexpected RPC method: ${method}`)
+            },
+          },
+          { retryCount: 0 },
+        ),
+      })
+      const plan = planCredential({
+        account,
+        entry: undefined,
+        decimals: 6,
+        maxDeposit: 2_000_000n,
+        resolved: challengeContext({
+          client: machineTokenClient,
+          suggestedDepositRaw: '2000000',
+          token: machineToken[4217].token,
+        }),
+      })
+      expect(plan.type).toBe('open')
+
+      const error = await executeCredentialPlan(plan, sink()).catch((e) => e)
+      expect(error).toBeInstanceOf(InsufficientBalanceError)
+      expect(error.fundingUrl).toBe(
+        `${machineTokenFundingBaseUrl}&address=${account.address}&amount=1.75`,
+      )
+      expect(error.message).toContain('requested 2 MACH, available 0.25 MACH')
     })
 
     test('rejects manual descriptors that do not match the active challenge', async () => {

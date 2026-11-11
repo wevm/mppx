@@ -1,4 +1,5 @@
-import { PassThrough, Readable } from 'node:stream'
+import { OutgoingMessage } from 'node:http'
+import { PassThrough } from 'node:stream'
 
 import type { Request as ExpressRequest, Response as ExpressResponse } from 'express'
 
@@ -49,18 +50,40 @@ export function wrapResponse(
   type Callback = (error?: Error | null) => void
   const callbacks: Callback[] = []
   const endCallbacks: Callback[] = []
+  const readyCallbacks: Callback[] = []
   let trailers: Parameters<typeof response.addTrailers>[0] | undefined
   let emitting = false
   let failed: Error | undefined
   let started = false
   let accepted = false
+  let preparingHeaders = false
+  let headersPrepared = false
+  const nativeHeadersSent = Object.getOwnPropertyDescriptor(
+    OutgoingMessage.prototype,
+    'headersSent',
+  )!.get!
+  Object.defineProperty(response, 'headersSent', {
+    configurable: true,
+    get: () => (started && !preparingHeaders) || nativeHeadersSent.call(response),
+  })
+
+  function acknowledgeWrites() {
+    if (!accepted || failed) return
+    for (const callback of readyCallbacks.splice(0)) {
+      const index = callbacks.indexOf(callback)
+      if (index !== -1) {
+        callbacks.splice(index, 1)
+        queueMicrotask(() => callback())
+      }
+    }
+  }
 
   function complete(pending: Callback[], error?: Error) {
     for (const callback of pending.splice(0)) queueMicrotask(() => callback(error))
   }
 
-  // Keep downstream middleware hooks in the output chain. Only synchronous native
-  // emission may bypass the gate; later writes from the handler stay intercepted.
+  // Handler bytes already passed through downstream body wrappers. Emit them natively
+  // once; header hooks run separately before selecting the payment transport.
   function emit<T>(run: () => T): T {
     emitting = true
     try {
@@ -71,23 +94,19 @@ export function wrapResponse(
   }
   const output = new Proxy(response, {
     get(target, property) {
-      if (property === 'write')
-        return (chunk: Uint8Array) => {
-          const pending = callbacks.splice(0)
-          return emit(() => response.write(chunk, (error) => complete(pending, error ?? undefined)))
-        }
+      if (property === 'write') return (chunk: Uint8Array) => emit(() => original.write(chunk))
       if (property === 'end')
         return () =>
           emit(() => {
-            if (accepted && trailers) response.addTrailers(trailers)
-            return response.end(() => {
+            if (accepted && trailers) original.addTrailers(trailers)
+            return original.end(() => {
               complete(callbacks, failed)
               complete(endCallbacks, failed)
             })
           })
       if (property === 'writeHead')
         return (...args: Parameters<typeof response.writeHead>) =>
-          emit(() => response.writeHead(...args))
+          emit(() => original.writeHead(...args))
       const value = Reflect.get(target, property, target)
       return typeof value === 'function' ? value.bind(target) : value
     },
@@ -109,7 +128,12 @@ export function wrapResponse(
     if (started) return
     started = true
     // Run downstream implicit-header hooks before the transport selects metering.
-    response.writeHead(response.statusCode)
+    preparingHeaders = true
+    try {
+      if (!headersPrepared) response.writeHead(response.statusCode)
+    } finally {
+      preparingHeaders = false
+    }
     const headers = new Headers()
     for (const [name, value] of Object.entries(response.getHeaders())) {
       if (Array.isArray(value)) for (const item of value) headers.append(name, item)
@@ -117,9 +141,24 @@ export function wrapResponse(
     }
     const status = response.statusCode
     const hasBody = ![204, 205, 304].includes(status)
-    const stream = Readable.toWeb(body, {
-      strategy: { highWaterMark: 1 },
-    }) as ReadableStream<Uint8Array>
+    const iterator = body[Symbol.asyncIterator]()
+    let canceled = false
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await iterator.next()
+          if (canceled) return
+          if (next.done) controller.close()
+          else controller.enqueue(next.value)
+        } catch (error) {
+          if (!canceled) controller.error(error)
+        }
+      },
+      cancel() {
+        canceled = true
+        body.destroy()
+      },
+    })
     if (!hasBody) body.resume()
     void Promise.resolve()
       .then(() =>
@@ -133,6 +172,7 @@ export function wrapResponse(
       )
       .then(async (wrapped) => {
         accepted = wrapped.status === status
+        acknowledgeWrites()
         if (!accepted) {
           failed = new Error('Payment transport rejected the content response.')
           body.destroy()
@@ -153,7 +193,7 @@ export function wrapResponse(
       })
   }
 
-  response.write = ((
+  const write = ((
     chunk: string | Uint8Array,
     encoding?: BufferEncoding | Callback,
     callback?: Callback,
@@ -171,8 +211,20 @@ export function wrapResponse(
       typeof chunk === 'string'
         ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined)
         : Buffer.from(chunk)
-    return body.write(copy)
+    return body.write(copy, (error) => {
+      if (!done || !callbacks.includes(done)) return
+      if (error) {
+        callbacks.splice(callbacks.indexOf(done), 1)
+        queueMicrotask(() => done(error))
+      } else {
+        // The copied input has entered a bounded stream. Waiting for a complete
+        // output event here deadlocks producers that write that event in pieces.
+        readyCallbacks.push(done)
+        acknowledgeWrites()
+      }
+    })
   }) as typeof response.write
+  response.write = write
   response.end = ((
     chunk?: string | Uint8Array | Callback,
     encoding?: BufferEncoding | Callback,
@@ -183,7 +235,7 @@ export function wrapResponse(
       typeof chunk === 'function' ? chunk : typeof encoding === 'function' ? encoding : callback
     if (done) endCallbacks.push(done)
     if (typeof chunk === 'string' || chunk instanceof Uint8Array)
-      response.write(chunk, typeof encoding === 'string' ? encoding : 'utf8')
+      write(chunk, typeof encoding === 'string' ? encoding : 'utf8')
     start()
     body.end()
     if (failed) complete(endCallbacks, failed)
@@ -206,9 +258,12 @@ export function wrapResponse(
     } else if (values) {
       for (const [name, value] of Object.entries(values)) response.setHeader(name, value)
     }
+    headersPrepared = true
     start()
     return response
   }) as typeof response.writeHead
+  // Node exposes writeHeader as a separate alias, so override it too.
+  Object.assign(response, { writeHeader: response.writeHead })
   response.flushHeaders = () => {
     if (emitting) original.flushHeaders()
     else start()

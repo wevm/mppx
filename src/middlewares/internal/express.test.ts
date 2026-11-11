@@ -206,3 +206,106 @@ test('applies downstream content-type hooks before choosing payment transport', 
   await (await fetch(server.url)).text()
   expect(wrap.mock.calls[0]?.[0].headers.get('content-type')).toBe('text/event-stream')
 })
+
+test('runs downstream body transformations once', async () => {
+  const writes = vi.fn()
+  const ends = vi.fn()
+  const server = await serve((res) => {
+    const write = res.write.bind(res)
+    const end = res.end.bind(res)
+    res.write = ((chunk: string) => {
+      writes()
+      return write(`[${chunk}]`)
+    }) as typeof res.write
+    res.end = ((chunk: string) => {
+      ends()
+      return end(`(${chunk})`)
+    }) as typeof res.end
+    res.write('one')
+    res.end('two')
+  })
+  expect(await (await fetch(server.url)).text()).toBe('[one](two)')
+  expect(writes).toHaveBeenCalledOnce()
+  expect(ends).toHaveBeenCalledOnce()
+})
+
+test('acknowledges split SSE input before a complete event is available', async () => {
+  const server = await serve(
+    (res) => {
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.write('data: ', () => res.end('paid\n\n'))
+    },
+    (response) => {
+      let pending = ''
+      return new Response(
+        response.body!.pipeThrough(
+          new TransformStream({
+            transform(chunk, controller) {
+              pending += new TextDecoder().decode(chunk)
+              if (pending.endsWith('\n\n')) controller.enqueue(new TextEncoder().encode(pending))
+            },
+          }),
+        ),
+        { headers: response.headers },
+      )
+    },
+  )
+  const response = await fetch(server.url, { signal: AbortSignal.timeout(2000) })
+  expect(await response.text()).toBe('data: paid\n\n')
+})
+
+test.each([true, false])('gates writeHeader alias: accepted=%s', async (accepted) => {
+  const server = await serve(
+    (res) => {
+      const alias = res as express.Response & { writeHeader: typeof res.writeHead }
+      alias.writeHeader(200, { 'X-Protected': 'secret' })
+      res.end('paid')
+    },
+    (response) => (accepted ? response : new Response('denied', { status: 402 })),
+  )
+  const response = await fetch(server.url)
+  expect(response.status).toBe(accepted ? 200 : 402)
+  expect(response.headers.get('X-Protected')).toBe(accepted ? 'secret' : null)
+  expect(await response.text()).toBe(accepted ? 'paid' : 'denied')
+})
+
+test('exposes started output to conventional error middleware', async () => {
+  const app = express()
+  const errorBody = vi.fn()
+  app.use((_req, res, next) => {
+    wrapResponse(res, (response) => response, next)
+    res.write('partial')
+    next(new Error('handler failed'))
+  })
+  app.use(
+    (error: Error, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (res.headersSent) return next(error)
+      errorBody()
+      res.status(500).end('error body')
+    },
+  )
+  app.use(
+    (_error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.destroy()
+    },
+  )
+  const server = await Http.createServer(app)
+  servers.push(server)
+  await expect(fetch(server.url)).rejects.toThrow()
+  expect(errorBody).not.toHaveBeenCalled()
+})
+
+test.each([true, false])('runs downstream header hooks once: explicit=%s', async (explicit) => {
+  const hook = vi.fn()
+  const server = await serve((res) => {
+    const previous = res.writeHead
+    res.writeHead = function (this: express.Response, ...args: Parameters<typeof res.writeHead>) {
+      hook()
+      return previous.apply(this, args)
+    } as typeof res.writeHead
+    if (explicit) res.writeHead(200)
+    res.end('paid')
+  })
+  expect(await (await fetch(server.url)).text()).toBe('paid')
+  expect(hook).toHaveBeenCalledOnce()
+})

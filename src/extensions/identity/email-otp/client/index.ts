@@ -1,4 +1,4 @@
-import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import { unwrapFetch, withoutPayment } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import * as Attestation from '../../attestation/client/index.js'
@@ -190,16 +190,16 @@ async function post(
   // The address and code never go over plaintext HTTP, except to localhost.
   if (!isIssuer(issuer))
     throw new EmailOtpError('The issuer must be an https URL (http only on localhost).')
-  // The unwrapped fetch, so an issuer's 402 is never paid automatically.
+  // Untagged forwarding wrappers survive unwrapping, so also opt out explicitly.
   const response = await unwrapFetch(fetch ?? globalThis.fetch)(
     `${issuer.replace(/\/+$/, '')}${path}`,
-    {
+    withoutPayment({
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
       // Workers reject 'error'; a redirect is not ok, so it fails below.
       redirect: 'manual',
-    },
+    }),
   )
   const json = (await response.json().catch(() => ({}))) as Record<string, unknown>
   if (!response.ok)

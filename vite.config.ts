@@ -21,6 +21,10 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/link',
   ),
+  'mppx/extensions/identity/persona': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/persona',
+  ),
   'mppx/extensions/identity/tap': path.resolve(import.meta.dirname, 'src/extensions/identity/tap'),
   'mppx/extensions/identity/web-bot-auth': path.resolve(
     import.meta.dirname,

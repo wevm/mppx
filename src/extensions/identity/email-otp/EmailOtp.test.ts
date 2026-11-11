@@ -6,7 +6,7 @@ import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
-import { afterEach, expect, test } from 'vp/test'
+import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
 
@@ -448,3 +448,40 @@ test('calls the issuer with the unwrapped fetch, so it never pays a 402', async 
   })
   expect(calls).toEqual(['inner'])
 })
+
+test.each(['sendCode', 'verifyCode'] as const)(
+  'never pays an issuer through identity forwarding: %s',
+  async (operation) => {
+    const sign = vi.fn(clientMethod.createCredential)
+    const server = Mppx.create({
+      methods: [serverMethod],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const raw = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const result = await server.charge(charge)(new Request(input, init))
+      if (result.status === 402) return result.challenge
+      return result.withReceipt(Response.json({ error: 'unexpected payment' }, { status: 400 }))
+    })
+    const payment = ClientMppx.create({
+      fetch: raw,
+      methods: [{ ...clientMethod, createCredential: sign }],
+      polyfill: false,
+    })
+    const fetch = Identity.Client.wrapFetch(
+      payment.fetch,
+      Identity.Client.from([{ scope: [issuer], prove: async (request) => request }]),
+    )
+    const promise =
+      operation === 'sendCode'
+        ? EmailOtp.Client.sendCode({
+            audience: 'https://api.example',
+            email: 'dana@example.com',
+            fetch,
+            issuer,
+          })
+        : EmailOtp.Client.verifyCode({ code: '123456', id: 'otp-id', fetch, issuer })
+    await expect(promise).rejects.toMatchObject({ status: 402 })
+    expect(sign).not.toHaveBeenCalled()
+    expect(raw).toHaveBeenCalledOnce()
+  },
+)
