@@ -407,6 +407,22 @@ test('runs the full client flow: approval, then the paid retry carries the sessi
     expect(again.status).toBe(200)
     expect(world.calls.filter((call) => call.path === '/device_authorization')).toHaveLength(1)
 
+    // Aborting the request stops waiting for approval: no more polls.
+    const controller = new AbortController()
+    const aborting = ClientMppx.create({
+      identity: [
+        World.Client.prover({ scope: [server.url], verification: () => controller.abort() }),
+      ],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    const polls = world.calls.length
+    await expect(
+      aborting.fetch(`${server.url}/report`, { signal: controller.signal }),
+    ).rejects.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    expect(world.calls.length).toBe(polls + 1)
+
     // Declining the link leaves the request rejected.
     const declining = ClientMppx.create({
       identity: [World.Client.prover({ scope: [server.url], verification: () => false })],

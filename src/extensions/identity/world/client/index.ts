@@ -94,6 +94,7 @@ async function authenticate(
         method: request.method,
         headers: { [Constants.pollHeader]: poll },
         redirect: 'manual',
+        signal: request.signal,
       }),
     )
     void response.body?.cancel().catch(() => {})
@@ -111,18 +112,39 @@ async function authenticate(
     expiresAt: new Date(expiresAt),
   })
   if (shown === false) return undefined
+  request.signal.throwIfAborted()
 
   while (device.status === 'pending') {
     const wait = device.interval * 1_000
     if (Date.now() + wait >= expiresAt) return undefined
-    await new Promise((resolve) => setTimeout(resolve, wait))
-    // A lost connection to the server backs off and polls again; any answer is followed.
-    const next: Types.Device | undefined = await call(device.attempt).catch(() => device)
+    await sleep(wait, request.signal)
+    // A lost connection to the server backs off and polls again; any answer is followed. The
+    // caller aborting the request ends the wait.
+    const next: Types.Device | undefined = await call(device.attempt).catch((error) => {
+      if (request.signal.aborted) throw error
+      return device
+    })
     if (!next) return undefined
     device = next
   }
   if (device.status !== 'approved') return undefined
   return { token: device.session, expiresAt: Date.now() + device.expires_in * 1_000 }
+}
+
+/** Waits ms milliseconds, or rejects with the signal's reason once it aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    const abort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', abort, { once: true })
+  })
 }
 
 /** Parses a `World-Id-Device` header, or returns `undefined` when it is missing or malformed. */
