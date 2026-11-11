@@ -26,7 +26,7 @@ The client prints an approval link and code. Approve in World App: the first rep
 
 ## How it works
 
-- [`src/server.ts`](./src/server.ts) checks `World.Server.verifier({ clientId, clientSecret, secretKey })`. A request without a session gets 401 with `World-Id-Required: device`.
+- [`src/server.ts`](./src/server.ts) checks `World.Server.verifier({ clientId, clientSecret, secretKey, store })`. A request without a session gets 401 with `World-Id-Required: device`.
 - [`src/client.ts`](./src/client.ts) passes `World.Client.prover({ scope, verification })` to `Mppx.create()`. On that 401, it asks the server to start a device attempt (`World-Id-Poll: start`), shows the link through `verification`, and polls at the server's interval.
 - On approval, the server validates the ID token (RS256 signature, issuer, audience, times, a fresh `auth_time`, and an Orb `acr` by default) and returns a session sealed with `secretKey`. The client sends it in `World-Id` on the retry and later requests until it expires (one hour by default). Device codes and ID tokens stay on the server, and device-flow calls never reach the handler.
 - The verified `subject` identifies the human, so the free report is counted per human, not per agent.

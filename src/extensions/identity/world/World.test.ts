@@ -1,6 +1,6 @@
 import type { RequestListener } from 'node:http'
 
-import { Credential, Method, Receipt, z } from 'mppx'
+import { Credential, Method, Receipt, Store, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
@@ -11,6 +11,7 @@ import * as Http from '~test/Http.js'
 const issuer = 'https://idp.example'
 const clientId = 'client-1'
 const config = {
+  store: Store.memory(),
   clientId,
   clientSecret: 's3cret/+',
   issuer,
@@ -207,9 +208,27 @@ test('polls World IdP at most once per interval', async () => {
     attempt: string
   }
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
-  // The attempt token it returns holds the next poll time, so polling it again at once waits.
+  // Polling again at once waits, with either token: the schedule is in the store.
   await verifier.verify(poll(pending.attempt))
+  await verifier.verify(poll(started.attempt))
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
+})
+
+test('keeps slow_down when an older attempt token is replayed', async () => {
+  const world = idp({ polls: ['slow_down', 'authorization_pending'] })
+  const verifier = World.Server.verifier({ ...config, fetch: world.fetch })
+  const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
+  wait(1)
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toMatchObject({
+    interval: 6,
+  })
+  // The first token still says 1 second, but the store holds the slower schedule.
+  wait(1)
+  await verifier.verify(poll(started.attempt))
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
+  wait(5)
+  await verifier.verify(poll(started.attempt))
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(2)
 })
 
 test('slows down, and ends denied or expired attempts', async () => {
@@ -257,7 +276,14 @@ test('validates the ID token', async () => {
     acr: [World.Constants.acr.selfie],
     fetch: idp({ token: () => idToken({ acr: World.Constants.acr.selfie }) }).fetch,
   })
-  expect((await run(selfie)).state.status).toBe('approved')
+  const { state } = await run(selfie)
+  expect(state.status).toBe('approved')
+  // A Selfie Check session does not pass a verifier that accepts only Orb.
+  const orb = World.Server.verifier({ ...config, fetch: idp().fetch })
+  const session = (state as { session: string }).session
+  expect(
+    await orb.verify(new Request('https://api.example', { headers: { 'World-Id': session } })),
+  ).toMatchObject({ status: 'invalid' })
 })
 
 test('maps World IdP outages to unavailable, never to approval', async () => {

@@ -29,4 +29,7 @@ export const challenges = Object.freeze(['privatetoken', 'identity-presentation'
 export const response = Object.freeze([
   'identity-attestation-required',
   'identity-required',
+  // World ID: a request for World ID, and a device attempt or session from the upstream.
+  'world-id-required',
+  'world-id-device',
 ] as const)
