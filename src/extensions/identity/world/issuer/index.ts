@@ -244,13 +244,15 @@ export function create(config: create.Config): Issuer {
     const storeKey = `${prefix}attempt:${id}`
     const now = Date.now()
     // Claims this poll's slot atomically, so replays and concurrent polls reach World IdP at most
-    // once per interval, on every instance sharing the store.
+    // once per interval, on every instance sharing the store. A completed attempt answers with its
+    // attestation again, so a lost response never loses the approval.
     const claimed = await store.update<string, 'missing' | 'early' | Attempt>(
       storeKey,
       (current) => {
         const attempt = current as Attempt | null
         if (!attempt) return { op: 'noop', result: 'missing' as const }
         if (attempt.expires <= now) return { op: 'delete', result: 'missing' as const }
+        if (attempt.done) return { op: 'noop', result: attempt }
         if (attempt.next > now) return { op: 'noop', result: 'early' as const }
         const next = { ...attempt, next: now + attempt.interval * 1_000 }
         return { op: 'set', value: next, result: next }
@@ -259,6 +261,7 @@ export function create(config: create.Config): Issuer {
     if (claimed === 'missing') return error(400, 'expired_token', 'The attempt expired.')
     if (claimed === 'early') return error(400, 'slow_down', 'Polled too soon.')
     const attempt = claimed
+    if (attempt.done) return issued(attempt.done)
 
     let idToken = attempt.idToken
     if (!idToken) {
@@ -284,14 +287,25 @@ export function create(config: create.Config): Issuer {
         return error(400, 'slow_down', 'Polled too soon.')
       }
       if (result.status !== 'approved') {
-        await store.delete(storeKey)
+        // An overlapping poll may have redeemed the device code and saved its approval meanwhile:
+        // that approval stands, and this poll's refusal of the spent code is not the human's answer.
+        const saved = await store.update<string, boolean>(storeKey, (current) => {
+          const value = current as Attempt | null
+          if (value?.idToken || value?.done) return { op: 'noop', result: true }
+          return { op: 'delete', result: false }
+        })
+        if (saved) return error(400, 'authorization_pending', 'Waiting for approval.')
         return result.status === 'expired'
           ? error(400, 'expired_token', 'The attempt expired.')
           : error(400, 'access_denied', 'World ID was not approved.')
       }
       idToken = result.idToken
       // World IdP redeems a device code once: keep its ID token until it verifies.
-      await store.put(storeKey, { ...attempt, idToken })
+      await store.update<string, undefined>(storeKey, (current) => {
+        const value = current as Attempt | null
+        if (!value || value.idToken || value.done) return { op: 'noop', result: undefined }
+        return { op: 'set', value: { ...value, idToken }, result: undefined }
+      })
     }
 
     let claims: Idp.IdTokenClaims | string
@@ -300,26 +314,44 @@ export function create(config: create.Config): Issuer {
     } catch {
       return error(503, 'temporarily_unavailable', 'World ID keys are unavailable.')
     }
-    await store.delete(storeKey)
-    if (typeof claims === 'string') return error(400, 'access_denied', claims)
+    if (typeof claims === 'string') {
+      await store.delete(storeKey)
+      return error(400, 'access_denied', claims)
+    }
 
     const { keyId } = await key
     const iat = Math.floor(Date.now() / 1_000)
-    const attestation = await sign(
-      {
-        acr: claims.acr,
-        aud: attempt.audience,
-        exp: iat + ttl,
-        iat,
-        iss: url,
-        jti: crypto.randomUUID(),
-        sub: await subjectOf(claims.sub, attempt.audience),
-        type: Constants.type,
-      } as AttestationTypes.Claims,
-      { key: config.signingKey.privateKey, keyId },
-    )
+    const done: Done = {
+      attestation: await sign(
+        {
+          acr: claims.acr,
+          aud: attempt.audience,
+          exp: iat + ttl,
+          iat,
+          iss: url,
+          jti: crypto.randomUUID(),
+          sub: await subjectOf(claims.sub, attempt.audience),
+          type: Constants.type,
+        } as AttestationTypes.Claims,
+        { key: config.signingKey.privateKey, keyId },
+      ),
+      expiresAt: (iat + ttl) * 1_000,
+    }
+    // The first completion wins, so overlapping polls all answer with one attestation; the record
+    // keeps it, without the ID token, until the attempt expires and the sweep deletes it.
+    const kept = await store.update<string, Done>(storeKey, (current) => {
+      const value = current as Attempt | null
+      if (!value) return { op: 'noop', result: done }
+      if (value.done) return { op: 'noop', result: value.done }
+      const { idToken: _, ...rest } = value
+      return { op: 'set', value: { ...rest, done }, result: done }
+    })
+    return issued(kept)
+  }
+
+  function issued(done: Done): Response {
     return Response.json(
-      { attestation, expires_at: new Date((iat + ttl) * 1_000).toISOString() },
+      { attestation: done.attestation, expires_at: new Date(done.expiresAt).toISOString() },
       { headers: { 'cache-control': 'no-store' } },
     )
   }
@@ -456,6 +488,15 @@ type Attempt = {
   readonly next: number
   /** An approval's ID token, kept until it verifies. */
   readonly idToken?: string | undefined
+  /** The attestation issued for it, answered again until the attempt expires. */
+  readonly done?: Done | undefined
+}
+
+/** An issued attestation. */
+type Done = {
+  readonly attestation: string
+  /** Unix milliseconds the attestation expires. */
+  readonly expiresAt: number
 }
 
 /** Granularity of the expiry index: records are swept within a minute of expiring. */

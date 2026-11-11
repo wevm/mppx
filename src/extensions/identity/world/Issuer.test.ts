@@ -233,6 +233,17 @@ test('keeps an approval when World IdP rotated its key during a JWKS outage', as
   expect((await poll(issuer, device.id)).status).toBe(200)
 })
 
+test('answers a completed attempt again, so a lost response keeps the approval', async () => {
+  const world = await createWorld()
+  const issuer = await createIssuer(world)
+  const device = await start(issuer)
+  const first = await poll(issuer, device.id)
+  expect(first.status).toBe(200)
+  const again = await poll(issuer, device.id)
+  expect(again).toEqual(first)
+  expect(world.calls.filter((path) => path === '/token')).toHaveLength(1)
+})
+
 test('polls World IdP at most once per interval', async () => {
   const world = await createWorld({ answers: ['pending', 'slow_down'] })
   const issuer = await createIssuer(world)

@@ -51,12 +51,9 @@ const issuer = process.env.WORLD_CLIENT_ID
       audiences: [ORIGIN],
       clientId: process.env.WORLD_CLIENT_ID,
       clientSecret: process.env.WORLD_CLIENT_SECRET!,
-      // One attempt start per minute per client IP. Trust x-forwarded-for only behind your proxy.
-      limit: {
-        key: (request) => request.headers.get('x-forwarded-for') ?? 'local',
-        max: 1,
-        window: 60,
-      },
+      // A global cap of 10 attempt starts a minute. Key it by your signed-in user (or a client IP
+      // your own proxy sets) instead: a header the caller controls can be rotated past the limit.
+      limit: { key: () => 'all', max: 10, window: 60 },
       secretKey,
       signingKey: (await crypto.subtle.generateKey({ name: 'Ed25519' }, false, [
         'sign',
