@@ -223,12 +223,14 @@ export function create(config: Config) {
  * Resolves World IdP's RS256 keys by key ID from its JSON Web Key Set, cached for five minutes.
  * An unknown key ID refetches the set at most every 30 seconds, and concurrent lookups share one
  * fetch. While a refetch fails, the last set fetched successfully keeps resolving for an hour, so
- * a brief outage never wastes an approval; it throws only when no set is usable.
+ * a brief outage never wastes an approval; a key it lacks then throws (unavailable), since World
+ * IdP may have rotated, and only a fresh set proves a key unknown.
  */
 function jwks(fetch: typeof globalThis.fetch) {
+  type Set = { keys: Map<string, CryptoKey>; fresh: boolean }
   let cache: { url: string; fetchedAt: number; keys: Promise<Map<string, CryptoKey>> } | undefined
   let good: { url: string; fetchedAt: number; keys: Map<string, CryptoKey> } | undefined
-  function load(url: string) {
+  function load(url: string): Promise<Set> {
     const fetchedAt = Date.now()
     const keys = (async () => {
       const response = await fetch(url, {
@@ -265,16 +267,26 @@ function jwks(fetch: typeof globalThis.fetch) {
     keys.catch(() => {
       if (cache === entry) cache = undefined
     })
-    return keys.catch((error) => {
-      if (good?.url === url && Date.now() - good.fetchedAt < 3_600_000) return good.keys
-      throw error
-    })
+    return keys.then(
+      (result) => ({ keys: result, fresh: true }),
+      (error) => {
+        if (good?.url === url && Date.now() - good.fetchedAt < 3_600_000)
+          return { keys: good.keys, fresh: false }
+        throw error
+      },
+    )
   }
   return async (url: string, kid: string): Promise<CryptoKey | undefined> => {
     const age = cache && cache.url === url ? Date.now() - cache.fetchedAt : Infinity
-    const keys = await (age < 300_000 ? cache!.keys : load(url))
-    if (keys.has(kid) || age < 30_000 || age >= 300_000) return keys.get(kid)
-    return (await load(url)).get(kid)
+    const first: Set = age < 300_000 ? { keys: await cache!.keys, fresh: true } : await load(url)
+    if (first.keys.has(kid)) return first.keys.get(kid)
+    // A stale set can't prove a key unknown: World IdP may have rotated while its JWKS is down.
+    if (!first.fresh) throw new Error('World IdP keys are unavailable.')
+    if (age < 30_000 || age >= 300_000) return undefined
+    const second = await load(url)
+    if (second.keys.has(kid)) return second.keys.get(kid)
+    if (!second.fresh) throw new Error('World IdP keys are unavailable.')
+    return undefined
   }
 }
 

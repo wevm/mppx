@@ -32,13 +32,14 @@ async function createWorld(options: { answers?: Answer[]; jwksDown?: number; acr
   )) as CryptoKeyPair
   const answers = [...(options.answers ?? [])]
   let jwksDown = options.jwksDown ?? 0
+  let kid = 'k1'
   const calls: string[] = []
   let started = 0
   const encode = (value: unknown) =>
     Base64.fromString(JSON.stringify(value), { pad: false, url: true })
   async function idToken(sub: string) {
     const now = Math.floor(Date.now() / 1_000)
-    const input = `${encode({ alg: 'RS256', kid: 'k1', typ: 'JWT' })}.${encode({
+    const input = `${encode({ alg: 'RS256', kid, typ: 'JWT' })}.${encode({
       acr: options.acr ?? World.Constants.acr.orb,
       amr: ['pop'],
       aud: clientId,
@@ -74,7 +75,7 @@ async function createWorld(options: { answers?: Answer[]; jwksDown?: number; acr
       }
       const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey)
       return Response.json({
-        keys: [{ alg: 'RS256', e: jwk.e, kid: 'k1', kty: 'RSA', n: jwk.n, use: 'sig' }],
+        keys: [{ alg: 'RS256', e: jwk.e, kid, kty: 'RSA', n: jwk.n, use: 'sig' }],
       })
     }
     if (pathname === '/device') {
@@ -99,7 +100,16 @@ async function createWorld(options: { answers?: Answer[]; jwksDown?: number; acr
     }
     return new Response('Not found', { status: 404 })
   }
-  return { calls, fetch }
+  return {
+    calls,
+    failJwks(count: number) {
+      jwksDown = count
+    },
+    fetch,
+    rotate(next: string) {
+      kid = next
+    },
+  }
 }
 
 async function createIssuer(
@@ -207,6 +217,22 @@ test('keeps an approval through a World IdP key outage', async () => {
   expect(world.calls.filter((path) => path === '/token')).toHaveLength(1)
 })
 
+test('keeps an approval when World IdP rotated its key during a JWKS outage', async () => {
+  const world = await createWorld()
+  const issuer = await createIssuer(world)
+  // The first approval caches World IdP's keys.
+  let device = await start(issuer)
+  expect((await poll(issuer, device.id)).status).toBe(200)
+  // Past the cache's lifetime, World IdP signs with a new key while its JWKS is down.
+  vi.setSystemTime(Date.now() + 360_000)
+  world.rotate('k2')
+  world.failJwks(1)
+  device = await start(issuer)
+  expect((await poll(issuer, device.id)).status).toBe(503)
+  vi.setSystemTime(Date.now() + 1_000)
+  expect((await poll(issuer, device.id)).status).toBe(200)
+})
+
 test('polls World IdP at most once per interval', async () => {
   const world = await createWorld({ answers: ['pending', 'slow_down'] })
   const issuer = await createIssuer(world)
@@ -292,8 +318,8 @@ test('deletes abandoned attempts and ended limit windows', async () => {
     { 'x-caller': 'a' },
   )
   const { id } = (await response.json()) as { id: string }
-  expect(await store.get(`mppx:world-id:attempt:${id}`)).not.toBeNull()
-  expect(await store.get('mppx:world-id:limit:a')).not.toBeNull()
+  expect(await store.get(`mppx:world-id:${issuer.url}:attempt:${id}`)).not.toBeNull()
+  expect(await store.get(`mppx:world-id:${issuer.url}:limit:a`)).not.toBeNull()
 
   // Within two minutes after the attempt's 600 s expiry, another caller's start sweeps both.
   vi.setSystemTime(Date.now() + 722_000)
@@ -304,9 +330,19 @@ test('deletes abandoned attempts and ended limit windows', async () => {
       { audience: 'https://api.example' },
       { 'x-caller': 'b' },
     )
-  expect(await store.get(`mppx:world-id:attempt:${id}`)).toBeNull()
-  expect(await store.get('mppx:world-id:limit:a')).toBeNull()
-  expect(await store.get('mppx:world-id:limit:b')).not.toBeNull()
+  expect(await store.get(`mppx:world-id:${issuer.url}:attempt:${id}`)).toBeNull()
+  expect(await store.get(`mppx:world-id:${issuer.url}:limit:a`)).toBeNull()
+  expect(await store.get(`mppx:world-id:${issuer.url}:limit:b`)).not.toBeNull()
+})
+
+test("issuers sharing a store never redeem each other's attempts", async () => {
+  const world = await createWorld()
+  const store = Store.memory()
+  const a = await createIssuer(world, { store })
+  const b = await createIssuer(world, { store, url: 'https://other-issuer.example' })
+  const device = await start(a)
+  expect((await poll(b, device.id)).body.error).toBe('expired_token')
+  expect((await poll(a, device.id)).status).toBe(200)
 })
 
 const servers: { close(): void }[] = []

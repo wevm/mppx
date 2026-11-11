@@ -58,6 +58,8 @@ export function create(config: create.Config): Issuer {
     throw new TypeError('World ID issuer ttl must be a positive integer of seconds.')
   const { limit, store } = config
   const base = new URL(url).pathname.replace(/\/+$/, '')
+  // Keys are scoped to this issuer, so issuers sharing a store never redeem each other's attempts.
+  const prefix = `mppx:world-id:${url}:`
   const idp = Idp.create({
     acr,
     clientAuthentication: config.clientAuthentication,
@@ -91,50 +93,70 @@ export function create(config: create.Config): Issuer {
 
   /** Indexes a record under the minute it expires, so {@link sweep} can delete it. */
   async function track(key: string, expires: number) {
-    const bucket = Math.ceil(expires / bucketMs)
-    await store.update<string, undefined>(`${prefix}expiry:${bucket}`, (current) => {
-      const keys = (current as string[] | null) ?? []
-      if (keys.includes(key)) return { op: 'noop', result: undefined }
-      return { op: 'set', value: [...keys, key], result: undefined }
-    })
+    const minute = Math.ceil(expires / bucketMs)
+    // Sharded, so concurrent starts rarely contend on one index key.
+    const created = await store.update<string, boolean>(
+      `${prefix}expiry:${minute}:${shardOf(key)}`,
+      (current) => {
+        const keys = (current as string[] | null) ?? []
+        if (keys.includes(key)) return { op: 'noop', result: false }
+        return { op: 'set', value: [...keys, key], result: keys.length === 0 }
+      },
+    )
+    // The list of minutes with records changes only when one of its shards gets its first key.
+    if (created)
+      await store.update<string, undefined>(`${prefix}expiry:minutes`, (current) => {
+        const minutes = (current as number[] | null) ?? []
+        if (minutes.includes(minute)) return { op: 'noop', result: undefined }
+        return { op: 'set', value: [...minutes, minute].sort((a, b) => a - b), result: undefined }
+      })
   }
 
   /**
-   * Deletes records whose minute has passed, a few minutes per call: stores enforce no expiry, so
-   * abandoned attempts and limit windows would otherwise stay forever. A record renewed since it
-   * was indexed (a limit window that started again) is kept.
+   * Deletes up to `sweepLimit` records whose minute has passed: stores enforce no expiry, so
+   * abandoned attempts and limit windows would otherwise stay forever. Each call does a bounded
+   * amount of work, oldest minute first. A record renewed since it was indexed (a limit window that
+   * started again) is kept.
    */
   async function sweep() {
     const now = Math.floor(Date.now() / bucketMs)
-    const due = await store.update<string, readonly number[]>(
-      `${prefix}expiry:cursor`,
-      (current) => {
-        const cursor = typeof current === 'number' ? current : now
-        if (cursor >= now)
-          return current === cursor
-            ? { op: 'noop', result: [] }
-            : { op: 'set', value: now, result: [] }
-        const end = Math.min(now, cursor + sweepBuckets)
-        return {
-          op: 'set',
-          value: end,
-          result: Array.from({ length: end - cursor }, (_, i) => cursor + i + 1),
-        }
-      },
-    )
+    const minutes = ((await store.get(`${prefix}expiry:minutes`)) as number[] | null) ?? []
+    const minute = minutes.find((value) => value < now)
+    if (minute === undefined) return
     const time = Date.now()
-    for (const bucket of due) {
-      const bucketKey = `${prefix}expiry:${bucket}`
+    let budget = sweepLimit
+    let empty = true
+    for (let shard = 0; shard < shards; shard++) {
+      const bucketKey = `${prefix}expiry:${minute}:${shard}`
       const keys = ((await store.get(bucketKey)) as string[] | null) ?? []
-      for (const key of keys)
+      if (keys.length === 0) continue
+      const batch = keys.slice(0, budget)
+      budget -= batch.length
+      for (const key of batch)
         await store.update<string, undefined>(key, (current) => {
           const record = current as { expires?: number; reset?: number } | null
           if (!record) return { op: 'noop', result: undefined }
           if ((record.expires ?? record.reset ?? 0) > time) return { op: 'noop', result: undefined }
           return { op: 'delete', result: undefined }
         })
-      await store.delete(bucketKey)
+      const left = await store.update<string, number>(bucketKey, (current) => {
+        const rest = ((current as string[] | null) ?? []).filter((key) => !batch.includes(key))
+        return rest.length === 0
+          ? { op: 'delete', result: 0 }
+          : { op: 'set', value: rest, result: rest.length }
+      })
+      if (left > 0) empty = false
+      if (budget === 0) {
+        if (shard < shards - 1) empty = false
+        break
+      }
     }
+    if (empty)
+      await store.update<string, undefined>(`${prefix}expiry:minutes`, (current) => {
+        const list = (current as number[] | null) ?? []
+        if (!list.includes(minute)) return { op: 'noop', result: undefined }
+        return { op: 'set', value: list.filter((value) => value !== minute), result: undefined }
+      })
   }
 
   async function device(request: Request): Promise<Response> {
@@ -158,15 +180,18 @@ export function create(config: create.Config): Issuer {
       if (caller !== undefined) {
         const now = Date.now()
         const limitKey = `${prefix}limit:${caller}`
-        await track(limitKey, now + limit.window * 1_000)
-        const retryAfter = await store.update(limitKey, (current) => {
+        const reset = now + limit.window * 1_000
+        // -1: this start opened a new window; 0: within the limit; above: seconds to wait.
+        const retryAfter = await store.update<string, number>(limitKey, (current) => {
           const window = current as { count: number; reset: number } | null
           if (!window || window.reset <= now)
-            return { op: 'set', value: { count: 1, reset: now + limit.window * 1_000 }, result: 0 }
+            return { op: 'set', value: { count: 1, reset }, result: -1 }
           if (window.count >= limit.max)
             return { op: 'noop', result: Math.ceil((window.reset - now) / 1_000) }
           return { op: 'set', value: { ...window, count: window.count + 1 }, result: 0 }
         })
+        // Indexed once per window, never on a refused start.
+        if (retryAfter < 0) await track(limitKey, reset).catch(() => {})
         if (retryAfter > 0)
           return error(429, 'slow_down', 'Too many World ID attempts.', {
             'retry-after': String(retryAfter),
@@ -193,7 +218,8 @@ export function create(config: create.Config): Issuer {
       // The first poll waits an interval too (RFC 8628).
       next: now + started.interval * 1_000,
     }
-    await track(`${prefix}attempt:${id}`, attempt.expires)
+    // Indexing never fails a start whose device authorization World IdP already issued.
+    await track(`${prefix}attempt:${id}`, attempt.expires).catch(() => {})
     await store.put(`${prefix}attempt:${id}`, attempt)
     return Response.json(
       {
@@ -432,13 +458,21 @@ type Attempt = {
   readonly idToken?: string | undefined
 }
 
-const prefix = 'mppx:world-id:'
-
 /** Granularity of the expiry index: records are swept within a minute of expiring. */
 const bucketMs = 60_000
 
-/** Most expiry-index minutes one sweep handles, so a start after a long idle stays cheap. */
-const sweepBuckets = 10
+/** Shards of each expiry-index minute. */
+const shards = 16
+
+/** Most records one sweep deletes, so each start does a bounded amount of cleanup. */
+const sweepLimit = 50
+
+/** The index shard of a key. */
+function shardOf(key: string): number {
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
+  return hash % shards
+}
 
 async function read(request: Request): Promise<Record<string, unknown> | undefined> {
   const length = Number(request.headers.get('content-length') ?? 0)
