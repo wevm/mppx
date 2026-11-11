@@ -106,10 +106,16 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       // slow_down adds five seconds to every later interval (RFC 8628).
       const slower = interval + 5
       try {
-        await store.put(slowKey(attempt.id), {
-          interval: slower,
-          until: Date.now() + slower * 1_000,
-        })
+        // Atomically, and never over an ended marker that an overlapping poll wrote.
+        await store.update(slowKey(attempt.id), (current) =>
+          (current as Slow | null)?.ended
+            ? { op: 'noop', result: undefined }
+            : {
+                op: 'set',
+                value: { interval: slower, until: Date.now() + slower * 1_000 },
+                result: undefined,
+              },
+        )
       } catch {}
       return pending({ ...attempt, interval: slower })
     }

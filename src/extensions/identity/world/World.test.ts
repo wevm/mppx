@@ -256,6 +256,36 @@ test('shares the poll schedule across instances and ends replayed attempts', asy
   expect(tokens()).toBe(2)
 })
 
+test('keeps an attempt ended when an overlapping slow_down answers late', async () => {
+  // The first poll's slow_down arrives after the second poll's access_denied.
+  let release!: () => void
+  const late = new Promise<void>((resolve) => (release = resolve))
+  const world = idp({ polls: ['slow_down', 'access_denied'] })
+  let calls = 0
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await world.fetch(input, init)
+    if (new URL(new Request(input).url).pathname === '/token' && calls++ === 0) await late
+    return response
+  }) as typeof globalThis.fetch
+  const verifier = World.Server.verifier({ ...config, store: Store.memory(), fetch })
+  const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
+  wait(1)
+  const first = verifier.verify(poll(started.attempt))
+  // Let the first poll reach World IdP before the second starts.
+  while (calls === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+  wait(1)
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toEqual({
+    status: 'denied',
+  })
+  release()
+  await first
+  wait(10)
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toEqual({
+    status: 'expired',
+  })
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(2)
+})
+
 test('slows down, and ends denied or expired attempts', async () => {
   const slow = World.Server.verifier({ ...config, fetch: idp({ polls: ['slow_down'] }).fetch })
   const { results } = await run(slow)
