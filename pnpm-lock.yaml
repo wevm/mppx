@@ -737,7 +737,7 @@ importers:
         specifier: ^4.157.0
         version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
-  examples/world-agentkit:
+  examples/world-id:
     dependencies:
       '@types/node':
         specifier: ^26.2.0

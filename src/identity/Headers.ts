@@ -11,8 +11,9 @@
 export const request = Object.freeze([
   'identity-attestation',
   'identity-presentation',
-  // World AgentKit: a signed, single-use proof of a human-backed agent wallet.
-  'agentkit',
+  // World ID: the session a server issued after World ID approval, and device-flow calls.
+  'world-id',
+  'world-id-poll',
 ] as const)
 
 /**

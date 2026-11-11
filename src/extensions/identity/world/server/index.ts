@@ -1,129 +1,163 @@
 import { Base64 } from 'ox'
-import {
-  createPublicClient,
-  getAddress,
-  isAddress,
-  http,
-  toHex,
-  verifyMessage,
-  type Address,
-  type Hex,
-} from 'viem'
 
+import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
-import * as Store from '../../../../Store.js'
-import { message } from '../client/index.js'
+import { isIssuer } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
 
-const abi = [
-  {
-    inputs: [{ name: '', type: 'address' }],
-    name: 'lookupHuman',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-] as const
-
 /**
- * Creates a request-stage identity verifier for World AgentKit: the request must carry an
- * `agentkit` header signed by a wallet that a World ID-verified human registered in AgentBook.
+ * Creates a request-stage identity verifier for World ID through World IdP, World's OpenID
+ * Connect issuer: the request must carry a session this server issued after a person approved
+ * the agent with World ID.
  *
- * It checks the SIWE message's domain, URI host and lifetime, claims its nonce once, verifies the
- * signature, then reads AgentBook on World Chain. The verified value carries the anonymous human
- * identifier, so usage can be limited per human rather than per agent.
+ * The server is World IdP's confidential client and runs the OAuth Device Authorization Grant
+ * (RFC 8628) for agents: `World.Client.prover` asks it to start an attempt, shows the person
+ * the approval link, and polls until they approve in World App. The server validates the ID
+ * token (signature, issuer, audience, times and `acr`) and returns a session sealed with
+ * `secretKey`, so it keeps no state. Device codes and ID tokens never leave the server. The
+ * verified value carries World ID's anonymous, pairwise `subject`, so usage can be limited per
+ * human rather than per agent.
+ *
+ * Register the client at https://auth.world.org/portal. See
+ * https://auth.world.org/docs/guides/getting-started.
  *
  * @example
  * ```ts
  * const human = World.Server.verifier({
- *   nonceStore: Store.redis(redis),
- *   origins: ['https://api.example'],
- *   rpcUrl: process.env.WORLD_CHAIN_RPC_URL,
+ *   clientId: process.env.WORLD_CLIENT_ID,
+ *   clientSecret: process.env.WORLD_CLIENT_SECRET,
+ *   secretKey: process.env.MPP_SECRET_KEY,
  * })
  * mppx.charge({ amount: '0.01', identity: [human] })
  * ```
  */
-export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedAgent> {
-  const maxAge = config.maxAge ?? Constants.maxAge
-  const lookup = cached(agentBook({ rpcUrl: config.rpcUrl, ...config.agentBook }))
-  const clients = signingClients(config)
-  const origins = config.origins.map((origin) => new URL(origin).origin)
+export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedHuman> {
+  const issuer = (config.issuer ?? Constants.issuer).replace(/\/+$/, '')
+  if (!isIssuer(issuer)) throw new TypeError('World ID issuer must be an https URL.')
+  if (!config.clientId || !config.clientSecret)
+    throw new TypeError('World ID verifier requires clientId and clientSecret.')
+  if (!config.secretKey) throw new TypeError('World ID verifier requires secretKey.')
+  const acr = config.acr ?? [Constants.acr.orb, Constants.acr.orbFace]
+  if (acr.length === 0) throw new TypeError('World ID verifier requires at least one acr.')
+  const sessionTtl = config.sessionTtl ?? Constants.sessionTtl
+  const tolerance = config.clockTolerance ?? Constants.clockTolerance
+  for (const [name, value] of [
+    ['sessionTtl', sessionTtl],
+    ['clockTolerance', tolerance],
+  ] as const)
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new TypeError(`World ID ${name} must be a non-negative integer of seconds.`)
+
+  const idp = provider({ ...config, acr, issuer })
+  const sealer = seal(config.secretKey, `${issuer} ${config.clientId}`)
+  const now = () => Math.floor(Date.now() / 1_000)
+
+  async function device(poll: string): Promise<Identity.Verification<Types.VerifiedHuman>> {
+    if (poll === 'start') {
+      let started: Awaited<ReturnType<typeof idp.start>>
+      try {
+        started = await idp.start()
+      } catch {
+        return { status: 'unavailable', reason: 'World ID is unavailable.' }
+      }
+      const created = now()
+      const attempt: Attempt = {
+        kind: 'attempt',
+        code: started.device_code,
+        created,
+        expires: created + started.expires_in,
+        interval: started.interval,
+        user_code: started.user_code,
+        verification_uri: started.verification_uri,
+        verification_uri_complete: started.verification_uri_complete,
+      }
+      return pending(attempt, await sealer.seal(attempt))
+    }
+
+    const attempt = await sealer.open<Attempt>(poll, 'attempt')
+    if (!attempt || attempt.expires <= now())
+      return rejected({ status: 'expired' }, 'The World ID attempt expired.')
+    let result: Awaited<ReturnType<typeof idp.poll>>
+    try {
+      result = await idp.poll(attempt.code)
+    } catch {
+      return { status: 'unavailable', reason: 'World ID is unavailable.' }
+    }
+    if (result.status === 'pending') return pending(attempt, poll)
+    if (result.status === 'slow_down') {
+      const slower = { ...attempt, interval: attempt.interval + 5 }
+      return pending(slower, await sealer.seal(slower))
+    }
+    if (result.status !== 'approved')
+      return rejected({ status: result.status }, 'World ID was not approved.')
+
+    let claims: IdTokenClaims
+    try {
+      const verified = await idp.verify(result.idToken, { created: attempt.created, tolerance })
+      if (typeof verified === 'string') return rejected({ status: 'denied' }, verified)
+      claims = verified
+    } catch {
+      return { status: 'unavailable', reason: 'World ID keys are unavailable.' }
+    }
+    const session: Session = {
+      kind: 'session',
+      acr: claims.acr,
+      amr: claims.amr,
+      auth_time: claims.auth_time,
+      expires: now() + sessionTtl,
+      sub: claims.sub,
+    }
+    const device: Types.Device = {
+      status: 'approved',
+      session: await sealer.seal(session),
+      expires_in: sessionTtl,
+    }
+    return {
+      status: 'missing',
+      headers: { [Constants.deviceHeader]: encode(device) },
+      reason: 'World ID approved: send the request again with the World-Id session.',
+    }
+  }
+
+  function pending(attempt: Attempt, token: string): Identity.Verification<never> {
+    const device: Types.Device = {
+      status: 'pending',
+      attempt: token,
+      user_code: attempt.user_code,
+      verification_uri: attempt.verification_uri,
+      ...(attempt.verification_uri_complete && {
+        verification_uri_complete: attempt.verification_uri_complete,
+      }),
+      expires_in: Math.max(0, attempt.expires - now()),
+      interval: attempt.interval,
+    }
+    return {
+      status: 'missing',
+      headers: { [Constants.deviceHeader]: encode(device) },
+      reason: `Approve with World ID at ${attempt.verification_uri_complete ?? attempt.verification_uri} (code ${attempt.user_code}).`,
+    }
+  }
+
   return {
     async verify(request) {
+      const poll = request.headers.get(Constants.pollHeader)
+      // A device-flow call never verifies, so it never reaches the route's handler.
+      if (poll !== null) return device(poll.trim())
       const header = request.headers.get(Constants.header)
-      if (!header)
-        return {
-          status: 'missing',
-          reason: 'Sign the request with a World ID-backed agent wallet (AgentKit).',
-        }
-      const payload = parse(header)
-      if (!payload) return { status: 'invalid', reason: 'The agentkit header is malformed.' }
-
-      const reason = check(payload, origins, maxAge)
-      if (reason) return { status: 'invalid', reason }
-
-      const chainId = Number(payload.chainId.slice('eip155:'.length))
-      let text: string
-      try {
-        text = message(payload)
-      } catch {
-        return { status: 'invalid', reason: 'The agentkit message is not a valid SIWE message.' }
-      }
-      const parameters = {
-        address: payload.address as Address,
-        message: text,
-        signature: payload.signature as Hex,
-      }
-      let valid = false
-      // An EOA signature recovers locally, without an RPC call.
-      try {
-        valid = await verifyMessage(parameters)
-      } catch {}
-      // Otherwise it may be a smart account's: ERC-1271, or ERC-6492 before deployment. Only
-      // payloads that declare one reach the RPC, so a forged EOA signature costs no call.
-      const client = !valid && payload.type === 'eip1271' ? clients.get(chainId) : undefined
-      if (client)
-        try {
-          valid = await client.verifyMessage(parameters)
-          // viem reports a failed eth_call as an invalid signature: tell an outage apart.
-          if (!valid) await client.getChainId?.()
-        } catch {
-          return {
-            status: 'unavailable',
-            reason: 'Smart-account signature verification is unavailable.',
-          }
-        }
-      if (!valid) return { status: 'invalid', reason: 'The agentkit signature is invalid.' }
-
-      let humanId: string | undefined
-      try {
-        humanId = await lookup(payload.address as Address)
-      } catch {
-        return { status: 'unavailable', reason: 'AgentBook is unavailable.' }
-      }
-      if (!humanId)
-        return {
-          status: 'forbidden',
-          headers: { Link: `<${Constants.registration}>; rel="register"` },
-          reason: `The agent wallet is not registered in AgentBook. Register it with: npx @worldcoin/agentkit-cli register ${payload.address}`,
-        }
-      // Claim the nonce only for registered wallets, so rejected ones leave no replay state.
-      try {
-        const expires = Date.parse(payload.issuedAt) + (maxAge + Constants.clockSkew) * 1000
-        const key = `world:${payload.address.toLowerCase()}:${payload.nonce}`
-        if (!(await Store.tryClaim(config.nonceStore, key, expires)))
-          return { status: 'invalid', reason: 'The agentkit nonce has already been used.' }
-      } catch {
-        return { status: 'unavailable', reason: 'Replay protection is unavailable.' }
-      }
-
+      if (!header) return required('missing', 'Authenticate with World ID.')
+      const session = await sealer.open<Session>(header.trim(), 'session')
+      if (!session || session.expires <= now())
+        return required('invalid', 'The World ID session is invalid or expired.')
       return {
         status: 'valid',
         value: Object.freeze({
-          address: getAddress(payload.address),
-          chainId: `eip155:${chainId}`,
-          humanId,
+          issuer,
+          subject: session.sub,
+          acr: session.acr,
+          amr: Object.freeze([...session.amr]),
+          authTime: new Date(session.auth_time * 1_000),
+          expiresAt: new Date(session.expires * 1_000),
         }),
       }
     },
@@ -132,264 +166,411 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
 
 export declare namespace verifier {
   type Config = {
-    /** Atomically claims each message nonce, shared across instances. */
-    nonceStore: Store.AtomicStore
+    /** Client ID registered at World IdP's portal. */
+    clientId: string
+    /** Client secret registered at World IdP's portal. Keep it on the server. */
+    clientSecret: string
+    /** How the client authenticates to World IdP, as registered. @default 'client_secret_basic' */
+    clientAuthentication?: 'client_secret_basic' | 'client_secret_post' | undefined
     /**
-     * The server's public origins, such as `['https://api.example']`. The signed domain and URI
-     * must match one of them. The request's own URL is never used: its host comes from the
-     * `Host` header, so a header signed for another site could be replayed here.
+     * Secret that seals device attempts and sessions, such as `MPP_SECRET_KEY`. Share it across
+     * instances; changing it ends every session.
      */
-    origins: readonly string[]
+    secretKey: string
+    /** World IdP issuer. @default 'https://auth.world.org' */
+    issuer?: string | undefined
     /**
-     * Your World Chain RPC URL, for AgentBook lookups and World Chain smart-account signatures.
-     * Any request can trigger a lookup, so use a provider you control and rate-limit, not a
-     * shared public endpoint.
+     * Accepted authentication classes, requested as essential and checked in the ID token.
+     * @default [Constants.acr.orb, Constants.acr.orbFace]
      */
-    rpcUrl: string
-    /** Overrides for AgentBook, such as its address or a client for tests. */
-    agentBook?: Omit<agentBook.Config, 'rpcUrl'> | undefined
-    /**
-     * RPC URLs for other signing chains, to verify smart-account (ERC-1271 and ERC-6492)
-     * signatures from payloads typed `eip1271`. World Chain uses `rpcUrl`. Add a chain only if
-     * its accounts are controlled as on World Chain: the same address can belong to someone else
-     * on another chain, and AgentBook does not record which chain registered it. Smart accounts
-     * on other chains are rejected.
-     */
-    rpcUrls?: Record<number, string> | undefined
-    /** Clients by signing chain ID, taking precedence over `rpcUrls`, such as for tests. */
-    clients?: Record<number, SigningClient> | undefined
-    /** Maximum age, in seconds, of a signed message. @default 300 */
-    maxAge?: number | undefined
+    acr?: readonly string[] | undefined
+    /** Lifetime, in seconds, of a session after approval. @default 3600 */
+    sessionTtl?: number | undefined
+    /** Clock tolerance, in seconds, for ID token times. @default 60 */
+    clockTolerance?: number | undefined
+    /** Fetch used to call World IdP. @default globalThis.fetch */
+    fetch?: typeof globalThis.fetch | undefined
   }
 }
 
-/** Verifies a message signature on chain, including ERC-1271 and ERC-6492 smart accounts. */
-type SigningClient = {
-  verifyMessage: (parameters: {
-    address: Address
-    message: string
-    signature: Hex
-  }) => Promise<boolean>
-  /** Reaches the RPC, to tell an outage from an invalid signature. */
-  getChainId?: (() => Promise<number>) | undefined
+type Attempt = {
+  readonly kind: 'attempt'
+  /** Private device code. */
+  readonly code: string
+  /** Unix time the attempt started. */
+  readonly created: number
+  /** Unix time the attempt expires. */
+  readonly expires: number
+  readonly interval: number
+  readonly user_code: string
+  readonly verification_uri: string
+  readonly verification_uri_complete?: string | undefined
 }
 
-/** One client per allowed signing chain: never an RPC the request names. */
-function signingClients(config: verifier.Config): Map<number, SigningClient> {
-  const urls = { [Constants.worldChainId]: config.rpcUrl, ...config.rpcUrls }
-  const clients = new Map<number, SigningClient>()
-  for (const [id, url] of Object.entries(urls))
-    clients.set(Number(id), signingClient(Number(id), url))
-  for (const [id, client] of Object.entries(config.clients ?? {})) clients.set(Number(id), client)
-  return clients
+type Session = {
+  readonly kind: 'session'
+  readonly sub: string
+  readonly acr: string
+  readonly amr: readonly string[]
+  readonly auth_time: number
+  /** Unix time the session expires. */
+  readonly expires: number
+}
+
+type IdTokenClaims = {
+  readonly sub: string
+  readonly acr: string
+  readonly amr: readonly string[]
+  readonly auth_time: number
+}
+
+function required(status: 'missing' | 'invalid', reason: string) {
+  return {
+    status,
+    headers: {
+      [Constants.requiredHeader]: 'device',
+      Link: `<${Constants.docs}>; rel="help"`,
+    },
+    reason,
+  } as const
+}
+
+function rejected(device: Types.Device, reason: string) {
+  return {
+    status: 'invalid',
+    headers: { [Constants.deviceHeader]: encode(device) },
+    reason,
+  } as const
+}
+
+function encode(device: Types.Device): string {
+  return Base64.fromString(JSON.stringify(device), { pad: false, url: true })
 }
 
 /**
- * A viem client that throws when the RPC fails. viem's `verifyMessage` reports any failed
- * `eth_call` as an invalid signature, so the transport records whether the last failure came from
- * the node being unreachable, and an invalid result after one is rethrown as an outage.
+ * Seals values with AES-GCM under a key derived from `secretKey` and bound to `context` (the
+ * issuer and client), so attempts and sessions need no server-side state and can't be read,
+ * changed or replayed against another client.
  */
-function signingClient(id: number, url: string): SigningClient {
+function seal(secretKey: string, context: string) {
+  const key = (async () => {
+    const material = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secretKey),
+      'HKDF',
+      false,
+      ['deriveKey'],
+    )
+    return crypto.subtle.deriveKey(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new TextEncoder().encode('mppx/extensions/identity/world'),
+        info: new TextEncoder().encode(context),
+      },
+      material,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
+    )
+  })()
   return {
-    async verifyMessage(parameters) {
-      let outage: unknown
-      // viem returns a JSON-RPC error body from a failed HTTP response without its status.
-      let status: number | undefined
-      // No retries: an unauthenticated header costs the RPC one call at most.
-      const transport = http(url, {
-        retryCount: 0,
-        onFetchResponse: (response) => {
-          status = response.status
-        },
-      })
-      const client = createPublicClient({
-        chain: { id } as never,
-        // A signature names the contracts it runs, so CCIP-Read would fetch URLs it chooses.
-        ccipRead: false,
-        transport: (options) => {
-          const inner = transport(options)
-          return {
-            ...inner,
-            async request(args: any, opts?: any) {
-              status = undefined
-              try {
-                const result = await inner.request(args, opts)
-                outage = undefined
-                return result
-              } catch (error) {
-                outage = unreachable(error) || unavailableStatus(status) ? error : undefined
-                throw error
-              }
-            },
-          } as typeof inner
-        },
-      })
-      const valid = await client.verifyMessage(parameters)
-      if (!valid && outage) throw outage
-      return valid
+    async seal(value: Attempt | Session): Promise<string> {
+      const iv = crypto.getRandomValues(new Uint8Array(12))
+      const sealed = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(value.kind) },
+        await key,
+        new TextEncoder().encode(JSON.stringify(value)),
+      )
+      const bytes = new Uint8Array(12 + sealed.byteLength)
+      bytes.set(iv)
+      bytes.set(new Uint8Array(sealed), 12)
+      return Base64.fromBytes(bytes, { pad: false, url: true })
+    },
+    async open<value extends Attempt | Session>(
+      token: string,
+      kind: value['kind'],
+    ): Promise<value | undefined> {
+      if (token.length > Constants.maxLength || !/^[A-Za-z0-9_-]+$/.test(token)) return undefined
+      try {
+        const bytes = Base64.toBytes(token)
+        const opened = await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: bytes.slice(0, 12),
+            additionalData: new TextEncoder().encode(kind),
+          },
+          await key,
+          bytes.slice(12),
+        )
+        const value = JSON.parse(new TextDecoder().decode(opened)) as value
+        return value?.kind === kind ? value : undefined
+      } catch {
+        return undefined
+      }
     },
   }
 }
 
-/** Whether an HTTP status means the node could not answer, whatever the response body says. */
-function unavailableStatus(status: number | undefined): boolean {
-  return status !== undefined && (status >= 500 || [403, 408, 429].includes(status))
+/** World IdP's endpoints, read from its discovery document. */
+type Metadata = {
+  readonly device_authorization_endpoint: string
+  readonly token_endpoint: string
+  readonly jwks_uri: string
 }
 
-/**
- * Whether an RPC error means the node could not answer: a network error, a timeout, HTTP 403,
- * 408, 429 or 5xx, or a JSON-RPC internal, unavailable or rate-limit error. Anything else, such as a revert or out of gas,
- * is the call failing, which means the signature is invalid.
- */
-function unreachable(error: unknown): boolean {
-  const { name, status, code } = (error ?? {}) as {
-    name?: unknown
-    status?: unknown
-    code?: unknown
-  }
-  if (name === 'TimeoutError') return true
-  if (name === 'HttpRequestError') return typeof status !== 'number' || unavailableStatus(status)
-  return code === -32603 || code === -32002 || code === -32005 || code === 429
-}
+/** Calls World IdP: discovery, the device flow and ID token validation. */
+function provider(config: verifier.Config & { acr: readonly string[]; issuer: string }) {
+  const { acr, clientId, clientSecret, issuer } = config
+  // Unwrapped, so a 402 is never paid in a process that also runs the client.
+  const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
+  let metadata: Promise<Metadata> | undefined
+  const keys = jwks(fetch)
 
-/**
- * Returns a function that resolves an agent wallet to its anonymous human identifier in
- * AgentBook, or `undefined` when the wallet is not registered.
- */
-export function agentBook(config: agentBook.Config = {}) {
-  const address = config.address ?? Constants.agentBook
-  const client =
-    config.client ??
-    createPublicClient({
-      chain: { id: Constants.worldChainId } as never,
-      ccipRead: false,
-      transport: http(config.rpcUrl ?? Constants.rpcUrl),
+  function discover(): Promise<Metadata> {
+    metadata ??= (async () => {
+      const body = await json(await get(`${issuer}/.well-known/openid-configuration`))
+      const endpoints = [
+        body.device_authorization_endpoint,
+        body.token_endpoint,
+        body.jwks_uri,
+      ] as const
+      if (
+        body.issuer !== issuer ||
+        !endpoints.every((url) => typeof url === 'string' && isIssuer(url))
+      )
+        throw new Error('World IdP discovery is malformed.')
+      return body as unknown as Metadata
+    })().catch((error) => {
+      metadata = undefined
+      throw error
     })
-  return async (agent: Address): Promise<string | undefined> => {
-    const humanId = (await client.readContract({
-      address,
-      abi,
-      functionName: 'lookupHuman',
-      args: [agent],
-    })) as bigint
-    return humanId === 0n ? undefined : toHex(humanId)
+    return metadata
+  }
+
+  function get(url: string) {
+    return fetch(url, {
+      headers: { accept: 'application/json' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    })
+  }
+
+  function post(url: string, fields: Record<string, string>) {
+    const body = new URLSearchParams(fields)
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+    }
+    if (config.clientAuthentication === 'client_secret_post') {
+      body.set('client_id', clientId)
+      body.set('client_secret', clientSecret)
+    } else
+      headers.authorization = `Basic ${Base64.fromString(
+        `${formEncode(clientId)}:${formEncode(clientSecret)}`,
+      )}`
+    return fetch(url, {
+      body,
+      headers,
+      method: 'POST',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    })
+  }
+
+  return {
+    /** Starts a device attempt. Throws when World IdP is unreachable or refuses it. */
+    async start() {
+      const { device_authorization_endpoint } = await discover()
+      const response = await post(device_authorization_endpoint, {
+        scope: 'openid',
+        claims: JSON.stringify({ id_token: { acr: { essential: true, values: acr } } }),
+      })
+      if (!response.ok) throw new Error(`World IdP answered ${response.status}.`)
+      const body = await json(response)
+      const { device_code, expires_in, interval, user_code, verification_uri } = body
+      const complete = body.verification_uri_complete
+      if (
+        !isText(device_code) ||
+        !isText(user_code) ||
+        !isText(verification_uri) ||
+        !isIssuer(verification_uri) ||
+        (complete !== undefined && !(isText(complete) && isIssuer(complete))) ||
+        !isSeconds(expires_in) ||
+        (interval !== undefined && !isSeconds(interval))
+      )
+        throw new Error('World IdP returned a malformed device authorization.')
+      return {
+        device_code,
+        expires_in,
+        interval: interval ?? Constants.interval,
+        user_code,
+        verification_uri,
+        verification_uri_complete: complete,
+      }
+    },
+    /** Polls a device attempt once. Throws when World IdP is unavailable. */
+    async poll(
+      deviceCode: string,
+    ): Promise<
+      | { status: 'approved'; idToken: string }
+      | { status: 'pending' | 'slow_down' | 'denied' | 'expired' }
+    > {
+      const { token_endpoint } = await discover()
+      const response = await post(token_endpoint, {
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: deviceCode,
+      })
+      const body = await json(response).catch(() => ({}) as Record<string, unknown>)
+      if (response.ok) {
+        if (!isText(body.id_token)) throw new Error('World IdP returned no ID token.')
+        return { status: 'approved', idToken: body.id_token }
+      }
+      // Only an OAuth error ends or continues the attempt; anything else is an outage.
+      if (response.status !== 400 && response.status !== 401)
+        throw new Error('World IdP is unavailable.')
+      if (body.error === 'authorization_pending') return { status: 'pending' }
+      if (body.error === 'slow_down') return { status: 'slow_down' }
+      if (body.error === 'expired_token') return { status: 'expired' }
+      if (body.error === 'access_denied' || body.error === 'invalid_grant')
+        return { status: 'denied' }
+      // invalid_client and other errors are this server's misconfiguration, not the person's answer.
+      throw new Error('World IdP rejected the request.')
+    },
+    /**
+     * Validates an ID token from the device grant: RS256 signature with World IdP's keys, issuer,
+     * audience, times, an authentication at or after the attempt started, and an accepted `acr`.
+     * Returns the reason when it is invalid; throws when the keys can't be fetched.
+     */
+    async verify(
+      token: string,
+      options: { created: number; tolerance: number },
+    ): Promise<IdTokenClaims | string> {
+      const parts = token.split('.')
+      if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part)))
+        return 'The ID token is malformed.'
+      let header: Record<string, unknown>
+      let claims: Record<string, unknown>
+      try {
+        header = JSON.parse(Base64.toString(parts[0]!))
+        claims = JSON.parse(Base64.toString(parts[1]!))
+      } catch {
+        return 'The ID token is malformed.'
+      }
+      if (header?.alg !== 'RS256' || !isText(header.kid))
+        return 'The ID token algorithm is not RS256.'
+      const now = Math.floor(Date.now() / 1_000)
+      const { tolerance } = options
+      if (claims?.iss !== issuer) return 'The ID token issuer is not World IdP.'
+      const aud = claims.aud
+      const audiences = Array.isArray(aud) ? aud : [aud]
+      if (!audiences.includes(clientId) || (audiences.length > 1 && claims.azp !== clientId))
+        return 'The ID token is for another client.'
+      if (!isText(claims.sub)) return 'The ID token has no subject.'
+      if (!isTime(claims.exp) || claims.exp <= now - tolerance) return 'The ID token has expired.'
+      if (!isTime(claims.iat) || claims.iat > now + tolerance)
+        return 'The ID token was issued in the future.'
+      if (!isTime(claims.auth_time) || claims.auth_time > now + tolerance)
+        return 'The ID token has no valid auth_time.'
+      // The device grant always authenticates afresh: an older authentication is not this attempt's.
+      if (claims.auth_time < options.created - tolerance)
+        return 'The World ID authentication predates the attempt.'
+      if (!isText(claims.acr) || !acr.includes(claims.acr))
+        return 'The World ID authentication class is not accepted.'
+      if (!Array.isArray(claims.amr) || !claims.amr.every(isText))
+        return 'The ID token has no valid amr.'
+
+      const { jwks_uri } = await discover()
+      const key = await keys(jwks_uri, header.kid)
+      if (!key) return 'No World IdP key matches the ID token.'
+      let valid = false
+      try {
+        valid = await crypto.subtle.verify(
+          'RSASSA-PKCS1-v1_5',
+          key,
+          Base64.toBytes(parts[2]!) as Uint8Array<ArrayBuffer>,
+          new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+        )
+      } catch {}
+      if (!valid) return 'The ID token signature is invalid.'
+      return { sub: claims.sub, acr: claims.acr, amr: claims.amr, auth_time: claims.auth_time }
+    },
   }
 }
-
-export declare namespace agentBook {
-  type Config = {
-    /** AgentBook contract address. @default the canonical World Chain deployment */
-    address?: Address | undefined
-    /** World Chain RPC URL. @default World Chain's public RPC */
-    rpcUrl?: string | undefined
-    /** A client to read the contract with, such as for tests or a private RPC. */
-    client?: { readContract: (parameters: any) => Promise<unknown> } | undefined
-  }
-}
-
-/** How long, in milliseconds, an AgentBook answer is reused, so floods of requests share calls. */
-const lookupTtl = { registered: 60_000, unregistered: 10_000 }
-
-/** The most wallets each cache holds; the oldest entry goes first. */
-const lookupLimit = 10_000
 
 /**
- * Caches AgentBook answers briefly and shares in-flight lookups for the same wallet. Registered
- * and unregistered wallets are kept apart, so a flood of fresh wallets never evicts real agents.
+ * Resolves World IdP's RS256 keys by key ID from its JSON Web Key Set, cached for five minutes.
+ * An unknown key ID refetches the set at most every 30 seconds, and concurrent lookups share one
+ * fetch. Throws when the set can't be fetched.
  */
-function cached(lookup: (agent: Address) => Promise<string | undefined>) {
-  type Entry = { expires: number; value: Promise<string | undefined> }
-  const registered = new Map<string, Entry>()
-  const other = new Map<string, Entry>()
-  const put = (entries: Map<string, Entry>, key: string, entry: Entry) => {
-    entries.delete(key)
-    if (entries.size >= lookupLimit) entries.delete(entries.keys().next().value!)
-    entries.set(key, entry)
+function jwks(fetch: typeof globalThis.fetch) {
+  let cache: { url: string; fetchedAt: number; keys: Promise<Map<string, CryptoKey>> } | undefined
+  function load(url: string) {
+    const keys = (async () => {
+      const response = await fetch(url, {
+        headers: { accept: 'application/json' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      })
+      const body = await json(response)
+      if (!Array.isArray(body.keys)) throw new Error('World IdP JWKS has no keys.')
+      const result = new Map<string, CryptoKey>()
+      for (const jwk of body.keys) {
+        const { alg, e, kid, kty, n, use } = (jwk ?? {}) as Record<string, unknown>
+        if (kty !== 'RSA' || !isText(kid) || !isText(n) || !isText(e)) continue
+        if ((use !== undefined && use !== 'sig') || (alg !== undefined && alg !== 'RS256')) continue
+        try {
+          result.set(
+            kid,
+            await crypto.subtle.importKey(
+              'jwk',
+              { kty, n, e },
+              { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+              false,
+              ['verify'],
+            ),
+          )
+        } catch {}
+      }
+      return result
+    })()
+    const entry = { url, fetchedAt: Date.now(), keys }
+    cache = entry
+    keys.catch(() => {
+      if (cache === entry) cache = undefined
+    })
+    return keys
   }
-  return (agent: Address) => {
-    const key = agent.toLowerCase()
-    const now = Date.now()
-    const fresh = (entry: Entry | undefined) => (entry && entry.expires > now ? entry : undefined)
-    const entry = fresh(registered.get(key)) ?? fresh(other.get(key))
-    if (entry) return entry.value
-    registered.delete(key)
-    const value = lookup(agent)
-    put(other, key, { expires: Number.POSITIVE_INFINITY, value })
-    value.then(
-      (humanId) => {
-        other.delete(key)
-        if (humanId) put(registered, key, { expires: Date.now() + lookupTtl.registered, value })
-        else put(other, key, { expires: Date.now() + lookupTtl.unregistered, value })
-      },
-      () => other.delete(key),
-    )
-    return value
-  }
-}
-
-function parse(header: string): Types.Payload | undefined {
-  try {
-    const value = JSON.parse(Base64.toString(header)) as Record<string, unknown>
-    const strings = [
-      'domain',
-      'address',
-      'uri',
-      'version',
-      'chainId',
-      'nonce',
-      'issuedAt',
-      'signature',
-    ]
-    if (!value || strings.some((name) => typeof value[name] !== 'string')) return undefined
-    const optional = ['statement', 'expirationTime', 'notBefore', 'requestId']
-    if (optional.some((name) => value[name] !== undefined && typeof value[name] !== 'string'))
-      return undefined
-    if (
-      value.resources !== undefined &&
-      !(Array.isArray(value.resources) && value.resources.every((r) => typeof r === 'string'))
-    )
-      return undefined
-    if (value.type !== 'eip191' && value.type !== 'eip1271') return undefined
-    if (value.version !== '1') return undefined
-    // A canonical, positive chain ID, so the signed `Chain ID` line and the result agree.
-    if (!/^eip155:[1-9]\d{0,15}$/.test(value.chainId as string)) return undefined
-    if (!Number.isSafeInteger(Number((value.chainId as string).slice('eip155:'.length))))
-      return undefined
-    // SIWE request IDs are pchar: no spaces or line breaks that could restate signed lines.
-    if (value.requestId !== undefined && !/^[\x21-\x7e]*$/.test(value.requestId as string))
-      return undefined
-    // Lowercase or EIP-55 checksummed, normalised so one signature has one spelling.
-    if (!isAddress(value.address as string, { strict: true })) return undefined
-    value.address = getAddress(value.address as string)
-    return value as Types.Payload
-  } catch {
-    return undefined
+  return async (url: string, kid: string): Promise<CryptoKey | undefined> => {
+    const age = cache && cache.url === url ? Date.now() - cache.fetchedAt : Infinity
+    const keys = await (age < 300_000 ? cache!.keys : load(url))
+    if (keys.has(kid) || age < 30_000 || age >= 300_000) return keys.get(kid)
+    return (await load(url)).get(kid)
   }
 }
 
-/** Returns why a message does not fit the request, or `undefined` when it does. */
-function check(
-  payload: Types.Payload,
-  origins: readonly string[],
-  maxAge: number,
-): string | undefined {
-  let uri: URL
-  try {
-    uri = new URL(payload.uri)
-  } catch {
-    return 'The agentkit message URI is invalid.'
-  }
-  if (!origins.includes(uri.origin)) return 'The agentkit message is for another URI.'
-  if (payload.domain !== uri.hostname) return 'The agentkit message is for another domain.'
-  const now = Date.now()
-  const issuedAt = Date.parse(payload.issuedAt)
-  if (Number.isNaN(issuedAt)) return 'The agentkit message has no valid issuedAt.'
-  if (issuedAt > now + Constants.clockSkew * 1000)
-    return 'The agentkit message is issued in the future.'
-  if (now - issuedAt > maxAge * 1000) return 'The agentkit message is too old.'
-  if (payload.expirationTime && !(Date.parse(payload.expirationTime) > now))
-    return 'The agentkit message has expired.'
-  if (payload.notBefore && !(Date.parse(payload.notBefore) <= now))
-    return 'The agentkit message is not valid yet.'
-  return undefined
+async function json(response: Response): Promise<Record<string, unknown>> {
+  if (!(response.headers.get('content-type') ?? '').includes('json') && response.ok)
+    throw new Error('World IdP did not answer with JSON.')
+  const body = (await response.json()) as unknown
+  if (typeof body !== 'object' || body === null || Array.isArray(body))
+    throw new Error('World IdP answered with a malformed body.')
+  return body as Record<string, unknown>
+}
+
+/** Form-encodes a client credential for HTTP Basic authentication (RFC 6749, section 2.3.1). */
+function formEncode(value: string): string {
+  return new URLSearchParams({ v: value }).toString().slice(2)
+}
+
+function isText(value: unknown): value is string {
+  return typeof value === 'string' && value !== '' && value.length <= Constants.maxLength
+}
+
+function isSeconds(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 86_400
+}
+
+function isTime(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }

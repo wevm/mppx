@@ -57,11 +57,11 @@ describe('scrub', () => {
     expect([...result.keys()]).toEqual(['x-public'])
   })
 
-  test('behavior: strips the World AgentKit proof', () => {
+  test('behavior: strips the World ID session', () => {
     const result = Headers.scrub(
-      new globalThis.Headers({ AgentKit: 'eyJzaWduYXR1cmUiOiIweCJ9', 'X-Public': 'value' }),
+      new globalThis.Headers({ 'World-Id': 'c2Vzc2lvbg', 'X-Public': 'value' }),
     )
-    expect(result.has('agentkit')).toBe(false)
+    expect(result.has('world-id')).toBe(false)
     expect(result.get('x-public')).toBe('value')
   })
 

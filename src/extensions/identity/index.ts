@@ -10,7 +10,7 @@ export * as Persona from './persona/index.js'
 export * as Tap from './tap/index.js'
 /** Client and server adapters for the Web Bot Auth HTTPS-directory profile. */
 export * as WebBotAuth from './web-bot-auth/index.js'
-/** World AgentKit: agents backed by a World ID-verified human, through AgentBook. */
+/** World ID: agents approved by a World ID-verified human, through World IdP (OpenID Connect). */
 export * as World from './world/index.js'
 export * from './Constants.js'
 export type * from './Types.js'

@@ -1,11 +1,10 @@
 {
-  "name": "world-agentkit",
+  "name": "world-id",
   "private": true,
   "type": "module",
   "scripts": {
     "check:types": "tsgo -b",
     "client": "tsx src/client.ts",
-    "register": "tsx src/register.ts",
     "server": "tsx src/server.ts"
   },
   "dependencies": {

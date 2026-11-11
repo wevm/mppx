@@ -1,19 +1,39 @@
-/** World AgentKit values, matching `@worldcoin/agentkit` so x402 registrations work on MPP. */
+/** World ID values for the World IdP (OpenID Connect) device flow. */
 export const Constants = {
-  /** Request header carrying the signed AgentKit payload, base64-encoded JSON. Same as x402. */
-  header: 'agentkit',
-  /** Canonical AgentBook deployment on World Chain. */
-  agentBook: '0xA23aB2712eA7BBa896930544C7d6636a96b944dA',
-  /** World Chain ID, where AgentBook lookups resolve. */
-  worldChainId: 480,
-  /** Default World Chain RPC URL. */
-  rpcUrl: 'https://worldchain-mainnet.g.alchemy.com/public',
-  /** Default maximum age, in seconds, of a signed AgentKit message. */
-  maxAge: 5 * 60,
-  /** Allowed clock skew, in seconds, for a message issued in the future. */
-  clockSkew: 30,
-  /** Statement signed when the client sets none. */
-  statement: 'Verify your agent is backed by a real human',
-  /** Where an unregistered agent registers its wallet. */
-  registration: 'https://docs.world.org/agents/agent-kit',
+  /** World IdP issuer. */
+  issuer: 'https://auth.world.org',
+  /** World IdP sandbox issuer, for testing with sandbox client credentials. */
+  sandboxIssuer: 'https://sandbox.auth.world.org',
+  /** Request header carrying the session the server issued after World ID approval. */
+  header: 'World-Id',
+  /**
+   * Request header of the prover's out-of-band device-flow calls: `start`, or an attempt token
+   * to poll. A request carrying it never reaches the route's handler.
+   */
+  pollHeader: 'World-Id-Poll',
+  /** Response header asking for World ID: `device`. */
+  requiredHeader: 'World-Id-Required',
+  /** Response header carrying the device attempt's state, base64url-encoded JSON. */
+  deviceHeader: 'World-Id-Device',
+  /** World IdP authentication classes (`acr`). */
+  acr: {
+    /** Orb-verified account. */
+    orb: 'https://world.org/oidc/acr/orb',
+    /** Orb-verified account with a Face Auth check during this authentication. */
+    orbFace: 'https://world.org/oidc/acr/orb-face',
+    /** Selfie Check-verified account. */
+    selfie: 'https://world.org/oidc/acr/selfie',
+    /** Selfie Check-verified account with a Face Auth check during this authentication. */
+    selfieFace: 'https://world.org/oidc/acr/selfie-face',
+  },
+  /** Default lifetime, in seconds, of a session after World ID approval. */
+  sessionTtl: 60 * 60,
+  /** Default device-flow polling interval, in seconds, when World IdP sets none. */
+  interval: 5,
+  /** Allowed clock skew, in seconds, for ID token times. */
+  clockTolerance: 60,
+  /** Largest accepted `World-Id` or `World-Id-Poll` header value, in characters. */
+  maxLength: 4096,
+  /** World IdP integration guides. */
+  docs: 'https://auth.world.org/docs/guides/getting-started',
 } as const
