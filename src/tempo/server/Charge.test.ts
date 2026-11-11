@@ -2036,6 +2036,34 @@ describe('tempo', () => {
       expect(challenge!.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')
 
+      // Switching direct MACH on keeps challenges issued before it valid: they bind as before, and
+      // only a challenge that carries the flag accepts MACH.
+      const preOptIn = challenge!
+      await issue(true)
+      challenge = preOptIn
+      const preOptInResult = await server.charge({
+        amount: '1',
+        decimals: 6,
+        recipient: accounts[0].address,
+      })(
+        new Request('https://example.com', {
+          headers: {
+            Authorization: Credential.serialize(
+              Credential.from({
+                challenge: preOptIn,
+                payload: { hash, type: 'hash' as const },
+                source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+              }),
+            ),
+          },
+        }),
+      )
+      const preOptInBody =
+        preOptInResult.status === 402 ? await preOptInResult.challenge.text() : ''
+      // It reaches payment verification instead of failing the challenge binding.
+      expect(preOptInBody).not.toContain('invalid-challenge')
+      expect(preOptInBody).toContain('verification-failed')
+
       const plainServer = await issue(false)
       expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')
       await expect(

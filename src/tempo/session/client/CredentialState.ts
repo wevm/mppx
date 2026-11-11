@@ -37,11 +37,7 @@ import {
   deleteChannel,
   type ChannelSink,
 } from './ChannelStore.js'
-import {
-  isMachineToken,
-  resolveMachineTokenFeeToken,
-  resolveMachineTokenOpen,
-} from './MachineToken.js'
+import { resolveMachineTokenFeeToken, resolveMachineTokenOpen } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -220,6 +216,8 @@ export type ClientSessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Fee token selected by the server for open/top-up transactions. */
   feeToken?: Address | undefined
+  /** Whether the payee also accepts a channel funded in MACH, 1:1 with the challenge currency. */
+  machineTokenDirect?: boolean | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
@@ -295,6 +293,8 @@ export type ChallengeContext = {
   feePayer?: boolean | undefined
   feeToken?: Address | undefined
   key: string
+  /** Whether the challenge also accepts a channel funded in MACH, and the client allows MACH. */
+  machineTokenDirect?: boolean | undefined
   operator?: Address | undefined
   payee: Address
   snapshot?: SessionSnapshot | undefined
@@ -417,6 +417,9 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     feeToken: readOptionalAddress(methodDetails.feeToken),
+    machineTokenDirect:
+      Constants.getMethodDetail(methodDetails, Constants.MethodDetailKeys.machineTokenDirect) ===
+      true,
     operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
@@ -468,6 +471,7 @@ export async function resolveChallengeContext(
     feePayer: methodDetails.feePayer,
     feeToken: methodDetails.feeToken,
     key: channelKey({ payee, token, escrow, chainId }),
+    machineTokenDirect: methodDetails.machineTokenDirect,
     operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
@@ -717,7 +721,14 @@ async function resolveAutoSwapCalls(
   },
 ): Promise<readonly TempoChannelCall[] | undefined> {
   // MACH is never acquired by swapping: a session funds a MACH channel only from MACH already held.
-  if (!autoSwap || isMachineToken(parameters.chainId, parameters.tokenOut)) return undefined
+  if (
+    !autoSwap ||
+    MachineTokenCharge.isMachineToken({
+      chainId: parameters.chainId,
+      currency: parameters.tokenOut,
+    })
+  )
+    return undefined
   return (await AutoSwap.findCalls(parameters.client, {
     account: parameters.account,
     amountOut: parameters.amountOut,

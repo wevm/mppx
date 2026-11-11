@@ -16,6 +16,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
@@ -230,14 +231,6 @@ export function session(parameters: session.Parameters = {}) {
     resolveAccount,
   } = parameters
   const policy = resolveSpendingPolicy(parameters)
-  // A `currencies` allowlist without MACH keeps channels in the advertised currency.
-  const machineTokenAllowed =
-    !policy.currencies ||
-    Object.values(defaults.machineToken).some((deployment) =>
-      policy.currencies!.includes(deployment.token.toLowerCase()),
-    )
-  const withAllowedFunding = <challenge extends Challenge.Challenge>(challenge: challenge) =>
-    machineTokenAllowed ? challenge : withoutMachineTokenDirect(challenge)
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
@@ -253,6 +246,31 @@ export function session(parameters: session.Parameters = {}) {
     throw new Error('Session origins require HTTP or HTTPS')
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
+
+  /**
+   * Resolves a challenge's context. A `currencies` allowlist without the chain's MACH keeps
+   * channels in the advertised currency, so MACH funding and a server snapshot of a MACH channel
+   * are ignored.
+   */
+  const resolveContext = async (challenge: Challenge.Challenge): Promise<ChallengeContext> => {
+    const resolved = await resolveChallengeContext({
+      allowCustomEscrow,
+      challenge,
+      escrowOverride,
+      allowedChainIds,
+      getClient,
+    })
+    const { chainId, snapshot } = resolved
+    if (MachineTokenCharge.isAllowed(policy.currencies, chainId)) return resolved
+    const machineSnapshot =
+      snapshot &&
+      MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
+    return {
+      ...resolved,
+      machineTokenDirect: false,
+      snapshot: machineSnapshot ? undefined : snapshot,
+    }
+  }
 
   const resolveCredentialAccount = async (
     resolved: ChallengeContext,
@@ -304,13 +322,7 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const challengeContext = await resolveChallengeContext({
-        allowCustomEscrow,
-        challenge: withAllowedFunding(challenge),
-        escrowOverride,
-        allowedChainIds,
-        getClient,
-      })
+      const challengeContext = await resolveContext(challenge)
       const attempt = MethodResponse.getAttempt(parameters)
       const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
       if (
@@ -325,11 +337,7 @@ export function session(parameters: session.Parameters = {}) {
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
         if (automatic) release = await lockChannels(store, getLockKeys(challengeContext))
-        const resolved = await selectChannelContext({
-          context,
-          resolved: challengeContext,
-          store,
-        })
+        let resolved = await selectChannelContext({ context, resolved: challengeContext, store })
         if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
@@ -340,6 +348,8 @@ export function session(parameters: session.Parameters = {}) {
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannels(store, getLockKeys(challengeContext))
+          // Select again: another flow may have opened a channel, possibly in MACH, while this waited.
+          resolved = await selectChannelContext({ context, resolved: challengeContext, store })
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')
@@ -387,7 +397,8 @@ export function session(parameters: session.Parameters = {}) {
             if (!accepted && outcome.status === 'pending') return false
             try {
               if (accepted) {
-                const current = await store.get(resolved.key)
+                // An open that switched to MACH stored its channel under the MACH scope.
+                const current = await store.get(entryKey(opened))
                 if (
                   !current?.opened ||
                   current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
@@ -501,13 +512,7 @@ export function session(parameters: session.Parameters = {}) {
     assertSpendingPolicy(policy, challenge.request)
     const resolved = await selectChannelContext({
       context: sessionContext,
-      resolved: await resolveChallengeContext({
-        allowCustomEscrow,
-        challenge: withAllowedFunding(challenge),
-        escrowOverride,
-        allowedChainIds,
-        getClient,
-      }),
+      resolved: await resolveContext(challenge),
       store,
     })
     const channel = await store.get(resolved.key)
@@ -567,13 +572,7 @@ export function session(parameters: session.Parameters = {}) {
       const channelKey = (
         await selectChannelContext({
           context: sessionContextSchema.safeParse(context).data,
-          resolved: await resolveChallengeContext({
-            allowCustomEscrow,
-            challenge: withAllowedFunding(challenge),
-            escrowOverride,
-            allowedChainIds,
-            getClient,
-          }),
+          resolved: await resolveContext(challenge),
           store,
         })
       ).key
@@ -692,14 +691,4 @@ function resolveInputOrigin(input: RequestInfo | URL): string {
   if (!['http:', 'https:'].includes(url.protocol))
     throw new Error('Session payments require an HTTP or HTTPS origin')
   return url.origin
-}
-
-/** Returns a challenge without `machineTokenDirect`, so its channel opens in the advertised currency. */
-function withoutMachineTokenDirect<challenge extends Challenge.Challenge>(
-  challenge: challenge,
-): challenge {
-  const methodDetails = challenge.request.methodDetails
-  if (typeof methodDetails !== 'object' || methodDetails === null) return challenge
-  const { machineTokenDirect: _, ...rest } = methodDetails as Record<string, unknown>
-  return { ...challenge, request: { ...challenge.request, methodDetails: rest } }
 }

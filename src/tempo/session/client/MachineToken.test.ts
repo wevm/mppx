@@ -233,6 +233,44 @@ describe('session machineTokenDirect', () => {
     expect(open.descriptor.token).toBe(currency)
   })
 
+  test('ignores a MACH channel snapshot when the currencies allowlist leaves MACH out', async () => {
+    const method = session({
+      account,
+      currencies: [currency],
+      decimals: 0,
+      getClient: () => createTestClient({ machBalance: 1_000n }),
+    })
+    const sessionSnapshot = {
+      acceptedCumulative: '100',
+      chainId,
+      channelId: `0x${'33'.repeat(32)}`,
+      deposit: '1000',
+      descriptor: {
+        authorizedSigner: account.address,
+        expiringNonceHash: `0x${'11'.repeat(32)}`,
+        operator: '0x0000000000000000000000000000000000000000',
+        payee,
+        payer: account.address,
+        salt: `0x${'22'.repeat(32)}`,
+        token: mach,
+      },
+      escrow: tip20ChannelEscrow,
+      requiredCumulative: '200',
+      settled: '0',
+      spent: '100',
+    }
+
+    const open = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge({ machineTokenDirect: true, sessionSnapshot }),
+        context: {},
+      }),
+    )
+
+    expect(open.action).toBe('open')
+    expect(open.descriptor.token).toBe(currency)
+  })
+
   test('keeps using an existing channel in the challenge currency', async () => {
     const channelStore = createChannelStore()
     const poor = session({
@@ -356,6 +394,6 @@ describe('MACH channel funding', () => {
 
     // Both scopes, since an open for a MACH-direct challenge can fall back to the challenge currency.
     expect(getLockKeys(resolved)).toEqual([resolved.key, resolveMachineTokenContext(resolved)!.key])
-    expect(getLockKeys({ ...resolved, challenge: makeChallenge({}) })).toEqual([resolved.key])
+    expect(getLockKeys({ ...resolved, machineTokenDirect: false })).toEqual([resolved.key])
   })
 })

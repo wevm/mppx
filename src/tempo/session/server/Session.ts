@@ -41,6 +41,7 @@ import {
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
   resolveMachineTokenCredential,
+  resolveMachineTokenOffer,
   resolveSessionChannelId,
   resolveSessionSnapshot,
   resolveSessionPaymentRequest,
@@ -135,7 +136,8 @@ type BootstrapPreflightParameters = {
     chainId?: number | undefined
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
-  machineTokenEnabled?: boolean | undefined
+  /** Accepts a channel funded in MACH, 1:1 with the session currency. */
+  machineTokenDirect?: boolean | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
@@ -322,14 +324,15 @@ async function handleBootstrapPreflight(
     store: parameters.store,
   })
   const chainId = readBootstrapChainId(request.chainId)
+  const currency = readBootstrapAddress(request.currency, 'currency')
   const snapshot = await resolveSessionSnapshot({
     amount: 0n,
     channelId,
     expected: {
       chainId,
-      currency: readBootstrapAddress(request.currency, 'currency'),
-      machineToken: parameters.machineTokenEnabled
-        ? MachineTokenCharge.getToken(chainId)
+      currency,
+      machineToken: parameters.machineTokenDirect
+        ? resolveMachineTokenOffer({ chainId, currency })
         : undefined,
       escrowContract: resolveBootstrapEscrowContract(
         parameters.paymentRequest,
@@ -475,25 +478,32 @@ export function session<const parameters extends session.Parameters>(
       })
     : undefined
 
+  /**
+   * Parses a credential and resolves what it is verified against: priced in MACH when it uses a
+   * MACH channel a `machineTokenDirect` challenge accepts. Mppx verified the challenge's HMAC
+   * before calling `validate` or `broadcast`.
+   */
+  const resolveCredential = async (credential: Credential.Credential, request: unknown) => {
+    const payload = requireSessionCredentialPayload(credential.payload)
+    const context = await resolveCredentialVerificationContext({
+      decimals,
+      feePayer: configuredFeePayer,
+      getClient,
+      minVoucherDelta: parameters.minVoucherDelta,
+      request,
+    })
+    return {
+      payload,
+      ...resolveMachineTokenCredential({ challenge: credential.challenge, context, payload }),
+    }
+  }
+
   const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
     credential,
     operation,
     request,
   }) => {
-    const payload = requireSessionCredentialPayload(credential.payload)
-    // Mppx verified the challenge's HMAC before calling this hook.
-    const { challenge, context } = await resolveMachineTokenCredential({
-      challenge: credential.challenge,
-      context: await resolveCredentialVerificationContext({
-        decimals,
-        feePayer: configuredFeePayer,
-        getClient,
-        minVoucherDelta: parameters.minVoucherDelta,
-        request,
-      }),
-      payload,
-      store,
-    })
+    const { challenge, context, payload } = await resolveCredential(credential, request)
 
     // A broadcast voucher is checked against the stored channel by the update that accepts it.
     const details =
@@ -538,20 +548,10 @@ export function session<const parameters extends session.Parameters>(
     envelope,
     request,
   }) => {
-    const payload = requireSessionCredentialPayload(credential.payload)
-    // Mppx verified the challenge's HMAC before calling this hook.
-    const { challenge, context } = await resolveMachineTokenCredential({
-      challenge: credential.challenge,
-      context: await resolveCredentialVerificationContext({
-        decimals,
-        feePayer: configuredFeePayer,
-        getClient,
-        minVoucherDelta: parameters.minVoucherDelta,
-        request,
-      }),
-      payload,
-      store,
-    })
+    const { challenge, context, machineToken, payload } = await resolveCredential(
+      credential,
+      request,
+    )
 
     const prepaidRefundKey = parameters.sse ? `stream:${globalThis.crypto.randomUUID()}` : undefined
     const markPrepaidReceipt = (receipt: Parameters<typeof Transport.markPrepaidSessionTick>[0]) =>
@@ -579,7 +579,7 @@ export function session<const parameters extends session.Parameters>(
         store,
         channel,
       }).catch(ignoreRetryableSettlementFailure)
-    const sessionReceipt = await broadcastCredentialPayload({
+    const receipt = await broadcastCredentialPayload({
       account,
       challenge,
       chargeAmount,
@@ -616,8 +616,7 @@ export function session<const parameters extends session.Parameters>(
     })
 
     // A MACH channel accepted for a machineTokenDirect challenge reports the token it debits.
-    if (challenge !== credential.challenge)
-      Object.assign(sessionReceipt, { fundingCurrency: challenge.request.currency })
+    const sessionReceipt = { ...receipt, ...(machineToken && { fundingCurrency: machineToken }) }
 
     if (acceptance.charged) {
       const settlementTxHash = await settleAcceptedCharge(acceptance.charged)
@@ -674,7 +673,7 @@ export function session<const parameters extends session.Parameters>(
             credential,
             input,
             charge: bootstrapCharge,
-            machineTokenEnabled: machineTokenDirect,
+            machineTokenDirect,
             decimals,
             defaultRecipient: recipient,
             expires,
@@ -697,7 +696,7 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
-        machineTokenEnabled: machineTokenDirect,
+        machineTokenDirect,
         minVoucherDelta: parameters.minVoucherDelta,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,

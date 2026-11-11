@@ -288,7 +288,7 @@ export type ResolveSessionPaymentRequestParameters = {
   defaultFeePayer?: viem_Account | undefined
   getClient: ResolveRequestChainIdParameters['getClient']
   /** Advertises `machineTokenDirect` so clients may fund the channel in MACH instead. */
-  machineTokenEnabled?: boolean | undefined
+  machineTokenDirect?: boolean | undefined
   minVoucherDelta?: string | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
@@ -414,7 +414,7 @@ export async function resolveSessionPaymentRequest(
     decimals,
     defaultFeePayer,
     getClient,
-    machineTokenEnabled,
+    machineTokenDirect,
     minVoucherDelta,
     parameterChainId,
     parameterEscrowContract,
@@ -443,7 +443,7 @@ export async function resolveSessionPaymentRequest(
   )
   const currency = readChallengeAddress(request.currency, 'currency')
   const recipient = readChallengeAddress(request.recipient, 'recipient')
-  const machineToken = machineTokenEnabled
+  const machineToken = machineTokenDirect
     ? resolveMachineTokenOffer({ chainId, currency })
     : undefined
   const operator = resolveRequestOperator(request.operator)
@@ -465,7 +465,7 @@ export async function resolveSessionPaymentRequest(
     requireVoucherAdvance: Boolean(capturedRequest) && !sseEnabled && isContentRequest,
     store,
   })
-  // `machineTokenDirect` is set only by `machineTokenEnabled`.
+  // `machineTokenDirect` is set only by the server's direct MACH opt-in.
   const {
     [Constants.MethodDetailKeys.machineTokenDirect]: _machineTokenDirect,
     operator: _operator,
@@ -489,7 +489,7 @@ export async function resolveSessionPaymentRequest(
 }
 
 /**
- * Returns MACH when a `machineTokenEnabled` session should also accept a MACH channel, or
+ * Returns MACH when a `machineTokenDirect` session should also accept a MACH channel, or
  * `undefined` when the session is already priced in MACH. Throws on chains without MACH, as the
  * charge does.
  */
@@ -510,6 +510,8 @@ export type MachineTokenCredentialResolution = {
   challenge: Challenge.Challenge
   /** Verification context, priced in MACH when the credential uses a MACH channel. */
   context: CredentialVerificationContext
+  /** MACH, when the credential uses a MACH channel the challenge accepts. */
+  machineToken?: Address | undefined
 }
 
 /**
@@ -521,13 +523,12 @@ export type MachineTokenCredentialResolution = {
  * carry `machineTokenDirect: true` and the credential's channel token is MACH, so a channel in any
  * other token is still checked against the challenge currency and rejected.
  */
-export async function resolveMachineTokenCredential(parameters: {
+export function resolveMachineTokenCredential(parameters: {
   challenge: Challenge.Challenge
   context: CredentialVerificationContext
   payload: SessionCredentialPayload
-  store: ChannelStore.ChannelStore
-}): Promise<MachineTokenCredentialResolution> {
-  const { challenge, context, payload, store } = parameters
+}): MachineTokenCredentialResolution {
+  const { challenge, context, payload } = parameters
   const unchanged = { challenge, context }
   if (!isObject(challenge.request.methodDetails)) return unchanged
   if (challenge.request.methodDetails.machineTokenDirect !== true) return unchanged
@@ -535,8 +536,7 @@ export async function resolveMachineTokenCredential(parameters: {
   const machineToken = MachineTokenCharge.getToken(context.chainId)
   if (!machineToken || isAddressEqual(context.request.currency as Address, machineToken))
     return unchanged
-  const token = await readCredentialChannelToken(payload, store)
-  if (!token || !isAddressEqual(token, machineToken)) return unchanged
+  if (!isAddressEqual(payload.descriptor.token, machineToken)) return unchanged
   const currency = readChallengeAddress(challenge.request.currency, 'currency')
   return {
     challenge: { ...challenge, request: { ...challenge.request, currency: machineToken } },
@@ -549,22 +549,8 @@ export async function resolveMachineTokenCredential(parameters: {
       },
       request: { ...context.request, currency: machineToken },
     },
+    machineToken,
   }
-}
-
-async function readCredentialChannelToken(
-  payload: SessionCredentialPayload,
-  store: ChannelStore.ChannelStore,
-): Promise<Address | undefined> {
-  const descriptor = (payload as { descriptor?: { token?: unknown } }).descriptor
-  if (descriptor) {
-    const token = descriptor.token
-    return typeof token === 'string' && isAddress(token, { strict: false }) ? token : undefined
-  }
-  const channelId = normalizeSessionChannelId(payload.channelId)
-  if (!channelId) return undefined
-  const channel = await store.getChannel(channelId)
-  return channel && ChannelStore.isPrecompileState(channel) ? channel.token : undefined
 }
 
 function resolveRequestEscrowContract(

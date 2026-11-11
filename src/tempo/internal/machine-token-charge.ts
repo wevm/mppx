@@ -104,11 +104,11 @@ export function getRoute(parameters: {
   }
 }
 
-/** Builds and simulates the first-party settlement route. */
+/** Builds the legacy swapper route and returns it when the account can spend its MACH and it simulates. */
 export async function findRoute(
   client: Client,
   parameters: {
-    account: Address
+    account: Account
     chainId: number
     currency: Address
     transfers: readonly Transfer[]
@@ -116,22 +116,12 @@ export async function findRoute(
 ): Promise<Route | undefined> {
   const route = getRoute(parameters)
   if (!route) return undefined
-
-  try {
-    const balance = await readContract(
-      client,
-      Actions.token.getBalance.call(client, {
-        account: parameters.account,
-        token: route.calls[0].to,
-      }) as never,
-    )
-    if ((balance as bigint) < route.transfers[0].amount) return undefined
-
-    await call(client, { account: parameters.account, calls: route.calls } as never)
-    return route
-  } catch {
-    return undefined
-  }
+  const { account } = parameters
+  const amount = route.transfers[0].amount
+  if (!(await canSpend(client, { account, amount, token: route.calls[0].to }))) return undefined
+  return (await simulates(client, { account: account.address, calls: route.calls }))
+    ? route
+    : undefined
 }
 
 /** Matches an exact legacy swapper route. */
@@ -182,6 +172,19 @@ export function acceptsDirect(parameters: {
   machineTokenEnabled?: boolean | undefined
 }): boolean {
   return parameters.machineTokenEnabled === true && parameters.machineTokenDirect === true
+}
+
+/**
+ * Returns whether a client's `currencies` allowlist lets it pay in MACH on a chain. No allowlist
+ * allows it.
+ */
+export function isAllowed(
+  currencies: readonly string[] | undefined,
+  chainId: number | undefined,
+): boolean {
+  if (!currencies) return true
+  const token = getToken(chainId)
+  return token !== undefined && currencies.some((c) => c.toLowerCase() === token.toLowerCase())
 }
 
 /** Returns the canonical machine token on a chain, if one is deployed. */
@@ -352,8 +355,16 @@ export async function canPayDirect(
 ): Promise<boolean> {
   const { account, amount, calls, token } = parameters
   if (!(await canSpend(client, { account, amount, token }))) return false
+  return simulates(client, { account: account.address, calls })
+}
+
+/** Returns whether calls simulate from an account. Any failure returns false. */
+async function simulates(
+  client: Client,
+  parameters: { account: Address; calls: readonly Call[] },
+): Promise<boolean> {
   try {
-    await call(client, { account: account.address, calls } as never)
+    await call(client, parameters as never)
     return true
   } catch {
     return false

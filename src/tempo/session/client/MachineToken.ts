@@ -1,26 +1,10 @@
 import type { Account, Address } from 'viem'
 
-import * as Constants from '../../../Constants.js'
-import { defaultFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
-import { canSpend, getToken } from '../../internal/machine-token-charge.js'
+import { defaultFeeTokens, resolveFundedFeeToken } from '../../internal/fee-token.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import { isSameAddress } from './ChannelOps.js'
 import { channelKey, type ChannelStore } from './ChannelStore.js'
 import type { ChallengeContext, SessionContext } from './CredentialState.js'
-
-function isMachineTokenDirect(resolved: ChallengeContext): boolean {
-  return (
-    Constants.getMethodDetail<boolean>(
-      resolved.challenge.request.methodDetails,
-      Constants.MethodDetailKeys.machineTokenDirect,
-    ) === true
-  )
-}
-
-/** Returns whether a token is MACH on a chain. */
-export function isMachineToken(chainId: number, token: Address): boolean {
-  const machineToken = getToken(chainId)
-  return machineToken !== undefined && isSameAddress(machineToken, token)
-}
 
 /**
  * Returns the context for funding a `machineTokenDirect` challenge's channel in MACH, 1:1 with the
@@ -30,8 +14,8 @@ export function isMachineToken(chainId: number, token: Address): boolean {
 export function resolveMachineTokenContext(
   resolved: ChallengeContext,
 ): ChallengeContext | undefined {
-  if (!isMachineTokenDirect(resolved)) return undefined
-  const token = getToken(resolved.chainId)
+  if (!resolved.machineTokenDirect) return undefined
+  const token = MachineTokenCharge.getToken(resolved.chainId)
   if (!token || isSameAddress(token, resolved.token)) return undefined
   return {
     ...resolved,
@@ -82,7 +66,13 @@ export async function resolveMachineTokenOpen(parameters: {
   const { account, deposit, resolved } = parameters
   const machine = resolveMachineTokenContext(resolved)
   if (!machine) return undefined
-  if (!(await canSpend(resolved.client, { account, amount: deposit, token: machine.token })))
+  if (
+    !(await MachineTokenCharge.canSpend(resolved.client, {
+      account,
+      amount: deposit,
+      token: machine.token,
+    }))
+  )
     return undefined
   if (machine.feePayer) return machine
   // MACH cannot pay fees: an unsponsored payer without a stablecoin for gas opens in the challenge
@@ -102,10 +92,11 @@ export async function resolveMachineTokenFeeToken(parameters: {
   resolved: ChallengeContext
 }): Promise<Address | undefined> {
   const { account, resolved } = parameters
+  const { chainId } = resolved
   const currency = resolved.challenge.request.currency as Address
   if (
-    !isMachineToken(resolved.chainId, resolved.token) ||
-    isMachineToken(resolved.chainId, currency)
+    !MachineTokenCharge.isMachineToken({ chainId, currency: resolved.token }) ||
+    MachineTokenCharge.isMachineToken({ chainId, currency })
   )
     return resolved.feeToken
   if (resolved.feePayer) return resolved.feeToken
@@ -118,21 +109,16 @@ async function findFeeToken(parameters: {
   resolved: ChallengeContext
 }): Promise<Address | undefined> {
   const { account, resolved } = parameters
-  const currency = resolved.challenge.request.currency as Address
-  const methodDetails = resolved.challenge.request.methodDetails as
-    | { feeToken?: unknown }
-    | undefined
-  const feeTokens =
-    typeof methodDetails?.feeToken === 'string'
-      ? [methodDetails.feeToken as Address]
-      : [currency, ...defaultFeeTokens(resolved.chainId)]
-  return resolveFeeToken({
+  const { chainId, challenge, client } = resolved
+  const feeToken = (challenge.request.methodDetails as { feeToken?: unknown } | undefined)?.feeToken
+  return resolveFundedFeeToken({
     account: account.address,
-    allowedTokens: feeTokens,
-    candidateTokens: feeTokens,
-    client: resolved.client,
-    prioritizeCandidates: true,
-    requireBalance: true,
+    chainId,
+    client,
+    preferred:
+      typeof feeToken === 'string'
+        ? [feeToken as Address]
+        : [challenge.request.currency as Address, ...defaultFeeTokens(chainId)],
   })
 }
 

@@ -290,7 +290,8 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -352,7 +353,8 @@ describe('tempo.charge client', () => {
       signTransaction: vi.fn(),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -541,7 +543,8 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute: findMachineTokenRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -580,15 +583,16 @@ describe('tempo.charge client', () => {
 
       expect(findMachineTokenRoute).toHaveBeenCalledOnce()
       expect(findMachineTokenRoute.mock.calls[0]?.[1]).toMatchObject({
-        account: account.address,
+        account: expect.objectContaining({ address: account.address }),
         chainId,
         currency,
       })
       expect(findAutoSwapCalls).not.toHaveBeenCalled()
+      // The fee payer pays gas, so the sponsored transaction needs no fee token.
       expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
         calls: machineTokenCalls,
-        feeToken: Addresses.pathUsd,
       })
+      expect(prepareTransactionRequest.mock.calls[0]?.[1]).not.toHaveProperty('feeToken')
       expect(signTransaction).toHaveBeenCalledWith(
         client,
         expect.objectContaining({ feePayer: true }),
@@ -641,7 +645,8 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -684,7 +689,9 @@ describe('tempo.charge client', () => {
       })
       expect(findRoute).toHaveBeenCalledWith(
         client,
-        expect.objectContaining({ account: selectedAccount.address }),
+        expect.objectContaining({
+          account: expect.objectContaining({ address: selectedAccount.address }),
+        }),
       )
       expect(prepareTransactionRequest).toHaveBeenCalledWith(
         client,
@@ -774,7 +781,8 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -850,7 +858,8 @@ describe('tempo.charge client', () => {
       signTransaction: vi.fn(),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -1869,7 +1878,7 @@ describe('zero-amount recipient policy', () => {
 })
 
 describe('tempo.charge client: machineTokenDirect', () => {
-  test('pays MACH directly when the account can, without the swapper', async () => {
+  test('pays MACH directly when the account can, before the swapper', async () => {
     vi.resetModules()
     const fees = mockMachFeeSelection()
     const chainId = 42431
@@ -1888,10 +1897,13 @@ describe('tempo.charge client: machineTokenDirect', () => {
       signTransaction: vi.fn(async () => '0xdeadbeef'),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', () => ({
+    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
       canPayDirect,
       findRoute,
-      getRoute: vi.fn(),
+      getRoute: vi.fn(() => ({
+        calls: [{ data: '0x1234', to: '0x4444444444444444444444444444444444444444' }],
+      })),
       getToken: vi.fn(() => mach),
       isMachineToken: vi.fn(() => false),
     }))
@@ -1918,13 +1930,13 @@ describe('tempo.charge client: machineTokenDirect', () => {
         expect.objectContaining({ address: mach, functionName: 'transferWithMemo' }),
       ])
 
-      // Without enough MACH, pay the charge currency; the swapper is never used.
+      // Without enough MACH for a direct transfer, try the swapper, then pay the charge currency.
       canPay = false
       await method.createCredential({ challenge: challenge(), context: {} })
       expect(prepareTransactionRequest.mock.calls[1]?.[1].calls).toEqual([
         expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
       ])
-      expect(findRoute).not.toHaveBeenCalled()
+      expect(findRoute).toHaveBeenCalledOnce()
 
       // A `currencies` allowlist without MACH keeps the charge currency.
       canPay = true
