@@ -24,7 +24,7 @@ const secretKey =
   process.env.MPP_SECRET_KEY ??
   Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')
 
-// One durable, atomic store for payment replays, World ID polling and free-trial counts, so they survive restarts.
+// One durable, atomic store for payment replays and free-trial counts, so they survive restarts.
 // Point several instances at one shared store, such as Store.postgres() or Store.redis().
 const store = Store.sqlite(new DatabaseSync(process.env.DB_PATH ?? 'world-id.db'))
 
@@ -47,7 +47,6 @@ const human = World.Server.verifier({
   clientSecret: process.env.WORLD_CLIENT_SECRET!,
   issuer: process.env.WORLD_ISSUER ?? World.Constants.issuer,
   secretKey,
-  store,
 })
 
 /** Atomically uses one of a human's free reports: false once they are all used. */

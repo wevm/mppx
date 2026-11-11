@@ -2,7 +2,6 @@ import { Base64 } from 'ox'
 
 import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
-import type * as Store from '../../../../Store.js'
 import { isIssuer } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
@@ -29,7 +28,6 @@ import type * as Types from '../Types.js'
  *   clientId: process.env.WORLD_CLIENT_ID,
  *   clientSecret: process.env.WORLD_CLIENT_SECRET,
  *   secretKey: process.env.MPP_SECRET_KEY,
- *   store: Store.redis(redis),
  * })
  * mppx.charge({ amount: '0.01', identity: [human] })
  * ```
@@ -40,7 +38,6 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   if (!config.clientId || !config.clientSecret)
     throw new TypeError('World ID verifier requires clientId and clientSecret.')
   if (!config.secretKey) throw new TypeError('World ID verifier requires secretKey.')
-  if (!config.store) throw new TypeError('World ID verifier requires store.')
   const acr = config.acr ?? [Constants.acr.orb, Constants.acr.orbFace]
   if (acr.length === 0) throw new TypeError('World ID verifier requires at least one acr.')
   const sessionTtl = config.sessionTtl ?? Constants.sessionTtl
@@ -50,6 +47,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   const idp = provider({ ...config, acr, issuer })
   const sealer = seal(config.secretKey, `${issuer} ${config.clientId}`)
   const now = () => Math.floor(Date.now() / 1_000)
+  // Each live attempt's poll schedule, by attempt ID. In memory, so it needs no store and ends
+  // with the attempt or the process; bounded by Constants.maxAttempts.
+  const schedules = new Map<string, Schedule>()
 
   async function device(poll: string): Promise<Identity.Verification<Types.VerifiedHuman>> {
     if (poll === 'start') {
@@ -71,26 +71,17 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         verification_uri: started.verification_uri,
         verification_uri_complete: started.verification_uri_complete,
       }
-      try {
-        // The first poll waits an interval too (RFC 8628).
-        await schedule(attempt.id, attempt.interval)
-      } catch {
-        return { status: 'unavailable', reason: 'World ID polling state is unavailable.' }
-      }
+      // The first poll waits an interval too (RFC 8628).
+      schedule(attempt, attempt.interval)
       return pending(attempt)
     }
 
     const attempt = await sealer.open<Attempt>(poll, 'attempt')
     if (!attempt || attempt.expires <= now())
       return rejected({ status: 'expired' }, 'The World ID attempt expired.')
-    // Poll World IdP at most once per interval per attempt, across instances and however the
-    // client replays its attempt tokens.
-    let interval: number | undefined
-    try {
-      interval = await claim(attempt)
-    } catch {
-      return { status: 'unavailable', reason: 'World ID polling state is unavailable.' }
-    }
+    // Poll World IdP at most once per interval per attempt, however the client replays its
+    // attempt tokens.
+    const interval = claim(attempt)
     if (interval === undefined) return pending(attempt)
     let result: Awaited<ReturnType<typeof idp.poll>>
     try {
@@ -102,13 +93,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     if (result.status === 'slow_down') {
       // slow_down adds five seconds to every later interval (RFC 8628).
       const slower = interval + 5
-      try {
-        await schedule(attempt.id, slower)
-      } catch {}
+      schedule(attempt, slower)
       return pending({ ...attempt, interval: slower })
     }
     // The attempt has ended: its polling state is no longer needed.
-    void Promise.resolve(config.store.delete(key(attempt.id))).catch(() => {})
+    schedules.delete(attempt.id)
     if (result.status !== 'approved')
       return rejected({ status: result.status }, 'World ID was not approved.')
 
@@ -141,29 +130,33 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   }
 
   /** Records that the attempt may next be polled interval seconds from now. */
-  function schedule(id: string, interval: number) {
-    return config.store.update(key(id), () => ({
-      op: 'set',
-      value: { interval, until: Date.now() + interval * 1_000 },
-      result: undefined,
-    }))
+  function schedule(attempt: Attempt, interval: number) {
+    schedules.delete(attempt.id)
+    if (schedules.size >= Constants.maxAttempts) {
+      // Drop ended attempts, then the oldest, so the map stays bounded.
+      for (const [id, { expires }] of schedules) if (expires <= now()) schedules.delete(id)
+      for (const id of schedules.keys()) {
+        if (schedules.size < Constants.maxAttempts) break
+        schedules.delete(id)
+      }
+    }
+    schedules.set(attempt.id, {
+      expires: attempt.expires,
+      interval,
+      until: Date.now() + interval * 1_000,
+    })
   }
 
   /**
    * Claims the attempt's next poll: returns its interval, or undefined while its last poll is
    * less than an interval ago.
    */
-  function claim(attempt: Attempt) {
-    return config.store.update(key(attempt.id), (current) => {
-      const state = current as PollState | null
-      if (state && state.until > Date.now()) return { op: 'noop', result: undefined }
-      const interval = Math.max(attempt.interval, state?.interval ?? 0)
-      return {
-        op: 'set',
-        value: { interval, until: Date.now() + interval * 1_000 },
-        result: interval as number | undefined,
-      }
-    })
+  function claim(attempt: Attempt): number | undefined {
+    const current = schedules.get(attempt.id)
+    if (current && current.until > Date.now()) return undefined
+    const interval = Math.max(attempt.interval, current?.interval ?? 0)
+    schedule(attempt, interval)
+    return interval
   }
 
   async function pending(attempt: Attempt): Promise<Identity.Verification<never>> {
@@ -224,8 +217,6 @@ export declare namespace verifier {
      * instances; changing it ends every session.
      */
     secretKey: string
-    /** Holds each device attempt's polling schedule, shared across instances. */
-    store: Store.AtomicStore
     /** World IdP issuer. @default 'https://auth.world.org' */
     issuer?: string | undefined
     /**
@@ -256,16 +247,14 @@ type Attempt = {
   readonly verification_uri_complete?: string | undefined
 }
 
-/** An attempt's polling schedule in the store. */
-type PollState = {
+/** An attempt's poll schedule. */
+type Schedule = {
+  /** Unix time the attempt expires. */
+  readonly expires: number
   /** Seconds between polls, raised by slow_down. */
   readonly interval: number
   /** Unix time, in milliseconds, before which the attempt is not polled. */
   readonly until: number
-}
-
-function key(id: string) {
-  return 'world:poll:' + id
 }
 
 type Session = {
