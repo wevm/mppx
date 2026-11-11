@@ -598,7 +598,8 @@ async function readText(request: Request): Promise<string | undefined> {
       if (done) break
       size += value.byteLength
       if (size > maxBody) {
-        await reader.cancel().catch(() => {})
+        // Not awaited: a cloned body's cancel waits for its unread sibling.
+        reader.cancel().catch(() => {})
         return undefined
       }
       chunks.push(value)

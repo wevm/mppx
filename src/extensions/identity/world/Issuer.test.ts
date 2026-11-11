@@ -358,6 +358,25 @@ test('reads at most 4 KiB of a body, even without a content length', async () =>
   expect(pulled).toBeLessThan(10)
 })
 
+test('rejects an oversized cloned body without waiting for the unread clone', async () => {
+  const issuer = await createIssuer(await createWorld())
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(1_024).fill(32))
+    },
+  })
+  const request = new Request(`${issuer.url}${World.Constants.devicePath}`, {
+    body,
+    duplex: 'half',
+    method: 'POST',
+  } as RequestInit)
+  // The other branch stays unread, as hosting middleware keeping a clone would.
+  const kept = request.clone()
+  const response = await issuer.handle(kept)
+  expect(response!.status).toBe(400)
+  await request.body?.cancel()
+})
+
 test('fails a start it cannot index for cleanup, and saves nothing', async () => {
   const memory = Store.memory()
   let failing = true
