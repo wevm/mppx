@@ -57,6 +57,14 @@ describe('scrub', () => {
     expect([...result.keys()]).toEqual(['x-public'])
   })
 
+  test('behavior: strips the World AgentKit proof', () => {
+    const result = Headers.scrub(
+      new globalThis.Headers({ AgentKit: 'eyJzaWduYXR1cmUiOiIweCJ9', 'X-Public': 'value' }),
+    )
+    expect(result.has('agentkit')).toBe(false)
+    expect(result.get('x-public')).toBe('value')
+  })
+
   test('behavior: strips cookie header', () => {
     const headers = new globalThis.Headers({
       Cookie: 'session=abc123',
