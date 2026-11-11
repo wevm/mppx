@@ -286,6 +286,31 @@ test('keeps an attempt ended when an overlapping slow_down answers late', async 
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(2)
 })
 
+test('never shortens a stored backoff when an overlapping slow_down answers late', async () => {
+  // Two overlapping polls both get slow_down: the later write must not lower the backoff.
+  let release!: () => void
+  const late = new Promise<void>((resolve) => (release = resolve))
+  const world = idp({ polls: ['slow_down', 'slow_down'] })
+  let calls = 0
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await world.fetch(input, init)
+    if (new URL(new Request(input).url).pathname === '/token' && calls++ === 0) await late
+    return response
+  }) as typeof globalThis.fetch
+  const verifier = World.Server.verifier({ ...config, store: Store.memory(), fetch })
+  const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
+  wait(1)
+  const first = verifier.verify(poll(started.attempt))
+  while (calls === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+  wait(1)
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toMatchObject({
+    interval: 6,
+  })
+  release()
+  // The late reply builds on the stored 6 seconds rather than replacing it with its own.
+  expect(device((await first) as never)).toMatchObject({ interval: 11 })
+})
+
 test('slows down, and ends denied or expired attempts', async () => {
   const slow = World.Server.verifier({ ...config, fetch: idp({ polls: ['slow_down'] }).fetch })
   const { results } = await run(slow)

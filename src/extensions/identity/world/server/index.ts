@@ -103,19 +103,17 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }
     if (result.status === 'pending') return pending({ ...attempt, interval })
     if (result.status === 'slow_down') {
-      // slow_down adds five seconds to every later interval (RFC 8628).
-      const slower = interval + 5
+      // slow_down adds five seconds to every later interval (RFC 8628). Atomically, from the
+      // stored backoff, so an overlapping poll never shortens it or undoes an ended marker.
+      let slower = interval + 5
       try {
-        // Atomically, and never over an ended marker that an overlapping poll wrote.
-        await store.update(slowKey(attempt.id), (current) =>
-          (current as Slow | null)?.ended
-            ? { op: 'noop', result: undefined }
-            : {
-                op: 'set',
-                value: { interval: slower, until: Date.now() + slower * 1_000 },
-                result: undefined,
-              },
-        )
+        slower = await store.update(slowKey(attempt.id), (value) => {
+          const current = value as Slow | null
+          if (current?.ended) return { op: 'noop', result: slower }
+          const next = Math.max(interval, current?.interval ?? 0) + 5
+          const until = Math.max(current?.until ?? 0, Date.now() + next * 1_000)
+          return { op: 'set', value: { interval: next, until }, result: next }
+        })
       } catch {}
       return pending({ ...attempt, interval: slower })
     }
