@@ -2822,13 +2822,33 @@ test('rejects an unchanged foreign session challenge before account resolution',
   expect(fetch).toHaveBeenCalledOnce()
 })
 
-test('payment opt-out bypasses session bootstrap and voucher retries', async () => {
-  const fetch = vi.fn().mockImplementation(async () => make402Response())
-  const manager = sessionManager({ account, fetch, client })
-  const response = await manager.fetch('https://api.example.com/otp', Fetch.withoutPayment())
-  expect(response.status).toBe(402)
-  expect(fetch).toHaveBeenCalledOnce()
-  expect(manager.opened).toBe(false)
-  expect(manager.channelId).toBeUndefined()
-  expect(manager.cumulative).toBe(0n)
-})
+test.each(['bootstrap', 'active-channel'] as const)(
+  'payment opt-out bypasses session management: %s',
+  async (mode) => {
+    const fetch = vi.fn().mockImplementation(async () => make402Response())
+    const manager = sessionManager({ account, fetch, client, bootstrap: mode === 'bootstrap' })
+    if (mode === 'active-channel') {
+      const challenge = makeChallenge()
+      if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+      getSessionManagerInternals(manager).rehydrate({
+        channel: channelEntry({ origin: 'https://api.example.com' }),
+        challenge,
+        input: 'https://api.example.com/data',
+        spent: 0n,
+      })
+    }
+    const before = {
+      opened: manager.opened,
+      channelId: manager.channelId,
+      cumulative: manager.cumulative,
+    }
+    const response = await manager.fetch('https://api.example.com/otp', Fetch.withoutPayment())
+    expect(response.status).toBe(402)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect({
+      opened: manager.opened,
+      channelId: manager.channelId,
+      cumulative: manager.cumulative,
+    }).toEqual(before)
+  },
+)
