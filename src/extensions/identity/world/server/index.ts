@@ -179,12 +179,55 @@ function signingClients(config: verifier.Config): Map<number, SigningClient> {
   const urls = { [Constants.worldChainId]: config.rpcUrl, ...config.rpcUrls }
   const clients = new Map<number, SigningClient>()
   for (const [id, url] of Object.entries(urls))
-    clients.set(
-      Number(id),
-      createPublicClient({ chain: { id: Number(id) } as never, transport: http(url) }),
-    )
+    clients.set(Number(id), signingClient(Number(id), url))
   for (const [id, client] of Object.entries(config.clients ?? {})) clients.set(Number(id), client)
   return clients
+}
+
+/**
+ * A viem client that throws when the RPC fails. viem's `verifyMessage` reports any failed
+ * `eth_call` as an invalid signature, so the transport records the last failure that was not a
+ * revert, and an invalid result after one is rethrown as an outage.
+ */
+function signingClient(id: number, url: string): SigningClient {
+  const transport = http(url)
+  return {
+    async verifyMessage(parameters) {
+      let outage: unknown
+      const client = createPublicClient({
+        chain: { id } as never,
+        transport: (options) => {
+          const inner = transport(options)
+          return {
+            ...inner,
+            async request(args: any, opts?: any) {
+              try {
+                const result = await inner.request(args, opts)
+                outage = undefined
+                return result
+              } catch (error) {
+                outage = reverted(error) ? undefined : error
+                throw error
+              }
+            },
+          } as typeof inner
+        },
+      })
+      const valid = await client.verifyMessage(parameters)
+      if (!valid && outage) throw outage
+      return valid
+    },
+  }
+}
+
+/** Whether an RPC error is the call reverting, which means the signature is invalid. */
+function reverted(error: unknown): boolean {
+  const { code, details, message } = (error ?? {}) as {
+    code?: unknown
+    details?: unknown
+    message?: unknown
+  }
+  return code === 3 || /revert/i.test(String(details ?? message ?? ''))
 }
 
 /**

@@ -733,6 +733,32 @@ test('tells a smart-account RPC outage from an invalid signature', async () => {
   expect((await down.verify(await proof())).status).toBe('unavailable')
 })
 
+test('tells a default client RPC outage from a reverted signature check', async () => {
+  let reply: (id: unknown) => { status: number; body: unknown } = () => ({ status: 500, body: '' })
+  const server = await Http.createServer((request, response) => {
+    let raw = ''
+    request.on('data', (chunk) => (raw += chunk))
+    request.on('end', () => {
+      const { id } = JSON.parse(raw)
+      const { status, body } = reply(id)
+      response.writeHead(status, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(body))
+    })
+  })
+  try {
+    const verifier = verifierFor({ clients: {}, rpcUrl: server.url })
+    const proof = () => craft({ type: 'eip1271' }, { signature: '0x' + '00'.repeat(65) })
+    expect((await verifier.verify(await proof())).status).toBe('unavailable')
+    reply = (id) => ({
+      status: 200,
+      body: { jsonrpc: '2.0', id, error: { code: 3, message: 'execution reverted' } },
+    })
+    expect((await verifier.verify(await proof())).status).toBe('invalid')
+  } finally {
+    server.close()
+  }
+})
+
 test('accepts one spelling of an address: lowercase or checksummed', async () => {
   const verifier = verifierFor()
   // Flipping one letter's case breaks the EIP-55 checksum.
