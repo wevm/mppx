@@ -47,6 +47,7 @@ const human = World.Server.verifier({
   clientSecret: process.env.WORLD_CLIENT_SECRET!,
   issuer: process.env.WORLD_ISSUER ?? World.Constants.issuer,
   secretKey,
+  store,
 })
 
 /** Atomically uses one of a human's free reports: false once they are all used. */

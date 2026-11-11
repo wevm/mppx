@@ -30,8 +30,6 @@ export const Constants = {
   sessionTtl: 60 * 60,
   /** Default device-flow polling interval, in seconds, when World IdP sets none. */
   interval: 5,
-  /** Most device attempts one verifier tracks poll schedules for at once. */
-  maxAttempts: 10_000,
   /** Allowed clock skew, in seconds, for ID token times. */
   clockTolerance: 60,
   /** Largest accepted `World-Id` or `World-Id-Poll` header value, in characters. */
