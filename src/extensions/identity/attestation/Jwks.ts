@@ -1,4 +1,4 @@
-import { unwrapFetch } from '../../../client/internal/Fetch.js'
+import { unwrapFetch, withoutPayment } from '../../../client/internal/Fetch.js'
 import { Constants } from './Constants.js'
 import type * as Types from './Types.js'
 
@@ -30,12 +30,15 @@ export function resolver(options: resolver.Options = {}): Types.KeyResolver {
   function load(issuer: string) {
     const startedAt = Date.now()
     const keys = (async () => {
-      const response = await fetch(`${issuer.replace(/\/+$/, '')}${Constants.jwksPath}`, {
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(timeout),
-        // Workers reject 'error'; a redirect is not ok, so it fails below.
-        redirect: 'manual',
-      })
+      const response = await fetch(
+        `${issuer.replace(/\/+$/, '')}${Constants.jwksPath}`,
+        withoutPayment({
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(timeout),
+          // Workers reject 'error'; a redirect is not ok, so it fails below.
+          redirect: 'manual',
+        }),
+      )
       if (!response.ok) throw new Error(`JWKS request failed with ${response.status}.`)
       const body = (await response.json()) as { keys?: unknown } | null
       // A body without a key list is a failed fetch, so it never replaces the last good set.

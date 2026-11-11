@@ -2821,3 +2821,14 @@ test('rejects an unchanged foreign session challenge before account resolution',
   expect(resolveAccount).not.toHaveBeenCalled()
   expect(fetch).toHaveBeenCalledOnce()
 })
+
+test('payment opt-out bypasses session bootstrap and voucher retries', async () => {
+  const fetch = vi.fn().mockImplementation(async () => make402Response())
+  const manager = sessionManager({ account, fetch, client })
+  const response = await manager.fetch('https://api.example.com/otp', Fetch.withoutPayment())
+  expect(response.status).toBe(402)
+  expect(fetch).toHaveBeenCalledOnce()
+  expect(manager.opened).toBe(false)
+  expect(manager.channelId).toBeUndefined()
+  expect(manager.cumulative).toBe(0n)
+})

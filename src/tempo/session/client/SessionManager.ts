@@ -882,6 +882,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+    // Opted-out requests must not bootstrap, restore, top up, or retry a session.
+    if (
+      (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+    )
+      return toPaymentResponse(await config.fetch(input, Fetch.withoutPayment(init)))
     // The manager drives one shared `runtime` state machine, so requests are
     // single-flight. Reject overlap loudly instead of letting concurrent calls
     // corrupt each other's runtime and channel tracking.
