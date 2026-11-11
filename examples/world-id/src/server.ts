@@ -2,10 +2,10 @@
 //
 // `/api/report` requires an agent approved by a World ID-verified human. Each human's first
 // report is free, however many agents they run; later ones cost 0.01 pathUSD on Tempo testnet.
-// The server is World IdP's OpenID Connect client: it runs the device flow, so the person
-// approves in World App and the server keeps their anonymous, pairwise subject.
+// A shared World ID issuer runs World IdP's device flow and attests the human, so this server
+// only checks the attestation: it holds no World IdP credentials and hosts no extra routes.
 //
-//   WORLD_CLIENT_ID=... WORLD_CLIENT_SECRET=... pnpm server
+//   WORLD_ID_ISSUER=https://world-id.issuer.example pnpm server
 import * as http from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -17,9 +17,10 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Chain } from 'viem/tempo'
 
 const PORT = Number(process.env.PORT ?? 4021)
+const ORIGIN = process.env.PUBLIC_ORIGIN ?? `http://localhost:${PORT}`
 const FREE_USES = 1
 
-// Set MPP_SECRET_KEY so Challenges and World ID sessions stay valid across restarts and instances.
+// Set MPP_SECRET_KEY so Challenges stay valid across restarts and instances.
 const secretKey =
   process.env.MPP_SECRET_KEY ??
   Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')
@@ -41,12 +42,10 @@ const mppx = Mppx.create({
   ],
 })
 
-// Register a confidential client at https://auth.world.org/portal (or the sandbox portal).
 const human = World.Server.verifier({
-  clientId: process.env.WORLD_CLIENT_ID!,
-  clientSecret: process.env.WORLD_CLIENT_SECRET!,
-  issuer: process.env.WORLD_ISSUER ?? World.Constants.issuer,
-  secretKey,
+  acr: [World.Constants.acr.orb, World.Constants.acr.orbFace],
+  audience: ORIGIN,
+  issuer: process.env.WORLD_ID_ISSUER!,
 })
 
 /** Atomically uses one of a human's free reports: false once they are all used. */
@@ -62,18 +61,17 @@ async function handle(request: globalThis.Request): Promise<Response> {
   const url = new URL(request.url)
   if (url.pathname !== '/api/report') return new Response('Not found', { status: 404 })
 
-  // Without a session: 401 with World-Id-Required, and the client prover runs the device flow
-  // through this route. Device-flow calls never verify, so they stop here too.
+  // Without an attestation: 401 with Identity-Attestation-Required, and the client gets one from
+  // the issuer.
   const identity = await human.verify(request)
   if (identity.status !== 'valid')
     return new Response(identity.reason, {
       status: Identity.Status.codes[identity.status],
       headers: identity.headers,
     })
-  const { subject } = identity.value
+  const { issuer, subject } = identity.value
   const report = 'Q3 cross-border volume: $41.2M (+18%)'
-  // The subject stays on the server: World ID asks to keep it out of agents' messages.
-  if (await useFreeReport(subject)) return Response.json({ report, paid: false })
+  if (await useFreeReport(`${issuer} ${subject}`)) return Response.json({ report, paid: false })
 
   const result = await mppx.charge({ amount: '0.01', description: 'Market report' })(request)
   if (result.status === 402) return result.challenge
@@ -82,4 +80,4 @@ async function handle(request: globalThis.Request): Promise<Response> {
 
 http
   .createServer(Request.toNodeListener(handle))
-  .listen(PORT, () => console.log(`Listening on http://localhost:${PORT}`))
+  .listen(PORT, () => console.log(`Listening on ${ORIGIN}`))

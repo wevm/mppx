@@ -1,21 +1,25 @@
-/** World ID values for the World IdP (OpenID Connect) device flow. */
+/**
+ * World ID attestation values. Values every attestation shares are in `Attestation.Constants`.
+ *
+ * A World ID issuer is an external service holding a confidential World IdP client. It runs World
+ * IdP's OpenID Connect device flow for the agent's human, verifies the ID token, and signs an
+ * `Identity-Attestation` of type `world-id` bound to the server's origin. Its API:
+ *
+ * - `POST {issuer}/world/device` with `{ "audience": "<origin>" }`: starts an attempt and answers
+ *   `{ id, user_code, verification_uri, verification_uri_complete?, expires_in, interval }`.
+ * - `POST {issuer}/world/token` with `{ "id": "<attempt>" }`: answers `{ attestation, expires_at }`
+ *   once approved, or 400 with `error` set to `authorization_pending`, `slow_down`,
+ *   `access_denied` or `expired_token` (RFC 8628). 429 and 5xx mean try again later.
+ * - `GET {issuer}/.well-known/jwks.json`: its attestation keys.
+ */
 export const Constants = {
-  /** World IdP issuer. */
-  issuer: 'https://auth.world.org',
-  /** World IdP sandbox issuer, for testing with sandbox client credentials. */
-  sandboxIssuer: 'https://sandbox.auth.world.org',
-  /** Request header carrying the session the server issued after World ID approval. */
-  header: 'World-Id',
-  /**
-   * Request header of the prover's out-of-band device-flow calls: `start`, or an attempt token
-   * to poll. A request carrying it never reaches the route's handler.
-   */
-  pollHeader: 'World-Id-Poll',
-  /** Response header asking for World ID: `device`. */
-  requiredHeader: 'World-Id-Required',
-  /** Response header carrying the device attempt's state, base64url-encoded JSON. */
-  deviceHeader: 'World-Id-Device',
-  /** World IdP authentication classes (`acr`). */
+  /** Attestation type for a human verified with World ID. */
+  type: 'world-id',
+  /** Issuer path that starts a device attempt. */
+  devicePath: '/world/device',
+  /** Issuer path that polls a device attempt for its attestation. */
+  tokenPath: '/world/token',
+  /** World IdP authentication classes, which an issuer puts in the attestation's `acr` claim. */
   acr: {
     /** Orb-verified account. */
     orb: 'https://world.org/oidc/acr/orb',
@@ -26,16 +30,12 @@ export const Constants = {
     /** Selfie Check-verified account with a Face Auth check during this authentication. */
     selfieFace: 'https://world.org/oidc/acr/selfie-face',
   },
-  /** Default lifetime, in seconds, of a session after World ID approval. */
-  sessionTtl: 60 * 60,
-  /** Default device-flow polling interval, in seconds, when World IdP sets none. */
+  /** Polling interval, in seconds, when the issuer sets none (RFC 8628). */
   interval: 5,
-  /** Most device attempts one verifier tracks poll schedules for at once. */
-  maxAttempts: 10_000,
-  /** Allowed clock skew, in seconds, for ID token times. */
-  clockTolerance: 60,
-  /** Largest accepted `World-Id` or `World-Id-Poll` header value, in characters. */
-  maxLength: 4096,
-  /** World IdP integration guides. */
-  docs: 'https://auth.world.org/docs/guides/getting-started',
+  /** Seconds `slow_down` adds to the polling interval (RFC 8628). */
+  slowDown: 5,
+  /** Seconds a client waits after a failed or declined attempt before starting another for the same origin. */
+  retryDelay: 60,
+  /** Milliseconds a client waits for each issuer call. */
+  requestTimeout: 10_000,
 } as const

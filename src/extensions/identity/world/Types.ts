@@ -1,52 +1,43 @@
-/** A human verified with World ID through World IdP. */
+/** A human verified with World ID, as a World ID issuer attests. */
 export type VerifiedHuman = {
-  /** World IdP issuer. */
+  /** Issuer URL. */
   readonly issuer: string
   /**
-   * Anonymous, pairwise account identifier: stable for one person across sessions within your
-   * application's sector, and different in other sectors. Store it together with `issuer`.
+   * The issuer's identifier for the human. It is pseudonymous; whether it differs between
+   * servers depends on the issuer. Store it together with `issuer`.
    */
   readonly subject: string
-  /** Achieved authentication class, such as `https://world.org/oidc/acr/orb`. */
-  readonly acr: string
-  /** Authentication methods, such as `['pop']` for a World ID proof. */
-  readonly amr: readonly string[]
-  /** When the person authenticated with World ID. */
-  readonly authTime: Date
-  /** When the session ends. */
+  /** World IdP authentication class, such as `https://world.org/oidc/acr/orb`, if the issuer set one. */
+  readonly acr?: string | undefined
+  /** When the attestation expires. */
   readonly expiresAt: Date
+  /** Attestation identifier (`jti`), if the issuer set one. */
+  readonly id?: string | undefined
 }
 
-/**
- * A device attempt's state, sent base64url-encoded in the `World-Id-Device` header of
- * every answer to a `World-Id-Poll` request.
- */
-export type Device =
-  | {
-      /** Waiting for the person to approve in World App. */
-      readonly status: 'pending'
-      /** Opaque attempt token to poll with. */
-      readonly attempt: string
-      /** Code the person confirms on the approval page. */
-      readonly user_code: string
-      /** Approval page. */
-      readonly verification_uri: string
-      /** Approval page with the code filled in. */
-      readonly verification_uri_complete?: string | undefined
-      /** Seconds until the attempt expires. */
-      readonly expires_in: number
-      /** Seconds to wait between polls. */
-      readonly interval: number
-    }
-  | {
-      /** Approved: send `session` in the `World-Id` header. */
-      readonly status: 'approved'
-      /** Opaque session token. */
-      readonly session: string
-      /** Seconds until the session expires. */
-      readonly expires_in: number
-    }
-  | {
-      /** The person declined, the attempt expired, or World ID did not qualify: start over. */
-      readonly status: 'denied' | 'expired'
-    }
+/** A device attempt the issuer started: what to show the human. */
+export type Device = {
+  /** Attempt identifier to poll with. */
+  readonly id: string
+  /** Code the human confirms on the approval page. */
+  readonly userCode: string
+  /** Approval page. */
+  readonly verificationUri: string
+  /** Approval page with the code filled in, if the issuer provides one. */
+  readonly verificationUriComplete?: string | undefined
+  /** When the attempt expires. */
+  readonly expiresAt: Date
+  /** Seconds to wait between polls. */
+  readonly interval: number
+}
+
+/** One poll of a device attempt. */
+export type Poll =
+  /** Approved: the attestation for the audience the attempt was started for. */
+  | { readonly status: 'approved'; readonly attestation: string; readonly expiresAt: Date }
+  /** Not approved yet. */
+  | { readonly status: 'pending' }
+  /** Polling too fast: add `Constants.slowDown` seconds to the interval. */
+  | { readonly status: 'slow_down' }
+  /** The issuer could not answer (429, 5xx, timeout or network error): poll again later. */
+  | { readonly status: 'unavailable' }

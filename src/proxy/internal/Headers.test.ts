@@ -57,26 +57,6 @@ describe('scrub', () => {
     expect([...result.keys()]).toEqual(['x-public'])
   })
 
-  test('behavior: strips the World ID session', () => {
-    const result = Headers.scrub(
-      new globalThis.Headers({ 'World-Id': 'c2Vzc2lvbg', 'X-Public': 'value' }),
-    )
-    expect(result.has('world-id')).toBe(false)
-    expect(result.get('x-public')).toBe('value')
-  })
-
-  test('behavior: strips upstream World ID challenges from responses', () => {
-    const result = Headers.scrubResponse(
-      new Response(null, {
-        status: 401,
-        headers: { 'World-Id-Required': 'device', 'World-Id-Device': 'e30', 'X-Public': 'value' },
-      }),
-    )
-    expect(result.headers.has('world-id-required')).toBe(false)
-    expect(result.headers.has('world-id-device')).toBe(false)
-    expect(result.headers.get('x-public')).toBe('value')
-  })
-
   test('behavior: strips cookie header', () => {
     const headers = new globalThis.Headers({
       Cookie: 'session=abc123',

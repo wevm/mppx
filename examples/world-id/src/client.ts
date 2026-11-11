@@ -1,11 +1,11 @@
 // Agent client — Example
 //
-// The server asks for World ID: the agent prints World IdP's approval link, the person approves
-// in World App, and the agent's requests carry the session from then on. It pays 402s with Tempo
+// The server asks for World ID: the agent gets an approval link from the World ID issuer, the
+// person approves in World App, and the agent's requests carry the issuer's attestation from then on. It pays 402s with Tempo
 // testnet funds from the faucet.
 //
 //   pnpm client
-//   BASE_URL=https://api.example pnpm client
+//   WORLD_ID_ISSUER=https://world-id.issuer.example BASE_URL=https://api.example pnpm client
 import { Receipt } from 'mppx'
 import { Mppx, tempo } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
@@ -28,6 +28,7 @@ await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 const mppx = Mppx.create({
   identity: [
     World.Client.prover({
+      issuers: [process.env.WORLD_ID_ISSUER!],
       scope: [new URL(BASE_URL).origin],
       verification: ({ url, userCode }) =>
         console.log(`\nApprove this agent with World ID: ${url}\n  code: ${userCode}\n`),

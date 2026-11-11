@@ -8,13 +8,7 @@
  * never sent across origins on a redirect or forwarded upstream by a proxy. Provers declare
  * their own extra sensitive headers in `Prover.headers`.
  */
-export const request = Object.freeze([
-  'identity-attestation',
-  'identity-presentation',
-  // World ID: the session a server issued after World ID approval, and device-flow calls.
-  'world-id',
-  'world-id-poll',
-] as const)
+export const request = Object.freeze(['identity-attestation', 'identity-presentation'] as const)
 
 /**
  * `WWW-Authenticate` schemes that ask for an identity, lowercased. A proxy removes them from
@@ -29,7 +23,4 @@ export const challenges = Object.freeze(['privatetoken', 'identity-presentation'
 export const response = Object.freeze([
   'identity-attestation-required',
   'identity-required',
-  // World ID: a request for World ID, and a device attempt or session from the upstream.
-  'world-id-required',
-  'world-id-device',
 ] as const)
