@@ -134,6 +134,9 @@ export function charge(parameters: charge.Parameters = {}) {
       Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
+      // A challenge without a chain ID was checked without one: check its currency on this chain.
+      if (challengeChainId === undefined)
+        assertChallengePolicy(parameters, caps, challenge.request, chainId)
 
       const { request } = challenge
       const { amount, methodDetails } = request
@@ -679,6 +682,8 @@ function assertChallengePolicy(
   parameters: charge.Parameters,
   caps: { maxAmount: string | undefined; maxAtomicAmount: bigint | undefined },
   request: ChargeRequest,
+  /** Chain the client signs on, once resolved, for a challenge that names none. */
+  signingChainId?: number | undefined,
 ) {
   const { amount, methodDetails, recipient } = request
 
@@ -695,10 +700,16 @@ function assertChallengePolicy(
   if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
     Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
 
-  // Tokens match on the challenge's chain, or on any chain they list when it names none.
+  // Tokens match on the chain the client signs on: the challenge's, else the pinned or resolved
+  // one. Only selection, before a client is resolved, may match a token on any chain it lists,
+  // and `createCredential` checks the currency again on the resolved chain before signing.
   const currency = parameters.currencies
     ? Currency.find(parameters.currencies, request.currency, {
-        chainId: challengeChainId,
+        chainId:
+          challengeChainId ??
+          signingChainId ??
+          parameters.expectedChainId ??
+          (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined),
         decimals: parameters.decimals,
       })
     : undefined

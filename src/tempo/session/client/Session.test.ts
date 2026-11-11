@@ -960,6 +960,21 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(500n)
   })
 
+  test('rejects a chainless challenge whose token is not on the signing chain', async () => {
+    const method = session({
+      account,
+      currencies: [defineToken({ addresses: { 4217: descriptor.token }, decimals: 6 })],
+      getClient: () => client,
+    })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge({ methodDetails: { escrowContract: tip20ChannelEscrow } }),
+        context: {},
+      }),
+    ).rejects.toThrow(`Tempo session currency is not allowed: ${descriptor.token}.`)
+  })
+
   test('uses suggestedDeposit when below maxDeposit', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const payload = deserialize(

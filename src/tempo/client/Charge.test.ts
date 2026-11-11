@@ -1664,6 +1664,17 @@ describe('amount cap', () => {
       options: { currencies: [defineToken({ addresses: { 42431: otherCurrency }, decimals: 6 })] },
       error: `Tempo charge currency is not allowed: ${currency}.`,
     },
+    // The challenge names no chain, so the client signs on its own chain, 42431.
+    {
+      name: 'token currency only on another chain than the signing chain',
+      options: { currencies: [defineToken({ addresses: { 4217: currency }, decimals: 6 })] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
+    {
+      name: 'resolved token currency bound to another chain than the signing chain',
+      options: { currencies: [defineToken({ addresses: { 4217: currency }, decimals: 6 })(4217)] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
   ])('$name', async ({ options, error }) => {
     vi.resetModules()
     const prepareTransactionRequest = vi.fn(async () => ({}))
