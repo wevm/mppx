@@ -2825,13 +2825,38 @@ test('rejects an unchanged foreign session challenge before account resolution',
 test.each(['bootstrap', 'active-channel'] as const)(
   'payment opt-out bypasses session management: %s',
   async (mode) => {
-    const fetch = vi.fn().mockImplementation(async () => make402Response())
+    const entry = channelEntry()
+    const challenge = makeChallenge({
+      methodDetails: {
+        escrowContract: tip20ChannelEscrow,
+        chainId: 4217,
+        sessionProtocol: Constants.SessionProtocols.v2,
+        sessionSnapshot: {
+          acceptedCumulative: '1000000',
+          chainId: 4217,
+          channelId: entry.channelId,
+          deposit: '10000000',
+          descriptor: entry.descriptor,
+          escrow: tip20ChannelEscrow,
+          requiredCumulative: '2000000',
+          settled: '0',
+          spent: '1000000',
+          units: 1,
+        },
+      },
+    })
+    const fetch = vi
+      .fn()
+      .mockImplementation(async (_input, init?: RequestInit) =>
+        new Headers(init?.headers).has('Authorization')
+          ? makeOkResponse()
+          : make402Response(challenge),
+      )
     const manager = sessionManager({ account, fetch, client, bootstrap: mode === 'bootstrap' })
     if (mode === 'active-channel') {
-      const challenge = makeChallenge()
       if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
       getSessionManagerInternals(manager).rehydrate({
-        channel: channelEntry({ origin: 'https://api.example.com' }),
+        channel: entry,
         challenge,
         input: 'https://api.example.com/data',
         spent: 0n,
