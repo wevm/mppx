@@ -2,6 +2,7 @@ import { Base64 } from 'ox'
 import {
   createPublicClient,
   getAddress,
+  isAddress,
   http,
   toHex,
   verifyMessage,
@@ -85,6 +86,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       if (client)
         try {
           valid = await client.verifyMessage(parameters)
+          // viem reports a failed eth_call as an invalid signature: tell an outage apart.
+          if (!valid) await client.getChainId?.()
         } catch {
           return {
             status: 'unavailable',
@@ -166,6 +169,8 @@ type SigningClient = {
     message: string
     signature: Hex
   }) => Promise<boolean>
+  /** Reaches the RPC, to tell an outage from an invalid signature. */
+  getChainId?: (() => Promise<number>) | undefined
 }
 
 /** One client per allowed signing chain: never an RPC the request names. */
@@ -286,7 +291,9 @@ function parse(header: string): Types.Payload | undefined {
     // SIWE request IDs are pchar: no spaces or line breaks that could restate signed lines.
     if (value.requestId !== undefined && !/^[\x21-\x7e]*$/.test(value.requestId as string))
       return undefined
-    if (!/^0x[0-9a-fA-F]{40}$/.test(value.address as string)) return undefined
+    // Lowercase or EIP-55 checksummed, normalised so one signature has one spelling.
+    if (!isAddress(value.address as string, { strict: true })) return undefined
+    value.address = getAddress(value.address as string)
     return value as Types.Payload
   } catch {
     return undefined

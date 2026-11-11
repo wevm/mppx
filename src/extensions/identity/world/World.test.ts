@@ -708,3 +708,42 @@ test('refreshes an expired registered wallet with one shared lookup', async () =
     clock.mockRestore()
   }
 })
+
+test('tells a smart-account RPC outage from an invalid signature', async () => {
+  const smart = (getChainId: () => Promise<number>) =>
+    verifierFor({ clients: { 480: { verifyMessage: async () => false, getChainId } } })
+  const proof = () => craft({ type: 'eip1271' }, { signature: '0x' + '00'.repeat(65) })
+  expect((await smart(async () => 480).verify(await proof())).status).toBe('invalid')
+  const down = smart(async () => {
+    throw new Error('rpc down')
+  })
+  expect((await down.verify(await proof())).status).toBe('unavailable')
+})
+
+test('accepts one spelling of an address: lowercase or checksummed', async () => {
+  const verifier = verifierFor()
+  // Flipping one letter's case breaks the EIP-55 checksum.
+  const index = account.address.slice(2).search(/[a-fA-F]/) + 2
+  const letter = account.address[index]!
+  const flipped =
+    account.address.slice(0, index) +
+    (letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase()) +
+    account.address.slice(index + 1)
+  expect(await verifier.verify(await craft({ address: flipped }))).toMatchObject({
+    status: 'invalid',
+  })
+  expect(
+    await verifier.verify(await craft({ address: account.address.toLowerCase() })),
+  ).toMatchObject({ status: 'valid', value: { address: account.address } })
+})
+
+test('sends a request unsigned when its URL cannot be a SIWE message', async () => {
+  const prover = World.Client.prover({ account, scope: '*' })
+  for (const url of ['http://[::1]:8787/report', 'https://under_score.example/report']) {
+    const request = await prover.prove(new Request(url), {
+      created: Math.floor(Date.now() / 1000),
+      nonce: 'unsigned-attempt',
+    })
+    expect(request.headers.has('agentkit')).toBe(false)
+  }
+})

@@ -40,9 +40,15 @@ export function prover(config: prover.Config): Identity.Prover {
         issuedAt: issuedAt.toISOString(),
         ...(context.challenge && { requestId: context.challenge.id }),
       } as const
-      const signature = await config.account.signMessage({
-        message: message(fields),
-      })
+      let text: string
+      try {
+        text = message(fields)
+      } catch {
+        // SIWE allows fewer hosts and URI characters than WHATWG URLs (such as IPv6 or
+        // underscore hosts): send the request unsigned rather than failing it.
+        return request
+      }
+      const signature = await config.account.signMessage({ message: text })
       const payload: Types.Payload = { ...fields, signature }
       const headers = new Headers(request.headers)
       headers.set(Constants.header, Base64.fromString(JSON.stringify(payload)))
