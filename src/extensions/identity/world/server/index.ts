@@ -41,13 +41,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   const acr = config.acr ?? [Constants.acr.orb, Constants.acr.orbFace]
   if (acr.length === 0) throw new TypeError('World ID verifier requires at least one acr.')
   const sessionTtl = config.sessionTtl ?? Constants.sessionTtl
-  const tolerance = config.clockTolerance ?? Constants.clockTolerance
-  for (const [name, value] of [
-    ['sessionTtl', sessionTtl],
-    ['clockTolerance', tolerance],
-  ] as const)
-    if (!Number.isSafeInteger(value) || value < 0)
-      throw new TypeError(`World ID ${name} must be a non-negative integer of seconds.`)
+  if (!Number.isSafeInteger(sessionTtl) || sessionTtl <= 0)
+    throw new TypeError('World ID sessionTtl must be a positive integer of seconds.')
 
   const idp = provider({ ...config, acr, issuer })
   const sealer = seal(config.secretKey, `${issuer} ${config.clientId}`)
@@ -68,33 +63,36 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         created,
         expires: created + started.expires_in,
         interval: started.interval,
+        next: created + started.interval,
         user_code: started.user_code,
         verification_uri: started.verification_uri,
         verification_uri_complete: started.verification_uri_complete,
       }
-      return pending(attempt, await sealer.seal(attempt))
+      return pending(attempt)
     }
 
     const attempt = await sealer.open<Attempt>(poll, 'attempt')
     if (!attempt || attempt.expires <= now())
       return rejected({ status: 'expired' }, 'The World ID attempt expired.')
+    // Poll World IdP at most once per interval, however often the client asks.
+    if (now() < attempt.next) return pending(attempt)
     let result: Awaited<ReturnType<typeof idp.poll>>
     try {
       result = await idp.poll(attempt.code)
     } catch {
       return { status: 'unavailable', reason: 'World ID is unavailable.' }
     }
-    if (result.status === 'pending') return pending(attempt, poll)
-    if (result.status === 'slow_down') {
-      const slower = { ...attempt, interval: attempt.interval + 5 }
-      return pending(slower, await sealer.seal(slower))
+    if (result.status === 'pending' || result.status === 'slow_down') {
+      // slow_down adds five seconds to every later interval (RFC 8628).
+      const interval = attempt.interval + (result.status === 'slow_down' ? 5 : 0)
+      return pending({ ...attempt, interval, next: now() + interval })
     }
     if (result.status !== 'approved')
       return rejected({ status: result.status }, 'World ID was not approved.')
 
     let claims: IdTokenClaims
     try {
-      const verified = await idp.verify(result.idToken, { created: attempt.created, tolerance })
+      const verified = await idp.verify(result.idToken, attempt.created)
       if (typeof verified === 'string') return rejected({ status: 'denied' }, verified)
       claims = verified
     } catch {
@@ -120,10 +118,10 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }
   }
 
-  function pending(attempt: Attempt, token: string): Identity.Verification<never> {
+  async function pending(attempt: Attempt): Promise<Identity.Verification<never>> {
     const device: Types.Device = {
       status: 'pending',
-      attempt: token,
+      attempt: await sealer.seal(attempt),
       user_code: attempt.user_code,
       verification_uri: attempt.verification_uri,
       ...(attempt.verification_uri_complete && {
@@ -186,8 +184,6 @@ export declare namespace verifier {
     acr?: readonly string[] | undefined
     /** Lifetime, in seconds, of a session after approval. @default 3600 */
     sessionTtl?: number | undefined
-    /** Clock tolerance, in seconds, for ID token times. @default 60 */
-    clockTolerance?: number | undefined
     /** Fetch used to call World IdP. @default globalThis.fetch */
     fetch?: typeof globalThis.fetch | undefined
   }
@@ -202,6 +198,8 @@ type Attempt = {
   /** Unix time the attempt expires. */
   readonly expires: number
   readonly interval: number
+  /** Unix time of the earliest next poll. */
+  readonly next: number
   readonly user_code: string
   readonly verification_uri: string
   readonly verification_uri_complete?: string | undefined
@@ -442,10 +440,7 @@ function provider(config: verifier.Config & { acr: readonly string[]; issuer: st
      * audience, times, an authentication at or after the attempt started, and an accepted `acr`.
      * Returns the reason when it is invalid; throws when the keys can't be fetched.
      */
-    async verify(
-      token: string,
-      options: { created: number; tolerance: number },
-    ): Promise<IdTokenClaims | string> {
+    async verify(token: string, created: number): Promise<IdTokenClaims | string> {
       const parts = token.split('.')
       if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part)))
         return 'The ID token is malformed.'
@@ -460,7 +455,7 @@ function provider(config: verifier.Config & { acr: readonly string[]; issuer: st
       if (header?.alg !== 'RS256' || !isText(header.kid))
         return 'The ID token algorithm is not RS256.'
       const now = Math.floor(Date.now() / 1_000)
-      const { tolerance } = options
+      const tolerance = Constants.clockTolerance
       if (claims?.iss !== issuer) return 'The ID token issuer is not World IdP.'
       const aud = claims.aud
       const audiences = Array.isArray(aud) ? aud : [aud]
@@ -473,7 +468,7 @@ function provider(config: verifier.Config & { acr: readonly string[]; issuer: st
       if (!isTime(claims.auth_time) || claims.auth_time > now + tolerance)
         return 'The ID token has no valid auth_time.'
       // The device grant always authenticates afresh: an older authentication is not this attempt's.
-      if (claims.auth_time < options.created - tolerance)
+      if (claims.auth_time < created - tolerance)
         return 'The World ID authentication predates the attempt.'
       if (!isText(claims.acr) || !acr.includes(claims.acr))
         return 'The World ID authentication class is not accepted.'

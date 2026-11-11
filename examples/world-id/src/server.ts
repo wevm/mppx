@@ -72,11 +72,12 @@ async function handle(request: globalThis.Request): Promise<Response> {
     })
   const { subject } = identity.value
   const report = 'Q3 cross-border volume: $41.2M (+18%)'
-  if (await useFreeReport(subject)) return Response.json({ report, paid: false, subject })
+  // The subject stays on the server: World ID asks to keep it out of agents' messages.
+  if (await useFreeReport(subject)) return Response.json({ report, paid: false })
 
   const result = await mppx.charge({ amount: '0.01', description: 'Market report' })(request)
   if (result.status === 402) return result.challenge
-  return result.withReceipt(Response.json({ report, paid: true, subject }))
+  return result.withReceipt(Response.json({ report, paid: true }))
 }
 
 http

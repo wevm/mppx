@@ -116,7 +116,8 @@ async function authenticate(
     const wait = device.interval * 1_000
     if (Date.now() + wait >= expiresAt) return undefined
     await new Promise((resolve) => setTimeout(resolve, wait))
-    const next: Types.Device | undefined = await call(device.attempt)
+    // A lost connection to the server backs off and polls again; any answer is followed.
+    const next: Types.Device | undefined = await call(device.attempt).catch(() => device)
     if (!next) return undefined
     device = next
   }

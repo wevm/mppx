@@ -5,7 +5,7 @@ import { Mppx as ClientMppx } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { Base64 } from 'ox'
-import { expect, test } from 'vp/test'
+import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 const issuer = 'https://idp.example'
@@ -105,11 +105,22 @@ function device(result: { headers?: HeadersInit | undefined }): World.Device {
 const poll = (value: string) =>
   new Request('https://api.example/report', { headers: { 'World-Id-Poll': value } })
 
-/** Starts an attempt and polls it until it settles; returns every result. */
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+/** Moves the clock forward, as a client waiting between polls does. */
+function wait(seconds: number) {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(Date.now() + seconds * 1000)
+}
+
+/** Starts an attempt and polls it at its interval until it settles; returns every result. */
 async function run(verifier: ReturnType<typeof World.Server.verifier>) {
   const results = [await verifier.verify(poll('start'))]
   let state = device(results[0] as never)
   while (state.status === 'pending') {
+    wait(state.interval)
     const result = await verifier.verify(poll(state.attempt))
     results.push(result)
     state = device(result as never)
@@ -183,6 +194,24 @@ test('runs the device flow and accepts the session it issues', async () => {
   expect(device((await verifier.verify(poll(session))) as never)).toEqual({ status: 'expired' })
 })
 
+test('polls World IdP at most once per interval', async () => {
+  const world = idp({ polls: ['authorization_pending'] })
+  const verifier = World.Server.verifier({ ...config, fetch: world.fetch })
+  const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
+  // Too early: answered pending without calling World IdP.
+  const early = device((await verifier.verify(poll(started.attempt))) as never)
+  expect(early).toMatchObject({ status: 'pending', interval: 1 })
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(0)
+  wait(1)
+  const pending = device((await verifier.verify(poll(started.attempt))) as never) as {
+    attempt: string
+  }
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
+  // The attempt token it returns holds the next poll time, so polling it again at once waits.
+  await verifier.verify(poll(pending.attempt))
+  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
+})
+
 test('slows down, and ends denied or expired attempts', async () => {
   const slow = World.Server.verifier({ ...config, fetch: idp({ polls: ['slow_down'] }).fetch })
   const { results } = await run(slow)
@@ -237,6 +266,7 @@ test('maps World IdP outages to unavailable, never to approval', async () => {
 
   const flaky = World.Server.verifier({ ...config, fetch: idp({ polls: ['503'] }).fetch })
   const started = device((await flaky.verify(poll('start'))) as never)
+  wait(1)
   expect(await flaky.verify(poll((started as { attempt: string }).attempt))).toMatchObject({
     status: 'unavailable',
   })
@@ -246,6 +276,7 @@ test('maps World IdP outages to unavailable, never to approval', async () => {
     fetch: idp({ polls: ['invalid_client'] }).fetch,
   })
   const attempt = device((await misconfigured.verify(poll('start'))) as never)
+  wait(1)
   expect(await misconfigured.verify(poll((attempt as { attempt: string }).attempt))).toMatchObject({
     status: 'unavailable',
   })

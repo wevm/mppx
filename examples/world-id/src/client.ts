@@ -40,10 +40,9 @@ const mppx = Mppx.create({
 for (const attempt of [1, 2]) {
   const response = await mppx.fetch(`${BASE_URL}/api/report`)
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`)
-  const body = (await response.json()) as { report: string; paid: boolean; subject: string }
+  const body = (await response.json()) as { report: string; paid: boolean }
   console.log(`\n--- Report ${attempt} ---`)
   console.log(`  ${body.report}`)
-  console.log(`  human: ${body.subject}`)
   if (body.paid) {
     const receipt = Receipt.fromResponse(response)
     console.log(`  paid: ${receipt.method} ${receipt.reference}`)
