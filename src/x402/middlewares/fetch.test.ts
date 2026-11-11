@@ -142,7 +142,7 @@ describe('MPP compatibility challenges', () => {
       await expect(challengeScopes(path)).resolves.toEqual([
         {
           method: 'evm',
-          meta: { _mppx_scope: `https://example.com${path}`, _mppx_nonce: expect.any(String) },
+          meta: { _mppx_scope: `https://example.com${path}`, _mpp_nonce: expect.any(String) },
         },
       ])
   })

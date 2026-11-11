@@ -365,7 +365,10 @@ export function charge<const parameters extends charge.Parameters>(
         senderTag,
       })
     if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
-      throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+      throw new MismatchError(
+        'Payment verification failed: memo is not bound to this challenge.',
+        {},
+      )
 
     return { hash, portal, receipt, senderTag }
   }
@@ -1857,9 +1860,8 @@ function assertChallengeBoundMemo(
   parameters: { challengeId: string; realm: string },
 ) {
   const memos = matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined))
-  // The transfer already settled to the recipient, so another payment would not help.
   if (!isChallengeBound(memos, parameters))
-    throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
 function assertChallengeBoundCallMemo(
@@ -1872,17 +1874,16 @@ function assertChallengeBoundCallMemo(
 }
 
 /**
- * Whether matched payment transfers carry a challenge-bound attribution memo and
- * no conflicting attribution. Otherwise, a split payment could authorize another
- * challenge after the first challenge's replay marker expires. Unmatched transfers
- * cannot establish the binding; plain transfers and non-MPP memos remain allowed.
+ * Whether every attribution memo on the matched payment transfers is bound to this
+ * challenge's realm and ID. The attribution memo is optional (Tempo charge spec): plain
+ * transfers and memos not in attribution format are accepted, but an attribution memo
+ * for another realm or challenge is rejected.
  * @internal
  */
 function isChallengeBound(
   memos: readonly (`0x${string}` | undefined)[],
   parameters: { challengeId: string; realm: string },
 ): boolean {
-  let bound = false
   for (const memo of memos) {
     if (!memo || !Attribution.isMppMemo(memo)) continue
     if (
@@ -1890,9 +1891,8 @@ function isChallengeBound(
       !Attribution.verifyChallengeBinding(memo, parameters.challengeId)
     )
       return false
-    bound = true
   }
-  return bound
+  return true
 }
 
 /** @internal */

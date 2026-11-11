@@ -163,8 +163,16 @@ export function http(options: http.Options = {}): Http {
     },
 
     getCredential(request) {
+      // A Payment credential in a field the Challenge didn't select is ignored, but more than
+      // one Payment credential across both fields is a bad request.
+      const count = [Constants.Headers.authorization, Constants.Headers.paymentAuthorization]
+        .map((name) => request.headers.get(name))
+        .reduce((total, value) => total + (value ? countPaymentCredentials(value) : 0), 0)
+      if (count > 1) throw new Errors.MultipleCredentialsError()
       const header = request.headers.get(credentialHeader)
       if (!header) return null
+      if (header.length > maxCredentialHeaderLength)
+        throw new Credential.InvalidCredentialEncodingError()
       const payment = Credential.extractPaymentScheme(header)
       if (!payment) return null
       return Credential.deserialize(payment)
@@ -174,8 +182,9 @@ export function http(options: http.Options = {}): Http {
       const { challenge, error, input } = options
 
       // A 403 means the payment was valid but cannot pay for this request.
-      // Omit the challenge so clients do not pay again.
-      if (error?.status === 403)
+      // Omit the challenge so clients do not pay again. A request with more than
+      // one Payment credential gets 400 and no challenge too.
+      if (error?.status === 403 || error instanceof Errors.MultipleCredentialsError)
         return new Response(JSON.stringify(error.toProblemDetails()), {
           status: error.status,
           headers: {
@@ -253,6 +262,14 @@ export declare namespace http {
     /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
     requiresAuth?: boolean | undefined
   }
+}
+
+/** Longest credential field value accepted (65536 octets); longer ones are malformed credentials. */
+const maxCredentialHeaderLength = 64 * 1024
+
+/** Counts the Payment credentials (`Payment <token>`) in a comma-joined credential field value. */
+function countPaymentCredentials(value: string): number {
+  return value.split(',').filter((part) => /^Payment\s+\S/i.test(part.trim())).length
 }
 
 function withPrivateCacheControl(value: string | null): string {

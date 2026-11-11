@@ -340,6 +340,11 @@ describe('Fetch.from', () => {
   })
 })
 
+/** A final 403: the payment verified, but policy denies access, so no challenge is sent. */
+class ForbiddenError extends Errors.VerificationFailedError {
+  override readonly status = 403
+}
+
 // Minimal mock method — createCredential is only invoked on the 402 retry path.
 const noopMethod = {
   name: 'test',
@@ -1513,8 +1518,8 @@ describe('Fetch.from: 402 retry path', () => {
     }
   })
 
-  test('does not report a 403 credential replay as an unknown outcome', async () => {
-    const replayed = new Errors.CredentialReplayedError()
+  test('does not report a final 403 as an unknown outcome', async () => {
+    const replayed = new ForbiddenError({ reason: 'policy denies access' })
     const events: string[] = []
     const eventDispatcher = Fetch.createEventDispatcher()
     eventDispatcher.on('*', (event) => {
@@ -2495,18 +2500,19 @@ describe('Fetch.from: 402 retry path', () => {
 
   test.each([
     {
-      name: 'replayed credential',
-      error: new Errors.CredentialReplayedError({
-        reason: 'Transaction hash has already been used',
-      }),
+      name: 'policy denial',
+      error: new ForbiddenError({ reason: 'policy denies access' }),
       status: 403,
       payments: 1,
     },
     {
-      name: 'memo bound to another challenge',
-      error: new Errors.CredentialReplayedError({ reason: 'memo is not bound to this challenge' }),
-      status: 403,
-      payments: 1,
+      // A replay gets 402 with a fresh challenge (invalid-challenge), which the client answers.
+      name: 'replayed credential',
+      error: new Errors.CredentialReplayedError({
+        reason: 'Transaction hash has already been used',
+      }),
+      status: 402,
+      payments: 3,
     },
     {
       name: 'verification failure',

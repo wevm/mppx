@@ -243,9 +243,9 @@ async function expectReplayed(promise: Promise<unknown>) {
   const replay = await promise.catch((error: unknown) => error)
   expect(replay).toBeInstanceOf(Errors.CredentialReplayedError)
   expect(replay).toMatchObject({
-    message: 'Payment verification failed: Transaction hash has already been used.',
-    status: 403,
-    type: 'https://paymentauth.org/problems/verification-failed',
+    message: 'Challenge is invalid: Transaction hash has already been used.',
+    status: 402,
+    type: 'https://paymentauth.org/problems/invalid-challenge',
   })
 }
 

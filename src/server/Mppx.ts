@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
+import * as BodyDigest from '../BodyDigest.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
@@ -555,6 +556,7 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    challengeNonce = true,
     requiresAuth,
     realm = Env.get('realm'),
     selectOffers,
@@ -614,6 +616,7 @@ export function create<
   for (const mi of methods) {
     const fn = createMethodFn({
       authorize: mi.authorize as never,
+      challengeNonce,
       credentialHeader,
       defaults: mi.defaults,
       method: mi,
@@ -679,6 +682,7 @@ export function create<
     if (!challengeHandlers[mi.name]) challengeHandlers[mi.name] = {}
     if (challengeHandlers[mi.name]![mi.alias ?? mi.intent]) continue
     challengeHandlers[mi.name]![mi.alias ?? mi.intent] = createChallengeFn({
+      challengeNonce,
       credentialHeader,
       defaults: mi.defaults,
       method: mi,
@@ -1092,6 +1096,12 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
+    /**
+     * Adds a fresh random nonce to every Challenge's `opaque` under `_mpp_nonce`, so each
+     * Challenge gets a unique ID. Route matching ignores it.
+     * @default true
+     */
+    challengeNonce?: boolean | undefined
     /** Array of configured methods. @example [tempo()] */
     methods: methods
     /** Uses `Payment-Authorization` for Payment credentials so `Authorization` remains available for application authentication. */
@@ -1120,6 +1130,7 @@ function createMethodFn<
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
   const {
     authorize,
+    challengeNonce,
     credentialHeader,
     defaults,
     events,
@@ -1364,6 +1375,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
       const routeChallenge = await resolveRouteChallenge({
         capturedRequest,
+        challengeNonce,
         credential,
         defaults,
         description,
@@ -1379,6 +1391,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         if (!(e instanceof Errors.PaymentError)) throw e
         const challenge = createFallbackChallenge({
           capturedRequest,
+          challengeNonce,
           defaults: defaults ?? {},
           description,
           expires,
@@ -1643,6 +1656,33 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
       }
 
+      // A body digest bound into the Challenge must match this request's body.
+      if (
+        credential.challenge.digest !== undefined &&
+        !(await matchesBodyDigest(input, credential.challenge.digest))
+      ) {
+        const error = new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason: 'request body does not match the challenge digest',
+        })
+        await emitPaymentFailed({
+          challenge,
+          credential,
+          error,
+          request: parsedRequest,
+          retryChallenge: challenge,
+          submittedChallenge: credential.challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
+          credential,
+          request: parsedRequest,
+          error,
+          html: method.html,
+        })
+        return { challenge: response, status: 402 }
+      }
+
       // Reject credentials without expires (fail-closed) or with expired timestamp
       try {
         Expires.assert(credential.challenge.expires, credential.challenge.id)
@@ -1805,6 +1845,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
  * but returns a Challenge object directly instead of a request handler.
  */
 function createChallengeFn(parameters: {
+  challengeNonce?: boolean | undefined
   credentialHeader?: string | undefined
   defaults?: Record<string, unknown>
   method: Method.Method
@@ -1812,7 +1853,7 @@ function createChallengeFn(parameters: {
   request?: Method.RequestFn<Method.Method>
   secretKey: string
 }): (options: Record<string, unknown>) => Promise<Challenge.Challenge> {
-  const { credentialHeader, defaults, method, realm, secretKey } = parameters
+  const { challengeNonce, credentialHeader, defaults, method, realm, secretKey } = parameters
 
   return async (options) => {
     const {
@@ -1836,6 +1877,7 @@ function createChallengeFn(parameters: {
         : Expires.minutes(5)
 
     return resolveRouteChallenge({
+      challengeNonce,
       defaults,
       description,
       expires,
@@ -1857,6 +1899,7 @@ declare namespace createMethodFn {
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
     authorize?: Method.AuthorizeFn<method>
+    challengeNonce?: boolean | undefined
     credentialHeader?: string | undefined
     defaults?: defaults
     method: method
@@ -2260,6 +2303,20 @@ export function isMissingReceiptResponseError(
   )
 }
 
+/**
+ * Whether an HTTP request's body matches a Challenge's body digest. Transports without an
+ * HTTP request body (MCP) have nothing to compare and match.
+ */
+async function matchesBodyDigest(input: unknown, digest: string): Promise<boolean> {
+  if (!(input instanceof globalThis.Request)) return true
+  try {
+    return BodyDigest.verify(digest as BodyDigest.BodyDigest, await input.clone().text())
+  } catch {
+    // A consumed body cannot be compared, so it cannot prove the digest.
+    return false
+  }
+}
+
 function normalizeExpires(expires: z.DatetimeInput | undefined): string | undefined {
   return expires === undefined ? undefined : z.toDatetimeString(expires)
 }
@@ -2279,6 +2336,7 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
 
 async function resolveRouteChallenge(parameters: {
   capturedRequest?: Method.CapturedRequest | undefined
+  challengeNonce?: boolean | undefined
   credential?: Credential.Credential | null | undefined
   defaults?: Record<string, unknown> | undefined
   description?: string | undefined
@@ -2320,7 +2378,7 @@ async function resolveRouteChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(parameters.meta, parameters.challengeNonce),
     realm: effectiveRealm,
     request: request as never,
     secretKey: parameters.secretKey,
@@ -2335,6 +2393,7 @@ async function resolveRouteChallenge(parameters: {
 
 function createFallbackChallenge(parameters: {
   capturedRequest?: Method.CapturedRequest | undefined
+  challengeNonce?: boolean | undefined
   defaults: Record<string, unknown>
   description?: string | undefined
   expires?: string | undefined
@@ -2349,7 +2408,7 @@ function createFallbackChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(parameters.meta, parameters.challengeNonce),
     realm:
       parameters.realm ??
       (parameters.capturedRequest
@@ -2696,7 +2755,7 @@ declare namespace MethodFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601) or Date. */
     expires?: z.DatetimeInput | undefined
-    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce; clients MUST echo opaque unchanged. */
+    /** Optional server-defined correlation data serialized as `opaque`. `_mpp_nonce` is reserved for a fresh server-generated issuance nonce; clients MUST echo opaque unchanged. */
     meta?: Record<string, string> | undefined
     /** Optional route/resource scope bound via reserved challenge metadata. */
     scope?: string | undefined

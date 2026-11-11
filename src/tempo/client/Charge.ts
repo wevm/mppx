@@ -198,11 +198,17 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const currency = request.currency as Address
       const isMachineTokenCurrency = MachineTokenCharge.isMachineToken({ chainId, currency })
-      const memo = Attribution.encode({
-        challengeId: challenge.id,
-        clientId,
-        serverId: challenge.realm,
-      })
+      // A memo the server requires (`methodDetails.memo`, which other MPP servers may set)
+      // goes on the primary transfer as is; otherwise the optional attribution memo does.
+      const memo =
+        ((methodDetails as { memo?: string | undefined } | undefined)?.memo as
+          | Hex.Hex
+          | undefined) ??
+        Attribution.encode({
+          challengeId: challenge.id,
+          clientId,
+          serverId: challenge.realm,
+        })
       const transfers = Charge_internal.getTransfers({
         amount,
         methodDetails: {

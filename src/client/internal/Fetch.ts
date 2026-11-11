@@ -458,6 +458,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                 createCredential,
               })
             : undefined)
+        // `onChallenge` declined the payment: pay nothing and hand back the 402.
+        if (onChallengeCredential === false) {
+          await settleAttempt(preparedCredential, { challenges, response, status: 'rejected' })
+          preparedCredential = undefined
+          return response
+        }
         const credential = onChallengeCredential ?? (await createCredential())
         const prepared = preparedCredential
         if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
@@ -656,14 +662,18 @@ export declare namespace from {
     maxPaymentRetries?: number | undefined
     /** Array of methods to use. */
     methods: methods
-    /** Called when a 402 challenge is received and no event handler supplies a credential. */
+    /**
+     * Called when a 402 challenge is received and no event handler supplies a credential, before
+     * paying. Return a credential to send it, `undefined` to pay with the method's default
+     * credential, or `false` to decline: nothing is paid and the 402 response is returned.
+     */
     onChallenge?:
       | ((
           challenge: Challenge.Challenge,
           helpers: {
             createCredential: (context?: AnyContextFor<methods>) => Promise<string>
           },
-        ) => Promise<string | undefined>)
+        ) => Promise<string | undefined | false>)
       | undefined
     /** Filters and sorts supported challenges before credential creation. */
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined

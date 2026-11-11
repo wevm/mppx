@@ -9,6 +9,7 @@ import {
   InternalPaymentError,
   InvalidPayloadError,
   MalformedCredentialError,
+  MultipleCredentialsError,
   PaymentRequiredError,
   VerificationFailedError,
 } from '../Errors.js'
@@ -105,6 +106,68 @@ describe('http', () => {
       })
 
       expect(transport.getCredential(request)).toBeNull()
+    })
+
+    test('ignores a Payment credential in the field the challenge did not select', () => {
+      const transport = Transport.http({ requiresAuth: true })
+      const request = new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+
+      expect(transport.getCredential(request)).toBeNull()
+    })
+
+    test.each(['Payment', 'Payment ', 'Bearer x, Payment'])(
+      'treats %j without a token as absent',
+      (value) => {
+        const transport = Transport.http()
+        const request = new Request('https://example.com', { headers: { Authorization: value } })
+
+        expect(transport.getCredential(request)).toBeNull()
+      },
+    )
+
+    test('throws malformed for a token that is not base64url JSON', () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Authorization: 'Payment not-json' },
+      })
+
+      expect(() => transport.getCredential(request)).toThrow(
+        Credential.InvalidCredentialEncodingError,
+      )
+    })
+
+    test('throws malformed for a credential field over 65536 octets', () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Authorization: `Payment ${'a'.repeat(64 * 1024)}` },
+      })
+
+      expect(() => transport.getCredential(request)).toThrow(
+        Credential.InvalidCredentialEncodingError,
+      )
+    })
+
+    test.each([
+      {
+        name: 'comma-joined in Authorization',
+        headers: {
+          Authorization: `${Credential.serialize(credential)}, ${Credential.serialize(credential)}`,
+        },
+      },
+      {
+        name: 'across Authorization and Payment-Authorization',
+        headers: {
+          Authorization: Credential.serialize(credential),
+          [Constants.Headers.paymentAuthorization]: Credential.serialize(credential),
+        },
+      },
+    ])('throws bad request for more than one Payment credential: $name', ({ headers }) => {
+      for (const transport of [Transport.http(), Transport.http({ requiresAuth: true })]) {
+        const request = new Request('https://example.com', { headers })
+        expect(() => transport.getCredential(request)).toThrow(MultipleCredentialsError)
+      }
     })
 
     test('uses Payment-Authorization when application authentication is required', () => {
@@ -445,13 +508,13 @@ describe('http', () => {
       {
         name: 'replayed credential',
         error: new CredentialReplayedError({ reason: 'Transaction hash has already been used' }),
-        status: 403,
-        challenged: false,
+        status: 402,
+        challenged: true,
       },
       {
-        name: 'memo bound to another challenge',
-        error: new CredentialReplayedError({ reason: 'memo is not bound to this challenge' }),
-        status: 403,
+        name: 'multiple credentials',
+        error: new MultipleCredentialsError(),
+        status: 400,
         challenged: false,
       },
     ])('$name returns $status (challenged=$challenged)', async ({ error, status, challenged }) => {
