@@ -360,6 +360,37 @@ test('fails a start it cannot index for cleanup, and saves nothing', async () =>
   ).toBe(200)
 })
 
+test('a failed window index never erases starts that share the window', async () => {
+  const memory = Store.memory()
+  let release: (() => void) | undefined
+  let fail = true
+  const store: typeof memory = {
+    ...memory,
+    update(key, change) {
+      // The first index write waits, then fails, while another start goes ahead.
+      if (fail && key.includes(':expiry:')) {
+        fail = false
+        return new Promise((_, reject) => {
+          release = () => reject(new Error('store down'))
+        })
+      }
+      return memory.update(key, change)
+    },
+  }
+  const issuer = await createIssuer(await createWorld(), {
+    limit: { key: () => 'all', max: 2, window: 60 },
+    store,
+  })
+  const body = { audience: 'https://api.example' }
+  const a = post(issuer, World.Constants.devicePath, body)
+  await vi.waitFor(() => expect(release).toBeDefined())
+  expect((await post(issuer, World.Constants.devicePath, body)).status).toBe(200)
+  release!()
+  expect((await a).status).toBe(503)
+  expect((await post(issuer, World.Constants.devicePath, body)).status).toBe(200)
+  expect((await post(issuer, World.Constants.devicePath, body)).status).toBe(429)
+})
+
 test('deletes abandoned attempts and ended limit windows', async () => {
   const world = await createWorld()
   const store = Store.memory()

@@ -182,26 +182,30 @@ export function create(config: create.Config): Issuer {
         const now = Date.now()
         const limitKey = `${prefix}limit:${caller}`
         const reset = now + limit.window * 1_000
-        // -1: this start opened a new window; 0: within the limit; above: seconds to wait.
-        const retryAfter = await store.update<string, number>(limitKey, (current) => {
-          const window = current as { count: number; reset: number } | null
-          if (!window || window.reset <= now)
-            return { op: 'set', value: { count: 1, reset }, result: -1 }
-          if (window.count >= limit.max)
-            return { op: 'noop', result: Math.ceil((window.reset - now) / 1_000) }
-          return { op: 'set', value: { ...window, count: window.count + 1 }, result: 0 }
-        })
-        // Indexed once per window, never on a refused start. A window that can't be indexed is
-        // dropped (it holds only this start), since no sweep could ever find it.
-        if (retryAfter < 0)
+        // A new window opens only once indexed for cleanup, so a failed index never leaves a
+        // counter to undo: the start fails before any window exists. Indexed once per window.
+        let indexed = false
+        let retryAfter: number | 'index'
+        while (true) {
+          // 'index': a new window must be indexed first; 0: within the limit; above: seconds to wait.
+          retryAfter = await store.update<string, number | 'index'>(limitKey, (current) => {
+            const window = current as { count: number; reset: number } | null
+            if (!window || window.reset <= now) {
+              if (!indexed) return { op: 'noop', result: 'index' }
+              return { op: 'set', value: { count: 1, reset }, result: 0 }
+            }
+            if (window.count >= limit.max)
+              return { op: 'noop', result: Math.ceil((window.reset - now) / 1_000) }
+            return { op: 'set', value: { ...window, count: window.count + 1 }, result: 0 }
+          })
+          if (retryAfter !== 'index') break
           try {
             await track(limitKey, reset)
           } catch {
-            await store
-              .update<string, undefined>(limitKey, () => ({ op: 'delete', result: undefined }))
-              .catch(() => {})
             return error(503, 'temporarily_unavailable', 'World ID is unavailable.')
           }
+          indexed = true
+        }
         if (retryAfter > 0)
           return error(429, 'slow_down', 'Too many World ID attempts.', {
             'retry-after': String(retryAfter),
