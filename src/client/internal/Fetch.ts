@@ -11,6 +11,7 @@ import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as ProofRealm from './ProofRealm.js'
+import * as Mcp_protocol from './protocols/Mcp.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
@@ -321,6 +322,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       ...fetchInit
     } = (transportRequest ?? {}) as Record<string, unknown>
 
+    // Whether the first request already carried a Payment credential the caller attached.
+    const initialCredentialSent =
+      hasPaymentCredential(callerHeaders) ||
+      Mcp_protocol.hasCredential(transportRequest as RequestInit | undefined)
     let challenge: Challenge.Challenge | undefined
     let challenges: readonly Challenge.Challenge[] | undefined
     let mi: methods[number] | undefined
@@ -332,8 +337,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
         challenges = await transport.getChallenges(response, transportRequest as never)
         // invalid-challenge answering a sent credential can mean it was already settled
-        // (a replay): paying the fresh Challenge would pay twice, so the 402 is final.
-        if (retry > 0 && (await isInvalidChallengeProblem(response))) {
+        // (a replay): paying the fresh Challenge would pay twice, so the 402 is final. That
+        // holds for a credential the caller attached to the first request too.
+        if (
+          (retry > 0 || initialCredentialSent) &&
+          (await isInvalidChallengeResponse(response, transportRequest as RequestInit | undefined))
+        ) {
           await settleAttempt(preparedCredential, { challenges, response, status: 'rejected' })
           return response
         }
@@ -1355,9 +1364,16 @@ async function resolvePaymentRetryInput(
   return response.url
 }
 
-/** Whether an HTTP response carries an `invalid-challenge` problem, read without consuming it. */
-async function isInvalidChallengeProblem(response: unknown): Promise<boolean> {
+/**
+ * Whether a payment-required response carries an `invalid-challenge` problem, as an HTTP
+ * problem document or in an MCP payment-required error, read without consuming it.
+ */
+async function isInvalidChallengeResponse(
+  response: unknown,
+  request: RequestInit | undefined,
+): Promise<boolean> {
   if (!(response instanceof globalThis.Response)) return false
+  if (await Mcp_protocol.isInvalidChallenge(response, request)) return true
   if (!response.headers.get('Content-Type')?.includes('application/problem+json')) return false
   try {
     const problem = (await response.clone().json()) as { type?: unknown }
@@ -1365,4 +1381,10 @@ async function isInvalidChallengeProblem(response: unknown): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Whether request headers carry a Payment credential (`Authorization: Payment` or `Payment-Authorization`). */
+function hasPaymentCredential(headers: Headers): boolean {
+  if (headers.get(Constants.Headers.paymentAuthorization)) return true
+  return /(^|,)\s*Payment\s+\S/i.test(headers.get(Constants.Headers.authorization) ?? '')
 }

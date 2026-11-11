@@ -291,9 +291,11 @@ export function charge<const parameters extends charge.Parameters>(
       transfers,
       validateSender,
     })
+    // A push payment (hash credential) must carry the challenge-bound attribution memo.
     assertChallengeBoundMemo(matchedLogs, {
       challengeId: challenge.id,
       realm: challenge.realm,
+      required: true,
     })
     // The payer is the account the matched transfers debited, not the submitter.
     // Settlement-contract transfers are funded by the transaction sender.
@@ -364,7 +366,14 @@ export function charge<const parameters extends charge.Parameters>(
       throw new MismatchError('Payment verification failed: Zone withdrawal not found.', {
         senderTag,
       })
-    if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
+    // A push payment (Zone withdrawal) must carry the challenge-bound attribution memo.
+    if (
+      !isChallengeBound([withdrawal.memo], {
+        challengeId: challenge.id,
+        realm: challenge.realm,
+        required: true,
+      })
+    )
       throw new MismatchError(
         'Payment verification failed: memo is not bound to this challenge.',
         {},
@@ -1857,7 +1866,7 @@ function toReceipt(reference: string, fundingCurrency?: string) {
 
 function assertChallengeBoundMemo(
   matchedLogs: readonly TransferLog[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ) {
   const memos = matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined))
   if (!isChallengeBound(memos, parameters))
@@ -1866,33 +1875,53 @@ function assertChallengeBoundMemo(
 
 function assertChallengeBoundCallMemo(
   matchedCalls: readonly { memo?: string | undefined }[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ) {
   const memos = matchedCalls.map((call) => call.memo as `0x${string}` | undefined)
   if (!isChallengeBound(memos, parameters))
     throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
+/** The challenge a payment's attribution memo binds to. */
+type ChallengeBinding = {
+  challengeId: string
+  realm: string
+  /**
+   * Whether the payment must carry an attribution memo bound to this challenge. Push payments
+   * (hash and Zone credentials) are already settled, so only the memo ties them to one
+   * challenge: without it, the same settlement could pay for another challenge. Pull
+   * payments (transaction credentials) are broadcast by the server from the client's own
+   * signed transaction, which the chain accepts once, so their memo is optional.
+   */
+  required?: boolean | undefined
+}
+
 /**
- * Whether every attribution memo on the matched payment transfers is bound to this
- * challenge's realm and ID. The attribution memo is optional (Tempo charge spec): plain
- * transfers and memos not in attribution format are accepted, but an attribution memo
- * for another realm or challenge is rejected.
+ * Whether the matched payment transfers are bound to this challenge. An attribution memo of
+ * this realm bound to another challenge is always rejected. With required (push payments),
+ * at least one matched transfer must carry an attribution memo bound to this challenge's
+ * realm and ID, and another realm's attribution memo is rejected too. Otherwise (pull
+ * payments) plain transfers, memos not in attribution format and other realms' attribution
+ * memos are accepted (Tempo charge spec).
  * @internal
  */
 function isChallengeBound(
   memos: readonly (`0x${string}` | undefined)[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ): boolean {
+  let bound = false
   for (const memo of memos) {
     if (!memo || !Attribution.isMppMemo(memo)) continue
-    if (
-      !Attribution.verifyServer(memo, parameters.realm) ||
-      !Attribution.verifyChallengeBinding(memo, parameters.challengeId)
-    )
-      return false
+    // Another realm's attribution memo can't be claimed here, so a pull payment may carry it.
+    if (!Attribution.verifyServer(memo, parameters.realm)) {
+      if (parameters.required) return false
+      continue
+    }
+    // This realm's memo for another challenge could later pay for that challenge: reject it.
+    if (!Attribution.verifyChallengeBinding(memo, parameters.challengeId)) return false
+    bound = true
   }
-  return true
+  return bound || !parameters.required
 }
 
 /** @internal */

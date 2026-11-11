@@ -170,6 +170,27 @@ describe('http', () => {
       }
     })
 
+    test.each([
+      {
+        name: 'quoted comma in another scheme',
+        authorization: 'Digest username="alice, Payment bob", realm="x"',
+      },
+      {
+        name: 'oversized unselected field',
+        authorization: 'Payment a, Payment b, ' + 'x'.repeat(64 * 1024),
+      },
+    ])('ignores Authorization text that is not a second credential: $name', ({ authorization }) => {
+      const transport = Transport.http({ requiresAuth: true })
+      const request = new Request('https://example.com', {
+        headers: {
+          Authorization: authorization,
+          [Constants.Headers.paymentAuthorization]: Credential.serialize(credential),
+        },
+      })
+
+      expect(transport.getCredential(request)?.challenge.id).toBe(challenge.id)
+    })
+
     test('uses Payment-Authorization when application authentication is required', () => {
       const transport = Transport.http({ requiresAuth: true })
       const request = new Request('https://example.com', {

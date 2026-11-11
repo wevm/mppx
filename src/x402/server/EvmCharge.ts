@@ -231,6 +231,8 @@ export function createPath(config: ResolvedOptions): Path {
 
     respondChallenge(options, response) {
       if (!response) throw new Error('x402 path requires a base challenge response.')
+      // A rejection without a Challenge (403, or 400 for more than one credential) gets no offer.
+      if (!response.headers.has('WWW-Authenticate')) return response
       const headers = new Headers(response.headers)
       const request = options.challenge.request as Types.ChargeRequest
       headers.set(

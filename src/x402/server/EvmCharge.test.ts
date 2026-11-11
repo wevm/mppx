@@ -506,3 +506,23 @@ describe('x402 evm charge behind Proxy', () => {
     expect(response.headers.get(x402_Types.paymentResponseHeader)).toBeTruthy()
   })
 })
+
+describe('x402 evm charge rejections without a Challenge', () => {
+  test('more than one Payment credential gets 400 without an x402 offer', async () => {
+    const { mppx, reached } = createMppx()
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const result = await route(
+      new Request('https://example.com/paid', {
+        headers: { Authorization: 'Payment a, Payment b' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.status).toBe(400)
+    expect(result.challenge.headers.has('WWW-Authenticate')).toBe(false)
+    expect(result.challenge.headers.has(x402_Types.paymentRequiredHeader)).toBe(false)
+    expect(reached).toEqual([])
+  })
+})

@@ -2691,6 +2691,20 @@ describe('precompile server session unit guardrails', () => {
       },
     )
 
+    test('HEAD with more than one Payment credential gets 400 without a challenge', async () => {
+      const route = createBootstrapRoute({ rawStore: Store.memory() })
+      const challenge = Challenge.fromResponse(await bootstrapResponse(route))
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { type: 'transaction' },
+      } as never)
+
+      const response = await bootstrapResponse(route, authorization + ', ' + authorization)
+
+      expect(response.status).toBe(400)
+      expect(response.headers.has('WWW-Authenticate')).toBe(false)
+    })
+
     test('malformed bootstrap payload returns an invalid-payload challenge', async () => {
       const route = createBootstrapRoute({ rawStore: Store.memory() })
       const challenge = Challenge.fromResponse(await bootstrapResponse(route))

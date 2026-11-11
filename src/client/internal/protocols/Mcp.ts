@@ -36,6 +36,17 @@ export function adapterOwnsPayment(request?: RequestInit): boolean {
   }
 }
 
+/** Whether an MCP request already carries a Payment credential in its `_meta`. */
+export function hasCredential(request?: RequestInit): boolean {
+  if (typeof request?.body !== 'string') return false
+  try {
+    const message = JSON.parse(request.body)
+    return message?.jsonrpc === '2.0' && message.params?._meta?.[Mcp.credentialMetaKey] != null
+  } catch {
+    return false
+  }
+}
+
 // Bound automatic inspection; the caller retains the original response stream.
 const maxInspectionBytes = 1024 * 1024
 
@@ -227,3 +238,21 @@ export function mcp(): Protocol {
     },
   }
 }
+
+/**
+ * Whether an MCP-over-HTTP response answers the request with a payment-required error whose
+ * problem is `invalid-challenge` (a replayed or otherwise unusable Challenge).
+ */
+export async function isInvalidChallenge(
+  response: Response,
+  request?: RequestInit,
+): Promise<boolean> {
+  const id = mcpHttpRequestId(request)
+  if (response.status === paymentRequiredStatus || id === undefined) return false
+  const message = await parseJsonRpcResponse(response)
+  if (!message || message.id !== id) return false
+  return paymentRequiredData(message)?.problem?.type === invalidChallengeType
+}
+
+/** Problem type of an unusable (replayed, expired or unknown) Challenge. */
+export const invalidChallengeType = 'https://paymentauth.org/problems/invalid-challenge'

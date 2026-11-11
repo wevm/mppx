@@ -245,14 +245,17 @@ describe('tempo.charge zone credentials', () => {
     ).rejects.toThrow('memo is not bound to this challenge')
   })
 
-  test('accepts a withdrawal without an attribution memo', async () => {
+  test.each([
+    ['no memo', zeroHash],
+    ['a memo not in attribution format', `0x${'ab'.repeat(32)}` as const],
+  ])('rejects a withdrawal with %s', async (_, memo) => {
     let fixture: WithdrawalFixture[] = []
     const { challenge, credential, server } = setup({ withdrawals: () => fixture })
     const { challenge: c } = await challenge()
-    fixture = [{ senderTag: tagA, memo: zeroHash }]
+    fixture = [{ senderTag: tagA, memo }]
     await expect(
       server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash })),
-    ).resolves.toMatchObject({ status: 'success' })
+    ).rejects.toThrow('memo is not bound to this challenge')
   })
 
   test.each([

@@ -1099,6 +1099,11 @@ export declare namespace create {
     /**
      * Adds a fresh random nonce to every Challenge's `opaque` under `_mpp_nonce`, so each
      * Challenge gets a unique ID. Route matching ignores it.
+     *
+     * With `false`, requests for the same route with the same `expires` get the same Challenge
+     * ID, so a payment bound to that ID (such as a Tempo push payment's attribution memo) can be
+     * redeemed by whichever requester presents it first. Turn it off only when each Challenge
+     * is otherwise unique (for example, a per-request `expires` or `meta`).
      * @default true
      */
     challengeNonce?: boolean | undefined
@@ -1279,7 +1284,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
       })()
 
-      if (preflight && input instanceof globalThis.Request) {
+      // More than one Payment credential is a bad request (400, no Challenge), even on routes
+      // whose preflight would otherwise answer a credential-less request with its own Challenge.
+      if (
+        preflight &&
+        !(credentialError instanceof Errors.MultipleCredentialsError) &&
+        input instanceof globalThis.Request
+      ) {
         const response = await preflight({
           capturedRequest,
           credential,

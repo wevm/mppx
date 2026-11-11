@@ -165,14 +165,22 @@ export function http(options: http.Options = {}): Http {
     getCredential(request) {
       // A Payment credential in a field the Challenge didn't select is ignored, but more than
       // one Payment credential across both fields is a bad request.
+      // Oversized fields are rejected (selected) or ignored (unselected) before any parsing.
+      const header = request.headers.get(credentialHeader)
+      if (header && header.length > maxCredentialHeaderLength)
+        throw new Credential.InvalidCredentialEncodingError()
       const count = [Constants.Headers.authorization, Constants.Headers.paymentAuthorization]
         .map((name) => request.headers.get(name))
-        .reduce((total, value) => total + (value ? countPaymentCredentials(value) : 0), 0)
+        .reduce(
+          (total, value) =>
+            total +
+            (value && value.length <= maxCredentialHeaderLength
+              ? countPaymentCredentials(value)
+              : 0),
+          0,
+        )
       if (count > 1) throw new Errors.MultipleCredentialsError()
-      const header = request.headers.get(credentialHeader)
       if (!header) return null
-      if (header.length > maxCredentialHeaderLength)
-        throw new Credential.InvalidCredentialEncodingError()
       const payment = Credential.extractPaymentScheme(header)
       if (!payment) return null
       return Credential.deserialize(payment)
@@ -267,9 +275,28 @@ export declare namespace http {
 /** Longest credential field value accepted (65536 octets); longer ones are malformed credentials. */
 const maxCredentialHeaderLength = 64 * 1024
 
-/** Counts the Payment credentials (`Payment <token>`) in a comma-joined credential field value. */
+/**
+ * Counts the Payment credentials (`Payment <token>`) in a comma-joined credential field value.
+ * Commas inside quoted strings (another scheme's auth-params) don't separate credentials.
+ */
 function countPaymentCredentials(value: string): number {
-  return value.split(',').filter((part) => /^Payment\s+\S/i.test(part.trim())).length
+  let count = 0
+  let start = 0
+  let quoted = false
+  for (let i = 0; i <= value.length; i++) {
+    const char = value[i]
+    if (quoted) {
+      if (char === '\\') i++
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (char === '"') quoted = true
+    else if (char === ',' || i === value.length) {
+      if (/^\s*Payment\s+\S/i.test(value.slice(start, i))) count++
+      start = i + 1
+    }
+  }
+  return count
 }
 
 function withPrivateCacheControl(value: string | null): string {

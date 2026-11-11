@@ -372,8 +372,13 @@ describe('tempo', () => {
             : { type: 'transaction' as const, signature }
         const credential = Credential.serialize(Credential.from({ challenge, payload }))
         rpcMethods.length = 0
+        // Push payments (hash) must carry the challenge-bound memo and no other attribution
+        // memo. Pull payments need no memo and reject only this realm's memo for another
+        // challenge.
+        const expectAccepted =
+          mode === 'hash' ? accepted && memos.includes('bound') : !memos.includes('other challenge')
 
-        if (accepted) {
+        if (expectAccepted) {
           await expect(handler.validateCredential(credential)).resolves.toMatchObject({
             intent: 'charge',
           })
@@ -6696,7 +6701,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('server accepts plain transfer without an attribution memo', async () => {
+    test('server rejects hash of a plain transfer without the challenge-bound memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -6728,7 +6733,11 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(200)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
+        expect(body.detail).toContain('memo is not bound to this challenge')
       }
 
       httpServer.close()
@@ -6794,7 +6803,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('server accepts hash with a memo not in attribution format', async () => {
+    test('server rejects hash with a memo not in attribution format', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -6830,7 +6839,11 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(200)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
+        expect(body.detail).toContain('memo is not bound to this challenge')
       }
 
       httpServer.close()
