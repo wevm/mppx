@@ -465,15 +465,28 @@ test('claims nonces per agent, shared across verifiers on one store', async () =
   })
 })
 
-test('maps a nonce store failure to unavailable before reading AgentBook', async () => {
-  const book = registered()
+test('maps a nonce store failure to unavailable', async () => {
   const fail = async () => {
     throw new Error('store down')
   }
   const nonceStore = { ...Store.memory(), update: fail, tryClaim: fail } as never
-  const verifier = verifierFor({ agentBook: book, nonceStore })
+  const verifier = verifierFor({ agentBook: registered(), nonceStore })
   expect(await verifier.verify(await craft())).toMatchObject({ status: 'unavailable' })
-  expect(book.calls).toHaveLength(0)
+})
+
+test('claims no nonce for an unregistered wallet', async () => {
+  const claims: string[] = []
+  const memory = Store.memory()
+  const nonceStore = {
+    ...memory,
+    tryClaim: async (key: string, expires: number) => {
+      claims.push(key)
+      return Store.tryClaim(memory, key, expires)
+    },
+  } as never
+  const verifier = verifierFor({ agentBook: agentBook({}), nonceStore })
+  expect(await verifier.verify(await craft())).toMatchObject({ status: 'forbidden' })
+  expect(claims).toHaveLength(0)
 })
 
 test('checks the signature before claiming the nonce or reading AgentBook', async () => {

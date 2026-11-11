@@ -96,15 +96,6 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         }
       if (!valid) return { status: 'invalid', reason: 'The agentkit signature is invalid.' }
 
-      try {
-        const expires = Date.parse(payload.issuedAt) + (maxAge + Constants.clockSkew) * 1000
-        const key = `world:${payload.address.toLowerCase()}:${payload.nonce}`
-        if (!(await Store.tryClaim(config.nonceStore, key, expires)))
-          return { status: 'invalid', reason: 'The agentkit nonce has already been used.' }
-      } catch {
-        return { status: 'unavailable', reason: 'Replay protection is unavailable.' }
-      }
-
       let humanId: string | undefined
       try {
         humanId = await lookup(payload.address as Address)
@@ -117,6 +108,16 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
           headers: { Link: `<${Constants.registration}>; rel="register"` },
           reason: `The agent wallet is not registered in AgentBook. Register it with: npx @worldcoin/agentkit-cli register ${payload.address}`,
         }
+      // Claim the nonce only for registered wallets, so rejected ones leave no replay state.
+      try {
+        const expires = Date.parse(payload.issuedAt) + (maxAge + Constants.clockSkew) * 1000
+        const key = `world:${payload.address.toLowerCase()}:${payload.nonce}`
+        if (!(await Store.tryClaim(config.nonceStore, key, expires)))
+          return { status: 'invalid', reason: 'The agentkit nonce has already been used.' }
+      } catch {
+        return { status: 'unavailable', reason: 'Replay protection is unavailable.' }
+      }
+
       return {
         status: 'valid',
         value: Object.freeze({
