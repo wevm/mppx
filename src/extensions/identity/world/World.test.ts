@@ -735,7 +735,9 @@ test('tells a smart-account RPC outage from an invalid signature', async () => {
 
 test('tells a default client RPC outage from a failed signature check', async () => {
   let reply: (id: unknown) => { status: number; body: unknown } = () => ({ status: 500, body: '' })
+  let calls = 0
   const server = await Http.createServer((request, response) => {
+    calls++
     let raw = ''
     request.on('data', (chunk) => (raw += chunk))
     request.on('end', () => {
@@ -749,6 +751,8 @@ test('tells a default client RPC outage from a failed signature check', async ()
     const verifier = verifierFor({ clients: {}, rpcUrl: server.url })
     const proof = () => craft({ type: 'eip1271' }, { signature: '0x' + '00'.repeat(65) })
     expect((await verifier.verify(await proof())).status).toBe('unavailable')
+    // One call, never retried.
+    expect(calls).toBe(1)
     reply = (id) => ({
       status: 200,
       body: { jsonrpc: '2.0', id, error: { code: 3, message: 'execution reverted' } },

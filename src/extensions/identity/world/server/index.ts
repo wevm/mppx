@@ -195,7 +195,9 @@ function signingClient(id: number, url: string): SigningClient {
       let outage: unknown
       // viem returns a JSON-RPC error body from a failed HTTP response without its status.
       let status: number | undefined
+      // No retries: an unauthenticated header costs the RPC one call at most.
       const transport = http(url, {
+        retryCount: 0,
         onFetchResponse: (response) => {
           status = response.status
         },
