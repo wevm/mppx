@@ -1,7 +1,7 @@
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
-import * as defaults from '../internal/defaults.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
@@ -275,10 +275,9 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
     // `machineTokenDirect` offers also accept MACH channels; the first offer settles them.
-    const machineToken =
-      parameters?.machineTokenEnabled && parameters?.machineTokenDirect
-        ? defaults.machineToken[currency.chainId as keyof typeof defaults.machineToken]?.token
-        : undefined
+    const machineToken = MachineTokenCharge.acceptsDirect(parameters ?? {})
+      ? MachineTokenCharge.getToken(currency.chainId)
+      : undefined
     for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
       if (settlements.has(key(currency.chainId, token))) continue
       settlements.set(key(currency.chainId, token), method.extensions!.settleScheduled)

@@ -3,6 +3,8 @@ import { TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   type Client as viem_Client,
+  isAddress,
+  isAddressEqual,
   keccak256,
   parseEventLogs,
   parseUnits,
@@ -233,7 +235,7 @@ export function charge(parameters: charge.Parameters = {}) {
         if (!machineTokenDirect || isMachineTokenCurrency) return undefined
         const token = MachineTokenCharge.getToken(chainId)
         if (!token || !parameters.currencies) return token
-        return parameters.currencies.some((c) => c.toLowerCase() === token.toLowerCase())
+        return parameters.currencies.some((c) => isAddress(c) && isAddressEqual(c, token))
           ? token
           : undefined
       })()
@@ -267,19 +269,25 @@ export function charge(parameters: charge.Parameters = {}) {
         if (supportedModes.includes(preferredMode)) return preferredMode
         return supportedModes[0]!
       }
+      const allowedFeeTokens = defaultFeeTokens(chainId)
+      const explicitFeeToken = context?.feeToken ?? parameters.feeToken
+      // A funded stablecoin found while checking MACH gas, reused as the transaction's fee token.
+      let machineTokenFeeToken: Address | undefined
       // MACH cannot pay fees, so paying in MACH needs a sponsored pull transaction or a stablecoin
       // the payer holds for gas.
-      const canPayMachineTokenGas = async (payer: { address: Address; type: string }) =>
-        Boolean(context?.feeToken ?? parameters.feeToken) ||
-        (methodDetails?.feePayer === true && resolveMode(payer) === 'pull') ||
-        (await resolveFeeToken({
+      const canPayMachineTokenGas = async (payer: { address: Address; type: string }) => {
+        if (explicitFeeToken) return true
+        if (methodDetails?.feePayer === true && resolveMode(payer) === 'pull') return true
+        machineTokenFeeToken = await resolveFeeToken({
           account: payer.address,
-          allowedTokens: defaultFeeTokens(chainId),
-          candidateTokens: defaultFeeTokens(chainId),
+          allowedTokens: allowedFeeTokens,
+          candidateTokens: allowedFeeTokens,
           client,
           prioritizeCandidates: true,
           requireBalance: true,
-        })) !== undefined
+        })
+        return machineTokenFeeToken !== undefined
+      }
 
       let account = defaultAccount
       let machineTokenPaymentCalls: readonly AccountResolution.ResolveAccountCall[] | undefined
@@ -353,19 +361,19 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       const calls = machineTokenPaymentCalls ?? [...(swapCalls ?? []), ...transferCalls]
-      const allowedFeeTokens = defaultFeeTokens(chainId)
-      const explicitFeeToken = context?.feeToken ?? parameters.feeToken
       const feeToken = explicitFeeToken
         ? explicitFeeToken
-        : machineTokenPaymentCalls || isMachineTokenCurrency
-          ? await resolveFeeToken({
-              account: account.address,
-              allowedTokens: allowedFeeTokens,
-              candidateTokens: allowedFeeTokens,
-              client,
-              prioritizeCandidates: true,
-            })
-          : undefined
+        : machineTokenFeeToken && machineTokenPaymentCalls
+          ? machineTokenFeeToken
+          : machineTokenPaymentCalls || isMachineTokenCurrency
+            ? await resolveFeeToken({
+                account: account.address,
+                allowedTokens: allowedFeeTokens,
+                candidateTokens: allowedFeeTokens,
+                client,
+                prioritizeCandidates: true,
+              })
+            : undefined
 
       const mode = resolveMode(account)
 

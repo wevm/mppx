@@ -1,4 +1,13 @@
-import { createClient, custom, encodeFunctionData } from 'viem'
+import {
+  createClient,
+  custom,
+  decodeFunctionData,
+  encodeFunctionData,
+  encodeFunctionResult,
+  type Hex,
+  numberToHex,
+} from 'viem'
+import { tempoModerato } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
@@ -282,53 +291,76 @@ describe('MACH funding', () => {
 })
 
 describe('canPayDirect', () => {
-  async function load(options: {
+  const chain = { ...tempoModerato, hardfork: 't3' } as const
+
+  // Answers the balance, access-key and simulation reads canPayDirect makes, over a real transport.
+  function rpc(options: {
     balance: bigint
     remaining?: bigint | undefined
     simulate?: 'ok' | 'revert' | undefined
     spendPolicy?: 'limited' | 'unlimited' | undefined
   }) {
-    vi.resetModules()
-    vi.doMock('viem/actions', () => ({
-      call: vi.fn(async () => {
-        if (options.simulate === 'revert') throw new Error('PolicyForbids')
-      }),
-      readContract: vi.fn(async () => options.balance),
-    }))
-    vi.doMock('viem/tempo', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('viem/tempo')>()
-      return {
-        ...actual,
-        Actions: {
-          ...actual.Actions,
-          accessKey: {
-            ...actual.Actions.accessKey,
-            getMetadata: vi.fn(async () => ({ spendPolicy: options.spendPolicy ?? 'limited' })),
-            getRemainingLimit: vi.fn(async () => ({ remaining: options.remaining ?? 0n })),
-          },
+    const abi = [...Abis.tip20, ...Abis.accountKeychain]
+    return createClient({
+      chain,
+      transport: custom({
+        async request({ method, params }) {
+          if (method === 'eth_chainId') return numberToHex(chain.id)
+          if (method !== 'eth_call') throw new Error(`Unexpected RPC method: ${method}`)
+          const [request] = params as [{ data?: Hex }]
+          const decoded = (() => {
+            try {
+              return request.data ? decodeFunctionData({ abi, data: request.data }) : undefined
+            } catch {
+              return undefined
+            }
+          })()
+          if (!decoded) {
+            // The transfer simulation.
+            if (options.simulate === 'revert') throw new Error('PolicyForbids')
+            return '0x'
+          }
+          const result = (() => {
+            switch (decoded.functionName) {
+              case 'balanceOf':
+                return options.balance
+              case 'decimals':
+                return 6
+              case 'getKey':
+                return {
+                  enforceLimits: (options.spendPolicy ?? 'limited') === 'limited',
+                  expiry: 2n ** 64n - 1n,
+                  isRevoked: false,
+                  keyId: accessKey,
+                  signatureType: 0,
+                }
+              case 'getRemainingLimitWithPeriod':
+                return [options.remaining ?? 0n, 0n]
+              default:
+                throw new Error(`Unexpected call: ${decoded.functionName}`)
+            }
+          })()
+          return encodeFunctionResult({
+            abi,
+            functionName: decoded.functionName,
+            result,
+          } as never)
         },
-      }
+      }),
     })
-    return import('./machine-token-charge.js')
   }
 
   async function canPay(
-    options: Parameters<typeof load>[0],
+    options: Parameters<typeof rpc>[0],
     account: Record<string, unknown> = { address: payer, type: 'local' },
   ) {
-    try {
-      const MachineToken = await load(options)
-      return await MachineToken.canPayDirect({} as never, {
-        account: account as never,
-        amount: 1_000_000n,
-        calls,
-        token: deployment.token,
-      })
-    } finally {
-      vi.doUnmock('viem/actions')
-      vi.doUnmock('viem/tempo')
-      vi.resetModules()
-    }
+    const MachineToken = await import('./machine-token-charge.js')
+    return MachineToken.canPayDirect(rpc(options), {
+      account: account as never,
+      amount: 1_000_000n,
+      calls,
+      token: deployment.token,
+    })
   }
 
   test('pays directly when the balance covers the amount and the transfer simulates', async () => {

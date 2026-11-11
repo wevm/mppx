@@ -1954,14 +1954,32 @@ describe('tempo', () => {
                     },
                   ],
                 }
-              if (method === 'eth_getTransactionReceipt' && challenge)
-                return directMachineTokenReceipt({
+              if (method === 'eth_getTransactionReceipt' && challenge) {
+                const receipt = directMachineTokenReceipt({
                   amount: BigInt(String(challenge.request.amount)),
                   from: accounts[1].address,
                   hash,
                   memo: memo(),
                   recipient: accounts[0].address,
                 })
+                // An unrelated stablecoin transfer of the same amount, bound to another challenge,
+                // must not hide the valid MACH payment.
+                const unrelated = {
+                  ...receipt.logs[0]!,
+                  address: asset,
+                  logIndex: '0x1',
+                  topics: encodeEventTopics({
+                    abi: Abis.tip20,
+                    args: {
+                      from: accounts[1].address,
+                      memo: Attribution.encode({ challengeId: 'other', serverId: challenge.realm }),
+                      to: accounts[0].address,
+                    },
+                    eventName: 'TransferWithMemo',
+                  }),
+                }
+                return { ...receipt, logs: [unrelated, ...receipt.logs] }
+              }
               throw new Error(`Unexpected direct MACH test RPC method: ${method}`)
             },
           },

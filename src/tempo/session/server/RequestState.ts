@@ -12,7 +12,7 @@ import type * as Credential from '../../../Credential.js'
 import { VerificationFailedError } from '../../../Errors.js'
 import type { Challenge } from '../../../index.js'
 import type * as z from '../../../zod.js'
-import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import {
   captureRequestBodyProbe,
@@ -467,7 +467,7 @@ export async function resolveSessionPaymentRequest(
   })
   // `machineTokenDirect` is set only by `machineTokenEnabled`.
   const {
-    machineTokenDirect: _machineTokenDirect,
+    [Constants.MethodDetailKeys.machineTokenDirect]: _machineTokenDirect,
     operator: _operator,
     ...requestWithoutOperator
   } = request
@@ -482,16 +482,10 @@ export async function resolveSessionPaymentRequest(
       parameterFeePayer,
       requestFeePayer: request.feePayer,
     }),
-    ...(machineToken ? { machineTokenDirect: true as const } : {}),
+    ...(machineToken ? { [Constants.MethodDetailKeys.machineTokenDirect]: true as const } : {}),
     ...(operator ? { operator } : {}),
     ...(sessionSnapshot ? { sessionSnapshot } : {}),
   }
-}
-
-/** Returns MACH's address on a chain, if it is deployed there. */
-export function getMachineToken(chainId: number | undefined): Address | undefined {
-  if (chainId === undefined) return undefined
-  return defaults.machineToken[chainId as keyof typeof defaults.machineToken]?.token
 }
 
 /**
@@ -504,7 +498,7 @@ export function resolveMachineTokenOffer(parameters: {
   currency: Address
 }): Address | undefined {
   const { chainId, currency } = parameters
-  const machineToken = getMachineToken(chainId)
+  const machineToken = MachineTokenCharge.getToken(chainId)
   if (!machineToken) throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
   if (isAddressEqual(currency, machineToken)) return undefined
   return machineToken
@@ -538,7 +532,7 @@ export async function resolveMachineTokenCredential(parameters: {
   if (!isObject(challenge.request.methodDetails)) return unchanged
   if (challenge.request.methodDetails.machineTokenDirect !== true) return unchanged
   if (context.methodDetails.machineTokenDirect !== true) return unchanged
-  const machineToken = getMachineToken(context.chainId)
+  const machineToken = MachineTokenCharge.getToken(context.chainId)
   if (!machineToken || isAddressEqual(context.request.currency as Address, machineToken))
     return unchanged
   const token = await readCredentialChannelToken(payload, store)

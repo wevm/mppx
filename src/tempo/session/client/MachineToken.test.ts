@@ -351,10 +351,11 @@ describe('MACH channel funding', () => {
   })
 
   test('locks the MACH channel scope for machineTokenDirect challenges', async () => {
-    const { getLockKey, resolveMachineTokenContext } = await import('./MachineToken.js')
+    const { getLockKeys, resolveMachineTokenContext } = await import('./MachineToken.js')
     const resolved = await resolvedFor({})
 
-    expect(getLockKey(resolved)).toBe(resolveMachineTokenContext(resolved)!.key)
-    expect(getLockKey({ ...resolved, challenge: makeChallenge({}) })).toBe(resolved.key)
+    // Both scopes, since an open for a MACH-direct challenge can fall back to the challenge currency.
+    expect(getLockKeys(resolved)).toEqual([resolved.key, resolveMachineTokenContext(resolved)!.key])
+    expect(getLockKeys({ ...resolved, challenge: makeChallenge({}) })).toEqual([resolved.key])
   })
 })

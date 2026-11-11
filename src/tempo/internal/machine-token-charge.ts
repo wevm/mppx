@@ -173,6 +173,17 @@ export function matchRoute(parameters: {
   }
 }
 
+/**
+ * Returns whether a server accepts MACH paid directly to its recipient. `machineTokenDirect` counts
+ * only with `machineTokenEnabled`, so the two flags can later merge into one.
+ */
+export function acceptsDirect(parameters: {
+  machineTokenDirect?: boolean | undefined
+  machineTokenEnabled?: boolean | undefined
+}): boolean {
+  return parameters.machineTokenEnabled === true && parameters.machineTokenDirect === true
+}
+
 /** Returns the canonical machine token on a chain, if one is deployed. */
 export function getToken(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.token
@@ -302,21 +313,21 @@ export async function canSpend(
 ): Promise<boolean> {
   const { account, amount, token } = parameters
   try {
-    const balance = (await readContract(
-      client,
-      Actions.token.getBalance.call(client, { account: account.address, token }) as never,
-    )) as bigint
+    const { amount: balance } = await Actions.token.getBalance(client, {
+      account: account.address,
+      token,
+    })
     if (balance < amount) return false
-    const accessKey = (account as { accessKeyAddress?: unknown }).accessKeyAddress
-    if (typeof accessKey !== 'string') return true
+    const accessKey = 'accessKeyAddress' in account ? account.accessKeyAddress : undefined
+    if (typeof accessKey !== 'string' || !isAddress(accessKey)) return true
     const metadata = await Actions.accessKey.getMetadata(client, {
       account: account.address,
-      accessKey: accessKey as Address,
+      accessKey,
     })
     if (metadata.spendPolicy !== 'limited') return true
     const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
       account: account.address,
-      accessKey: accessKey as Address,
+      accessKey,
       token,
     })
     return remaining >= amount

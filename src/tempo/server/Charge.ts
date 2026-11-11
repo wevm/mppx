@@ -228,24 +228,31 @@ export function charge<const parameters extends charge.Parameters>(
           transfers,
         })
       : undefined
-    // A direct MACH payment transfers MACH 1:1 to the same recipients instead of the currency.
-    const paymentCurrency =
-      !machineRoute &&
-      context.machineToken &&
-      calls.some((call) => call.to && TempoAddress.isEqual(call.to, context.machineToken!))
-        ? context.machineToken
-        : currency
-    const matchedCalls =
-      machineRoute?.transfers ??
-      assertTransferCalls(calls, {
-        currency: paymentCurrency,
-        exactCount: isFeePayerTx,
-        transfers,
-      })
-    assertChallengeBoundCallMemo(matchedCalls, {
-      challengeId: context.challenge.id,
-      realm: context.challenge.realm,
-    })
+    const bound = { challengeId: context.challenge.id, realm: context.challenge.realm }
+    const matchCalls = (currency: `0x${string}`) => {
+      const matched = assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
+      assertChallengeBoundCallMemo(matched, bound)
+      return matched
+    }
+    // The challenge currency first; a direct MACH payment pays the same transfers in MACH.
+    const paymentCurrency = (() => {
+      if (machineRoute) {
+        assertChallengeBoundCallMemo(machineRoute.transfers, bound)
+        return currency
+      }
+      try {
+        matchCalls(currency)
+        return currency
+      } catch (error) {
+        if (!context.machineToken) throw error
+        try {
+          matchCalls(context.machineToken)
+        } catch {
+          throw error
+        }
+        return context.machineToken
+      }
+    })()
 
     if (machineRoute)
       return {
@@ -295,17 +302,15 @@ export function charge<const parameters extends charge.Parameters>(
       hash: payload.hash as `0x${string}`,
     })
     const sender = source?.address ?? receipt.from
-    const logParameters = { sender, settlementSenders, source, transfers, validateSender }
-    const matchedLogs = await assertTransferLogs(receipt, { ...logParameters, currency }).catch(
-      (error) => {
-        // A direct MACH payment pays the same transfers in MACH.
-        if (!context.machineToken) throw error
-        return assertTransferLogs(receipt, { ...logParameters, currency: context.machineToken })
-      },
-    )
-    assertChallengeBoundMemo(matchedLogs, {
-      challengeId: challenge.id,
-      realm: challenge.realm,
+    const matchedLogs = await assertBoundTransferLogs(receipt, {
+      challenge,
+      currency,
+      machineToken: context.machineToken,
+      sender,
+      settlementSenders,
+      source,
+      transfers,
+      validateSender,
     })
     // The payer is the account the matched transfers debited, not the submitter.
     // Settlement-contract transfers are funded by the transaction sender.
@@ -677,7 +682,7 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
-      const machineTokenDirect = Boolean(request.machineTokenEnabled && request.machineTokenDirect)
+      const machineTokenDirect = MachineTokenCharge.acceptsDirect(request)
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -1027,25 +1032,13 @@ export function charge<const parameters extends charge.Parameters>(
                 receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
-              const logParameters = {
+              await assertBoundTransferLogs(receipt, {
+                challenge,
+                currency,
+                machineToken: context.machineToken,
                 sender: transaction.from! as `0x${string}`,
                 settlementSenders,
                 transfers,
-              }
-              const matchedLogs = await assertTransferLogs(receipt, {
-                ...logParameters,
-                currency,
-              }).catch((error) => {
-                // A direct MACH payment pays the same transfers in MACH.
-                if (!context.machineToken) throw error
-                return assertTransferLogs(receipt, {
-                  ...logParameters,
-                  currency: context.machineToken,
-                })
-              })
-              assertChallengeBoundMemo(matchedLogs, {
-                challengeId: challenge.id,
-                realm: challenge.realm,
               })
               if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
                 throw new VerificationFailedError({
@@ -1890,6 +1883,34 @@ function toReceipt(reference: string, fundingCurrency?: string) {
     timestamp: new Date().toISOString(),
     reference,
   } as const
+}
+
+/**
+ * Matches a receipt's transfers in the challenge currency and checks their challenge-bound memo.
+ * When that fails and the challenge accepts direct MACH, matches the same transfers in MACH instead.
+ * A failure of both rethrows the challenge-currency error.
+ */
+async function assertBoundTransferLogs(
+  receipt: TransactionReceipt,
+  parameters: Parameters<typeof assertTransferLogs>[1] & {
+    challenge: { id: string; realm: string }
+    machineToken?: `0x${string}` | undefined
+  },
+): Promise<TransferLog[]> {
+  const { challenge, machineToken, ...rest } = parameters
+  const match = async (currency: `0x${string}`) => {
+    const logs = await assertTransferLogs(receipt, { ...rest, currency })
+    assertChallengeBoundMemo(logs, { challengeId: challenge.id, realm: challenge.realm })
+    return logs
+  }
+  try {
+    return await match(rest.currency)
+  } catch (error) {
+    if (!machineToken) throw error
+    return match(machineToken).catch(() => {
+      throw error
+    })
+  }
 }
 
 function assertChallengeBoundMemo(

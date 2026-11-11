@@ -43,7 +43,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { getLockKey, selectChannelContext } from './MachineToken.js'
+import { getLockKeys, selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -74,6 +74,15 @@ async function lockChannel(store: ChannelStore, key: string) {
   return () => {
     unlock()
     if (tails.get(key) === current) tails.delete(key)
+  }
+}
+
+/** Locks several payment scopes in a fixed order, so overlapping lock sets cannot deadlock. */
+async function lockChannels(store: ChannelStore, keys: readonly string[]) {
+  const releases: (() => void)[] = []
+  for (const key of [...new Set(keys)].sort()) releases.push(await lockChannel(store, key))
+  return () => {
+    for (const release of releases.reverse()) release()
   }
 }
 
@@ -315,7 +324,7 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        if (automatic) release = await lockChannel(store, getLockKey(challengeContext))
+        if (automatic) release = await lockChannels(store, getLockKeys(challengeContext))
         const resolved = await selectChannelContext({
           context,
           resolved: challengeContext,
@@ -330,7 +339,7 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannel(store, getLockKey(challengeContext))
+          release = await lockChannels(store, getLockKeys(challengeContext))
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')

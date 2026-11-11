@@ -1,28 +1,24 @@
 import type { Account, Address } from 'viem'
 
-import * as defaults from '../../internal/defaults.js'
+import * as Constants from '../../../Constants.js'
 import { defaultFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
-import { canSpend } from '../../internal/machine-token-charge.js'
+import { canSpend, getToken } from '../../internal/machine-token-charge.js'
 import { isSameAddress } from './ChannelOps.js'
 import { channelKey, type ChannelStore } from './ChannelStore.js'
 import type { ChallengeContext, SessionContext } from './CredentialState.js'
 
-function getMachineToken(chainId: number): Address | undefined {
-  return defaults.machineToken[chainId as keyof typeof defaults.machineToken]?.token
-}
-
 function isMachineTokenDirect(resolved: ChallengeContext): boolean {
-  const methodDetails = resolved.challenge.request.methodDetails
   return (
-    typeof methodDetails === 'object' &&
-    methodDetails !== null &&
-    (methodDetails as { machineTokenDirect?: unknown }).machineTokenDirect === true
+    Constants.getMethodDetail<boolean>(
+      resolved.challenge.request.methodDetails,
+      Constants.MethodDetailKeys.machineTokenDirect,
+    ) === true
   )
 }
 
 /** Returns whether a token is MACH on a chain. */
 export function isMachineToken(chainId: number, token: Address): boolean {
-  const machineToken = getMachineToken(chainId)
+  const machineToken = getToken(chainId)
   return machineToken !== undefined && isSameAddress(machineToken, token)
 }
 
@@ -35,7 +31,7 @@ export function resolveMachineTokenContext(
   resolved: ChallengeContext,
 ): ChallengeContext | undefined {
   if (!isMachineTokenDirect(resolved)) return undefined
-  const token = getMachineToken(resolved.chainId)
+  const token = getToken(resolved.chainId)
   if (!token || isSameAddress(token, resolved.token)) return undefined
   return {
     ...resolved,
@@ -141,9 +137,11 @@ async function findFeeToken(parameters: {
 }
 
 /**
- * Returns the scope an automatic open locks: for a `machineTokenDirect` challenge, the MACH
- * channel's, which offers in other currencies share, so they cannot open two MACH channels at once.
+ * Returns the scopes an automatic open locks: the challenge currency's and, for a
+ * `machineTokenDirect` challenge, the MACH channel's too. The open may land on either, so locking
+ * both keeps concurrent opens from funding two channels in the same scope.
  */
-export function getLockKey(resolved: ChallengeContext): string {
-  return resolveMachineTokenContext(resolved)?.key ?? resolved.key
+export function getLockKeys(resolved: ChallengeContext): readonly string[] {
+  const machineTokenKey = resolveMachineTokenContext(resolved)?.key
+  return machineTokenKey ? [resolved.key, machineTokenKey] : [resolved.key]
 }

@@ -22,6 +22,7 @@ import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
 import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
@@ -37,7 +38,6 @@ import * as ChannelStore from './ChannelStore.js'
 import { broadcastCredentialPayload, validateCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload, validateChannelState } from './CredentialVerification.js'
 import {
-  getMachineToken,
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
   resolveMachineTokenCredential,
@@ -328,7 +328,9 @@ async function handleBootstrapPreflight(
     expected: {
       chainId,
       currency: readBootstrapAddress(request.currency, 'currency'),
-      machineToken: parameters.machineTokenEnabled ? getMachineToken(chainId) : undefined,
+      machineToken: parameters.machineTokenEnabled
+        ? MachineTokenCharge.getToken(chainId)
+        : undefined,
       escrowContract: resolveBootstrapEscrowContract(
         parameters.paymentRequest,
         parameters.parameterEscrowContract,
@@ -377,9 +379,7 @@ export function session<const parameters extends session.Parameters>(
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   // Sessions accept MACH channels only when the payee opts in to direct MACH.
-  const machineTokenDirect = Boolean(
-    parameters.machineTokenEnabled && parameters.machineTokenDirect,
-  )
+  const machineTokenDirect = MachineTokenCharge.acceptsDirect(parameters)
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
