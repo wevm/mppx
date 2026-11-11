@@ -2223,3 +2223,68 @@ test('anonymous subscription probes do not create permanent key indexes', async 
   }
   expect([...written]).toEqual(['tempo:subscription:pending-access-key:sealing-key'])
 })
+
+test.each([false, true])(
+  'refuses overlapping identity policies with an unresolved chain: %s',
+  (reverse) => {
+    const method = subscription({
+      amount: subscriptionAmount,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      subscriptionExpires: activeSubscriptionExpires,
+      resolve: async () => ({ accessKey, key: subscriptionKey }),
+      store: Store.memory(),
+    })
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const checked = mppx.tempo.subscription({
+      identity: {
+        payment: {
+          requires: [{ type: 'kyc' }],
+          verify: () => ({ status: 'missing' as const }),
+        },
+      },
+    })
+    const unchecked = mppx.tempo.subscription({ chainId: subscriptionDefaultChainId })
+    expect(() => Mppx.compose(...(reverse ? [unchecked, checked] : [checked, unchecked]))).toThrow(
+      'identity',
+    )
+  },
+)
+
+test('a rejected subscription credential cannot mutate the configured dispatch binding', async () => {
+  const method = subscription({
+    amount: subscriptionAmount,
+    currency: subscriptionCurrency,
+    periodCount: subscriptionPeriodCount,
+    periodUnit: subscriptionPeriodUnit,
+    recipient: subscriptionRecipient,
+    subscriptionExpires: activeSubscriptionExpires,
+    resolve: async () => ({ accessKey, key: subscriptionKey }),
+    store: Store.memory(),
+  })
+  const mppx = Mppx.create({ methods: [method], realm, secretKey })
+  const handler = mppx.tempo.subscription({})
+  const internal = (handler as typeof handler & { _internal: { _canonicalRequest: unknown } })
+    ._internal
+  const before = structuredClone(internal._canonicalRequest)
+  const offered = await handler(new Request('https://api.example.com/data'))
+  if (offered.status !== 402) throw new Error('expected challenge')
+  const challenge = Challenge.fromResponse(offered.challenge)
+  const changed = {
+    ...challenge,
+    request: {
+      ...challenge.request,
+      methodDetails: { ...(challenge.request.methodDetails as Record<string, unknown>), chainId },
+    },
+  }
+  await handler(
+    new Request('https://api.example.com/data', {
+      headers: {
+        Authorization: Credential.serialize({ challenge: changed, payload: {} }),
+      },
+    }),
+  )
+  expect(internal._canonicalRequest).toEqual(before)
+})
