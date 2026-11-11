@@ -134,7 +134,7 @@ export const charge = Method.from({
         .object({
           machineTokenEnabled: z.optional(z.boolean()),
           // The payee accepts MACH 1:1 by direct transfer instead of the challenge currency.
-          machineTokenAccepted: z.optional(z.boolean()),
+          machTokenAccepted: z.optional(z.boolean()),
           amount: z.amount(),
           chainId: z.optional(z.number()),
           currency: z.string(),
@@ -180,7 +180,7 @@ export const charge = Method.from({
       z.transform(
         ({
           machineTokenEnabled,
-          machineTokenAccepted,
+          machTokenAccepted,
           amount,
           chainId,
           decimals,
@@ -194,7 +194,7 @@ export const charge = Method.from({
           ...rest,
           amount: parseUnits(amount, decimals).toString(),
           ...(machineTokenEnabled !== undefined ||
-          machineTokenAccepted !== undefined ||
+          machTokenAccepted !== undefined ||
           chainId !== undefined ||
           feePayer !== undefined ||
           splits !== undefined ||
@@ -203,7 +203,7 @@ export const charge = Method.from({
             ? {
                 methodDetails: {
                   ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
-                  ...(machineTokenAccepted !== undefined && { machineTokenAccepted }),
+                  ...(machTokenAccepted !== undefined && { machTokenAccepted }),
                   ...(chainId !== undefined && { chainId }),
                   ...(feePayer !== undefined && { feePayer }),
                   ...(splits !== undefined && {
@@ -287,7 +287,7 @@ export const session = Method.from({
           ),
           feeToken: z.optional(z.address()),
           // The payee accepts a channel in MACH 1:1 instead of the challenge currency.
-          machineTokenAccepted: z.optional(z.boolean()),
+          machTokenAccepted: z.optional(z.boolean()),
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
@@ -313,7 +313,7 @@ export const session = Method.from({
           escrowContract,
           feePayer,
           feeToken,
-          machineTokenAccepted,
+          machTokenAccepted,
           minVoucherDelta,
           operator,
           sessionProtocol,
@@ -337,7 +337,7 @@ export const session = Method.from({
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
             ...(feeToken !== undefined && { feeToken }),
-            ...(machineTokenAccepted !== undefined && { machineTokenAccepted }),
+            ...(machTokenAccepted !== undefined && { machTokenAccepted }),
             ...(operator !== undefined && { operator }),
             ...(sessionProtocol !== undefined && {
               [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,

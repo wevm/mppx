@@ -136,7 +136,7 @@ type BootstrapPreflightParameters = {
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
   /** Accepts a channel funded in MACH, 1:1 with the session currency. */
-  machineTokenAccepted?: boolean | undefined
+  machTokenAccepted?: boolean | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
@@ -330,7 +330,7 @@ async function handleBootstrapPreflight(
     expected: {
       chainId,
       currency,
-      machineToken: parameters.machineTokenAccepted
+      machineToken: parameters.machTokenAccepted
         ? resolveMachineTokenOffer({ chainId, currency })
         : undefined,
       escrowContract: resolveBootstrapEscrowContract(
@@ -381,7 +381,7 @@ export function session<const parameters extends session.Parameters>(
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   // Sessions accept MACH channels only when the payee opts in to direct MACH.
-  const machineTokenAccepted = parameters.machineTokenAccepted === true
+  const machTokenAccepted = parameters.machTokenAccepted === true
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
@@ -479,7 +479,7 @@ export function session<const parameters extends session.Parameters>(
 
   /**
    * Parses a credential and resolves what it is verified against: priced in MACH when it uses a
-   * MACH channel a `machineTokenAccepted` challenge accepts. Mppx verified the challenge's HMAC
+   * MACH channel a `machTokenAccepted` challenge accepts. Mppx verified the challenge's HMAC
    * before calling `validate` or `broadcast`.
    */
   const resolveCredential = async (credential: Credential.Credential, request: unknown) => {
@@ -614,7 +614,7 @@ export function session<const parameters extends session.Parameters>(
       voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
 
-    // A MACH channel accepted for a machineTokenAccepted challenge reports the token it debits.
+    // A MACH channel accepted for a machTokenAccepted challenge reports the token it debits.
     const sessionReceipt = { ...receipt, ...(machineToken && { fundingCurrency: machineToken }) }
 
     if (acceptance.charged) {
@@ -672,7 +672,7 @@ export function session<const parameters extends session.Parameters>(
             credential,
             input,
             charge: bootstrapCharge,
-            machineTokenAccepted,
+            machTokenAccepted,
             decimals,
             defaultRecipient: recipient,
             expires,
@@ -695,7 +695,7 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
-        machineTokenAccepted,
+        machTokenAccepted,
         minVoucherDelta: parameters.minVoucherDelta,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
@@ -843,11 +843,11 @@ export namespace session {
     /**
      * Also accepts channels funded in MACH, 1:1 with the session currency. The payee must be on
      * MACH's merchant list. Challenges stay priced in the session currency and carry
-     * `machineTokenAccepted: true`, so clients holding MACH may open the channel in MACH instead and
+     * `machTokenAccepted: true`, so clients holding MACH may open the channel in MACH instead and
      * older clients keep paying the session currency. MACH channels pay fees in `feeToken` or the
      * session currency. Throws on chains without MACH; ignored for sessions priced in MACH.
      */
-    machineTokenAccepted?: boolean | undefined
+    machTokenAccepted?: boolean | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
      * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never

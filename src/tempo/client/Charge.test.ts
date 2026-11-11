@@ -1877,7 +1877,7 @@ describe('zero-amount recipient policy', () => {
   )
 })
 
-describe('tempo.charge client: machineTokenAccepted', () => {
+describe('tempo.charge client: machTokenAccepted', () => {
   test('pays MACH directly when the account can, before the swapper', async () => {
     vi.resetModules()
     const fees = mockMachFeeSelection()
@@ -1920,7 +1920,7 @@ describe('tempo.charge client: machineTokenAccepted', () => {
         createChallenge({
           amount: '1',
           chainId,
-          machineTokenAccepted: true,
+          machTokenAccepted: true,
           machineTokenEnabled: true,
           supportedModes: ['pull'],
         })
@@ -1958,7 +1958,7 @@ describe('tempo.charge client: machineTokenAccepted', () => {
           amount: '1',
           chainId,
           feePayer: true,
-          machineTokenAccepted: true,
+          machTokenAccepted: true,
           machineTokenEnabled: true,
           supportedModes: ['pull'],
         }),

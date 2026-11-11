@@ -1905,7 +1905,7 @@ describe('tempo', () => {
         (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
       ).toBe(true)
       // Without the direct opt-in, MACH still settles through the swapper.
-      expect(challenge.request.methodDetails).not.toHaveProperty('machineTokenAccepted')
+      expect(challenge.request.methodDetails).not.toHaveProperty('machTokenAccepted')
       const credential = Credential.from({
         challenge,
         payload: { hash, type: 'hash' as const },
@@ -1988,13 +1988,13 @@ describe('tempo', () => {
       })
       const issue = async (
         machineTokenEnabled: boolean,
-        machineTokenAccepted = machineTokenEnabled,
+        machTokenAccepted = machineTokenEnabled,
       ) => {
         const server = Mppx_server.create({
           methods: [
             tempo_server.charge({
               ...(machineTokenEnabled && { machineTokenEnabled }),
-              ...(machineTokenAccepted && { machineTokenAccepted }),
+              ...(machTokenAccepted && { machTokenAccepted }),
               account: accounts[0],
               currency: asset,
               getClient: () => directClient,
@@ -2017,7 +2017,7 @@ describe('tempo', () => {
 
       const server = await issue(true)
       expect(challenge!.request.methodDetails).toMatchObject({
-        machineTokenAccepted: true,
+        machTokenAccepted: true,
         machineTokenEnabled: true,
       })
       const credential = Credential.from({
@@ -2035,7 +2035,7 @@ describe('tempo', () => {
       // Without the opt-in, MACH still goes through the swapper only.
       await issue(true, false)
       expect(challenge!.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
-      expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenAccepted')
+      expect(challenge!.request.methodDetails).not.toHaveProperty('machTokenAccepted')
 
       // Switching direct MACH on keeps challenges issued before it valid: they bind as before, and
       // only a challenge that carries the flag accepts MACH.
@@ -2067,11 +2067,11 @@ describe('tempo', () => {
 
       // Direct MACH works without the swapper flag.
       await issue(false, true)
-      expect(challenge!.request.methodDetails).toMatchObject({ machineTokenAccepted: true })
+      expect(challenge!.request.methodDetails).toMatchObject({ machTokenAccepted: true })
       expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenEnabled')
 
       const plainServer = await issue(false)
-      expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenAccepted')
+      expect(challenge!.request.methodDetails).not.toHaveProperty('machTokenAccepted')
       await expect(
         plainServer.validateCredential(
           Credential.from({
@@ -7550,7 +7550,7 @@ describe('direct MACH pull payments', () => {
           account: accounts[0],
           currency: asset,
           getClient: () => rpc,
-          machineTokenAccepted: true,
+          machTokenAccepted: true,
           machineTokenEnabled: true,
           store: Store.memory(),
           supportedModes: ['pull'],
@@ -7565,7 +7565,7 @@ describe('direct MACH pull payments', () => {
     )
     if (result.status !== 402) throw new Error('Expected challenge')
     const challenge = Challenge.fromResponse(result.challenge)
-    expect(challenge.request.methodDetails).toMatchObject({ machineTokenAccepted: true })
+    expect(challenge.request.methodDetails).toMatchObject({ machTokenAccepted: true })
 
     const credential = await tempo_client
       .charge({ account: payer, getClient: () => rpc, mode: 'pull' })
@@ -7621,7 +7621,7 @@ describe('direct MACH pull payments', () => {
           account: accounts[0],
           currency: asset,
           getClient: () => rpc,
-          machineTokenAccepted: true,
+          machTokenAccepted: true,
           machineTokenEnabled: true,
           store: Store.memory(),
           supportedModes: ['pull'],

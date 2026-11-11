@@ -217,7 +217,7 @@ export type ClientSessionMethodDetails = {
   /** Fee token selected by the server for open/top-up transactions. */
   feeToken?: Address | undefined
   /** Whether the payee also accepts a channel funded in MACH, 1:1 with the challenge currency. */
-  machineTokenAccepted?: boolean | undefined
+  machTokenAccepted?: boolean | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
@@ -294,7 +294,7 @@ export type ChallengeContext = {
   feeToken?: Address | undefined
   key: string
   /** Whether the challenge also accepts a channel funded in MACH, and the client allows MACH. */
-  machineTokenAccepted?: boolean | undefined
+  machTokenAccepted?: boolean | undefined
   operator?: Address | undefined
   payee: Address
   snapshot?: SessionSnapshot | undefined
@@ -417,8 +417,8 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     feeToken: readOptionalAddress(methodDetails.feeToken),
-    machineTokenAccepted:
-      Constants.getMethodDetail(methodDetails, Constants.MethodDetailKeys.machineTokenAccepted) ===
+    machTokenAccepted:
+      Constants.getMethodDetail(methodDetails, Constants.MethodDetailKeys.machTokenAccepted) ===
       true,
     operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
@@ -471,7 +471,7 @@ export async function resolveChallengeContext(
     feePayer: methodDetails.feePayer,
     feeToken: methodDetails.feeToken,
     key: channelKey({ payee, token, escrow, chainId }),
-    machineTokenAccepted: methodDetails.machineTokenAccepted,
+    machTokenAccepted: methodDetails.machTokenAccepted,
     operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
@@ -769,7 +769,7 @@ async function open(
     requestAmount: plan.resolved.amount,
     suggestedDepositRaw: plan.resolved.suggestedDepositRaw,
   })
-  // A machineTokenAccepted challenge also accepts a channel in MACH, preferred when MACH covers it.
+  // A machTokenAccepted challenge also accepts a channel in MACH, preferred when MACH covers it.
   const resolved =
     (await resolveMachineTokenOpen({ account, deposit, resolved: plan.resolved })) ?? plan.resolved
   await assertMachineTokenDeposit(autoSwap, {

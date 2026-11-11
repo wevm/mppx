@@ -41,7 +41,7 @@ function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
   // These options apply only to charge, even when configured at the family level: sessions have no
-  // swapper route, so only `machineTokenAccepted` enables MACH for them.
+  // swapper route, so only `machTokenAccepted` enables MACH for them.
   const {
     allowedFeeTokens: _allowedFeeTokens,
     machineTokenEnabled: _machineTokenEnabled,
@@ -114,7 +114,7 @@ type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
      * Accepts MACH paid directly: charges by a transfer to the recipient, sessions by a channel
      * funded in MACH. The recipient must be on MACH's merchant list.
      */
-    machineTokenAccepted?: boolean | undefined
+    machTokenAccepted?: boolean | undefined
     /** Charges only: lets payers fund charges with MACH through the swapper. */
     machineTokenEnabled?: boolean | undefined
   }
@@ -279,8 +279,8 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
-    // `machineTokenAccepted` offers also accept MACH channels; the first offer settles them.
-    const machineToken = parameters?.machineTokenAccepted
+    // `machTokenAccepted` offers also accept MACH channels; the first offer settles them.
+    const machineToken = parameters?.machTokenAccepted
       ? MachineTokenCharge.getToken(currency.chainId)
       : undefined
     for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {

@@ -271,7 +271,7 @@ export function session(parameters: session.Parameters = {}) {
       MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
     return {
       ...resolved,
-      machineTokenAccepted: false,
+      machTokenAccepted: false,
       snapshot: machineSnapshot ? undefined : snapshot,
     }
   }
