@@ -69,6 +69,8 @@ function causedBy(error: unknown, expected: unknown): boolean {
 
 async function setup(parameters: {
   confirmationTimeoutMs?: number | undefined
+  /** Whether the transfer carries this challenge's attribution memo (default) or a memo that binds nothing. */
+  bound?: boolean | undefined
   /** Thrown by broadcasts unless the outcome is `normal`; `hang` never settles. */
   error?: unknown
   sponsorBudgetStore?: Store.AtomicStore | undefined
@@ -78,6 +80,7 @@ async function setup(parameters: {
   waitForConfirmation?: boolean | undefined
 }) {
   const {
+    bound = true,
     confirmationTimeoutMs = 200,
     error = gateway,
     sponsorBudgetStore,
@@ -200,7 +203,9 @@ async function setup(parameters: {
   )
   if (challengeResponse.status !== 402) throw new Error('Expected challenge')
   const challenge = Challenge.fromResponse(challengeResponse.challenge)
-  memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+  memo = bound
+    ? Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+    : `0x${'ab'.repeat(32)}`
   const signature = await signTransaction(client, {
     account: payer,
     calls: [
@@ -480,3 +485,34 @@ test.each([
   expect(lookupHashes).toHaveLength(0)
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
+
+test.each([
+  { name: 'already known', error: alreadyKnown, settles: false },
+  { name: 'known transaction', error: knownTransaction, settles: false },
+  { name: 'expiring nonce replay', error: expiringNonceReplay, settles: false },
+  { name: 'transport timeout', error: transportTimeout, settles: true },
+  { name: 'sync timeout', error: syncTimeout, settles: true },
+] as const)(
+  'unbound pull recovered after a duplicate submission is not settled: $name',
+  async ({ error, settles }) => {
+    // A node that already holds the transaction may hold it from someone else (another server,
+    // or anyone who saw it pending), so a transfer without this challenge's attribution memo
+    // does not pay this challenge. A timeout of this server's own send still recovers it.
+    const { broadcast, finalHash, onPaymentSuccess, state } = await setup({
+      bound: false,
+      error,
+      sponsored: false,
+    })
+    state.outcome = 'pending'
+    if (settles) {
+      const receipt = await broadcast()
+      expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+      return
+    }
+    const thrown = await broadcast().catch((e: unknown) => e)
+    expect(thrown).toMatchObject({
+      message: expect.stringContaining('not bound to this challenge'),
+    })
+    expect(onPaymentSuccess).not.toHaveBeenCalled()
+  },
+)

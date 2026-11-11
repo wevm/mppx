@@ -983,6 +983,11 @@ export function charge<const parameters extends charge.Parameters>(
                   ? Number.POSITIVE_INFINITY
                   : transaction.validBefore * 1_000 + 2_000
               let receipt: TransactionReceipt
+              // Set when the node already held the transaction this server
+              // sent: someone else (another server, or anyone who saw it
+              // pending) may have submitted it, so its receipt pays this
+              // challenge only with an attribution memo bound to it.
+              let submittedElsewhere = false
               try {
                 receipt = await withDeadline(
                   sendRawTransactionSync(client, {
@@ -994,6 +999,7 @@ export function charge<const parameters extends charge.Parameters>(
                 )
               } catch (broadcastError) {
                 if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
+                submittedElsewhere = isDuplicateBroadcastError(broadcastError)
                 // The node may have accepted the transaction, so poll for its receipt.
                 const timeout = Math.min(deadline, validUntil) - Date.now()
                 let recovered: TransactionReceipt | undefined
@@ -1029,6 +1035,7 @@ export function charge<const parameters extends charge.Parameters>(
               assertChallengeBoundMemo(matchedLogs, {
                 challengeId: challenge.id,
                 realm: challenge.realm,
+                required: submittedElsewhere && !isFeePayerTx,
               })
               if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
                 throw new VerificationFailedError({
@@ -1825,6 +1832,24 @@ function isAmbiguousBroadcastError(error: unknown): boolean {
     if (name === 'HttpRequestError') return status === undefined || Number(status) >= 500
     if (ambiguousErrorNames.has(name as string)) return true
     if (code === 4) return true
+    if (
+      typeof message === 'string' &&
+      /\balready ?known\b|\bknown transaction\b|\bExpiringNonceReplay\b/i.test(message)
+    )
+      return true
+  }
+  return false
+}
+
+/**
+ * Whether a failed synchronous broadcast says the node already holds the
+ * transaction ("already known", "known transaction" or Tempo's
+ * `ExpiringNonceReplay`), matched anywhere in the `cause` chain.
+ */
+function isDuplicateBroadcastError(error: unknown): boolean {
+  for (let cause = error; cause; cause = (cause as { cause?: unknown }).cause) {
+    if (typeof cause !== 'object') return false
+    const { message } = cause as Record<string, unknown>
     if (
       typeof message === 'string' &&
       /\balready ?known\b|\bknown transaction\b|\bExpiringNonceReplay\b/i.test(message)
