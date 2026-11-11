@@ -204,6 +204,8 @@ function signingClient(id: number, url: string): SigningClient {
       })
       const client = createPublicClient({
         chain: { id } as never,
+        // A signature names the contracts it runs, so CCIP-Read would fetch URLs it chooses.
+        ccipRead: false,
         transport: (options) => {
           const inner = transport(options)
           return {
@@ -260,6 +262,7 @@ export function agentBook(config: agentBook.Config = {}) {
     config.client ??
     createPublicClient({
       chain: { id: Constants.worldChainId } as never,
+      ccipRead: false,
       transport: http(config.rpcUrl ?? Constants.rpcUrl),
     })
   return async (agent: Address): Promise<string | undefined> => {
