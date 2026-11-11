@@ -1897,12 +1897,13 @@ type ChallengeBinding = {
 }
 
 /**
- * Whether the matched payment transfers are bound to this challenge. An attribution memo of
- * this realm bound to another challenge is always rejected. With required (push payments),
- * at least one matched transfer must carry an attribution memo bound to this challenge's
- * realm and ID, and another realm's attribution memo is rejected too. Otherwise (pull
- * payments) plain transfers, memos not in attribution format and other realms' attribution
- * memos are accepted (Tempo charge spec).
+ * Whether the matched payment transfers are bound to this challenge. Any attribution memo
+ * that is not for this challenge's realm and ID is rejected, whatever the credential type:
+ * a pull payment carrying another realm's attribution memo could later be presented to that
+ * realm as a push payment, and that realm keeps no record of it. With required (push
+ * payments), at least one matched transfer must also carry an attribution memo bound to this
+ * challenge. Otherwise (pull payments) plain transfers and memos not in attribution format
+ * are accepted.
  * @internal
  */
 function isChallengeBound(
@@ -1912,12 +1913,7 @@ function isChallengeBound(
   let bound = false
   for (const memo of memos) {
     if (!memo || !Attribution.isMppMemo(memo)) continue
-    // Another realm's attribution memo can't be claimed here, so a pull payment may carry it.
-    if (!Attribution.verifyServer(memo, parameters.realm)) {
-      if (parameters.required) return false
-      continue
-    }
-    // This realm's memo for another challenge could later pay for that challenge: reject it.
+    if (!Attribution.verifyServer(memo, parameters.realm)) return false
     if (!Attribution.verifyChallengeBinding(memo, parameters.challengeId)) return false
     bound = true
   }

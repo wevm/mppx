@@ -372,11 +372,9 @@ describe('tempo', () => {
             : { type: 'transaction' as const, signature }
         const credential = Credential.serialize(Credential.from({ challenge, payload }))
         rpcMethods.length = 0
-        // Push payments (hash) must carry the challenge-bound memo and no other attribution
-        // memo. Pull payments need no memo and reject only this realm's memo for another
-        // challenge.
-        const expectAccepted =
-          mode === 'hash' ? accepted && memos.includes('bound') : !memos.includes('other challenge')
+        // Push payments (hash) must carry the challenge-bound memo. Pull payments need no
+        // memo. Both reject any attribution memo for another realm or challenge.
+        const expectAccepted = mode === 'hash' ? accepted && memos.includes('bound') : accepted
 
         if (expectAccepted) {
           await expect(handler.validateCredential(credential)).resolves.toMatchObject({
