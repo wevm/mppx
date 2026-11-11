@@ -999,7 +999,11 @@ export function charge<const parameters extends charge.Parameters>(
                 )
               } catch (broadcastError) {
                 if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
-                submittedElsewhere = isDuplicateBroadcastError(broadcastError)
+                // A duplicate of this server's own earlier broadcast for this
+                // challenge, whose outcome was unknown, is not someone else's.
+                submittedElsewhere =
+                  isDuplicateBroadcastError(broadcastError) &&
+                  !(await isOwnBroadcast(store, finalHash, challenge.id))
                 // The node may have accepted the transaction, so poll for its receipt.
                 const timeout = Math.min(deadline, validUntil) - Date.now()
                 let recovered: TransactionReceipt | undefined
@@ -1041,6 +1045,7 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
+              await store.delete(getBroadcastStoreKey(finalHash))
               return toReceipt(receipt.transactionHash, fundingCurrency)
             }
 
@@ -1090,6 +1095,21 @@ export function charge<const parameters extends charge.Parameters>(
             // and recovers the receipt instead of being rejected as a replay.
             if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
             await releaseHashUse(store, hash)
+            // Remember a broadcast whose outcome is unknown, for this challenge
+            // only, so a retry that finds the node already holding it recovers
+            // it as this server's own.
+            if (error instanceof BroadcastOutcomeUnknownError && finalHash)
+              await store
+                .put(getBroadcastStoreKey(finalHash), {
+                  challengeId: challenge.id,
+                  expires:
+                    Math.max(
+                      expires ? Date.parse(expires) : Date.now() + 3_600_000,
+                      (transaction.validBefore ?? 0) * 1_000,
+                    ) + 60_000,
+                  type: 'mppx:broadcast',
+                })
+                .catch(() => {})
             if (broadcastAttempted) throw error
             throw await explainMachineTokenFailure(error, {
               amount,
@@ -1108,7 +1128,11 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]: number | SponsorBudget.State | Store.ReplayMarker
+    [key: `mppx:charge:${string}`]:
+      | number
+      | SponsorBudget.State
+      | Store.ReplayMarker
+      | BroadcastMarker
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -1694,6 +1718,30 @@ async function tryClaimHash(
   expires: number,
 ): Promise<boolean> {
   return Store.tryClaim(store, getHashStoreKey(hash), expires)
+}
+
+/** A broadcast this server sent for a challenge whose outcome was unknown. */
+type BroadcastMarker = { challengeId: string; expires: number; type: 'mppx:broadcast' }
+
+function getBroadcastStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
+  return `mppx:charge:broadcast:${hash.toLowerCase()}`
+}
+
+/** Whether this server broadcast `hash` for `challengeId` on an earlier attempt. */
+async function isOwnBroadcast(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  hash: `0x${string}`,
+  challengeId: string,
+): Promise<boolean> {
+  const marker: unknown = await store.get(getBroadcastStoreKey(hash)).catch(() => null)
+  if (typeof marker !== 'object' || marker === null) return false
+  const { challengeId: recorded, expires, type } = marker as Partial<BroadcastMarker>
+  return (
+    type === 'mppx:broadcast' &&
+    recorded === challengeId &&
+    typeof expires === 'number' &&
+    expires > Date.now()
+  )
 }
 
 /** Whether a live replay marker holds `hash`, read without claiming it. */

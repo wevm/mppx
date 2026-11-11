@@ -516,3 +516,18 @@ test.each([
     expect(onPaymentSuccess).not.toHaveBeenCalled()
   },
 )
+test('unbound pull retried after an unknown outcome recovers its own duplicate broadcast', async () => {
+  // The first attempt's outcome is unknown, so the server remembers its broadcast for this
+  // challenge; the retry that finds the node already holding it settles it as its own.
+  const { broadcast, finalHash, state } = await setup({
+    bound: false,
+    error: alreadyKnown,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  state.outcome = 'pending'
+  const receipt = await broadcast()
+  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+})
