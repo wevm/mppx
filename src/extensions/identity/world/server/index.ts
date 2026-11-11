@@ -2,7 +2,6 @@ import { Base64 } from 'ox'
 
 import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
-import * as Store from '../../../../Store.js'
 import { isIssuer } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
@@ -16,7 +15,7 @@ import type * as Types from '../Types.js'
  * (RFC 8628) for agents: `World.Client.prover` asks it to start an attempt, shows the person
  * the approval link, and polls until they approve in World App. The server validates the ID
  * token (signature, issuer, audience, times and `acr`) and returns a session sealed with
- * `secretKey`. Only each attempt's polling schedule lives in `store`, as expiring claims. Device codes and ID tokens never leave the server. The
+ * `secretKey`; only live attempts' poll schedules stay in memory. Device codes and ID tokens never leave the server. The
  * verified value carries World ID's anonymous, pairwise `subject`, so usage can be limited per
  * human rather than per agent.
  *
@@ -29,7 +28,6 @@ import type * as Types from '../Types.js'
  *   clientId: process.env.WORLD_CLIENT_ID,
  *   clientSecret: process.env.WORLD_CLIENT_SECRET,
  *   secretKey: process.env.MPP_SECRET_KEY,
- *   store: Store.redis(redis),
  * })
  * mppx.charge({ amount: '0.01', identity: [human] })
  * ```
@@ -40,8 +38,6 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   if (!config.clientId || !config.clientSecret)
     throw new TypeError('World ID verifier requires clientId and clientSecret.')
   if (!config.secretKey) throw new TypeError('World ID verifier requires secretKey.')
-  if (!config.store) throw new TypeError('World ID verifier requires store.')
-  const store = config.store
   const acr = config.acr ?? [Constants.acr.orb, Constants.acr.orbFace]
   if (acr.length === 0) throw new TypeError('World ID verifier requires at least one acr.')
   const sessionTtl = config.sessionTtl ?? Constants.sessionTtl
@@ -51,6 +47,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
   const idp = provider({ ...config, acr, issuer })
   const sealer = seal(config.secretKey, `${issuer} ${config.clientId}`)
   const now = () => Math.floor(Date.now() / 1_000)
+  // Each attempt's poll schedule, by attempt ID, until it expires. In memory, so it needs no
+  // store; per instance and bounded by Constants.maxAttempts.
+  const schedules = new Map<string, Schedule>()
 
   async function device(poll: string): Promise<Identity.Verification<Types.VerifiedHuman>> {
     if (poll === 'start') {
@@ -72,26 +71,17 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         verification_uri: started.verification_uri,
         verification_uri_complete: started.verification_uri_complete,
       }
-      try {
-        // The first poll waits an interval too (RFC 8628).
-        await Store.tryClaim(store, pollKey(attempt.id), Date.now() + attempt.interval * 1_000)
-      } catch {
-        return { status: 'unavailable', reason: 'World ID polling state is unavailable.' }
-      }
+      // The first poll waits an interval too (RFC 8628).
+      set(attempt, { interval: attempt.interval, until: Date.now() + attempt.interval * 1_000 })
       return pending(attempt)
     }
 
     const attempt = await sealer.open<Attempt>(poll, 'attempt')
     if (!attempt || attempt.expires <= now())
       return rejected({ status: 'expired' }, 'The World ID attempt expired.')
-    // Poll World IdP at most once per interval per attempt, across instances and however the
-    // client replays its attempt tokens.
-    let interval: number | 'ended' | undefined
-    try {
-      interval = await claim(attempt)
-    } catch {
-      return { status: 'unavailable', reason: 'World ID polling state is unavailable.' }
-    }
+    // Poll World IdP at most once per interval per attempt, however the client replays its
+    // attempt tokens.
+    const interval = claim(attempt)
     if (interval === 'ended')
       return rejected({ status: 'expired' }, 'The World ID attempt has ended.')
     if (interval === undefined) return pending(attempt)
@@ -103,29 +93,20 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }
     if (result.status === 'pending') return pending({ ...attempt, interval })
     if (result.status === 'slow_down') {
-      // slow_down adds five seconds to every later interval (RFC 8628). Atomically, from the
-      // stored backoff, so an overlapping poll never shortens it or undoes an ended marker.
-      let slower = interval + 5
-      try {
-        slower = await store.update(slowKey(attempt.id), (value) => {
-          const current = value as Slow | null
-          if (current?.ended) return { op: 'noop', result: slower }
-          const next = Math.max(interval, current?.interval ?? 0) + 5
-          const until = Math.max(current?.until ?? 0, Date.now() + next * 1_000)
-          return { op: 'set', value: { interval: next, until }, result: next }
-        })
-      } catch {}
+      // slow_down adds five seconds to every later interval (RFC 8628), built on the current
+      // schedule so an overlapping poll never shortens it or undoes an ended attempt.
+      const current = schedules.get(attempt.id)
+      if (current?.ended) return pending({ ...attempt, interval: interval + 5 })
+      const slower = Math.max(interval, current?.interval ?? 0) + 5
+      set(attempt, {
+        interval: slower,
+        until: Math.max(current?.until ?? 0, Date.now() + slower * 1_000),
+      })
       return pending({ ...attempt, interval: slower })
     }
     // The attempt has ended, but its token stays valid until it expires: mark it ended until
     // then, so replaying the token never reaches World IdP again.
-    try {
-      await store.put(slowKey(attempt.id), {
-        ended: true,
-        interval,
-        until: attempt.expires * 1_000,
-      })
-    } catch {}
+    set(attempt, { ended: true, interval, until: attempt.expires * 1_000 })
     if (result.status !== 'approved')
       return rejected({ status: result.status }, 'World ID was not approved.')
 
@@ -157,18 +138,30 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }
   }
 
+  /** Sets the attempt's schedule, dropping expired, then the oldest, ones to stay bounded. */
+  function set(attempt: Attempt, schedule: Omit<Schedule, 'expires'>) {
+    schedules.delete(attempt.id)
+    if (schedules.size >= Constants.maxAttempts) {
+      for (const [id, { expires }] of schedules) if (expires <= now()) schedules.delete(id)
+      for (const id of schedules.keys()) {
+        if (schedules.size < Constants.maxAttempts) break
+        schedules.delete(id)
+      }
+    }
+    schedules.set(attempt.id, { ...schedule, expires: attempt.expires })
+  }
+
   /**
-   * Claims the attempt's next poll: returns its interval, or undefined while its last poll is
-   * less than an interval ago. Each poll is an expiring claim (`Store.tryClaim`), so the limit
-   * holds across instances; a slow_down record, which only World IdP causes, raises the interval.
+   * Claims the attempt's next poll: returns its interval, undefined while its last poll is less
+   * than an interval ago, or 'ended' once World IdP gave a final answer.
    */
-  async function claim(attempt: Attempt): Promise<number | 'ended' | undefined> {
-    const slow = (await store.get(slowKey(attempt.id))) as Slow | null
-    if (slow?.ended) return 'ended'
-    if (slow && slow.until > Date.now()) return undefined
-    const interval = Math.max(attempt.interval, slow?.interval ?? 0)
-    const claimed = await Store.tryClaim(store, pollKey(attempt.id), Date.now() + interval * 1_000)
-    return claimed ? interval : undefined
+  function claim(attempt: Attempt): number | 'ended' | undefined {
+    const current = schedules.get(attempt.id)
+    if (current?.ended) return 'ended'
+    if (current && current.until > Date.now()) return undefined
+    const interval = Math.max(attempt.interval, current?.interval ?? 0)
+    set(attempt, { interval, until: Date.now() + interval * 1_000 })
+    return interval
   }
 
   async function pending(attempt: Attempt): Promise<Identity.Verification<never>> {
@@ -238,11 +231,6 @@ export declare namespace verifier {
     acr?: readonly string[] | undefined
     /** Lifetime, in seconds, of a session after approval. @default 3600 */
     sessionTtl?: number | undefined
-    /**
-     * Atomic store, shared across instances, for each attempt's polling schedule: an expiring
-     * poll claim, and one record that slow_down raises and the attempt's end marks ended.
-     */
-    store: Store.AtomicStore
     /** Fetch used to call World IdP. @default globalThis.fetch */
     fetch?: typeof globalThis.fetch | undefined
   }
@@ -264,22 +252,16 @@ type Attempt = {
   readonly verification_uri_complete?: string | undefined
 }
 
-/** An attempt's slow_down schedule in the store. */
-type Slow = {
+/** An attempt's poll schedule. */
+type Schedule = {
   /** The attempt has ended: World IdP gave a final answer. */
   readonly ended?: boolean | undefined
+  /** Unix time the attempt expires. */
+  readonly expires: number
   /** Seconds between polls, raised by slow_down. */
   readonly interval: number
   /** Unix time, in milliseconds, before which the attempt is not polled. */
   readonly until: number
-}
-
-function pollKey(id: string) {
-  return 'world:poll:' + id
-}
-
-function slowKey(id: string) {
-  return 'world:slow:' + id
 }
 
 type Session = {

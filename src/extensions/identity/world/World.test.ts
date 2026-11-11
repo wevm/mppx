@@ -1,6 +1,6 @@
 import type { RequestListener } from 'node:http'
 
-import { Credential, Method, Receipt, Store, z } from 'mppx'
+import { Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as World from 'mppx/extensions/identity/world'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
@@ -15,7 +15,6 @@ const config = {
   clientSecret: 's3cret/+',
   issuer,
   secretKey: 'test-secret-key-test-secret-key-32',
-  store: Store.memory(),
 }
 
 const keyPair = await crypto.subtle.generateKey(
@@ -208,7 +207,7 @@ test('polls World IdP at most once per interval', async () => {
     attempt: string
   }
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
-  // Polling again at once waits, with either token: the store holds the schedule.
+  // Polling again at once waits, with either token: the verifier holds the schedule.
   await verifier.verify(poll(pending.attempt))
   await verifier.verify(poll(started.attempt))
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
@@ -222,7 +221,7 @@ test('keeps slow_down when an older attempt token is replayed', async () => {
   expect(device((await verifier.verify(poll(started.attempt))) as never)).toMatchObject({
     interval: 6,
   })
-  // The first token still says 1 second, but the store holds the slower schedule.
+  // The first token still says 1 second, but the verifier holds the slower schedule.
   wait(1)
   await verifier.verify(poll(started.attempt))
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(1)
@@ -231,28 +230,23 @@ test('keeps slow_down when an older attempt token is replayed', async () => {
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(2)
 })
 
-test('shares the poll schedule across instances and ends replayed attempts', async () => {
+test('ends replayed attempts', async () => {
   const world = idp({ polls: ['slow_down'] })
-  const store = Store.memory()
   const tokens = () => world.calls.filter((call) => call.path === '/token').length
-  const a = World.Server.verifier({ ...config, store, fetch: world.fetch })
-  const b = World.Server.verifier({ ...config, store, fetch: world.fetch })
-  const started = device((await a.verify(poll('start'))) as never) as { attempt: string }
-  // Another instance sees the same schedule: too early, so World IdP is not called.
-  await b.verify(poll(started.attempt))
-  expect(tokens()).toBe(0)
+  const verifier = World.Server.verifier({ ...config, fetch: world.fetch })
+  const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
   wait(1)
-  expect(device((await b.verify(poll(started.attempt))) as never)).toMatchObject({ interval: 6 })
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toMatchObject({
+    interval: 6,
+  })
   wait(6)
-  expect(device((await a.verify(poll(started.attempt))) as never).status).toBe('approved')
+  expect(device((await verifier.verify(poll(started.attempt))) as never).status).toBe('approved')
   expect(tokens()).toBe(2)
   // The token stays valid until the attempt expires, but replaying it never reaches World IdP.
-  for (const verifier of [a, b]) {
-    wait(10)
-    expect(device((await verifier.verify(poll(started.attempt))) as never)).toEqual({
-      status: 'expired',
-    })
-  }
+  wait(10)
+  expect(device((await verifier.verify(poll(started.attempt))) as never)).toEqual({
+    status: 'expired',
+  })
   expect(tokens()).toBe(2)
 })
 
@@ -267,7 +261,7 @@ test('keeps an attempt ended when an overlapping slow_down answers late', async 
     if (new URL(new Request(input).url).pathname === '/token' && calls++ === 0) await late
     return response
   }) as typeof globalThis.fetch
-  const verifier = World.Server.verifier({ ...config, store: Store.memory(), fetch })
+  const verifier = World.Server.verifier({ ...config, fetch })
   const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
   wait(1)
   const first = verifier.verify(poll(started.attempt))
@@ -297,7 +291,7 @@ test('never shortens a stored backoff when an overlapping slow_down answers late
     if (new URL(new Request(input).url).pathname === '/token' && calls++ === 0) await late
     return response
   }) as typeof globalThis.fetch
-  const verifier = World.Server.verifier({ ...config, store: Store.memory(), fetch })
+  const verifier = World.Server.verifier({ ...config, fetch })
   const started = device((await verifier.verify(poll('start'))) as never) as { attempt: string }
   wait(1)
   const first = verifier.verify(poll(started.attempt))
