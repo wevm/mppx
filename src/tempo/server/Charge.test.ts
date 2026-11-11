@@ -1993,7 +1993,8 @@ describe('tempo', () => {
         const server = Mppx_server.create({
           methods: [
             tempo_server.charge({
-              ...(machineTokenEnabled ? { machineTokenEnabled, machineTokenDirect } : {}),
+              ...(machineTokenEnabled && { machineTokenEnabled }),
+              ...(machineTokenDirect && { machineTokenDirect }),
               account: accounts[0],
               currency: asset,
               getClient: () => directClient,
@@ -2063,6 +2064,11 @@ describe('tempo', () => {
       // It reaches payment verification instead of failing the challenge binding.
       expect(preOptInBody).not.toContain('invalid-challenge')
       expect(preOptInBody).toContain('verification-failed')
+
+      // Direct MACH works without the swapper flag.
+      await issue(false, true)
+      expect(challenge!.request.methodDetails).toMatchObject({ machineTokenDirect: true })
+      expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenEnabled')
 
       const plainServer = await issue(false)
       expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')

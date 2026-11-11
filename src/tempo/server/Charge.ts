@@ -670,11 +670,14 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(
           'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
         )
-      if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
+      if (
+        (request.machineTokenEnabled || request.machineTokenDirect) &&
+        !MachineTokenCharge.isSupported(chainId)
+      )
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
-      const machineTokenDirect = MachineTokenCharge.acceptsDirect(request)
+      const machineTokenDirect = request.machineTokenDirect === true
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -1151,15 +1154,14 @@ export declare namespace charge {
      */
     confirmationTimeoutMs?: number | undefined
     /**
-     * Also accepts MACH 1:1 transferred directly to the recipient, when `machineTokenEnabled` is
-     * set. The recipient must be on MACH's merchant list. Leave it off when the recipient can't hold
-     * MACH, such as a Stripe deposit address: clients then keep paying MACH through the swapper.
-     * Enable it only once every server instance runs a version that supports it.
+     * Accepts MACH 1:1 transferred directly to the recipient. The recipient must be on MACH's
+     * merchant list. Leave it off when the recipient can't hold MACH, such as a Stripe deposit
+     * address. Enable it only once every server instance runs a version that supports it.
      */
     machineTokenDirect?: boolean | undefined
     /**
      * Lets payers fund this charge with MACH through the swapper, which pays the recipient in the
-     * challenge currency. Add `machineTokenDirect` to also accept MACH transferred directly.
+     * challenge currency. Independent of `machineTokenDirect`.
      */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */

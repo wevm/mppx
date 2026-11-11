@@ -164,17 +164,6 @@ export function matchRoute(parameters: {
 }
 
 /**
- * Returns whether a server accepts MACH paid directly to its recipient. `machineTokenDirect` counts
- * only with `machineTokenEnabled`, so the two flags can later merge into one.
- */
-export function acceptsDirect(parameters: {
-  machineTokenDirect?: boolean | undefined
-  machineTokenEnabled?: boolean | undefined
-}): boolean {
-  return parameters.machineTokenEnabled === true && parameters.machineTokenDirect === true
-}
-
-/**
  * Returns whether a client's `currencies` allowlist lets it pay in MACH on a chain. No allowlist
  * allows it.
  */

@@ -381,8 +381,7 @@ export function session<const parameters extends session.Parameters>(
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
   // Sessions accept MACH channels only when the payee opts in to direct MACH.
-  // Sessions have no swapper route, so enabling MACH means accepting MACH channels directly.
-  const machineTokenDirect = parameters.machineTokenEnabled === true
+  const machineTokenDirect = parameters.machineTokenDirect === true
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
@@ -842,14 +841,13 @@ export namespace session {
     /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
     /**
-     * Also accepts channels funded in MACH, 1:1 with the session currency. Sessions have no swapper
-     * route, so enabling MACH always means accepting it directly: the payee must be on MACH's
-     * merchant list. Challenges stay priced in the session currency and carry
+     * Also accepts channels funded in MACH, 1:1 with the session currency. The payee must be on
+     * MACH's merchant list. Challenges stay priced in the session currency and carry
      * `machineTokenDirect: true`, so clients holding MACH may open the channel in MACH instead and
      * older clients keep paying the session currency. MACH channels pay fees in `feeToken` or the
      * session currency. Throws on chains without MACH; ignored for sessions priced in MACH.
      */
-    machineTokenEnabled?: boolean | undefined
+    machineTokenDirect?: boolean | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
      * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never

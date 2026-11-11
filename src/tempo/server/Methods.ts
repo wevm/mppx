@@ -40,11 +40,11 @@ function createChargeMethod<const parameters extends SharedParameters>(
 function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
-  // These options apply only to charge, even when configured at the family level: sessions accept
-  // MACH directly whenever `machineTokenEnabled` is set.
+  // These options apply only to charge, even when configured at the family level: sessions have no
+  // swapper route, so only `machineTokenDirect` enables MACH for them.
   const {
     allowedFeeTokens: _allowedFeeTokens,
-    machineTokenDirect: _machineTokenDirect,
+    machineTokenEnabled: _machineTokenEnabled,
     ...sessionParameters
   } = parameters ?? {}
   return sessionServer(
@@ -111,14 +111,11 @@ export function tempo<const parameters extends tempo.Parameters>(
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
     /**
-     * Charges only: also accepts MACH transferred directly to the recipient instead of only through
-     * the swapper. Needs `machineTokenEnabled`; leave it off when the recipient can't hold MACH.
+     * Accepts MACH paid directly: charges by a transfer to the recipient, sessions by a channel
+     * funded in MACH. The recipient must be on MACH's merchant list.
      */
     machineTokenDirect?: boolean | undefined
-    /**
-     * Enables MACH. Charges accept it through the swapper (add `machineTokenDirect` to also accept
-     * it directly); sessions accept channels funded in MACH directly.
-     */
+    /** Charges only: lets payers fund charges with MACH through the swapper. */
     machineTokenEnabled?: boolean | undefined
   }
 
@@ -282,8 +279,8 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
-    // `machineTokenEnabled` offers also accept MACH channels; the first offer settles them.
-    const machineToken = parameters?.machineTokenEnabled
+    // `machineTokenDirect` offers also accept MACH channels; the first offer settles them.
+    const machineToken = parameters?.machineTokenDirect
       ? MachineTokenCharge.getToken(currency.chainId)
       : undefined
     for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
