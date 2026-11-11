@@ -236,19 +236,35 @@ export function session(parameters: session.Parameters = {}) {
     resolveAccount,
   } = parameters
   const policy = resolveSpendingPolicy(parameters)
-  // Display amounts use the configured decimals, else the decimals the accepted tokens share.
-  const decimals =
-    decimalsParameter ?? Currency.decimalsOf(parameters.currencies) ?? defaults.decimals
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account })
-  const maxDeposit =
-    maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
-  const topUpAmount =
-    topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined
+  /**
+   * Parses human-readable amounts in the decimals of the currency a challenge matched: a token's
+   * own, else the configured `decimals`, else 6. A token on another chain never sets the scale.
+   */
+  const resolveAmounts = (request: SpendingRequest) => {
+    const matched = policy.currencies
+      ? Currency.find(policy.currencies, request.currency, {
+          chainId: request.methodDetails?.chainId,
+          decimals: decimalsParameter,
+        })
+      : undefined
+    const decimals = matched?.decimals ?? decimalsParameter ?? defaults.decimals
+    return {
+      decimals,
+      maxDeposit:
+        maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined,
+      topUpAmount:
+        topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined,
+    }
+  }
+  // Reject malformed amounts at construction rather than at the first challenge.
+  if (maxDepositParameter !== undefined) parseUnits(maxDepositParameter, defaults.decimals)
+  if (topUpAmountParameter !== undefined) parseUnits(topUpAmountParameter, defaults.decimals)
   const configuredOrigin = parameters.origin === undefined ? undefined : new URL(parameters.origin)
   if (configuredOrigin && !['http:', 'https:'].includes(configuredOrigin.protocol))
     throw new Error('Session origins require HTTP or HTTPS')
@@ -281,8 +297,9 @@ export function session(parameters: session.Parameters = {}) {
     resolved: ChallengeContext,
     context: CredentialContext | undefined,
     entry: ChannelEntry | undefined,
-  ) =>
-    planCredential({
+  ) => {
+    const { decimals, maxDeposit } = resolveAmounts(resolved.challenge.request as SpendingRequest)
+    return planCredential({
       account: await resolveCredentialAccount(resolved, context, entry),
       entry,
       context,
@@ -290,6 +307,7 @@ export function session(parameters: session.Parameters = {}) {
       maxDeposit,
       resolved,
     })
+  }
 
   const method = Method.toClient(Methods.session, {
     // Skip offers that violate client policy so an acceptable offer can be chosen. An explicit
@@ -446,6 +464,7 @@ export function session(parameters: session.Parameters = {}) {
           'Session funding outcome is unknown; reconcile the pending payment before another top-up.',
         )
       const knownDeposit = channel.deposit > deposit ? channel.deposit : deposit
+      const { maxDeposit, topUpAmount } = resolveAmounts(challenge.request)
       const additionalDeposit = resolveAutomaticTopUp({
         deposit: knownDeposit,
         maxDeposit,
@@ -570,7 +589,7 @@ export function session(parameters: session.Parameters = {}) {
       let channel = await store.get(channelKey)
       const driver = {
         assertVoucherWithinLocalLimit: (cumulativeAmount) =>
-          assertWithinMaxDeposit(cumulativeAmount, maxDeposit),
+          assertWithinMaxDeposit(cumulativeAmount, resolveAmounts(challenge.request).maxDeposit),
         createSessionCredential: (challenge, context) =>
           createSessionCredential(challenge, context, input),
         fetch,
@@ -640,9 +659,9 @@ export declare namespace session {
        */
       expectedRecipients?: readonly Address[] | undefined
       /**
-       * Decimals of address `currencies`, used to parse human-readable amounts. Tokens carry
-       * their own; `maxDeposit` and `topUpAmount` use the decimals the tokens share, else 6.
-       * `maxAmount` requires decimals for every address currency.
+       * Decimals of address `currencies` (default: 6), used to parse human-readable amounts.
+       * Tokens carry their own: `maxDeposit` and `topUpAmount` use the decimals of the currency
+       * each challenge matched. `maxAmount` requires decimals for every address currency.
        */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */

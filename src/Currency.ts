@@ -39,20 +39,6 @@ export function chainIdOf(currency: Currency): number | undefined {
 }
 
 /**
- * Returns the decimals every token in `currencies` shares, or `undefined` when the list has no
- * tokens or its tokens disagree. Addresses carry no decimals and are ignored.
- */
-export function decimalsOf(currencies: readonly Currency[] | undefined): number | undefined {
-  let decimals: number | undefined
-  for (const currency of currencies ?? []) {
-    if (typeof currency === 'string') continue
-    if (decimals !== undefined && decimals !== currency.decimals) return undefined
-    decimals = currency.decimals
-  }
-  return decimals
-}
-
-/**
  * Resolves a currency for `chainId`: a token by its addresses, a resolved token only on its own
  * chain, and an address on any chain with `decimals`. Returns `undefined` when the currency has no
  * address on `chainId`.

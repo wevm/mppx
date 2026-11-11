@@ -29,17 +29,18 @@ export function resolve(parameters: {
   for (const token of currencies) {
     // A shared USD price cannot also price EUR, BTC, or unknown denominations.
     if (typeof token !== 'string' && token.currency !== 'USD') continue
+    const currency = Currency_.resolve(token as Currency, {
+      chainId,
+      decimals: parameters.decimals ?? defaults.decimals,
+    })
+    // Tokens not on this chain are skipped before their decimals are compared.
+    if (currency === undefined) continue
     if (
       typeof token !== 'string' &&
       parameters.decimals !== undefined &&
       parameters.decimals !== token.decimals
     )
       throw new Error('Configured `decimals` must match each token definition.')
-    const currency = Currency_.resolve(token as Currency, {
-      chainId,
-      decimals: parameters.decimals ?? defaults.decimals,
-    })
-    if (currency === undefined) continue
     if (!isAddress(currency.address, { strict: false }))
       throw new Error(`Invalid Tempo currency address: ${currency.address}.`)
     const decimals = currency.decimals ?? defaults.decimals

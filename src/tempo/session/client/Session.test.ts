@@ -931,6 +931,35 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(500n)
   })
 
+  test.each([
+    {
+      name: 'an address next to an 18-decimal token on another chain',
+      currencies: [
+        descriptor.token,
+        defineToken({
+          addresses: { 1: '0x0000000000000000000000000000000000000009' },
+          decimals: 18,
+        }),
+      ],
+      maxDeposit: '0.0005',
+    },
+    {
+      name: 'the matched token',
+      currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+      maxDeposit: '5',
+    },
+  ])('parses maxDeposit in the decimals of $name', async ({ currencies, maxDeposit }) => {
+    const method = session({ account, currencies, maxDeposit, getClient: () => client })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge({ suggestedDeposit: '1000' }),
+        context: {},
+      }),
+    )
+
+    expect(openDeposit(payload)).toBe(500n)
+  })
+
   test('uses suggestedDeposit when below maxDeposit', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const payload = deserialize(

@@ -67,15 +67,6 @@ describe('chainIdOf', () => {
   })
 })
 
-describe('decimalsOf', () => {
-  test('returns the decimals every token shares, ignoring addresses', () => {
-    expect(Currency.decimalsOf([ousd, usdc(8453), pathUsd])).toBe(6)
-    expect(Currency.decimalsOf([pathUsd])).toBeUndefined()
-    expect(Currency.decimalsOf(undefined)).toBeUndefined()
-    expect(Currency.decimalsOf([ousd, { ...usdc(8453), decimals: 18 }])).toBeUndefined()
-  })
-})
-
 describe('isToken and isResolvedToken', () => {
   test('distinguish the three currency shapes', () => {
     expect([ousd, ousd(4217), pathUsd].map(Currency.isToken)).toEqual([true, false, false])
