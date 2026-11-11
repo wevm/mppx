@@ -869,10 +869,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (runtime.channel?.opened) await persistChannel(runtime.channel)
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
+  function toPaymentResponse(response: Response, acceptReceipt = true): PaymentResponse {
     const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
-    updateSpentFromReceipt(receipt)
+    if (acceptReceipt) updateSpentFromReceipt(receipt)
     return Object.assign(response, {
       receipt,
       challenge: runtime.lastChallenge,
@@ -886,7 +886,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (
       (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
     )
-      return toPaymentResponse(await config.fetch(input, Fetch.withoutPayment(init)))
+      return toPaymentResponse(await config.fetch(input, Fetch.withoutPayment(init)), false)
     // The manager drives one shared `runtime` state machine, so requests are
     // single-flight. Reject overlap loudly instead of letting concurrent calls
     // corrupt each other's runtime and channel tracking.
@@ -1069,6 +1069,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
 
     async sse(input, init) {
+      if (
+        (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+      )
+        throw new Error('SessionManager.sse requires payment; use fetch for unpaid streams.')
       return openSseSession(input, init, sseDriver)
     },
 

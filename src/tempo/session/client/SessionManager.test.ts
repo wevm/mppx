@@ -2877,3 +2877,46 @@ test.each(['bootstrap', 'active-channel'] as const)(
     }).toEqual(before)
   },
 )
+
+test('an unpaid response cannot change shared session receipt accounting', async () => {
+  const entry = channelEntry()
+  const challenge = makeChallenge()
+  if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(null, {
+      headers: {
+        'Payment-Receipt': serializeSessionReceipt(
+          createSessionReceipt({
+            channelId: entry.channelId,
+            challengeId: challenge.id,
+            acceptedCumulative: entry.cumulativeAmount,
+            spent: 500_000n,
+            units: 1,
+          }),
+        ),
+      },
+    }),
+  )
+  const manager = sessionManager({ account, client, fetch })
+  getSessionManagerInternals(manager).rehydrate({
+    channel: entry,
+    challenge,
+    input: 'https://api.example.com/data',
+    spent: 0n,
+  })
+  const before = structuredClone(manager.state)
+  await manager.fetch('https://api.example.com/issuer', Fetch.withoutPayment())
+  expect(manager.state).toEqual(before)
+})
+
+test('refuses payment-driving SSE sessions when payment is disabled', async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response('event: payment-need-voucher\ndata: {}\n\n'))
+  const manager = sessionManager({ account, client, fetch })
+  await expect(
+    manager.sse('https://api.example.com/events', {
+      ...Fetch.withoutPayment(),
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow('requires payment')
+  expect(fetch).not.toHaveBeenCalled()
+})
