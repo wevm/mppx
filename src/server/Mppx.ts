@@ -1409,7 +1409,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
       if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
       const { challenge, parsedRequest, request } = routeChallenge
-      internal._canonicalRequest = parsedRequest
 
       // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
       // no Challenge) leaves nothing the client proved a payment check against.
@@ -3347,7 +3346,7 @@ function hasCheckedTwin(offers: readonly ConfiguredHandler['_internal'][]): bool
   const unchecked = offers.filter((offer) => offer._paymentCheck === undefined)
   return checked.some((a) =>
     unchecked.some(
-      (b) => a.name === b.name && a.intent === b.intent && sameTerms(a, b) && sameTerms(b, a),
+      (b) => a.name === b.name && a.intent === b.intent && (sameTerms(a, b) || sameTerms(b, a)),
     ),
   )
 }
