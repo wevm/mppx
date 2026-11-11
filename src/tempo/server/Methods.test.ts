@@ -205,7 +205,7 @@ test.each(
   },
 )
 
-test('machineTokenDirect sessions settle MACH channels', async () => {
+test('machineTokenAccepted sessions settle MACH channels', async () => {
   const settle = vi.spyOn(Settlement, 'maybeSettleScheduled').mockResolvedValue('0x01')
   try {
     const channel = {
@@ -218,14 +218,14 @@ test('machineTokenDirect sessions settle MACH channels', async () => {
       createdAt: new Date().toISOString(),
       highestVoucher: { cumulativeAmount: 1_000_000n },
     } as unknown as ChannelStore.State
-    const create = (machineTokenDirect: boolean) =>
+    const create = (machineTokenAccepted: boolean) =>
       Mppx.create({
         methods: [
           tempo({
             ...config,
             // The swapper flag alone does nothing for sessions.
             machineTokenEnabled: true,
-            machineTokenDirect,
+            machineTokenAccepted,
             settlementSchedule: { amount: '1' },
           }),
         ],

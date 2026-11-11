@@ -81,7 +81,7 @@ type SessionChallenge = Challenge<
 >
 
 function makeChallenge(
-  methodDetails: Record<string, unknown> = { machineTokenDirect: true },
+  methodDetails: Record<string, unknown> = { machineTokenAccepted: true },
 ): SessionChallenge {
   return {
     id: 'challenge-id',
@@ -118,7 +118,7 @@ function key(token: Address) {
   return channelKey({ chainId, escrow: tip20ChannelEscrow, payee, token })
 }
 
-describe('session machineTokenDirect', () => {
+describe('session machineTokenAccepted', () => {
   test('opens the channel in MACH when MACH covers the deposit', async () => {
     const channelStore = createChannelStore()
     const method = session({
@@ -158,7 +158,7 @@ describe('session machineTokenDirect', () => {
 
     const open = deserialize(
       await method.createCredential({
-        challenge: makeChallenge({ feePayer: true, machineTokenDirect: true }),
+        challenge: makeChallenge({ feePayer: true, machineTokenAccepted: true }),
         context: {},
       }),
     )
@@ -177,7 +177,7 @@ describe('session machineTokenDirect', () => {
       })
       return deserialize(
         await method.createCredential({
-          challenge: makeChallenge({ feePayer, machineTokenDirect: true }),
+          challenge: makeChallenge({ feePayer, machineTokenAccepted: true }),
           context: {},
         }),
       )
@@ -202,7 +202,7 @@ describe('session machineTokenDirect', () => {
     expect(open.descriptor.token).toBe(currency)
   })
 
-  test('ignores MACH for challenges without machineTokenDirect', async () => {
+  test('ignores MACH for challenges without machineTokenAccepted', async () => {
     const calls: { to?: Address | undefined }[] = []
     const method = session({
       account,
@@ -262,7 +262,7 @@ describe('session machineTokenDirect', () => {
 
     const open = deserialize(
       await method.createCredential({
-        challenge: makeChallenge({ machineTokenDirect: true, sessionSnapshot }),
+        challenge: makeChallenge({ machineTokenAccepted: true, sessionSnapshot }),
         context: {},
       }),
     )
@@ -290,7 +290,7 @@ describe('session machineTokenDirect', () => {
 
     const close = deserialize(
       await method.createCredential({
-        challenge: makeChallenge({ machineTokenDirect: true }),
+        challenge: makeChallenge({ machineTokenAccepted: true }),
         context: { action: 'close', cumulativeAmountRaw: '100', descriptor },
       }),
     )
@@ -382,7 +382,7 @@ describe('MACH channel funding', () => {
     const { resolveChallengeContext } = await import('./CredentialState.js')
     return resolveChallengeContext({
       allowCustomEscrow: false,
-      challenge: makeChallenge({ machineTokenDirect: true, ...methodDetails }),
+      challenge: makeChallenge({ machineTokenAccepted: true, ...methodDetails }),
       escrowOverride: undefined,
       allowedChainIds: undefined,
       getClient: async () => client,
@@ -416,12 +416,12 @@ describe('MACH channel funding', () => {
     ).toBe(advertised)
   })
 
-  test('locks the MACH channel scope for machineTokenDirect challenges', async () => {
+  test('locks the MACH channel scope for machineTokenAccepted challenges', async () => {
     const { getLockKeys, resolveMachineTokenContext } = await import('./MachineToken.js')
     const resolved = await resolvedFor({})
 
     // Both scopes, since an open for a MACH-direct challenge can fall back to the challenge currency.
     expect(getLockKeys(resolved)).toEqual([resolved.key, resolveMachineTokenContext(resolved)!.key])
-    expect(getLockKeys({ ...resolved, machineTokenDirect: false })).toEqual([resolved.key])
+    expect(getLockKeys({ ...resolved, machineTokenAccepted: false })).toEqual([resolved.key])
   })
 })

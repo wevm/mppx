@@ -69,7 +69,7 @@ export function charge<const parameters extends charge.Parameters>(
   >,
 ): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>> {
   const {
-    machineTokenDirect,
+    machineTokenAccepted,
     machineTokenEnabled,
     allowedFeeTokens: configuredAllowedFeeTokens,
     amount,
@@ -173,9 +173,9 @@ export function charge<const parameters extends charge.Parameters>(
     // switching it on or off never invalidates challenges already issued. It needs no settlement
     // sender: MACH goes straight to the recipient.
     const machineToken =
-      methodDetails?.machineTokenDirect === true &&
-      (challenge.request.methodDetails as { machineTokenDirect?: unknown } | undefined)
-        ?.machineTokenDirect === true
+      methodDetails?.machineTokenAccepted === true &&
+      (challenge.request.methodDetails as { machineTokenAccepted?: unknown } | undefined)
+        ?.machineTokenAccepted === true
         ? MachineTokenCharge.getToken(chainId)
         : undefined
     const isZeroAmount = BigInt(amount) === 0n
@@ -598,7 +598,7 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
-      machineTokenDirect,
+      machineTokenAccepted,
       machineTokenEnabled,
       amount,
       currency,
@@ -671,13 +671,13 @@ export function charge<const parameters extends charge.Parameters>(
           'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
         )
       if (
-        (request.machineTokenEnabled || request.machineTokenDirect) &&
+        (request.machineTokenEnabled || request.machineTokenAccepted) &&
         !MachineTokenCharge.isSupported(chainId)
       )
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
-      const machineTokenDirect = request.machineTokenDirect === true
+      const machineTokenAccepted = request.machineTokenAccepted === true
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -705,9 +705,9 @@ export function charge<const parameters extends charge.Parameters>(
       return {
         ...request,
         // `machineTokenEnabled` keeps legacy swapper clients working during the transition;
-        // `machineTokenDirect` tells current clients they may pay MACH directly.
+        // `machineTokenAccepted` tells current clients they may pay MACH directly.
         machineTokenEnabled: request.machineTokenEnabled || undefined,
-        machineTokenDirect: machineTokenDirect || undefined,
+        machineTokenAccepted: machineTokenAccepted || undefined,
         chainId,
         feePayer: resolvedFeePayer,
       }
@@ -1158,10 +1158,10 @@ export declare namespace charge {
      * merchant list. Leave it off when the recipient can't hold MACH, such as a Stripe deposit
      * address. Enable it only once every server instance runs a version that supports it.
      */
-    machineTokenDirect?: boolean | undefined
+    machineTokenAccepted?: boolean | undefined
     /**
      * Lets payers fund this charge with MACH through the swapper, which pays the recipient in the
-     * challenge currency. Independent of `machineTokenDirect`.
+     * challenge currency. Independent of `machineTokenAccepted`.
      */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
@@ -1335,7 +1335,7 @@ function chargeBinding(request: ChargeRequest) {
     machineTokenEnabled,
     // Not bound: verification requires both the challenge and the route to accept direct MACH, so
     // switching it on or off keeps challenges already issued valid.
-    machineTokenDirect: _machineTokenDirect,
+    machineTokenAccepted: _machineTokenAccepted,
     splits,
     supportedModes,
     zones,

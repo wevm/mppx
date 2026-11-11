@@ -7,14 +7,14 @@ import { channelKey, type ChannelStore } from './ChannelStore.js'
 import type { ChallengeContext, SessionContext } from './CredentialState.js'
 
 /**
- * Returns the context for funding a `machineTokenDirect` challenge's channel in MACH, 1:1 with the
+ * Returns the context for funding a `machineTokenAccepted` challenge's channel in MACH, 1:1 with the
  * challenge currency, or `undefined` when the challenge does not accept MACH. MACH cannot pay fees,
  * so its transactions pay them in the server's fee token or the challenge currency.
  */
 export function resolveMachineTokenContext(
   resolved: ChallengeContext,
 ): ChallengeContext | undefined {
-  if (!resolved.machineTokenDirect) return undefined
+  if (!resolved.machineTokenAccepted) return undefined
   const token = MachineTokenCharge.getToken(resolved.chainId)
   if (!token || isSameAddress(token, resolved.token)) return undefined
   return {
@@ -31,7 +31,7 @@ export function resolveMachineTokenContext(
 }
 
 /**
- * Selects the channel a challenge pays from: for a `machineTokenDirect` challenge, a MACH channel when
+ * Selects the channel a challenge pays from: for a `machineTokenAccepted` challenge, a MACH channel when
  * the caller's descriptor, the stored channels or the server's snapshot point to one. A stored channel
  * in the challenge currency is kept, so the MACH preference never opens a second channel. Other
  * challenges resolve unchanged, without store reads.
@@ -54,7 +54,7 @@ export async function selectChannelContext(parameters: {
 }
 
 /**
- * Returns the context to open a `machineTokenDirect` challenge's channel in MACH when the account's MACH
+ * Returns the context to open a `machineTokenAccepted` challenge's channel in MACH when the account's MACH
  * balance covers the deposit and, for an access key that limits spending, its remaining MACH limit
  * does too. Any failed read returns `undefined`, so the channel opens in the challenge currency.
  */
@@ -83,7 +83,7 @@ export async function resolveMachineTokenOpen(parameters: {
 
 /**
  * Returns the fee token for a transaction funding a MACH channel accepted for a
- * `machineTokenDirect` challenge. MACH cannot pay fees, so an unsponsored payer pays them in the
+ * `machineTokenAccepted` challenge. MACH cannot pay fees, so an unsponsored payer pays them in the
  * server's fee token, or else in the challenge currency or a default stablecoin it holds. Other
  * channels keep their resolved fee token.
  */
@@ -124,7 +124,7 @@ async function findFeeToken(parameters: {
 
 /**
  * Returns the scopes an automatic open locks: the challenge currency's and, for a
- * `machineTokenDirect` challenge, the MACH channel's too. The open may land on either, so locking
+ * `machineTokenAccepted` challenge, the MACH channel's too. The open may land on either, so locking
  * both keeps concurrent opens from funding two channels in the same scope.
  */
 export function getLockKeys(resolved: ChallengeContext): readonly string[] {

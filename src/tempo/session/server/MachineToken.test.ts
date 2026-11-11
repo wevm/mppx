@@ -280,18 +280,18 @@ function makeChallenge(request: ReturnType<typeof Methods.session.schema.request
   }
 }
 
-describe('session machineTokenDirect', () => {
+describe('session machineTokenAccepted', () => {
   test('flags challenges without reading the chain', async () => {
     const calls: RpcCall[] = []
     const { method } = createServer({
       client: createServerClient({ calls }),
-      machineTokenDirect: true,
+      machineTokenAccepted: true,
     })
 
     const request = await issueRequest(method)
 
     expect(request.currency).toBe(token)
-    expect(request.methodDetails.machineTokenDirect).toBe(true)
+    expect(request.methodDetails.machineTokenAccepted).toBe(true)
     expect(calls.filter(({ method }) => method === 'eth_call')).toEqual([])
   })
 
@@ -299,9 +299,9 @@ describe('session machineTokenDirect', () => {
     const calls: RpcCall[] = []
     const { method } = createServer({ client: createServerClient({ calls }) })
 
-    const request = await issueRequest(method, { machineTokenDirect: true })
+    const request = await issueRequest(method, { machineTokenAccepted: true })
 
-    expect(request.methodDetails.machineTokenDirect).toBeUndefined()
+    expect(request.methodDetails.machineTokenAccepted).toBeUndefined()
     expect(calls.filter(({ method }) => method === 'eth_call')).toEqual([])
   })
 
@@ -310,18 +310,18 @@ describe('session machineTokenDirect', () => {
 
     const request = await issueRequest(method)
 
-    expect(request.methodDetails.machineTokenDirect).toBeUndefined()
+    expect(request.methodDetails.machineTokenAccepted).toBeUndefined()
   })
 
   test('does not flag sessions priced in MACH', async () => {
     const { method } = createServer({
       currency: mach,
-      machineTokenDirect: true,
+      machineTokenAccepted: true,
     })
 
     const request = await issueRequest(method, { currency: mach })
 
-    expect(request.methodDetails.machineTokenDirect).toBeUndefined()
+    expect(request.methodDetails.machineTokenAccepted).toBeUndefined()
   })
 
   test('throws on chains without MACH', async () => {
@@ -337,7 +337,7 @@ describe('session machineTokenDirect', () => {
     const { method } = createServer({
       chainId: 1337,
       client: client as never,
-      machineTokenDirect: true,
+      machineTokenAccepted: true,
     })
 
     await expect(issueRequest(method)).rejects.toThrow(
@@ -346,7 +346,7 @@ describe('session machineTokenDirect', () => {
   })
 
   test('accepts a MACH channel for a flagged challenge', async () => {
-    const { method } = createServer({ machineTokenDirect: true })
+    const { method } = createServer({ machineTokenAccepted: true })
     const request = await issueRequest(method)
     const payload = await createOpenPayload(mach)
 
@@ -372,9 +372,9 @@ describe('session machineTokenDirect', () => {
   })
 
   test('rejects a MACH channel when the route no longer offers MACH', async () => {
-    const { method } = createServer({ machineTokenDirect: true })
+    const { method } = createServer({ machineTokenAccepted: true })
     const request = await issueRequest(method)
-    const { machineTokenDirect: _, ...methodDetails } = request.methodDetails
+    const { machineTokenAccepted: _, ...methodDetails } = request.methodDetails
     const payload = await createOpenPayload(mach)
 
     await expect(
@@ -386,7 +386,7 @@ describe('session machineTokenDirect', () => {
   })
 
   test('rejects channels in other tokens for a flagged challenge', async () => {
-    const { method } = createServer({ machineTokenDirect: true })
+    const { method } = createServer({ machineTokenAccepted: true })
     const request = await issueRequest(method)
     const payload = await createOpenPayload(otherToken)
 
@@ -404,7 +404,7 @@ describe('session machineTokenDirect', () => {
     const { method } = createServer({
       client: createServerClient({ calls, open: payload }),
       feePayer: payer,
-      machineTokenDirect: true,
+      machineTokenAccepted: true,
     })
     const request = await issueRequest(method)
 
@@ -424,7 +424,7 @@ describe('session machineTokenDirect', () => {
     const payload = await createOpenPayload(mach)
     const { method, store } = createServer({
       client: createServerClient({ open: payload }),
-      machineTokenDirect: true,
+      machineTokenAccepted: true,
     })
     const request = await issueRequest(method)
 

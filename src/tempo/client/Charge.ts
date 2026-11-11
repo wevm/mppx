@@ -228,7 +228,7 @@ export function charge(parameters: charge.Parameters = {}) {
       )
       // The payee accepts MACH 1:1 directly, unless the client's `currencies` allowlist leaves it out.
       const machineToken =
-        methodDetails?.machineTokenDirect === true &&
+        methodDetails?.machineTokenAccepted === true &&
         !isMachineTokenCurrency &&
         MachineTokenCharge.isAllowed(parameters.currencies, chainId)
           ? MachineTokenCharge.getToken(chainId)

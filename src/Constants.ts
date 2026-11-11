@@ -31,7 +31,7 @@ export const Intents = {
 /** Method detail object keys used by built-in methods. */
 export const MethodDetailKeys = {
   /** The payee also accepts MACH 1:1: a direct transfer for charges, a MACH channel for sessions. */
-  machineTokenDirect: 'machineTokenDirect',
+  machineTokenAccepted: 'machineTokenAccepted',
   sessionProtocol: 'sessionProtocol',
   sessionSnapshot: 'sessionSnapshot',
 } as const
