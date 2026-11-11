@@ -265,7 +265,7 @@ export function create(config: create.Config): Issuer {
     // Claims this poll's slot atomically, so replays and concurrent polls reach World IdP at most
     // once per interval, on every instance sharing the store. A completed attempt answers with its
     // attestation again, so a lost response never loses the approval.
-    const claimed = await store.update<string, 'missing' | 'early' | Attempt>(
+    const claimed = await store.update<string, 'missing' | 'early' | 'busy' | Attempt>(
       storeKey,
       (current) => {
         const attempt = current as Attempt | null
@@ -273,33 +273,61 @@ export function create(config: create.Config): Issuer {
         if (attempt.expires <= now) return { op: 'delete', result: 'missing' as const }
         if (attempt.done) return { op: 'noop', result: attempt }
         if (attempt.next > now) return { op: 'noop', result: 'early' as const }
-        const next = { ...attempt, next: now + attempt.interval * 1_000 }
+        // A poll of World IdP still in flight holds the attempt, so an overlapping poll never
+        // redeems the spent code and takes its refusal for the human's answer.
+        if (!attempt.idToken && attempt.polling && attempt.polling > now)
+          return { op: 'noop', result: 'busy' as const }
+        const next: Attempt = {
+          ...attempt,
+          next: now + attempt.interval * 1_000,
+          ...(!attempt.idToken && { polling: now + pollLease }),
+        }
         return { op: 'set', value: next, result: next }
       },
     )
     if (claimed === 'missing') return error(400, 'expired_token', 'The attempt expired.')
     if (claimed === 'early') return error(400, 'slow_down', 'Polled too soon.')
+    if (claimed === 'busy') return error(400, 'authorization_pending', 'Waiting for approval.')
     const attempt = claimed
     if (attempt.done) return issued(attempt.done)
 
     let idToken = attempt.idToken
     if (!idToken) {
+      const lease = attempt.polling
+      // Lets the next poll go ahead once this one ends without an approval.
+      const release = () =>
+        store
+          .update<string, undefined>(storeKey, (current) => {
+            const value = current as Attempt | null
+            if (!value || value.polling !== lease) return { op: 'noop', result: undefined }
+            const { polling: _, ...rest } = value
+            return { op: 'set', value: rest, result: undefined }
+          })
+          .catch(() => {})
       let result: Idp.Poll
       try {
         result = await idp.poll(attempt.deviceCode)
       } catch {
+        await release()
         return error(503, 'temporarily_unavailable', 'World ID is unavailable.')
       }
-      if (result.status === 'pending')
+      if (result.status === 'pending') {
+        await release()
         return error(400, 'authorization_pending', 'Waiting for approval.')
+      }
       if (result.status === 'slow_down') {
         await store.update(storeKey, (current) => {
           const value = current as Attempt | null
           if (!value) return { op: 'noop', result: undefined }
           const interval = value.interval + Constants.slowDown
+          const { polling: _, ...rest } = value
           return {
             op: 'set',
-            value: { ...value, interval, next: now + interval * 1_000 },
+            value: {
+              ...(value.polling === lease ? rest : value),
+              interval,
+              next: now + interval * 1_000,
+            },
             result: undefined,
           }
         })
@@ -323,7 +351,8 @@ export function create(config: create.Config): Issuer {
       await store.update<string, undefined>(storeKey, (current) => {
         const value = current as Attempt | null
         if (!value || value.idToken || value.done) return { op: 'noop', result: undefined }
-        return { op: 'set', value: { ...value, idToken }, result: undefined }
+        const { polling: _, ...rest } = value
+        return { op: 'set', value: { ...rest, idToken }, result: undefined }
       })
     }
 
@@ -505,6 +534,8 @@ type Attempt = {
   readonly interval: number
   /** Unix milliseconds before which World IdP is not polled again. */
   readonly next: number
+  /** Unix milliseconds until which a poll of World IdP is in flight and holds the attempt. */
+  readonly polling?: number | undefined
   /** An approval's ID token, kept until it verifies. */
   readonly idToken?: string | undefined
   /** The attestation issued for it, answered again until the attempt expires. */
@@ -526,6 +557,9 @@ const shards = 16
 
 /** Most records one sweep deletes, so each start does a bounded amount of cleanup. */
 const sweepLimit = 50
+
+/** How long a poll of World IdP holds its attempt: past its request timeout, so it has ended. */
+const pollLease = Constants.requestTimeout + 5_000
 
 /** The largest request body the issuer reads, in bytes. */
 const maxBody = 4_096

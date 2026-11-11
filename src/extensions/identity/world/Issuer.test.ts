@@ -244,6 +244,30 @@ test('answers a completed attempt again, so a lost response keeps the approval',
   expect(world.calls.filter((path) => path === '/token')).toHaveLength(1)
 })
 
+test('a poll in flight holds its attempt, so an overlapping poll never ends it', async () => {
+  const world = await createWorld()
+  let release: (() => void) | undefined
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init)
+    // World IdP answers the first token poll late.
+    if (new URL(request.url).pathname === '/token' && !release)
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    return world.fetch(input, init)
+  }
+  const issuer = await createIssuer({ fetch })
+  const device = await start(issuer)
+  const a = poll(issuer, device.id)
+  await vi.waitFor(() => expect(release).toBeDefined())
+  // Past the interval, another poll waits for the one in flight instead of polling World IdP.
+  vi.setSystemTime(Date.now() + 2_000)
+  expect((await poll(issuer, device.id)).body.error).toBe('authorization_pending')
+  release!()
+  expect((await a).status).toBe(200)
+  expect(world.calls.filter((path) => path === '/token')).toHaveLength(1)
+})
+
 test('polls World IdP at most once per interval', async () => {
   const world = await createWorld({ answers: ['pending', 'slow_down'] })
   const issuer = await createIssuer(world)
