@@ -231,38 +231,29 @@ test('keeps slow_down when an older attempt token is replayed', async () => {
   expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(2)
 })
 
-test('shares the poll schedule across instances and clears it when the attempt ends', async () => {
+test('shares the poll schedule across instances and ends replayed attempts', async () => {
   const world = idp({ polls: ['slow_down'] })
-  const memory = Store.memory()
-  const keys = new Set<string>()
-  const store = {
-    ...memory,
-    put: async (key: string, value: unknown) => {
-      keys.add(key)
-      return memory.put(key as never, value as never)
-    },
-    update: (key: string, fn: never) => {
-      keys.add(key)
-      return memory.update(key as never, fn)
-    },
-    delete: async (key: string) => {
-      keys.delete(key)
-      return memory.delete(key as never)
-    },
-  } as never
+  const store = Store.memory()
+  const tokens = () => world.calls.filter((call) => call.path === '/token').length
   const a = World.Server.verifier({ ...config, store, fetch: world.fetch })
   const b = World.Server.verifier({ ...config, store, fetch: world.fetch })
   const started = device((await a.verify(poll('start'))) as never) as { attempt: string }
   // Another instance sees the same schedule: too early, so World IdP is not called.
   await b.verify(poll(started.attempt))
-  expect(world.calls.filter((call) => call.path === '/token')).toHaveLength(0)
+  expect(tokens()).toBe(0)
   wait(1)
   expect(device((await b.verify(poll(started.attempt))) as never)).toMatchObject({ interval: 6 })
   wait(6)
   expect(device((await a.verify(poll(started.attempt))) as never).status).toBe('approved')
-  // The attempt has ended, so its poll claim and slow_down record are gone.
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  expect([...keys]).toEqual([])
+  expect(tokens()).toBe(2)
+  // The token stays valid until the attempt expires, but replaying it never reaches World IdP.
+  for (const verifier of [a, b]) {
+    wait(10)
+    expect(device((await verifier.verify(poll(started.attempt))) as never)).toEqual({
+      status: 'expired',
+    })
+  }
+  expect(tokens()).toBe(2)
 })
 
 test('slows down, and ends denied or expired attempts', async () => {

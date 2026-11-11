@@ -86,12 +86,14 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       return rejected({ status: 'expired' }, 'The World ID attempt expired.')
     // Poll World IdP at most once per interval per attempt, across instances and however the
     // client replays its attempt tokens.
-    let interval: number | undefined
+    let interval: number | 'ended' | undefined
     try {
       interval = await claim(attempt)
     } catch {
       return { status: 'unavailable', reason: 'World ID polling state is unavailable.' }
     }
+    if (interval === 'ended')
+      return rejected({ status: 'expired' }, 'The World ID attempt has ended.')
     if (interval === undefined) return pending(attempt)
     let result: Awaited<ReturnType<typeof idp.poll>>
     try {
@@ -111,9 +113,15 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
       } catch {}
       return pending({ ...attempt, interval: slower })
     }
-    // The attempt has ended: its polling state is no longer needed.
-    for (const key of [pollKey(attempt.id), slowKey(attempt.id)])
-      void Promise.resolve(store.delete(key)).catch(() => {})
+    // The attempt has ended, but its token stays valid until it expires: mark it ended until
+    // then, so replaying the token never reaches World IdP again.
+    try {
+      await store.put(slowKey(attempt.id), {
+        ended: true,
+        interval,
+        until: attempt.expires * 1_000,
+      })
+    } catch {}
     if (result.status !== 'approved')
       return rejected({ status: result.status }, 'World ID was not approved.')
 
@@ -150,8 +158,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
    * less than an interval ago. Each poll is an expiring claim (`Store.tryClaim`), so the limit
    * holds across instances; a slow_down record, which only World IdP causes, raises the interval.
    */
-  async function claim(attempt: Attempt): Promise<number | undefined> {
+  async function claim(attempt: Attempt): Promise<number | 'ended' | undefined> {
     const slow = (await store.get(slowKey(attempt.id))) as Slow | null
+    if (slow?.ended) return 'ended'
     if (slow && slow.until > Date.now()) return undefined
     const interval = Math.max(attempt.interval, slow?.interval ?? 0)
     const claimed = await Store.tryClaim(store, pollKey(attempt.id), Date.now() + interval * 1_000)
@@ -227,7 +236,7 @@ export declare namespace verifier {
     sessionTtl?: number | undefined
     /**
      * Atomic store, shared across instances, for each attempt's polling schedule: an expiring
-     * poll claim, and a slow_down record when World IdP asks for one. Both go when the attempt ends.
+     * poll claim, and one record that slow_down raises and the attempt's end marks ended.
      */
     store: Store.AtomicStore
     /** Fetch used to call World IdP. @default globalThis.fetch */
@@ -253,6 +262,8 @@ type Attempt = {
 
 /** An attempt's slow_down schedule in the store. */
 type Slow = {
+  /** The attempt has ended: World IdP gave a final answer. */
+  readonly ended?: boolean | undefined
   /** Seconds between polls, raised by slow_down. */
   readonly interval: number
   /** Unix time, in milliseconds, before which the attempt is not polled. */
