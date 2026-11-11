@@ -1,4 +1,4 @@
-import { createClient, custom, HttpRequestError } from 'viem'
+import { type Address, createClient, custom, HttpRequestError } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoChain } from 'viem/chains'
 import { defineToken } from 'viem/tokens'
@@ -224,7 +224,7 @@ describe('common currency offers', () => {
       currencies: [tokens.usdc, tokens.ousd],
     },
     {
-      parameters: { currencies: [tokens.ousd, tokens.ousd.toLowerCase()] },
+      parameters: { currencies: [tokens.ousd, tokens.ousd.toLowerCase() as Address] },
       currencies: [tokens.ousd],
     },
   ])('advertises charge and session offers for $parameters', async ({ parameters, currencies }) => {

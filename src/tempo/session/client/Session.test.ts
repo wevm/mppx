@@ -1,6 +1,7 @@
 import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
+import { defineToken } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
@@ -1803,6 +1804,27 @@ describe('session spending policy', () => {
     {
       name: 'disallowed currency',
       options: { currencies: [otherCurrency] },
+      error: 'Tempo session currency is not allowed',
+    },
+    {
+      name: 'token currency with its own decimals',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+        maxAmount: '1',
+      },
+      error: undefined,
+    },
+    {
+      name: 'token currency above its decimals cap',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+        maxAmount: '0.99',
+      },
+      error: 'Tempo session amount exceeds maxAmount.',
+    },
+    {
+      name: 'token currency without the challenge currency',
+      options: { currencies: [defineToken({ addresses: { 42431: otherCurrency }, decimals: 2 })] },
       error: 'Tempo session currency is not allowed',
     },
     {

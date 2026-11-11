@@ -32,6 +32,18 @@ describe('resolve', () => {
     )
   })
 
+  test('resolves viem tokens resolved to the configured chain, and skips other chains', () => {
+    expect(resolve({ testnet: true, currencies: [ousd(42431), ousd(4217)] })).toEqual([
+      { currency: tokens.ousd, decimals: 6, chainId: 42431 },
+    ])
+  })
+
+  test('resolves OUSD on Moderato from its chain-indexed definition', () => {
+    expect(resolve({ testnet: true, currencies: [ousd] })).toEqual([
+      { currency: tokens.ousd, decimals: 6, chainId: 42431 },
+    ])
+  })
+
   test('deduplicates addresses across strings and definitions, preserving first occurrence', () => {
     expect(
       resolve({
@@ -81,8 +93,8 @@ describe('resolve', () => {
   test.each([
     { parameters: { currencies: [] }, message: 'No accepted USD currencies' },
     {
-      parameters: { currencies: [ousd], testnet: true },
-      message: 'No accepted USD currencies for chain 42431',
+      parameters: { currencies: [ousd], chainId: 31337 },
+      message: 'No accepted USD currencies for chain 31337',
     },
     { parameters: { currencies: ['invalid'] }, message: 'Invalid Tempo currency address' },
     {

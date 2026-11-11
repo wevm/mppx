@@ -5,6 +5,7 @@ import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import * as Currency from '../../../Currency.js'
 import * as AcceptPayment from '../../../internal/AcceptPayment.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
@@ -117,10 +118,18 @@ function acknowledgesOpen(
 }
 
 type SpendingPolicy = {
-  currencies: readonly string[] | undefined
+  currencies: readonly Currency.Currency[] | undefined
+  decimals: number | undefined
   expectedRecipients: ReadonlySet<string> | undefined
-  maxAmount: bigint | undefined
+  maxAmount: string | undefined
   maxAtomicAmount: bigint | undefined
+}
+
+type SpendingRequest = {
+  amount: string
+  currency: string
+  methodDetails?: { chainId?: number | undefined } | undefined
+  recipient?: string | undefined
 }
 
 /** Validates and parses the client's session spending options once, at construction. */
@@ -129,12 +138,16 @@ function resolveSpendingPolicy(parameters: session.Parameters): SpendingPolicy {
   // Caps are denominated in the challenge currency, so they require a currency pin.
   if ((maxAmount !== undefined || maxAtomicAmount !== undefined) && currencies === undefined)
     throw new Error('Tempo session maxAmount and maxAtomicAmount require currencies.')
+  // Fail at construction for any accepted currency whose decimals cannot parse `maxAmount`.
+  for (const currency of currencies ?? [])
+    parseMaxAmount(maxAmount, typeof currency === 'string' ? decimals : currency.decimals)
   return {
-    currencies: currencies?.map((currency) => currency.toLowerCase()),
+    currencies,
+    decimals,
     expectedRecipients: expectedRecipients
       ? new Set(expectedRecipients.map((recipient) => recipient.toLowerCase()))
       : undefined,
-    maxAmount: parseMaxAmount(maxAmount, decimals),
+    maxAmount,
     maxAtomicAmount: maxAtomicAmount === undefined ? undefined : BigInt(maxAtomicAmount),
   }
 }
@@ -155,11 +168,15 @@ function parseMaxAmount(maxAmount: string | undefined, decimals: number | undefi
  * Rejects a session challenge whose currency, recipient or per-unit amount violates the client
  * policy. Runs during challenge selection, in the automatic top-up hook, and before any signing work.
  */
-function assertSpendingPolicy(
-  policy: SpendingPolicy,
-  request: { amount: string; currency: string; recipient?: string | undefined },
-) {
-  if (policy.currencies && !policy.currencies.includes(request.currency.toLowerCase()))
+function assertSpendingPolicy(policy: SpendingPolicy, request: SpendingRequest) {
+  // Tokens match on the challenge's chain, or on any chain they list when it names none.
+  const currency = policy.currencies
+    ? Currency.find(policy.currencies, request.currency, {
+        chainId: request.methodDetails?.chainId,
+        decimals: policy.decimals,
+      })
+    : undefined
+  if (policy.currencies && !currency)
     throw new Error(`Tempo session currency is not allowed: ${request.currency}.`)
   // The recipient is the channel payee, so it must be one the client expects, as for charge.
   if (
@@ -170,15 +187,15 @@ function assertSpendingPolicy(
   const amount = BigInt(request.amount)
   if (policy.maxAtomicAmount !== undefined && amount > policy.maxAtomicAmount)
     throw new Error('Tempo session amount exceeds maxAtomicAmount.')
-  if (policy.maxAmount !== undefined && amount > policy.maxAmount)
+  if (
+    policy.maxAmount !== undefined &&
+    amount > parseMaxAmount(policy.maxAmount, currency?.decimals)!
+  )
     throw new Error('Tempo session amount exceeds maxAmount.')
 }
 
 /** Returns whether a session challenge satisfies the client policy. */
-function satisfiesSpendingPolicy(
-  policy: SpendingPolicy,
-  request: { amount: string; currency: string; recipient?: string | undefined },
-) {
+function satisfiesSpendingPolicy(policy: SpendingPolicy, request: SpendingRequest) {
   try {
     assertSpendingPolicy(policy, request)
     return true
@@ -209,7 +226,7 @@ export function session(parameters: session.Parameters = {}) {
     allowCustomEscrow = false,
     autoSwap: autoSwapParameter,
     channelStore,
-    decimals = defaults.decimals,
+    decimals: decimalsParameter,
     escrow: escrowOverride,
     allowedChainIds,
     getClient: getClientParameter,
@@ -219,6 +236,9 @@ export function session(parameters: session.Parameters = {}) {
     resolveAccount,
   } = parameters
   const policy = resolveSpendingPolicy(parameters)
+  // Display amounts use the configured decimals, else the decimals the accepted tokens share.
+  const decimals =
+    decimalsParameter ?? Currency.decimalsOf(parameters.currencies) ?? defaults.decimals
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: getClientParameter,
@@ -606,19 +626,24 @@ export declare namespace session {
        */
       channelStore?: ChannelStore | undefined
       /**
-       * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
-       * case-insensitively. Offers in other currencies are skipped during selection and
-       * rejected before signing; an empty list rejects all. Required with `maxAmount` or
-       * `maxAtomicAmount`, which are denominated in the challenge currency.
+       * Allowlist of currencies this client will pay sessions in: TIP-20 addresses, compared
+       * case-insensitively, or `viem/tokens` tokens, matched on the challenge's chain. Offers
+       * in other currencies are skipped during selection and rejected before signing; an empty
+       * list rejects all. Required with `maxAmount` or `maxAtomicAmount`, which are
+       * denominated in the challenge currency.
        */
-      currencies?: readonly Address[] | undefined
+      currencies?: readonly Currency.Currency[] | undefined
       /**
        * Allowlist of session recipients (the channel payee), compared case-insensitively. Offers
        * to other recipients, or without one, are skipped during selection and rejected before
        * signing, as for charge. Explicit closes are exempt.
        */
       expectedRecipients?: readonly Address[] | undefined
-      /** Token decimals for parsing human-readable amounts (default: 6). `maxAmount` requires it explicitly. */
+      /**
+       * Decimals of address `currencies`, used to parse human-readable amounts. Tokens carry
+       * their own; `maxDeposit` and `topUpAmount` use the decimals the tokens share, else 6.
+       * `maxAmount` requires decimals for every address currency.
+       */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined

@@ -11,7 +11,7 @@ trustPolicy: no-downgrade
 
 catalog:
   file-type: '22.1.1'
-  ox: '0.14.45'
+  ox: '0.14.65'
   typescript: '~7.0.2'
 
 overrides:
@@ -25,7 +25,7 @@ overrides:
   vitest@<4.1.11: '4.1.11'
   typescript: 'catalog:'
   ox: 'catalog:'
-  viem: '2.57.1'
+  viem: '0.0.0-pr-5488-2e2712c'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'
@@ -101,7 +101,7 @@ minimumReleaseAgeExclude:
   - ip-address@10.7.1
   - js-yaml@4.3.1
   - nanoid@3.3.18
-  - ox@0.14.45
+  - ox@0.14.65
   - postcss@8.5.23
   - protobufjs@7.6.5
   - qs@6.16.1
@@ -109,7 +109,7 @@ minimumReleaseAgeExclude:
   - tmp@0.2.7
   - socket.io-parser@4.2.7
   - undici@8.10.2
-  - viem@2.57.1
+  - viem@0.0.0-pr-5488-2e2712c
   - vite@8.0.16
   - ws@8.21.0
 

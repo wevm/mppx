@@ -2,6 +2,7 @@ import type { Address, Client } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 
+import * as Currency from '../../Currency.js'
 import * as TempoAddress from './address.js'
 import * as defaults from './defaults.js'
 
@@ -32,7 +33,20 @@ export async function findCalls(
   if (parameters.maxAmountIn !== undefined && parameters.maxAmountIn <= 0n)
     throw new Error('Auto-swap maxAmountIn must be positive.')
 
-  const candidates = tokenIn.filter((t) => !TempoAddress.isEqual(t, tokenOut))
+  // Tokens resolve on the client's chain; ones without an address there are skipped.
+  const chainId = client.chain?.id
+  const candidates: Address[] = []
+  for (const currency of tokenIn) {
+    const address =
+      typeof currency === 'string'
+        ? currency
+        : chainId === undefined
+          ? undefined
+          : Currency.resolve(currency, { chainId })?.address
+    if (!address || TempoAddress.isEqual(address, tokenOut)) continue
+    if (candidates.some((candidate) => TempoAddress.isEqual(candidate, address))) continue
+    candidates.push(address)
+  }
 
   // Reads never carry the client's account: a node refuses every call from an access key whose
   // authorization is not yet published, which would hide every route from a new key.
@@ -110,8 +124,8 @@ export declare namespace findCalls {
     account: Address
     /** Amount of the target token needed. */
     amountOut: bigint
-    /** Candidate input tokens to swap from, in priority order. */
-    tokenIn: readonly Address[]
+    /** Candidate input tokens to swap from, in priority order, resolved on the client's chain. */
+    tokenIn: readonly Currency.Currency[]
     /** Maximum input-token units to spend. Defaults to the missing output amount plus slippage (1:1 units). */
     maxAmountIn?: bigint | undefined
     /** Max slippage tolerance as a percentage (e.g. `1` = 1%). */
@@ -137,7 +151,8 @@ export function resolve(
         ...(value.fallback === false
           ? []
           : defaultCurrencies.filter(
-              (d) => !value.tokenIn!.some((c) => TempoAddress.isEqual(c, d)),
+              (d) =>
+                !value.tokenIn!.some((c) => typeof c === 'string' && TempoAddress.isEqual(c, d)),
             )),
       ]
     : defaultCurrencies
@@ -152,8 +167,8 @@ export declare namespace resolve {
   type Options = {
     /** Maximum input-token units per swap. Defaults to parity with the missing output amount plus slippage; set explicitly for non-parity pairs. */
     maxAmountIn?: bigint | undefined
-    /** Fallback tokens to try swapping from, in priority order. */
-    tokenIn?: Address[] | undefined
+    /** Fallback tokens to try swapping from, in priority order: addresses or `viem/tokens` tokens. */
+    tokenIn?: readonly Currency.Currency[] | undefined
     /**
      * Whether to also try the default currencies after `tokenIn`. Set `false` to swap only from
      * `tokenIn`, as an allowlist. Ignored without `tokenIn`. @default true
@@ -166,7 +181,7 @@ export declare namespace resolve {
   type Value = boolean | Options
 
   type Resolved = {
-    tokenIn: readonly Address[]
+    tokenIn: readonly Currency.Currency[]
     slippage: number
     maxAmountIn?: bigint | undefined
   }
