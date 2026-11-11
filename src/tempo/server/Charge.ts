@@ -811,6 +811,9 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           let broadcastAttempted = false
+          // Set when the node already held the transaction from someone else,
+          // so an unknown outcome is not remembered as this server's own.
+          let duplicateElsewhere = false
           let finalHash: `0x${string}` | undefined
           // Set only after this request claims the final hash, so cleanup never
           // releases a marker that another request holds.
@@ -1004,6 +1007,7 @@ export function charge<const parameters extends charge.Parameters>(
                 submittedElsewhere =
                   isDuplicateBroadcastError(broadcastError) &&
                   !(await isOwnBroadcast(store, finalHash, challenge.id))
+                duplicateElsewhere = submittedElsewhere
                 // The node may have accepted the transaction, so poll for its receipt.
                 const timeout = Math.min(deadline, validUntil) - Date.now()
                 let recovered: TransactionReceipt | undefined
@@ -1095,10 +1099,12 @@ export function charge<const parameters extends charge.Parameters>(
             // and recovers the receipt instead of being rejected as a replay.
             if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
             await releaseHashUse(store, hash)
-            // Remember a broadcast whose outcome is unknown, for this challenge
-            // only, so a retry that finds the node already holding it recovers
-            // it as this server's own.
-            if (error instanceof BroadcastOutcomeUnknownError && finalHash)
+            // Remember a broadcast of this server's own whose outcome is
+            // unknown, for this challenge only, so a retry that finds the node
+            // already holding it recovers it as this server's own.
+            // A duplicate of someone else's submission leaves no record: this
+            // server has no evidence it sent the transaction.
+            if (error instanceof BroadcastOutcomeUnknownError && finalHash && !duplicateElsewhere)
               await store
                 .put(getBroadcastStoreKey(finalHash), {
                   challengeId: challenge.id,

@@ -100,7 +100,9 @@ async function setup(parameters: {
   const onPaymentSuccess = vi.fn()
   const store = Store.memory()
   // `gate` holds broadcasts in flight until it resolves.
-  const state: { gate?: Promise<void> | undefined; outcome: Outcome } = { outcome: 'normal' }
+  const state: { error?: unknown; gate?: Promise<void> | undefined; outcome: Outcome } = {
+    outcome: 'normal',
+  }
   let finalHash: `0x${string}` | undefined
   let memo: `0x${string}`
 
@@ -128,7 +130,7 @@ async function setup(parameters: {
             await state.gate
             if (outcome === 'normal') {
             } else if (error === 'hang') return new Promise(() => {})
-            else throw error
+            else throw state.error ?? error
           } else if (method === 'eth_getTransactionReceipt') {
             lookupHashes.push(params[0])
             if (outcome === 'missing' || outcome === 'expired' || outcome === 'expiring')
@@ -517,9 +519,27 @@ test.each([
   },
 )
 test('unbound pull retried after an unknown outcome recovers its own duplicate broadcast', async () => {
-  // The first attempt's outcome is unknown, so the server remembers its broadcast for this
-  // challenge; the retry that finds the node already holding it settles it as its own.
+  // The first attempt's own send timed out with an unknown outcome, so the server remembers its
+  // broadcast for this challenge; the retry that finds the node already holding it settles it.
   const { broadcast, finalHash, state } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  state.error = alreadyKnown
+  state.outcome = 'pending'
+  const receipt = await broadcast()
+  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+})
+
+test('a duplicate whose receipt never appeared is not remembered as its own', async () => {
+  // A first attempt that found the node already holding the transaction has no evidence this
+  // server sent it, so its unknown outcome leaves no broadcast record and a retry still needs
+  // this challenge's attribution memo.
+  const { broadcast, onPaymentSuccess, state } = await setup({
     bound: false,
     error: alreadyKnown,
     sponsored: false,
@@ -528,6 +548,7 @@ test('unbound pull retried after an unknown outcome recovers its own duplicate b
   const thrown = await broadcast().catch((e: unknown) => e)
   expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
   state.outcome = 'pending'
-  const receipt = await broadcast()
-  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+  const retry = await broadcast().catch((e: unknown) => e)
+  expect(retry).toMatchObject({ message: expect.stringContaining('not bound to this challenge') })
+  expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
