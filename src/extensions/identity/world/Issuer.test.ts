@@ -314,6 +314,52 @@ test('leaves other requests to the app', async () => {
   expect(jwks.keys.map(({ alg }) => alg)).toEqual(['EdDSA'])
 })
 
+test('reads at most 4 KiB of a body, even without a content length', async () => {
+  const issuer = await createIssuer(await createWorld())
+  let pulled = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++
+      controller.enqueue(new Uint8Array(1_024).fill(32))
+    },
+  })
+  const response = (await issuer.handle(
+    new Request(`${issuer.url}${World.Constants.devicePath}`, {
+      body,
+      duplex: 'half',
+      method: 'POST',
+    } as RequestInit),
+  ))!
+  expect(response.status).toBe(400)
+  expect(pulled).toBeLessThan(10)
+})
+
+test('fails a start it cannot index for cleanup, and saves nothing', async () => {
+  const memory = Store.memory()
+  let failing = true
+  const store: typeof memory = {
+    ...memory,
+    update(key, change) {
+      if (failing && key.includes(':expiry:')) return Promise.reject(new Error('store down'))
+      return memory.update(key, change)
+    },
+  }
+  const world = await createWorld()
+  const issuer = await createIssuer(world, {
+    limit: { key: () => 'all', max: 5, window: 60 },
+    store,
+  })
+  const response = await post(issuer, World.Constants.devicePath, {
+    audience: 'https://api.example',
+  })
+  expect(response.status).toBe(503)
+  expect(await memory.get(`mppx:world-id:${issuer.url}:limit:all`)).toBeNull()
+  failing = false
+  expect(
+    (await post(issuer, World.Constants.devicePath, { audience: 'https://api.example' })).status,
+  ).toBe(200)
+})
+
 test('deletes abandoned attempts and ended limit windows', async () => {
   const world = await createWorld()
   const store = Store.memory()

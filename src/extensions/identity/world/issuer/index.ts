@@ -190,8 +190,17 @@ export function create(config: create.Config): Issuer {
             return { op: 'noop', result: Math.ceil((window.reset - now) / 1_000) }
           return { op: 'set', value: { ...window, count: window.count + 1 }, result: 0 }
         })
-        // Indexed once per window, never on a refused start.
-        if (retryAfter < 0) await track(limitKey, reset).catch(() => {})
+        // Indexed once per window, never on a refused start. A window that can't be indexed is
+        // dropped (it holds only this start), since no sweep could ever find it.
+        if (retryAfter < 0)
+          try {
+            await track(limitKey, reset)
+          } catch {
+            await store
+              .update<string, undefined>(limitKey, () => ({ op: 'delete', result: undefined }))
+              .catch(() => {})
+            return error(503, 'temporarily_unavailable', 'World ID is unavailable.')
+          }
         if (retryAfter > 0)
           return error(429, 'slow_down', 'Too many World ID attempts.', {
             'retry-after': String(retryAfter),
@@ -218,8 +227,13 @@ export function create(config: create.Config): Issuer {
       // The first poll waits an interval too (RFC 8628).
       next: now + started.interval * 1_000,
     }
-    // Indexing never fails a start whose device authorization World IdP already issued.
-    await track(`${prefix}attempt:${id}`, attempt.expires).catch(() => {})
+    // An attempt is saved only once indexed, so a sweep can always delete it. A start that can't be
+    // indexed fails; the unused device authorization simply expires at World IdP.
+    try {
+      await track(`${prefix}attempt:${id}`, attempt.expires)
+    } catch {
+      return error(503, 'temporarily_unavailable', 'World ID is unavailable.')
+    }
     await store.put(`${prefix}attempt:${id}`, attempt)
     return Response.json(
       {
@@ -508,6 +522,9 @@ const shards = 16
 /** Most records one sweep deletes, so each start does a bounded amount of cleanup. */
 const sweepLimit = 50
 
+/** The largest request body the issuer reads, in bytes. */
+const maxBody = 4_096
+
 /** The index shard of a key. */
 function shardOf(key: string): number {
   let hash = 0
@@ -517,14 +534,47 @@ function shardOf(key: string): number {
 
 async function read(request: Request): Promise<Record<string, unknown> | undefined> {
   const length = Number(request.headers.get('content-length') ?? 0)
-  if (length > 4_096) return undefined
-  const text = await request.text().catch(() => '')
-  if (text.length > 4_096) return undefined
+  if (length > maxBody) return undefined
+  const text = await readText(request)
+  if (text === undefined) return undefined
   try {
     const value = JSON.parse(text) as unknown
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Reads a body of at most {@link maxBody} bytes, cancelling the stream as soon as it is over. */
+async function readText(request: Request): Promise<string | undefined> {
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBody) {
+        await reader.cancel().catch(() => {})
+        return undefined
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return undefined
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     return undefined
   }
