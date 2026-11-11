@@ -105,6 +105,11 @@ export function tempo<const parameters extends tempo.Parameters>(
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
+    /**
+     * Also accepts MACH paid directly to the recipient, for charges and sessions. Needs
+     * `machineTokenEnabled`; leave it off when the recipient can't hold MACH.
+     */
+    machineTokenDirect?: boolean | undefined
     /** Enables MACH funding for compatible Tempo methods: `charge` and `session`. */
     machineTokenEnabled?: boolean | undefined
   }
@@ -269,10 +274,11 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
-    // `machineTokenEnabled` offers also accept MACH channels; the first offer settles them.
-    const machineToken = parameters?.machineTokenEnabled
-      ? defaults.machineToken[currency.chainId as keyof typeof defaults.machineToken]?.token
-      : undefined
+    // `machineTokenDirect` offers also accept MACH channels; the first offer settles them.
+    const machineToken =
+      parameters?.machineTokenEnabled && parameters?.machineTokenDirect
+        ? defaults.machineToken[currency.chainId as keyof typeof defaults.machineToken]?.token
+        : undefined
     for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
       if (settlements.has(key(currency.chainId, token))) continue
       settlements.set(key(currency.chainId, token), method.extensions!.settleScheduled)

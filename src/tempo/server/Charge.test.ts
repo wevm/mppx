@@ -1904,9 +1904,8 @@ describe('tempo', () => {
       expect(
         (challenge.request.methodDetails as { machineTokenEnabled?: boolean })?.machineTokenEnabled,
       ).toBe(true)
-      expect(
-        (challenge.request.methodDetails as { machineTokenDirect?: boolean })?.machineTokenDirect,
-      ).toBe(true)
+      // Without the direct opt-in, MACH still settles through the swapper.
+      expect(challenge.request.methodDetails).not.toHaveProperty('machineTokenDirect')
       const credential = Credential.from({
         challenge,
         payload: { hash, type: 'hash' as const },
@@ -1969,11 +1968,14 @@ describe('tempo', () => {
           { retryCount: 0 },
         ),
       })
-      const issue = async (machineTokenEnabled: boolean) => {
+      const issue = async (
+        machineTokenEnabled: boolean,
+        machineTokenDirect = machineTokenEnabled,
+      ) => {
         const server = Mppx_server.create({
           methods: [
             tempo_server.charge({
-              ...(machineTokenEnabled ? { machineTokenEnabled } : {}),
+              ...(machineTokenEnabled ? { machineTokenEnabled, machineTokenDirect } : {}),
               account: accounts[0],
               currency: asset,
               getClient: () => directClient,
@@ -2010,6 +2012,11 @@ describe('tempo', () => {
       const receipt = await server.verifyCredential(Credential.serialize(credential))
       expect(receipt.reference).toBe(hash)
       expect(receipt.fundingCurrency).toBe(mach)
+
+      // Without the opt-in, MACH still goes through the swapper only.
+      await issue(true, false)
+      expect(challenge!.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
+      expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')
 
       const plainServer = await issue(false)
       expect(challenge!.request.methodDetails).not.toHaveProperty('machineTokenDirect')
@@ -7491,6 +7498,7 @@ describe('direct MACH pull payments', () => {
           account: accounts[0],
           currency: asset,
           getClient: () => rpc,
+          machineTokenDirect: true,
           machineTokenEnabled: true,
           store: Store.memory(),
           supportedModes: ['pull'],

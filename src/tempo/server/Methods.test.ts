@@ -220,7 +220,14 @@ test('machineTokenEnabled sessions settle MACH channels', async () => {
     } as unknown as ChannelStore.State
     const create = (machineTokenEnabled: boolean) =>
       Mppx.create({
-        methods: [tempo({ ...config, machineTokenEnabled, settlementSchedule: { amount: '1' } })],
+        methods: [
+          tempo({
+            ...config,
+            machineTokenDirect: machineTokenEnabled,
+            machineTokenEnabled,
+            settlementSchedule: { amount: '1' },
+          }),
+        ],
         secretKey,
       })
 

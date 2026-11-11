@@ -69,6 +69,7 @@ export function charge<const parameters extends charge.Parameters>(
   >,
 ): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>> {
   const {
+    machineTokenDirect,
     machineTokenEnabled,
     allowedFeeTokens: configuredAllowedFeeTokens,
     amount,
@@ -600,6 +601,7 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
+      machineTokenDirect,
       machineTokenEnabled,
       amount,
       currency,
@@ -674,8 +676,8 @@ export function charge<const parameters extends charge.Parameters>(
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
-      // Every MACH merchant is also authorized for the swapper, so `machineTokenEnabled` offers both.
-      const machineTokenDirect = Boolean(request.machineTokenEnabled)
+      // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
+      const machineTokenDirect = Boolean(request.machineTokenEnabled && request.machineTokenDirect)
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -1164,8 +1166,14 @@ export declare namespace charge {
      */
     confirmationTimeoutMs?: number | undefined
     /**
-     * Accepts MACH 1:1 for this charge: payers may transfer MACH directly to the recipient instead
-     * of the challenge currency. Payments made through the legacy swapper are still accepted.
+     * Also accepts MACH 1:1 transferred directly to the recipient, when `machineTokenEnabled` is
+     * set. Leave it off when the recipient can't hold MACH, such as a Stripe deposit address:
+     * clients then keep paying MACH through the swapper.
+     */
+    machineTokenDirect?: boolean | undefined
+    /**
+     * Lets payers fund this charge with MACH through the swapper, which pays the recipient in the
+     * challenge currency. Add `machineTokenDirect` to also accept MACH transferred directly.
      */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
