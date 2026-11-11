@@ -7542,4 +7542,104 @@ describe('direct MACH pull payments', () => {
     expect(receipt.reference).toBe(broadcast)
     expect(receipt.fundingCurrency).toBe(mach)
   })
+
+  test('accepts a challenge-currency payment batched with an unrelated MACH transfer', async () => {
+    const mach = defaults.machineToken[defaults.chainId.testnet].token
+    const payer = privateKeyToAccount(generatePrivateKey())
+    let broadcast: Hex.Hex | undefined
+    const rpc = createClient({
+      chain: { ...chain, id: defaults.chainId.testnet },
+      transport: custom(
+        {
+          async request({ method, params }) {
+            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+            if (method === 'eth_call') return '0x'
+            if (method === 'eth_sendRawTransactionSync') {
+              const [serialized] = params as [Hex.Hex]
+              broadcast = keccak256(serialized)
+              const transaction = Transaction.deserialize(serialized as never) as {
+                calls: readonly { data: Hex.Hex }[]
+              }
+              const { args } = decodeFunctionData({
+                abi: Abis.tip20,
+                data: transaction.calls[0]!.data,
+              })
+              const [to, amount, memo] = args as readonly [Hex.Hex, bigint, Hex.Hex]
+              const receipt = directMachineTokenReceipt({
+                amount,
+                from: payer.address,
+                hash: broadcast,
+                memo,
+                recipient: to,
+              })
+              // The payment itself settles in the challenge currency.
+              return { ...receipt, logs: [{ ...receipt.logs[0]!, address: asset }], to: asset }
+            }
+            throw new Error(`Unexpected batched MACH RPC method: ${method}`)
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const server = Mppx_server.create({
+      methods: [
+        tempo_server.charge({
+          account: accounts[0],
+          currency: asset,
+          getClient: () => rpc,
+          machineTokenDirect: true,
+          machineTokenEnabled: true,
+          store: Store.memory(),
+          supportedModes: ['pull'],
+          testnet: true,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const result = await server.charge({ amount: '1', decimals: 6 })(
+      new Request('https://example.com'),
+    )
+    if (result.status !== 402) throw new Error('Expected challenge')
+    const challenge = Challenge.fromResponse(result.challenge)
+    const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+    const signature = await signTransaction(rpc, {
+      account: payer,
+      calls: [
+        {
+          to: asset,
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transferWithMemo',
+            args: [accounts[0].address, BigInt(String(challenge.request.amount)), memo],
+          }),
+        },
+        {
+          to: mach,
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transfer',
+            args: [accounts[2].address, 1n],
+          }),
+        },
+      ],
+      feeToken: asset,
+      gas: 100_000n,
+      maxFeePerGas: 1_000_000_000n,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      nonce: 0,
+      nonceKey: maxUint256,
+      validBefore: Math.floor(Date.now() / 1_000) + 25,
+    } as never)
+    const credential = Credential.from({
+      challenge,
+      payload: { signature, type: 'transaction' as const },
+      source: `did:pkh:eip155:${defaults.chainId.testnet}:${payer.address}`,
+    })
+    const receipt = await server.verifyCredential(Credential.serialize(credential))
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.reference).toBe(broadcast)
+    expect(receipt.fundingCurrency).not.toBe(mach)
+  })
 })
