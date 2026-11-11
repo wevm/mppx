@@ -309,3 +309,21 @@ test.each([true, false])('runs downstream header hooks once: explicit=%s', async
   expect(await (await fetch(server.url)).text()).toBe('paid')
   expect(hook).toHaveBeenCalledOnce()
 })
+
+test('completes every queued write when the producer reuses one callback', async () => {
+  const callback = vi.fn()
+  const count = 1024
+  const server = await serve(
+    (res) => {
+      for (let i = 0; i < count; i++) res.write('x', callback)
+      res.end()
+    },
+    async (response) => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return response
+    },
+  )
+  expect(await (await fetch(server.url)).text()).toBe('x'.repeat(count))
+  await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(count))
+  expect(callback.mock.calls.every(([error]) => error == null)).toBe(true)
+})

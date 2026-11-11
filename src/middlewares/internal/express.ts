@@ -48,7 +48,7 @@ export function wrapResponse(
     addTrailers: response.addTrailers.bind(response),
   }
   type Callback = (error?: Error | null) => void
-  const callbacks: Callback[] = []
+  const callbacks = new Set<Callback>()
   const endCallbacks: Callback[] = []
   const readyCallbacks: Callback[] = []
   let trailers: Parameters<typeof response.addTrailers>[0] | undefined
@@ -70,16 +70,15 @@ export function wrapResponse(
   function acknowledgeWrites() {
     if (!accepted || failed) return
     for (const callback of readyCallbacks.splice(0)) {
-      const index = callbacks.indexOf(callback)
-      if (index !== -1) {
-        callbacks.splice(index, 1)
-        queueMicrotask(() => callback())
-      }
+      if (callbacks.delete(callback)) queueMicrotask(() => callback())
     }
   }
 
-  function complete(pending: Callback[], error?: Error) {
-    for (const callback of pending.splice(0)) queueMicrotask(() => callback(error))
+  function complete(pending: Callback[] | Set<Callback>, error?: Error) {
+    const entries = [...pending]
+    if (pending instanceof Set) pending.clear()
+    else pending.length = 0
+    for (const callback of entries) queueMicrotask(() => callback(error))
   }
 
   // Handler bytes already passed through downstream body wrappers. Emit them natively
@@ -199,12 +198,14 @@ export function wrapResponse(
     callback?: Callback,
   ) => {
     if (emitting) return original.write(chunk, encoding as BufferEncoding, callback)
-    const done = typeof encoding === 'function' ? encoding : callback
+    const handler = typeof encoding === 'function' ? encoding : callback
+    // Each write owns a completion, even when a producer reuses its callback.
+    const done = handler ? (error?: Error | null) => handler(error) : undefined
     if (failed || response.destroyed) {
       if (done) queueMicrotask(() => done(failed ?? new Error('Response closed.')))
       return false
     }
-    if (done) callbacks.push(done)
+    if (done) callbacks.add(done)
     start()
     // A transport may retain the chunk after the producer's callback runs.
     const copy =
@@ -212,9 +213,9 @@ export function wrapResponse(
         ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined)
         : Buffer.from(chunk)
     return body.write(copy, (error) => {
-      if (!done || !callbacks.includes(done)) return
+      if (!done || !callbacks.has(done)) return
       if (error) {
-        callbacks.splice(callbacks.indexOf(done), 1)
+        callbacks.delete(done)
         queueMicrotask(() => done(error))
       } else {
         // The copied input has entered a bounded stream. Waiting for a complete
