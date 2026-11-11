@@ -6,7 +6,7 @@ import * as World from 'mppx/extensions/identity/world'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { Base64 } from 'ox'
 import { privateKeyToAccount } from 'viem/accounts'
-import { expect, test } from 'vp/test'
+import { expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 const account = privateKeyToAccount(
@@ -677,4 +677,34 @@ test('shares AgentBook lookups for the same wallet', async () => {
   expect((await flaky.verify(await craft())).status).toBe('unavailable')
   expect((await flaky.verify(await craft())).status).toBe('unavailable')
   expect(down.calls).toHaveLength(2)
+})
+
+test('refreshes an expired registered wallet with one shared lookup', async () => {
+  let registeredNow = true
+  const calls: unknown[] = []
+  const book = {
+    client: {
+      async readContract(parameters: unknown) {
+        calls.push(parameters)
+        return registeredNow ? humanId : 0n
+      },
+    },
+  }
+  const verifier = verifierFor({ agentBook: book })
+  expect((await verifier.verify(await craft())).status).toBe('valid')
+  const now = Date.now()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 61_000)
+  try {
+    registeredNow = false
+    const results = await Promise.all(
+      [1, 2, 3].map(async () =>
+        verifier.verify(await craft({ issuedAt: new Date(now + 61_000).toISOString() })),
+      ),
+    )
+    // One refresh, and its unregistered answer is not hidden by the expired entry.
+    expect(calls).toHaveLength(2)
+    expect(results.map((result) => result.status)).toEqual(['forbidden', 'forbidden', 'forbidden'])
+  } finally {
+    clock.mockRestore()
+  }
 })

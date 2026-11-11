@@ -237,8 +237,10 @@ function cached(lookup: (agent: Address) => Promise<string | undefined>) {
   return (agent: Address) => {
     const key = agent.toLowerCase()
     const now = Date.now()
-    const entry = registered.get(key) ?? other.get(key)
-    if (entry && entry.expires > now) return entry.value
+    const fresh = (entry: Entry | undefined) => (entry && entry.expires > now ? entry : undefined)
+    const entry = fresh(registered.get(key)) ?? fresh(other.get(key))
+    if (entry) return entry.value
+    registered.delete(key)
     const value = lookup(agent)
     put(other, key, { expires: Number.POSITIVE_INFINITY, value })
     value.then(
