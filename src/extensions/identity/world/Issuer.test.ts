@@ -277,6 +277,38 @@ test('leaves other requests to the app', async () => {
   expect(jwks.keys.map(({ alg }) => alg)).toEqual(['EdDSA'])
 })
 
+test('deletes abandoned attempts and ended limit windows', async () => {
+  const world = await createWorld()
+  const store = Store.memory()
+  const issuer = await createIssuer(world, {
+    limit: { key: (request) => request.headers.get('x-caller') ?? undefined, max: 5, window: 60 },
+    store,
+  })
+  vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+  const response = await post(
+    issuer,
+    World.Constants.devicePath,
+    { audience: 'https://api.example' },
+    { 'x-caller': 'a' },
+  )
+  const { id } = (await response.json()) as { id: string }
+  expect(await store.get(`mppx:world-id:attempt:${id}`)).not.toBeNull()
+  expect(await store.get('mppx:world-id:limit:a')).not.toBeNull()
+
+  // Within two minutes after the attempt's 600 s expiry, another caller's start sweeps both.
+  vi.setSystemTime(Date.now() + 722_000)
+  for (let i = 0; i < 2; i++)
+    await post(
+      issuer,
+      World.Constants.devicePath,
+      { audience: 'https://api.example' },
+      { 'x-caller': 'b' },
+    )
+  expect(await store.get(`mppx:world-id:attempt:${id}`)).toBeNull()
+  expect(await store.get('mppx:world-id:limit:a')).toBeNull()
+  expect(await store.get('mppx:world-id:limit:b')).not.toBeNull()
+})
+
 const servers: { close(): void }[] = []
 afterEach(() => {
   for (const server of servers.splice(0)) server.close()

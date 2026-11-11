@@ -20,6 +20,9 @@ import * as Idp from '../internal/Idp.js'
  * - `POST /world/token` polls it; the poll interval is enforced per attempt in `store`.
  * - `GET /.well-known/jwks.json` publishes the attestation key.
  *
+ * Records expire on their own: each attempt start deletes attempts and limit windows that ended
+ * over a minute ago, so abandoned ones don't accumulate in `store`.
+ *
  * Device codes, ID tokens and World's subject never leave the issuer. An approval's ID token is
  * kept with the attempt until it verifies, so a World IdP key outage answers 503 and the next poll
  * retries verification instead of asking the human again.
@@ -86,7 +89,57 @@ export function create(config: create.Config): Issuer {
       )
     : undefined
 
+  /** Indexes a record under the minute it expires, so {@link sweep} can delete it. */
+  async function track(key: string, expires: number) {
+    const bucket = Math.ceil(expires / bucketMs)
+    await store.update<string, undefined>(`${prefix}expiry:${bucket}`, (current) => {
+      const keys = (current as string[] | null) ?? []
+      if (keys.includes(key)) return { op: 'noop', result: undefined }
+      return { op: 'set', value: [...keys, key], result: undefined }
+    })
+  }
+
+  /**
+   * Deletes records whose minute has passed, a few minutes per call: stores enforce no expiry, so
+   * abandoned attempts and limit windows would otherwise stay forever. A record renewed since it
+   * was indexed (a limit window that started again) is kept.
+   */
+  async function sweep() {
+    const now = Math.floor(Date.now() / bucketMs)
+    const due = await store.update<string, readonly number[]>(
+      `${prefix}expiry:cursor`,
+      (current) => {
+        const cursor = typeof current === 'number' ? current : now
+        if (cursor >= now)
+          return current === cursor
+            ? { op: 'noop', result: [] }
+            : { op: 'set', value: now, result: [] }
+        const end = Math.min(now, cursor + sweepBuckets)
+        return {
+          op: 'set',
+          value: end,
+          result: Array.from({ length: end - cursor }, (_, i) => cursor + i + 1),
+        }
+      },
+    )
+    const time = Date.now()
+    for (const bucket of due) {
+      const bucketKey = `${prefix}expiry:${bucket}`
+      const keys = ((await store.get(bucketKey)) as string[] | null) ?? []
+      for (const key of keys)
+        await store.update<string, undefined>(key, (current) => {
+          const record = current as { expires?: number; reset?: number } | null
+          if (!record) return { op: 'noop', result: undefined }
+          if ((record.expires ?? record.reset ?? 0) > time) return { op: 'noop', result: undefined }
+          return { op: 'delete', result: undefined }
+        })
+      await store.delete(bucketKey)
+    }
+  }
+
   async function device(request: Request): Promise<Response> {
+    // Cleanup never fails a start.
+    await sweep().catch(() => {})
     const body = await read(request)
     const audience = body?.audience
     if (typeof audience !== 'string' || !isOrigin(audience))
@@ -104,7 +157,9 @@ export function create(config: create.Config): Issuer {
       const caller = await limit.key(request)
       if (caller !== undefined) {
         const now = Date.now()
-        const retryAfter = await store.update(`${prefix}limit:${caller}`, (current) => {
+        const limitKey = `${prefix}limit:${caller}`
+        await track(limitKey, now + limit.window * 1_000)
+        const retryAfter = await store.update(limitKey, (current) => {
           const window = current as { count: number; reset: number } | null
           if (!window || window.reset <= now)
             return { op: 'set', value: { count: 1, reset: now + limit.window * 1_000 }, result: 0 }
@@ -138,6 +193,7 @@ export function create(config: create.Config): Issuer {
       // The first poll waits an interval too (RFC 8628).
       next: now + started.interval * 1_000,
     }
+    await track(`${prefix}attempt:${id}`, attempt.expires)
     await store.put(`${prefix}attempt:${id}`, attempt)
     return Response.json(
       {
@@ -377,6 +433,12 @@ type Attempt = {
 }
 
 const prefix = 'mppx:world-id:'
+
+/** Granularity of the expiry index: records are swept within a minute of expiring. */
+const bucketMs = 60_000
+
+/** Most expiry-index minutes one sweep handles, so a start after a long idle stays cheap. */
+const sweepBuckets = 10
 
 async function read(request: Request): Promise<Record<string, unknown> | undefined> {
   const length = Number(request.headers.get('content-length') ?? 0)
