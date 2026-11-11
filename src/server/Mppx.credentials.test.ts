@@ -124,6 +124,29 @@ test('a body digest mismatch gets 402 invalid-challenge with a fresh challenge',
   expect(verify).toHaveBeenCalledTimes(1)
 })
 
+test('a body digest is checked against the raw request bytes', async () => {
+  const { handler, verify } = setup()
+  const body = '\ufeff{"prompt":"hello"}'
+  const challenge = Challenge.from({
+    ...options,
+    digest: BodyDigest.compute(body),
+    intent: 'charge',
+    method: 'mock',
+    realm,
+    request: { amount: '1', currency: 'USD' },
+    secretKey,
+  })
+  const result = await handler(
+    new Request(url, {
+      body,
+      headers: { Authorization: authorization(challenge) },
+      method: 'POST',
+    }),
+  )
+  expect(result.status).toBe(200)
+  expect(verify).toHaveBeenCalledTimes(1)
+})
+
 test('a replayed credential gets 402 invalid-challenge with a fresh challenge', async () => {
   const { handler, mppx } = setup(async () => {
     throw new Errors.CredentialReplayedError()

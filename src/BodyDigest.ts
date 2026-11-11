@@ -17,7 +17,7 @@ export type BodyDigest = `sha-256=${string}`
 /**
  * Computes a SHA-256 digest of the given body.
  *
- * @param body - The body to digest (string or object).
+ * @param body - The body to digest (string, object or raw bytes).
  * @returns A digest string in the format "sha-256=base64hash".
  *
  * @example
@@ -28,9 +28,12 @@ export type BodyDigest = `sha-256=${string}`
  * // => 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE'
  * ```
  */
-export function compute(body: Record<string, unknown> | string): BodyDigest {
-  const str = typeof body === 'object' ? JSON.stringify(body) : body
-  const bytes = Bytes.fromString(str)
+export function compute(body: Record<string, unknown> | string | Uint8Array): BodyDigest {
+  // Raw bytes are hashed as is, so binary bodies and a leading BOM keep their digest.
+  const bytes =
+    body instanceof Uint8Array
+      ? body
+      : Bytes.fromString(typeof body === 'object' ? JSON.stringify(body) : body)
   const hash = Hash.sha256(bytes, { as: 'Bytes' })
   const base64 = Base64.fromBytes(hash)
   return `sha-256=${base64}`
@@ -50,7 +53,10 @@ export function compute(body: Record<string, unknown> | string): BodyDigest {
  * const isValid = BodyDigest.verify(digest, '{"amount":"1000"}')
  * ```
  */
-export function verify(digest: BodyDigest, body: Record<string, unknown> | string): boolean {
+export function verify(
+  digest: BodyDigest,
+  body: Record<string, unknown> | string | Uint8Array,
+): boolean {
   return constantTimeEqual(compute(body), normalize(digest))
 }
 

@@ -2310,7 +2310,9 @@ export function isMissingReceiptResponseError(
 async function matchesBodyDigest(input: unknown, digest: string): Promise<boolean> {
   if (!(input instanceof globalThis.Request)) return true
   try {
-    return BodyDigest.verify(digest as BodyDigest.BodyDigest, await input.clone().text())
+    // Compare the request's own bytes: text() would replace invalid UTF-8 and drop a BOM.
+    const body = new Uint8Array(await input.clone().arrayBuffer())
+    return BodyDigest.verify(digest as BodyDigest.BodyDigest, body)
   } catch {
     // A consumed body cannot be compared, so it cannot prove the digest.
     return false
