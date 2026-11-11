@@ -403,6 +403,74 @@ describe('tempo', () => {
       })
     })
 
+    test('a pull-settled transaction cannot be redeemed again as a hash credential', async () => {
+      const handler = Mppx_server.create({
+        challengeNonce: false,
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      // Without a nonce, the same route and expires give the same Challenge ID.
+      const expires = new Date(Date.now() + 60_000).toISOString()
+      const issue = async (expiresAt = expires) => {
+        const result = await handler.charge({ amount: '1', decimals: 6, expires: expiresAt })(
+          new Request('https://example.com'),
+        )
+        if (result.status !== 402) throw new Error('expected payment challenge')
+        return Challenge.fromResponse(result.challenge, { methods: [tempo_client.charge()] })
+      }
+      const challenge = await issue()
+      const same = await issue()
+      const other = await issue(new Date(Date.now() + 120_000).toISOString())
+      expect(same.id).toBe(challenge.id)
+      expect(other.id).not.toBe(challenge.id)
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: [
+          tokenTransferCall({
+            amount: 1_000_000n,
+            to: accounts[0].address,
+            token: asset,
+            memo: Attribution.encode({ challengeId: challenge.id, serverId: realm }),
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+      const receipt = await handler.verifyCredential(
+        Credential.serialize(
+          Credential.from({ challenge, payload: { type: 'transaction' as const, signature } }),
+        ),
+      )
+      expect(receipt.status).toBe('success')
+      const hash = receipt.reference as Hex.Hex
+
+      // The broadcast hash is in the record the hash path checks.
+      await expect(
+        handler.verifyCredential(
+          Credential.serialize(
+            Credential.from({ challenge: same, payload: { type: 'hash' as const, hash } }),
+          ),
+        ),
+      ).rejects.toThrow('Transaction hash has already been used')
+      await expect(
+        handler.verifyCredential(
+          Credential.serialize(
+            Credential.from({ challenge: other, payload: { type: 'hash' as const, hash } }),
+          ),
+        ),
+      ).rejects.toThrow('memo is not bound to this challenge')
+    })
+
     test('rejects a split payment for both challenges across replay-marker expiry', async () => {
       const handler = Mppx_server.create({
         methods: [
