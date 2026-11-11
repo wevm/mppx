@@ -186,14 +186,20 @@ function signingClients(config: verifier.Config): Map<number, SigningClient> {
 
 /**
  * A viem client that throws when the RPC fails. viem's `verifyMessage` reports any failed
- * `eth_call` as an invalid signature, so the transport records the last failure that was not a
- * revert, and an invalid result after one is rethrown as an outage.
+ * `eth_call` as an invalid signature, so the transport records whether the last failure came from
+ * the node being unreachable, and an invalid result after one is rethrown as an outage.
  */
 function signingClient(id: number, url: string): SigningClient {
-  const transport = http(url)
   return {
     async verifyMessage(parameters) {
       let outage: unknown
+      // viem returns a JSON-RPC error body from a failed HTTP response without its status.
+      let status: number | undefined
+      const transport = http(url, {
+        onFetchResponse: (response) => {
+          status = response.status
+        },
+      })
       const client = createPublicClient({
         chain: { id } as never,
         transport: (options) => {
@@ -201,12 +207,13 @@ function signingClient(id: number, url: string): SigningClient {
           return {
             ...inner,
             async request(args: any, opts?: any) {
+              status = undefined
               try {
                 const result = await inner.request(args, opts)
                 outage = undefined
                 return result
               } catch (error) {
-                outage = unreachable(error) ? error : undefined
+                outage = unreachable(error) || unavailableStatus(status) ? error : undefined
                 throw error
               }
             },
@@ -220,9 +227,14 @@ function signingClient(id: number, url: string): SigningClient {
   }
 }
 
+/** Whether an HTTP status means the node could not answer, whatever the response body says. */
+function unavailableStatus(status: number | undefined): boolean {
+  return status !== undefined && (status >= 500 || [403, 408, 429].includes(status))
+}
+
 /**
- * Whether an RPC error means the node could not answer: a network error, a timeout, HTTP 429 or
- * 5xx, or a JSON-RPC internal or rate-limit error. Anything else, such as a revert or out of gas,
+ * Whether an RPC error means the node could not answer: a network error, a timeout, HTTP 403,
+ * 408, 429 or 5xx, or a JSON-RPC internal, unavailable or rate-limit error. Anything else, such as a revert or out of gas,
  * is the call failing, which means the signature is invalid.
  */
 function unreachable(error: unknown): boolean {
@@ -232,9 +244,8 @@ function unreachable(error: unknown): boolean {
     code?: unknown
   }
   if (name === 'TimeoutError') return true
-  if (name === 'HttpRequestError')
-    return typeof status !== 'number' || status === 429 || status >= 500
-  return code === -32603 || code === -32005 || code === 429
+  if (name === 'HttpRequestError') return typeof status !== 'number' || unavailableStatus(status)
+  return code === -32603 || code === -32002 || code === -32005 || code === 429
 }
 
 /**

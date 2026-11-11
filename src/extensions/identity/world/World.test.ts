@@ -764,6 +764,12 @@ test('tells a default client RPC outage from a failed signature check', async ()
       body: { jsonrpc: '2.0', id, error: { code: -32005, message: 'rate limited' } },
     })
     expect((await verifier.verify(await proof())).status).toBe('unavailable')
+    // A failed HTTP response with a JSON-RPC error body is still an outage.
+    reply = (id) => ({
+      status: 503,
+      body: { jsonrpc: '2.0', id, error: { code: -32000, message: 'service unavailable' } },
+    })
+    expect((await verifier.verify(await proof())).status).toBe('unavailable')
   } finally {
     server.close()
   }
