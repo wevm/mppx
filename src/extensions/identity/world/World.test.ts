@@ -258,6 +258,21 @@ test('pollDevice: maps the issuer answers', async () => {
     issuer,
   })
   expect(offline).toEqual({ status: 'unavailable' })
+  // So is a body that fails after the issuer sent 200 headers.
+  const interrupted = await World.Client.pollDevice({
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('terminated'))
+          },
+        }),
+        { status: 200 },
+      ),
+    id: device.id,
+    issuer,
+  })
+  expect(interrupted).toEqual({ status: 'unavailable' })
 })
 
 test('verifier requires at least one acr', () => {

@@ -242,8 +242,17 @@ async function post(
       signal: AbortSignal.timeout(Constants.requestTimeout),
     },
   )
-  const json = (await response.json().catch(() => ({}))) as Record<string, unknown>
-  return { body: json && typeof json === 'object' ? json : {}, response }
+  // A body that fails to arrive (reset, timeout) throws, so a poll counts it as unavailable;
+  // only a body that arrived but isn't a JSON object reads as empty.
+  const text = await response.text()
+  let json: unknown
+  try {
+    json = JSON.parse(text)
+  } catch {}
+  return {
+    body: json && typeof json === 'object' ? (json as Record<string, unknown>) : {},
+    response,
+  }
 }
 
 function errorOf(body: Record<string, unknown>): string | undefined {
