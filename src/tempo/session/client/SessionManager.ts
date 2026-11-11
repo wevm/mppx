@@ -98,7 +98,10 @@ export type SessionManager = {
 
   /** Runs the HTTP 402 probe, signs/open/top-ups as needed, retries, and returns receipt metadata. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse>
-  /** Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom. */
+  /**
+   * Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom.
+   * Rejects `Fetch.withoutPayment` requests; use `fetch` to read an unpaid stream without session management.
+   */
   sse(input: RequestInfo | URL, init?: SessionManagerSseOptions): Promise<AsyncIterable<string>>
   /** Opens a paid WebSocket session after an HTTP challenge probe and manages in-band voucher frames. */
   ws(input: string | URL, init?: SessionManagerWebSocketOptions): Promise<SessionManagedWebSocket>
