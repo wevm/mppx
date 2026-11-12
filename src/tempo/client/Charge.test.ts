@@ -583,16 +583,15 @@ describe('tempo.charge client', () => {
 
       expect(findMachineTokenRoute).toHaveBeenCalledOnce()
       expect(findMachineTokenRoute.mock.calls[0]?.[1]).toMatchObject({
-        account: expect.objectContaining({ address: account.address }),
+        account: account.address,
         chainId,
         currency,
       })
       expect(findAutoSwapCalls).not.toHaveBeenCalled()
-      // The fee payer pays gas, so the sponsored transaction needs no fee token.
       expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
         calls: machineTokenCalls,
+        feeToken: Addresses.pathUsd,
       })
-      expect(prepareTransactionRequest.mock.calls[0]?.[1]).not.toHaveProperty('feeToken')
       expect(signTransaction).toHaveBeenCalledWith(
         client,
         expect.objectContaining({ feePayer: true }),
@@ -689,9 +688,7 @@ describe('tempo.charge client', () => {
       })
       expect(findRoute).toHaveBeenCalledWith(
         client,
-        expect.objectContaining({
-          account: expect.objectContaining({ address: selectedAccount.address }),
-        }),
+        expect.objectContaining({ account: selectedAccount.address }),
       )
       expect(prepareTransactionRequest).toHaveBeenCalledWith(
         client,

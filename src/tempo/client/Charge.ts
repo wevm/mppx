@@ -277,26 +277,44 @@ export function charge(parameters: charge.Parameters = {}) {
           () => undefined,
         )
         if (!payer) continue
-        const payable = route.token
-          ? await MachineTokenCharge.canPayDirect(client, {
-              account: payer,
-              amount: BigInt(amount),
-              calls: route.calls,
-              token: route.token,
-            })
-          : (await MachineTokenCharge.findRoute(client, {
-              account: payer,
-              chainId,
-              currency,
-              transfers,
-            })) !== undefined
+        if (!route.token) {
+          // The swapper route behaves exactly as before `machTokenAccepted` existed.
+          const found = await MachineTokenCharge.findRoute(client, {
+            account: payer.address,
+            chainId,
+            currency,
+            transfers,
+          })
+          if (!found) {
+            machineTokenUnpayable = true
+            continue
+          }
+          const feeToken =
+            explicitFeeToken ??
+            (await resolveFeeToken({
+              account: payer.address,
+              allowedTokens: defaultFeeTokens(chainId),
+              candidateTokens: defaultFeeTokens(chainId),
+              client,
+              prioritizeCandidates: true,
+            }))
+          machineTokenPayment = { calls: route.calls, feeToken: feeToken ?? null }
+          account = payer
+          break
+        }
+        const payable = await MachineTokenCharge.canPayDirect(client, {
+          account: payer,
+          amount: BigInt(amount),
+          calls: route.calls,
+          token: route.token,
+        })
         if (!payable) {
           machineTokenUnpayable = true
           continue
         }
         const feeToken = await resolveMachineTokenGas(payer)
-        // Without gas for a MACH payment, pay the challenge currency instead.
-        if (feeToken === undefined) break
+        // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
+        if (feeToken === undefined) continue
         machineTokenPayment = { calls: route.calls, feeToken }
         account = payer
         break

@@ -104,11 +104,11 @@ export function getRoute(parameters: {
   }
 }
 
-/** Builds the legacy swapper route and returns it when the account can spend its MACH and it simulates. */
+/** Builds and simulates the first-party settlement route. */
 export async function findRoute(
   client: Client,
   parameters: {
-    account: Account
+    account: Address
     chainId: number
     currency: Address
     transfers: readonly Transfer[]
@@ -116,12 +116,22 @@ export async function findRoute(
 ): Promise<Route | undefined> {
   const route = getRoute(parameters)
   if (!route) return undefined
-  const { account } = parameters
-  const amount = route.transfers[0].amount
-  if (!(await canSpend(client, { account, amount, token: route.calls[0].to }))) return undefined
-  return (await simulates(client, { account: account.address, calls: route.calls }))
-    ? route
-    : undefined
+
+  try {
+    const balance = await readContract(
+      client,
+      Actions.token.getBalance.call(client, {
+        account: parameters.account,
+        token: route.calls[0].to,
+      }) as never,
+    )
+    if ((balance as bigint) < route.transfers[0].amount) return undefined
+
+    await call(client, { account: parameters.account, calls: route.calls } as never)
+    return route
+  } catch {
+    return undefined
+  }
 }
 
 /** Matches an exact legacy swapper route. */

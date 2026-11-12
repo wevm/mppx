@@ -85,13 +85,11 @@ function rpc(options: {
   })
 }
 
-const payerAccount = { address: payer, type: 'local' } as never
-
 describe('Tempo machine-token charges', () => {
   test('builds and validates the exact first-party approve + swapTo calls', async () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     const route = await MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n }), {
-      account: payerAccount,
+      account: payer,
       chainId,
       currency: targetToken,
       transfers,
@@ -121,7 +119,7 @@ describe('Tempo machine-token charges', () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     await expect(
       MachineTokenCharge.findRoute(rpc({ balance: 999_999n }), {
-        account: payerAccount,
+        account: payer,
         chainId,
         currency: targetToken,
         transfers,
@@ -133,7 +131,7 @@ describe('Tempo machine-token charges', () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     await expect(
       MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n, simulate: 'revert' }), {
-        account: payerAccount,
+        account: payer,
         chainId,
         currency: targetToken,
         transfers,
@@ -144,7 +142,7 @@ describe('Tempo machine-token charges', () => {
   test('rejects extra calls and any mismatch in the owned swap', async () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     const route = await MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n }), {
-      account: payerAccount,
+      account: payer,
       chainId,
       currency: targetToken,
       transfers,
@@ -182,7 +180,7 @@ describe('Tempo machine-token charges', () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     await expect(
       MachineTokenCharge.findRoute(client, {
-        account: payerAccount,
+        account: payer,
         chainId: 69420,
         currency: targetToken,
         transfers,
@@ -195,7 +193,7 @@ describe('Tempo machine-token charges', () => {
     const MachineTokenCharge = await import('./machine-token-charge.js')
     await expect(
       MachineTokenCharge.findRoute(client, {
-        account: payerAccount,
+        account: payer,
         chainId,
         currency: targetToken,
         transfers: [...transfers, transfers[0]!],
