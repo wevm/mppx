@@ -375,6 +375,22 @@ describe('listOperations', () => {
     expect(operation!.requestSchema).toBeUndefined()
   })
 
+  test('percent-decodes a $ref fragment before splitting it', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Encoded', version: '1' },
+      components: {
+        requestBodies: {
+          'a b': { content: { 'application/json': { schema: { type: 'string' } } } },
+        },
+      },
+      paths: {
+        '/encoded': { post: { requestBody: { $ref: '#%2Fcomponents%2FrequestBodies%2Fa%20b' } } },
+      },
+    })
+    expect(operation!.requestSchema).toEqual({ type: 'string' })
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })

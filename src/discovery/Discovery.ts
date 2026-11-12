@@ -215,7 +215,7 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
     const ref = (value as { $ref?: unknown } | undefined)?.$ref
     if (typeof ref !== 'string') return value
     if (cache.has(ref)) return cache.get(ref)
-    if (!ref.startsWith('#/') || seen.has(ref)) return undefined
+    if (!ref.startsWith('#') || seen.has(ref)) return undefined
     seen.add(ref)
     const result = resolveValue(pointer(ref), seen)
     cache.set(ref, result)
@@ -223,10 +223,12 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
   }
 
   function pointer(ref: string): unknown {
+    // RFC 6901: percent-decode the URI fragment first, then split it into reference tokens.
+    const fragment = decodeFragment(ref.slice(1))
+    if (fragment === undefined || !fragment.startsWith('/')) return undefined
     let target: unknown = doc
-    for (const part of ref.slice(2).split('/')) {
-      const key = decode(part)
-      if (key === undefined) return undefined
+    for (const part of fragment.slice(1).split('/')) {
+      const key = part.replaceAll('~1', '/').replaceAll('~0', '~')
       if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return undefined
       target = (target as Record<string, unknown>)[key]
     }
@@ -236,10 +238,10 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
   return (value) => resolveValue(value, new Set())
 }
 
-/** Decodes one JSON Pointer segment of a URI fragment, or `undefined` when its percent-encoding is malformed. */
-function decode(part: string): string | undefined {
+/** Percent-decodes a URI fragment, or `undefined` when its encoding is malformed. */
+function decodeFragment(fragment: string): string | undefined {
   try {
-    return decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
+    return decodeURIComponent(fragment)
   } catch {
     return undefined
   }
