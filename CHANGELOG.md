@@ -1,5 +1,20 @@
 # mppx
 
+## 0.18.1
+
+### Patch Changes
+
+- 7663d93: Fixed Cloudflare settlement recovery for vouchers larger than recorded usage, capturing only the amount owed. Added a settlement backfill for channels left unscheduled before upgrading.
+- 2a00add: Fixed automatic session settlement retries and preserved prepaid stream delivery during channel closure. Fixed mixed-case channel IDs in settlement backfills.
+- e86c670: Added `listOperations` to `mppx/discovery`, which lists a discovery document's operations with typed offers and JSON request schemas. Typed the offers `PaymentInfo` returns.
+- 066a75b: Added `mppx/extensions/identity/link`: server verifiers and client provers for Link agent identity attestations and Link-signed claims, such as a verified email. Added `Identity.Verifier.authorization`, which makes a route refuse a server without `requiresAuth: true`, and stopped proxies from forwarding `Identity-Presentation` headers and upstream identity challenges.
+- 4071a6c: Added MACH onramp links to insufficient-balance errors. `Tempo.machineTokenFundingUrl` builds the Tempo Wallet link that buys MACH, and `PaymentError` gained an optional `fundingUrl`, serialized as a Problem Details extension member. On Tempo mainnet, the `tempo.charge` client now throws `InsufficientBalanceError` with the link when a MACH-enabled charge can't be paid from MACH or the charge currency, the session client does the same for a MACH channel deposit, servers link MACH payments rejected for a low MACH balance, and the `mppx` CLI treats a MACH-enabled charge as payable from a MACH balance.
+- ee48ef6: Removed the package size limits from the package check; it still reports the sizes.
+- 40b9535: Prevented automatic payments during email OTP requests through identity-wrapped fetch clients. Added `Fetch.withoutPayment` to explicitly disable payments for a request.
+- dd571b3: Added `mppx/extensions/identity/persona`: `Persona.Server.create` starts Persona inquiries and returns a payment check and a request-stage verifier that require an approved inquiry, with an onboarding link on rejection and an optional approval cache. `Persona.Server.verifyWallet` links a wallet to a person before KYC, and `Persona.did` builds a wallet's reference ID.
+- 6e32317: Fixed composed subscription routes retaining request-derived dispatch state and accepting overlapping identity policies.
+- 75aee4b: Added the `Currency` module and accepted `viem/tokens` tokens, chain-indexed (`ousd`) or resolved to one chain (`ousd(4217)`), everywhere a currency is configured: Tempo charge and session client `currencies`, `autoSwap.tokenIn`, Tempo server `currencies`, and EVM and x402 `currencies`, with token decimals used for `maxAmount`, `maxDeposit` and `topUpAmount`.
+
 ## 0.18.0
 
 ### Minor Changes
