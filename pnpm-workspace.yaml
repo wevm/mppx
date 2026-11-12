@@ -25,7 +25,7 @@ overrides:
   vitest@<4.1.11: '4.1.11'
   typescript: 'catalog:'
   ox: 'catalog:'
-  viem: '0.0.0-pr-5488-2e2712c'
+  viem: '2.57.19'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'
@@ -109,7 +109,7 @@ minimumReleaseAgeExclude:
   - tmp@0.2.7
   - socket.io-parser@4.2.7
   - undici@8.10.2
-  - viem@0.0.0-pr-5488-2e2712c
+  - viem@2.57.19
   - vite@8.0.16
   - ws@8.21.0
 

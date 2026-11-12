@@ -33,7 +33,12 @@ test.each([false, true])('proof replay preserves explicit store policy: %s', asy
     chain: tempoChain,
     transport: custom(
       {
-        request: async () => {
+        // The account has no config commitment (TIP-1113), which viem reads to accept a root
+        // key's signature. Every other call fails, as for an account without contract code.
+        request: async ({ method, params }) => {
+          const [call] = (params ?? []) as [{ data?: string; input?: string }?]
+          const data = call?.data ?? call?.input
+          if (method === 'eth_call' && data?.startsWith('0x5bd93359')) return `0x${'00'.repeat(32)}`
           throw new Error('No contract signature')
         },
       },
