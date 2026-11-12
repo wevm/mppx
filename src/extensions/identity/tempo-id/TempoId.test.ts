@@ -14,7 +14,7 @@ const payer = '0x1111111111111111111111111111111111111111'
 const other = '0x2222222222222222222222222222222222222222'
 
 const method = Method.from({
-  name: 'test',
+  name: 'tempo',
   intent: 'charge',
   schema: {
     credential: { payload: z.object({ token: z.string() }) },
@@ -26,7 +26,7 @@ const serverMethod = Method.toServer(method, {
   async verify() {
     settlements++
     return Receipt.from({
-      method: 'test',
+      method: 'tempo',
       reference: 'ref',
       status: 'success',
       timestamp: new Date().toISOString(),
@@ -234,4 +234,34 @@ test('rejects a DPoP-bound token without its proof, with another URL, or replaye
   const signed = await prover.prove(new Request(url), { created: 0, nonce: '' })
   expect(await status(signed.headers)).toBe('valid')
   expect(await status(signed.headers)).toBe('invalid')
+})
+
+test('refuses a payment by a method that does not bind its source', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+  const request = new Request(url, { headers: { Authorization: `Bearer ${token}` } })
+  const source = `did:pkh:eip155:${chainId}:${payer}`
+
+  const result = await tempoId.paymentCheck.verify({
+    challenge: { method: 'stripe' },
+    credential: { source },
+    request,
+  } as never)
+
+  expect(result.status).toBe('forbidden')
+})
+
+test('rejects a DPoP proof with a null key', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const dpop = await createDpop()
+  const token = await tempoIssuer.token({ dpop })
+  const encode = (value: unknown) =>
+    Base64.fromString(JSON.stringify(value), { pad: false, url: true })
+  const proof = `${encode({ alg: 'ES256', jwk: null, typ: 'dpop+jwt' })}.${encode({})}.AA`
+
+  const result = await tempoId.verifier.verify(
+    new Request(url, { headers: { Authorization: `DPoP ${token}`, DPoP: proof } }),
+  )
+
+  expect(result.status).toBe('invalid')
 })

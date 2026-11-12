@@ -9,8 +9,8 @@ import type * as Types from '../Types.js'
  * Creates a Tempo ID verifier for one API.
  *
  * - `verifier` requires a valid Tempo ID access token from an allowed app.
- * - `paymentCheck` also requires that the payment's `source` is a Tempo Account the token grants
- *   to the app, so one user's token cannot pay with another user's wallet.
+ * - `paymentCheck` also requires a `tempo` payment whose `source` is a Tempo Account the token
+ *   grants to the app, so one user's token cannot pay with another user's wallet.
  *
  * Tokens verify offline against Tempo ID's keys. A DPoP-bound token also needs a proof of its key
  * for the request, which `store` accepts once. The token uses `Authorization`, so create the
@@ -101,7 +101,12 @@ export function create(config: create.Config): TempoId {
     if (!proof || proof.header.alg !== 'ES256' || proof.header.typ !== 'dpop+jwt')
       return 'The DPoP proof is malformed.'
     const jwk = proof.header.jwk as JsonWebKey
-    if (typeof jwk !== 'object' || 'd' in jwk || (await Jwt.thumbprint(jwk)) !== options.jkt)
+    if (
+      !jwk ||
+      typeof jwk !== 'object' ||
+      'd' in jwk ||
+      (await Jwt.thumbprint(jwk)) !== options.jkt
+    )
       return 'The DPoP proof key does not bind the token.'
     const valid = await crypto.subtle
       .importKey('jwk', jwk, Jwt.es256.key, false, ['verify'])
@@ -146,7 +151,10 @@ export function create(config: create.Config): TempoId {
       async verify(parameters): Promise<Identity.Verification<Types.Payer>> {
         const caller = await verify(parameters.request)
         if (caller.status !== 'valid' || !parameters.credential) return caller
-        // The source is a did:pkh:eip155:<chainId>:<address>, which the tempo method binds to the sender.
+        // Only the tempo method checks the source against the transaction's sender.
+        if (parameters.challenge.method !== 'tempo')
+          return { status: 'forbidden', reason: 'Pay with the tempo method.' }
+        // The source is a did:pkh:eip155:<chainId>:<address>.
         const [, , , chain, address] = parameters.credential.source?.split(':') ?? []
         if (chain !== String(chainId) || !isAddress(address))
           return {
