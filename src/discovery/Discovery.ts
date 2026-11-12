@@ -128,7 +128,10 @@ export type Operation = {
   path: string
   /** What the operation costs. Empty when it has no `x-payment-info`. */
   offers: PaymentOffer[]
-  /** The JSON Schema of an `application/json` request body (an object or a boolean schema), when it has one. */
+  /**
+   * The JSON Schema of an `application/json` request body (an object or a boolean schema), when it
+   * has one. Local `$ref`s to the body or schema are followed; nested ones point into the document.
+   */
   requestSchema: Record<string, unknown> | boolean | undefined
   /** The operation's summary, when it has one. */
   summary: string | undefined
@@ -171,17 +174,41 @@ export function listOperations(document: unknown): Operation[] {
         method,
         path,
         offers: operation['x-payment-info']?.offers ?? [],
-        requestSchema: jsonSchema(operation.requestBody),
+        requestSchema: jsonSchema(doc, operation.requestBody),
         summary: operation.summary,
       })
     }
   return operations
 }
 
-/** The `application/json` schema of an OpenAPI request body, if any. */
-function jsonSchema(requestBody: unknown): Record<string, unknown> | boolean | undefined {
-  const schema = (requestBody as { content?: Record<string, { schema?: unknown }> } | undefined)
-    ?.content?.['application/json']?.schema
+/** The `application/json` schema of an OpenAPI request body, if any, following local `$ref`s. */
+function jsonSchema(
+  doc: DiscoveryDocument,
+  requestBody: unknown,
+): Record<string, unknown> | boolean | undefined {
+  const body = resolve(doc, requestBody) as
+    | { content?: Record<string, { schema?: unknown }> }
+    | undefined
+  const schema = resolve(doc, body?.content?.['application/json']?.schema)
   if (typeof schema === 'boolean') return schema
   return schema && typeof schema === 'object' ? (schema as Record<string, unknown>) : undefined
+}
+
+/**
+ * Follows a Reference Object to a local JSON Pointer (`#/components/...`) in the document.
+ * Nested references inside the result stay as they are. Returns `undefined` for a reference
+ * that is remote, missing or circular.
+ */
+function resolve(doc: DiscoveryDocument, value: unknown, seen = new Set<string>()): unknown {
+  const ref = (value as { $ref?: unknown } | undefined)?.$ref
+  if (typeof ref !== 'string') return value
+  if (!ref.startsWith('#/') || seen.has(ref)) return undefined
+  seen.add(ref)
+  let target: unknown = doc
+  for (const part of ref.slice(2).split('/')) {
+    const key = decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
+    if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return undefined
+    target = (target as Record<string, unknown>)[key]
+  }
+  return resolve(doc, target, seen)
 }

@@ -292,6 +292,32 @@ describe('listOperations', () => {
     expect(operations.map((operation) => operation.requestSchema)).toEqual([false, true])
   })
 
+  test('follows local $refs to request bodies and schemas', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Refs', version: '1' },
+      components: {
+        requestBodies: {
+          Forecast: { $ref: '#/components/requestBodies/Inline' },
+          Inline: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Forecast' } } },
+          },
+        },
+        schemas: { Forecast: { type: 'object', properties: { city: { type: 'string' } } } },
+      },
+      paths: {
+        '/body': { post: { requestBody: { $ref: '#/components/requestBodies/Forecast' } } },
+        '/remote': { post: { requestBody: { $ref: 'https://example.com/body.json' } } },
+        '/loop': { post: { requestBody: { $ref: '#/paths/~1loop/post/requestBody' } } },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { type: 'object', properties: { city: { type: 'string' } } },
+      undefined,
+      undefined,
+    ])
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
