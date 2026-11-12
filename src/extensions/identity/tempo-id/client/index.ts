@@ -2,6 +2,7 @@ import { Base64 } from 'ox'
 
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
+import { Constants } from '../Constants.js'
 import * as Jwt from '../internal/Jwt.js'
 import type * as Types from '../Types.js'
 
@@ -26,12 +27,14 @@ export function prover(config: prover.Config): Identity.Prover {
   const { dpop } = config
   return {
     scope: config.scope,
-    headers: ['dpop'],
+    headers: ['dpop', Constants.idTokenHeader.toLowerCase()],
     async prove(request) {
       const accessToken = await config.accessToken()
       const headers = new Headers(request.headers)
       headers.set('Authorization', `${dpop ? 'DPoP' : 'Bearer'} ${accessToken}`)
       if (dpop) headers.set('DPoP', await proof(dpop, accessToken, request))
+      const idToken = await config.idToken?.()
+      if (idToken) headers.set(Constants.idTokenHeader, idToken)
       return new Request(request, { headers })
     },
   }
@@ -43,6 +46,8 @@ export declare namespace prover {
     readonly accessToken: () => MaybePromise<string>
     /** The DPoP key that binds the token. Absent, the token is sent as a Bearer token. */
     readonly dpop?: Types.DpopKey | undefined
+    /** Returns the user's ID token, such as `accounts.session.get()?.idToken`, so the API reads their email. */
+    readonly idToken?: (() => MaybePromise<string | undefined>) | undefined
     /** Origins that receive the token. Send it only to the API it was issued for. */
     readonly scope: Identity.Prover['scope']
   }

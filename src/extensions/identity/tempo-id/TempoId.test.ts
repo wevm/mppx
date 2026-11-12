@@ -70,6 +70,7 @@ async function createIssuer() {
   async function token(
     options: {
       accounts?: readonly string[]
+      compliance?: Record<string, string>
       aud?: string | readonly string[]
       clientId?: string
       dpop?: TempoId.DpopKey
@@ -86,6 +87,7 @@ async function createIssuer() {
       })),
       aud: options.aud ?? issuer,
       client_id: options.clientId ?? clientId,
+      compliance: options.compliance ?? {},
       ...(options.dpop && { cnf: { jkt: await thumbprint(options.dpop.jwk) } }),
       exp: options.exp ?? now + 300,
       iat: now,
@@ -104,7 +106,28 @@ async function createIssuer() {
     )
     return `${input}.${Base64.fromBytes(new Uint8Array(signature), { pad: false, url: true })}`
   }
-  return { fetch, fetches: () => fetches, token }
+  async function idToken(claims: Record<string, unknown> = {}) {
+    const now = Math.floor(Date.now() / 1000)
+    const encode = (value: unknown) =>
+      Base64.fromString(JSON.stringify(value), { pad: false, url: true })
+    const body = {
+      aud: clientId,
+      email: 'Ada@Example.com',
+      email_verified: true,
+      exp: now + 300,
+      iss: issuer,
+      sub: 'user_01TEST',
+      ...claims,
+    }
+    const input = `${encode({ alg: 'RS256', kid: 'k1', typ: 'JWT' })}.${encode(body)}`
+    const signature = await crypto.subtle.sign(
+      'RSASSA-PKCS1-v1_5',
+      keyPair.privateKey,
+      new TextEncoder().encode(input),
+    )
+    return `${input}.${Base64.fromBytes(new Uint8Array(signature), { pad: false, url: true })}`
+  }
+  return { fetch, fetches: () => fetches, idToken, token }
 }
 
 async function createDpop(): Promise<TempoId.DpopKey> {
@@ -264,4 +287,67 @@ test('rejects a DPoP proof with a null key', async () => {
   )
 
   expect(result.status).toBe('invalid')
+})
+
+test('reads the email of an ID token for the same user and app', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token({ compliance: { [payer]: 'clear' } })
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Tempo-Id-Token': await tempoIssuer.idToken(),
+  }
+
+  const result = await tempoId.verifier.verify(new Request(url, { headers }))
+
+  expect(result).toMatchObject({
+    status: 'valid',
+    value: { compliance: { [payer]: 'clear' }, email: 'ada@example.com', emailVerified: true },
+  })
+})
+
+test('rejects an ID token for another user', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Tempo-Id-Token': await tempoIssuer.idToken({ sub: 'user_other' }),
+  }
+
+  const result = await tempoId.verifier.verify(new Request(url, { headers }))
+
+  expect(result.status).toBe('invalid')
+})
+
+test('allow decides by email', async () => {
+  const { tempoId, tempoIssuer } = await setup({
+    allow: (user) => user.email?.endsWith('@tempo.xyz') === true,
+  })
+  const token = await tempoIssuer.token()
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Tempo-Id-Token': await tempoIssuer.idToken(),
+  }
+
+  const result = await tempoId.verifier.verify(new Request(url, { headers }))
+
+  expect(result.status).toBe('forbidden')
+})
+
+test('allow refuses a payer whose account is not clear, before settlement', async () => {
+  const { fetch, tempoIssuer } = await setup({
+    allow: (user) => !user.account || user.compliance[user.account] === 'clear',
+  })
+  const token = await tempoIssuer.token({ compliance: { [payer]: 'blocked' } })
+  const client = ClientMppx.create({
+    fetch,
+    identity: [TempoId.Client.prover({ accessToken: () => token, scope: [origin] })],
+    methods: [clientMethod(`did:pkh:eip155:${chainId}:${payer}`)],
+    polyfill: false,
+  })
+  const before = settlements
+
+  const response = await client.fetch(url)
+
+  expect(response.status).toBe(403)
+  expect(settlements).toBe(before)
 })

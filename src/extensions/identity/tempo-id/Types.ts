@@ -1,4 +1,7 @@
-/** A Tempo ID user, as a verified access token names them. */
+/** The screening state of a Tempo Account: only `clear` may pay without limits. */
+export type ComplianceState = 'clear' | 'exit_only' | 'blocked' | 'pending'
+
+/** A Tempo ID user, as a verified access token (and, when sent, ID token) names them. */
 export type Caller = {
   /** The Tempo ID user ID: stable across every app on Tempo ID. */
   readonly userId: string
@@ -6,6 +9,12 @@ export type Caller = {
   readonly clientId: string
   /** The Tempo Accounts the token grants to the app on the configured chain, lowercased. */
   readonly accounts: readonly `0x${string}`[]
+  /** The screening state of each account in the app's realms, by lowercased address. Empty for an unregistered app. */
+  readonly compliance: Readonly<Record<`0x${string}`, ComplianceState>>
+  /** The user's email address, lowercased, from the ID token. Absent without one, or without the `email` scope. */
+  readonly email?: string | undefined
+  /** Whether Tempo ID verified the email address. */
+  readonly emailVerified?: boolean | undefined
 }
 
 /** A verified Tempo ID user and the Tempo Account that paid. */

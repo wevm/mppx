@@ -4,6 +4,8 @@ export const Constants = {
   type: 'tempo-id',
   /** Tempo ID in production: the issuer of every access token. */
   issuer: 'https://id.tempo.xyz',
+  /** Header that carries the user's ID token, for their email address. */
+  idTokenHeader: 'Tempo-Id-Token',
   /** Seconds a DPoP proof is accepted after its `iat`. */
   proofMaxAge: 300,
   /** Seconds of clock skew allowed on token and proof times. */

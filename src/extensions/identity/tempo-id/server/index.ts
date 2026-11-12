@@ -23,6 +23,20 @@ import type * as Types from '../Types.js'
  *
  * mppx.charge({ amount: '0.01', identity: { payment: tempoId.paymentCheck } })
  * ```
+ *
+ * `allow` receives the user's ID, app, accounts with their compliance states, the email address
+ * from the ID token the client sends in `Tempo-Id-Token`, and, on the paid retry, the paying account:
+ *
+ * ```ts
+ * TempoId.Server.create({
+ *   allow: (user) =>
+ *     user.emailVerified === true &&
+ *     user.email?.endsWith('@example.com') === true &&
+ *     (!user.account || user.compliance[user.account] === 'clear'),
+ *   chainId: 4217,
+ *   clientId: 'app_…',
+ * })
+ * ```
  */
 export function create(config: create.Config): TempoId {
   const { chainId, store } = config
@@ -43,19 +57,12 @@ export function create(config: create.Config): TempoId {
       return { status: 'missing', headers, reason: 'Sign in with Tempo ID.' }
 
     const jwt = Jwt.decode(token)
-    if (!jwt || jwt.header.alg !== 'RS256' || jwt.header.typ !== 'at+jwt')
+    if (!jwt || jwt.header.typ !== 'at+jwt')
       return invalid('The token is not a Tempo ID access token.')
-    let key: CryptoKey | undefined
-    try {
-      key = await keys(String(jwt.header.kid))
-    } catch {
+    const signed = await signedByTempoId(jwt)
+    if (signed === 'unavailable')
       return { status: 'unavailable', reason: "Tempo ID's signing keys are unavailable." }
-    }
-    if (
-      !key ||
-      !(await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, jwt.signature, jwt.signingInput))
-    )
-      return invalid('The access token signature is invalid.')
+    if (!signed) return invalid('The access token signature is invalid.')
 
     const { aud, client_id, cnf, exp, iss, sub } = jwt.claims
     const now = Math.floor(Date.now() / 1_000)
@@ -86,10 +93,74 @@ export function create(config: create.Config): TempoId {
       .map((entry) => entry.account)
       .concat((jwt.claims.tempo_accounts ?? []).filter(isAddress))
       .map((account: string) => account.toLowerCase() as `0x${string}`)
+    const compliance = Object.fromEntries(
+      Object.entries(jwt.claims.compliance ?? {}).map(([address, state]) => [
+        address.toLowerCase(),
+        state,
+      ]),
+    ) as Types.Caller['compliance']
+
+    const idToken = await checkIdToken(request, { clientId: client_id, now, sub })
+    if (typeof idToken === 'string') return invalid(idToken)
+    if (idToken === null)
+      return { status: 'unavailable', reason: "Tempo ID's signing keys are unavailable." }
+
     return {
       status: 'valid',
-      value: { accounts: [...new Set(accounts)], clientId: client_id, userId: sub },
+      value: {
+        accounts: [...new Set(accounts)],
+        clientId: client_id,
+        compliance,
+        ...idToken,
+        userId: sub,
+      },
     }
+  }
+
+  /** Returns whether Tempo ID's RS256 keys signed a JWS, or `'unavailable'` when they cannot be read. */
+  async function signedByTempoId(jwt: Jwt.Decoded): Promise<boolean | 'unavailable'> {
+    if (jwt.header.alg !== 'RS256') return false
+    let key: CryptoKey | undefined
+    try {
+      key = await keys(String(jwt.header.kid))
+    } catch {
+      return 'unavailable'
+    }
+    if (!key) return false
+    return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, jwt.signature, jwt.signingInput)
+  }
+
+  /**
+   * Reads the email of the request's ID token, which Tempo ID issues to the same app for the same
+   * user. Returns why it fails, `null` when the keys are unavailable, or no email without a token.
+   */
+  async function checkIdToken(
+    request: Request,
+    options: { clientId: string; now: number; sub: string },
+  ): Promise<Pick<Types.Caller, 'email' | 'emailVerified'> | string | null> {
+    const value = request.headers.get(Constants.idTokenHeader)
+    if (!value) return {}
+    const jwt = Jwt.decode(value)
+    if (!jwt) return 'The ID token is malformed.'
+    const signed = await signedByTempoId(jwt)
+    if (signed === 'unavailable') return null
+    if (!signed) return 'The ID token signature is invalid.'
+    const { aud, email, email_verified, exp, iss, sub } = jwt.claims
+    if (iss !== issuer || ![aud].flat().includes(options.clientId) || sub !== options.sub)
+      return 'The ID token is for another user or app.'
+    if (typeof exp !== 'number' || exp + Constants.clockTolerance <= options.now)
+      return 'The ID token has expired. Sign in again.'
+    if (typeof email !== 'string') return {}
+    return { email: email.toLowerCase(), emailVerified: email_verified === true }
+  }
+
+  /** Runs `allow` on a verified user or payer. */
+  async function allowed<value extends Types.Payer>(
+    result: Identity.Verification<value>,
+  ): Promise<Identity.Verification<value>> {
+    if (result.status !== 'valid' || !config.allow || (await config.allow(result.value)))
+      return result
+    return { status: 'forbidden', reason: 'This user may not call this API.' }
   }
 
   /** Returns why a request's DPoP proof fails, or `undefined`. */
@@ -145,12 +216,12 @@ export function create(config: create.Config): TempoId {
   }
 
   return {
-    verifier: { verify },
+    verifier: { verify: async (request) => allowed(await verify(request)) },
     paymentCheck: {
       requires: [{ type: Constants.type, issuer }],
       async verify(parameters): Promise<Identity.Verification<Types.Payer>> {
         const caller = await verify(parameters.request)
-        if (caller.status !== 'valid' || !parameters.credential) return caller
+        if (caller.status !== 'valid' || !parameters.credential) return allowed(caller)
         // Only the tempo method checks the source against the transaction's sender.
         if (parameters.challenge.method !== 'tempo')
           return { status: 'forbidden', reason: 'Pay with the tempo method.' }
@@ -167,7 +238,7 @@ export function create(config: create.Config): TempoId {
             status: 'forbidden',
             reason: 'The paying account is not one this user granted to the app.',
           }
-        return { status: 'valid', value: { ...caller.value, account } }
+        return allowed({ status: 'valid', value: { ...caller.value, account } })
       },
     },
   }
@@ -175,6 +246,11 @@ export function create(config: create.Config): TempoId {
 
 export declare namespace create {
   type Config = {
+    /**
+     * Decides whether a verified user may call the API, such as by email or by the paying
+     * account's compliance state. On the paid retry it also receives the paying `account`.
+     */
+    readonly allow?: ((user: Types.Payer) => boolean | Promise<boolean>) | undefined
     /** The chain payments settle on. */
     readonly chainId: number
     /** The app or apps whose tokens the API accepts. */
