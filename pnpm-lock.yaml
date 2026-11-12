@@ -235,7 +235,7 @@ importers:
         version: 0.5.15
       '@hono/node-server':
         specifier: 2.1.6
-        version: 2.1.6(hono@4.13.11)
+        version: 2.1.6(hono@4.13.16)
       '@modelcontextprotocol/sdk':
         specifier: 1.32.0
         version: 1.32.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.7)
@@ -277,7 +277,7 @@ importers:
         version: 2.27.0(bufferutil@4.1.0)(express@5.2.1(supports-color@10.2.2))(mppx@+)(typescript@7.0.2)(utf-8-validate@5.0.10)
       '@x402/hono':
         specifier: 2.27.0
-        version: 2.27.0(bufferutil@4.1.0)(hono@4.13.11)(typescript@7.0.2)(utf-8-validate@5.0.10)
+        version: 2.27.0(bufferutil@4.1.0)(hono@4.13.16)(typescript@7.0.2)(utf-8-validate@5.0.10)
       '@x402/mcp':
         specifier: 2.27.0
         version: 2.27.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
@@ -309,8 +309,8 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
       hono:
-        specifier: 4.13.11
-        version: 4.13.11
+        specifier: 4.13.16
+        version: 4.13.16
       incur:
         specifier: ^0.5.1
         version: 0.5.1
@@ -415,8 +415,8 @@ importers:
         specifier: ^7.0.0-dev.20260707.2
         version: 7.0.0-dev.20260707.2
       hono:
-        specifier: 4.13.11
-        version: 4.13.11
+        specifier: 4.13.16
+        version: 4.13.16
       mppx:
         specifier: workspace:*
         version: link:../..
@@ -785,8 +785,8 @@ importers:
         specifier: 7.0.0-dev.20260707.2
         version: 7.0.0-dev.20260707.2
       hono:
-        specifier: 4.13.11
-        version: 4.13.11
+        specifier: 4.13.16
+        version: 4.13.16
       mppx:
         specifier: workspace:*
         version: link:../..
@@ -4147,6 +4147,10 @@ packages:
     resolution: {integrity: sha512-/SMX/RQNJn7oNmFwH6DtwDqcrzZU2otm1FD6OJe2cWF6cfy/F8hq0XVBv7xW3FTJshRQwuBnXHDq2kNsdZnshg==}
     engines: {node: '>=16.9.0'}
 
+  hono@4.13.16:
+    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
+    engines: {node: '>=16.9.0'}
+
   http-errors@2.0.1:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
     engines: {node: '>= 0.8'}
@@ -6122,9 +6126,9 @@ snapshots:
     dependencies:
       hono: 4.13.11
 
-  '@hono/node-server@2.1.6(hono@4.13.11)':
+  '@hono/node-server@2.1.6(hono@4.13.16)':
     dependencies:
-      hono: 4.13.11
+      hono: 4.13.16
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -7520,11 +7524,11 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/hono@2.27.0(bufferutil@4.1.0)(hono@4.13.11)(typescript@7.0.2)(utf-8-validate@5.0.10)':
+  '@x402/hono@2.27.0(bufferutil@4.1.0)(hono@4.13.16)(typescript@7.0.2)(utf-8-validate@5.0.10)':
     dependencies:
       '@x402/core': 2.27.0
       '@x402/extensions': 2.27.0(bufferutil@4.1.0)(mppx@+)(typescript@7.0.2)(utf-8-validate@5.0.10)
-      hono: 4.13.11
+      hono: 4.13.16
     transitivePeerDependencies:
       - bufferutil
       - ethers
@@ -8486,6 +8490,8 @@ snapshots:
       function-bind: 1.1.2
 
   hono@4.13.11: {}
+
+  hono@4.13.16: {}
 
   http-errors@2.0.1:
     dependencies:

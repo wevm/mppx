@@ -60,7 +60,7 @@
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
     "frog": "^1.1.0",
-    "hono": "4.13.11",
+    "hono": "4.13.16",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
     "miniflare": "^4.20260730.0",
