@@ -169,6 +169,9 @@ export function listOperations(document: unknown): Operation[] {
   const merged = new WeakMap<object, Record<string, unknown> | boolean>()
   const operations: Operation[] = []
   for (const [path, entry] of Object.entries(doc.paths ?? {})) {
+    // OpenAPI paths start with `/` and are relative to the server; skip anything else, such as an
+    // absolute URL, rather than hand a client a path that points somewhere unexpected.
+    if (!path.startsWith('/') || path.startsWith('//')) continue
     // A Path Item can itself be a `$ref`, such as to `#/components/pathItems/...`.
     // A Path Item `$ref` merges with fields declared next to it (OpenAPI 3.1 leaves conflicts
     // undefined; inline fields win). An invalid target throws, as an invalid inline Path Item does;
@@ -203,7 +206,7 @@ function jsonSchema(
   const body = resolve(requestBody) as
     | { content?: Record<string, { schema?: unknown }> }
     | undefined
-  const raw = body?.content?.['application/json']?.schema
+  const raw = jsonContent(body?.content)?.schema
   const schema = resolve(raw)
   if (typeof raw === 'boolean') return raw
   if (typeof schema !== 'boolean' && !isObject(schema)) return undefined
@@ -291,4 +294,18 @@ function decodeFragment(fragment: string): string | undefined {
 /** Whether a value is a plain JSON object, not an array or `null`. */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The `application/json` entry of an OpenAPI `content` map. Media type keys match
+ * case-insensitively and may carry parameters, such as `application/json; charset=utf-8`.
+ */
+function jsonContent(
+  content: Record<string, { schema?: unknown }> | undefined,
+): { schema?: unknown } | undefined {
+  if (!isObject(content)) return undefined
+  if (Object.hasOwn(content, 'application/json')) return content['application/json']
+  for (const [type, entry] of Object.entries(content))
+    if (type.split(';')[0]!.trim().toLowerCase() === 'application/json') return entry
+  return undefined
 }

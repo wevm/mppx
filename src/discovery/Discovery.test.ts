@@ -525,6 +525,45 @@ describe('listOperations', () => {
     ).toEqual(['get'])
   })
 
+  test('reads a JSON request schema under a parameterised or mixed-case media type', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Media types', version: '1' },
+      paths: {
+        '/a': {
+          post: {
+            requestBody: {
+              content: { 'application/json; charset=utf-8': { schema: { type: 'object' } } },
+            },
+          },
+        },
+        '/b': {
+          post: {
+            requestBody: { content: { 'Application/JSON': { schema: { type: 'string' } } } },
+          },
+        },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { type: 'object' },
+      { type: 'string' },
+    ])
+  })
+
+  test('skips path keys that are not server-relative', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Paths', version: '1' },
+      paths: {
+        'https://example.com/pay': { post: {} },
+        '//example.com/pay': { post: {} },
+        relative: { post: {} },
+        '/ok': { post: {} },
+      },
+    })
+    expect(operations.map((operation) => operation.path)).toEqual(['/ok'])
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
