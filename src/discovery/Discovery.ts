@@ -166,9 +166,12 @@ const operationMethods = [
 export function listOperations(document: unknown): Operation[] {
   const doc = DiscoveryDocument.parse(document)
   const resolve = resolver(doc)
-  const merged = new WeakMap<object, Record<string, unknown>>()
+  const merged = new WeakMap<object, Record<string, unknown> | boolean>()
   const operations: Operation[] = []
-  for (const [path, item] of Object.entries(doc.paths ?? {}))
+  for (const [path, entry] of Object.entries(doc.paths ?? {})) {
+    // A Path Item can itself be a `$ref`, such as to `#/components/pathItems/...`.
+    const item = entry.$ref === undefined ? entry : PathItem.safeParse(resolve(entry)).data
+    if (!item) continue
     for (const method of operationMethods) {
       const operation = item[method]
       if (!operation) continue
@@ -180,13 +183,14 @@ export function listOperations(document: unknown): Operation[] {
         summary: operation.summary,
       })
     }
+  }
   return operations
 }
 
 /** The `application/json` schema of an OpenAPI request body, if any, following local `$ref`s. */
 function jsonSchema(
   resolve: (value: unknown) => unknown,
-  merged: WeakMap<object, Record<string, unknown>>,
+  merged: WeakMap<object, Record<string, unknown> | boolean>,
   requestBody: unknown,
 ): Record<string, unknown> | boolean | undefined {
   const body = resolve(requestBody) as
@@ -194,20 +198,25 @@ function jsonSchema(
     | undefined
   const raw = body?.content?.['application/json']?.schema
   const schema = resolve(raw)
-  if (typeof schema === 'boolean') return schema
-  if (!schema || typeof schema !== 'object') return undefined
+  if (typeof raw === 'boolean') return raw
+  if (typeof schema !== 'boolean' && !isObject(schema)) return undefined
+  if (!isObject(raw)) return undefined
   // JSON Schema 2020-12 applies keywords next to `$ref`: keep them alongside the target.
   const object = raw as Record<string, unknown>
   if (object === schema) return schema as Record<string, unknown>
+  // `false` rejects everything whatever its siblings say; a `true` target adds nothing to them.
+  if (schema === false) return false
   // Operations that share a schema object share one merged result, copied once.
   const cached = merged.get(object)
   if (cached) return cached
   const { $ref: _, ...siblings } = object
   const allOf = Array.isArray(siblings.allOf) ? siblings.allOf : []
-  const result =
+  const result: Record<string, unknown> | boolean =
     Object.keys(siblings).length === 0
-      ? (schema as Record<string, unknown>)
-      : { ...siblings, allOf: [schema, ...allOf] }
+      ? (schema as Record<string, unknown> | boolean)
+      : schema === true
+        ? siblings
+        : { ...siblings, allOf: [schema, ...allOf] }
   merged.set(object, result)
   return result
 }
@@ -270,4 +279,9 @@ function decodeFragment(fragment: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/** Whether a value is a plain JSON object, not an array or `null`. */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

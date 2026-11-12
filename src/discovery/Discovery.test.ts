@@ -433,6 +433,60 @@ describe('listOperations', () => {
     expect(operation!.requestSchema).toEqual({ type: 'object' })
   })
 
+  test('keeps keywords next to a $ref to a boolean schema', () => {
+    const body = (schema: unknown) => ({
+      post: { requestBody: { content: { 'application/json': { schema } } } },
+    })
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Boolean target', version: '1' },
+      components: { schemas: { Any: true, None: false } },
+      paths: {
+        '/any': body({ $ref: '#/components/schemas/Any', maxLength: 10 }),
+        '/none': body({ $ref: '#/components/schemas/None', maxLength: 10 }),
+        '/bare': body({ $ref: '#/components/schemas/Any' }),
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { maxLength: 10 },
+      false,
+      true,
+    ])
+  })
+
+  test('ignores an array request schema', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Array', version: '1' },
+      paths: {
+        '/array': { post: { requestBody: { content: { 'application/json': { schema: [] } } } } },
+      },
+    })
+    expect(operation!.requestSchema).toBeUndefined()
+  })
+
+  test('lists operations of a $ref path item', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Path ref', version: '1' },
+      components: {
+        pathItems: {
+          Forecast: {
+            post: { 'x-payment-info': { amount: '2000', intent: 'charge', method: 'tempo' } },
+          },
+        },
+      },
+      paths: { '/v1/forecast': { $ref: '#/components/pathItems/Forecast' } },
+    })
+    expect(operations.map(({ method, path, offers }) => ({ method, path, offers }))).toEqual([
+      {
+        method: 'post',
+        path: '/v1/forecast',
+        offers: [{ amount: '2000', intent: 'charge', method: 'tempo' }],
+      },
+    ])
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
