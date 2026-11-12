@@ -1,3 +1,5 @@
+import type { Address } from 'viem'
+
 import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import * as Store from '../../../../Store.js'
@@ -92,7 +94,7 @@ export function create(config: create.Config): TempoId {
       .filter((entry) => entry?.chain_id === chainId && isAddress(entry.account))
       .map((entry) => entry.account)
       .concat((jwt.claims.tempo_accounts ?? []).filter(isAddress))
-      .map((account: string) => account.toLowerCase() as `0x${string}`)
+      .map((account: string) => account.toLowerCase() as Address)
     const compliance = Object.fromEntries(
       Object.entries(jwt.claims.compliance ?? {}).map(([address, state]) => [
         address.toLowerCase(),
@@ -232,7 +234,7 @@ export function create(config: create.Config): TempoId {
             status: 'invalid',
             reason: `The payment must name its source account on chain ${chainId}.`,
           }
-        const account = address.toLowerCase() as `0x${string}`
+        const account = address.toLowerCase() as Address
         if (!caller.value.accounts.includes(account))
           return {
             status: 'forbidden',
@@ -274,6 +276,6 @@ export type TempoId = {
   readonly paymentCheck: Identity.PaymentCheck<Types.Payer>
 }
 
-function isAddress(value: unknown): value is `0x${string}` {
+function isAddress(value: unknown): value is Address {
   return typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value)
 }
