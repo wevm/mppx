@@ -20,7 +20,7 @@ import * as defaults from '../../internal/defaults.js'
 import type * as Methods from '../../Methods.js'
 import type * as Types from '../precompile/Protocol.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
-import { channelKey, createChannelStore } from './ChannelStore.js'
+import { channelKey, createChannelStore, entryKey } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
@@ -231,6 +231,43 @@ describe('session machTokenAccepted', () => {
     )
 
     expect(open.descriptor.token).toBe(currency)
+  })
+
+  test('keeps a single-scope store on the challenge currency when the allowlist leaves MACH out', async () => {
+    const open = async (machBalance: bigint) => {
+      const backing = createChannelStore()
+      const expected = key(currency)
+      // Mirrors the CLI's persistent store, which rejects any scope other than its own.
+      const assertKey = (k: string) => {
+        if (k !== expected) throw new Error(`unexpected payment scope: ${k}`)
+      }
+      const channelStore: typeof backing = {
+        ...backing,
+        async get(k) {
+          assertKey(k)
+          return backing.get(k)
+        },
+        async set(entry) {
+          assertKey(entryKey(entry))
+          return backing.set(entry)
+        },
+        async delete(k) {
+          assertKey(k)
+          return backing.delete(k)
+        },
+      }
+      const method = session({
+        account,
+        channelStore,
+        currencies: [currency],
+        decimals: 0,
+        getClient: () => createTestClient({ machBalance }),
+      })
+      return deserialize(await method.createCredential({ challenge: makeChallenge(), context: {} }))
+    }
+
+    expect((await open(1_000n)).descriptor.token).toBe(currency)
+    expect((await open(0n)).descriptor.token).toBe(currency)
   })
 
   test('ignores a MACH channel snapshot when the currencies allowlist leaves MACH out', async () => {
