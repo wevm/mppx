@@ -1,6 +1,6 @@
 import { Credential, Method, Receipt, Store, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
-import * as TempoId from 'mppx/extensions/identity/tempo-id'
+import * as TempoId from 'mppx/extensions/identity/tempo'
 import { Mppx } from 'mppx/server'
 import { Base64 } from 'ox'
 import { expect, test, vi } from 'vp/test'

@@ -268,10 +268,10 @@
       "types": "./dist/extensions/identity/link/index.d.ts",
       "default": "./dist/extensions/identity/link/index.js"
     },
-    "./extensions/identity/tempo-id": {
-      "src": "./src/extensions/identity/tempo-id/index.ts",
-      "types": "./dist/extensions/identity/tempo-id/index.d.ts",
-      "default": "./dist/extensions/identity/tempo-id/index.js"
+    "./extensions/identity/tempo": {
+      "src": "./src/extensions/identity/tempo/index.ts",
+      "types": "./dist/extensions/identity/tempo/index.d.ts",
+      "default": "./dist/extensions/identity/tempo/index.js"
     },
     "./extensions/identity/web-bot-auth": {
       "src": "./src/extensions/identity/web-bot-auth/index.ts",
