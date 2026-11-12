@@ -197,15 +197,18 @@ function jsonSchema(
   if (typeof schema === 'boolean') return schema
   if (!schema || typeof schema !== 'object') return undefined
   // JSON Schema 2020-12 applies keywords next to `$ref`: keep them alongside the target.
-  const { $ref, ...siblings } = raw as Record<string, unknown>
-  if ($ref === undefined || Object.keys(siblings).length === 0)
-    return schema as Record<string, unknown>
-  // Operations that share a schema object share one merged result.
-  const cached = merged.get(raw as object)
+  const object = raw as Record<string, unknown>
+  if (object === schema) return schema as Record<string, unknown>
+  // Operations that share a schema object share one merged result, copied once.
+  const cached = merged.get(object)
   if (cached) return cached
+  const { $ref: _, ...siblings } = object
   const allOf = Array.isArray(siblings.allOf) ? siblings.allOf : []
-  const result = { ...siblings, allOf: [schema, ...allOf] }
-  merged.set(raw as object, result)
+  const result =
+    Object.keys(siblings).length === 0
+      ? (schema as Record<string, unknown>)
+      : { ...siblings, allOf: [schema, ...allOf] }
+  merged.set(object, result)
   return result
 }
 
