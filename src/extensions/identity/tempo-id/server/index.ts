@@ -1,4 +1,4 @@
-import type { Address } from 'viem'
+import { type Address, getAddress } from 'viem'
 
 import { unwrapFetch } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
@@ -13,6 +13,7 @@ import type * as Types from '../Types.js'
  * - `verifier` requires a valid Tempo ID access token from an allowed app.
  * - `paymentCheck` also requires a `tempo` payment whose `source` is a Tempo Account the token
  *   grants to the app, so one user's token cannot pay with another user's wallet.
+ *   It refuses an account that Tempo ID screened as anything but `clear`.
  *
  * Tokens verify offline against Tempo ID's keys. A DPoP-bound token also needs a proof of its key
  * for the request, which `store` accepts once. The token uses `Authorization`, so create the
@@ -20,7 +21,7 @@ import type * as Types from '../Types.js'
  *
  * @example
  * ```ts
- * const tempoId = TempoId.Server.create({ chainId: 4217, clientId: 'app_…', store })
+ * const tempoId = TempoId.Server.create({ clientId: 'app_…', store })
  * const mppx = Mppx.create({ methods: [tempo({ … })], requiresAuth: true, secretKey })
  *
  * mppx.charge({ amount: '0.01', identity: { payment: tempoId.paymentCheck } })
@@ -33,15 +34,13 @@ import type * as Types from '../Types.js'
  * TempoId.Server.create({
  *   allow: (user) =>
  *     user.emailVerified === true &&
- *     user.email?.endsWith('@example.com') === true &&
- *     (!user.account || user.compliance[user.account] === 'clear'),
- *   chainId: 4217,
+ *     user.email?.endsWith('@example.com') === true,
  *   clientId: 'app_…',
  * })
  * ```
  */
 export function create(config: create.Config): TempoId {
-  const { chainId, store } = config
+  const { chainId = 4217, store } = config
   const issuer = new URL(config.issuer ?? Constants.issuer).origin
   const audience = config.audience ?? issuer
   const clientIds = [config.clientId].flat()
@@ -94,10 +93,10 @@ export function create(config: create.Config): TempoId {
       .filter((entry) => entry?.chain_id === chainId && isAddress(entry.account))
       .map((entry) => entry.account)
       .concat((jwt.claims.tempo_accounts ?? []).filter(isAddress))
-      .map((account: string) => account.toLowerCase() as Address)
+      .map((account: string) => getAddress(account))
     const compliance = Object.fromEntries(
       Object.entries(jwt.claims.compliance ?? {}).map(([address, state]) => [
-        address.toLowerCase(),
+        getAddress(address),
         state,
       ]),
     ) as Types.Caller['compliance']
@@ -234,12 +233,16 @@ export function create(config: create.Config): TempoId {
             status: 'invalid',
             reason: `The payment must name its source account on chain ${chainId}.`,
           }
-        const account = address.toLowerCase() as Address
+        const account = getAddress(address)
         if (!caller.value.accounts.includes(account))
           return {
             status: 'forbidden',
             reason: 'The paying account is not one this user granted to the app.',
           }
+        const state = caller.value.compliance[account]
+        // Tempo ID screens the accounts in a registered app's realms; only a clear one pays.
+        if (state !== undefined && state !== 'clear')
+          return { status: 'forbidden', reason: 'The paying account is not cleared to pay.' }
         return allowed({ status: 'valid', value: { ...caller.value, account } })
       },
     },
@@ -253,8 +256,8 @@ export declare namespace create {
      * account's compliance state. On the paid retry it also receives the paying `account`.
      */
     readonly allow?: ((user: Types.Payer) => boolean | Promise<boolean>) | undefined
-    /** The chain payments settle on. */
-    readonly chainId: number
+    /** The chain payments settle on. @default 4217 (Tempo mainnet) */
+    readonly chainId?: number | undefined
     /** The app or apps whose tokens the API accepts. */
     readonly clientId: string | readonly string[]
     /** Accepts each DPoP proof once. Without it, a proof can be replayed for five minutes. */

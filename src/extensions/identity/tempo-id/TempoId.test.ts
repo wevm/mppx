@@ -333,10 +333,8 @@ test('allow decides by email', async () => {
   expect(result.status).toBe('forbidden')
 })
 
-test('allow refuses a payer whose account is not clear, before settlement', async () => {
-  const { fetch, tempoIssuer } = await setup({
-    allow: (user) => !user.account || user.compliance[user.account] === 'clear',
-  })
+test('refuses a payer whose account is not clear, before settlement', async () => {
+  const { fetch, tempoIssuer } = await setup()
   const token = await tempoIssuer.token({ compliance: { [payer]: 'blocked' } })
   const client = ClientMppx.create({
     fetch,

@@ -9,9 +9,9 @@ export type Caller = {
   readonly userId: string
   /** The app the user signed in to. */
   readonly clientId: string
-  /** The Tempo Accounts the token grants to the app on the configured chain, lowercased. */
+  /** The Tempo Accounts the token grants to the app on the configured chain, checksummed. */
   readonly accounts: readonly Address[]
-  /** The screening state of each account in the app's realms, by lowercased address. Empty for an unregistered app. */
+  /** The screening state of each account in the app's realms, by checksummed address. Empty for an unregistered app. */
   readonly compliance: Readonly<Record<Address, ComplianceState>>
   /** The user's email address, lowercased, from the ID token. Absent without one, or without the `email` scope. */
   readonly email?: string | undefined
@@ -21,7 +21,7 @@ export type Caller = {
 
 /** A verified Tempo ID user and the Tempo Account that paid. */
 export type Payer = Caller & {
-  /** The account that paid, lowercased. Absent when the check ran without a Credential. */
+  /** The account that paid, checksummed. Absent when the check ran without a Credential. */
   readonly account?: Address | undefined
 }
 
