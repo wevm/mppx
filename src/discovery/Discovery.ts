@@ -46,10 +46,11 @@ export const PaymentInfo = z.pipe(
   z.transform((value) => {
     if (value.offers) return { offers: value.offers }
 
-    const offer: Record<string, unknown> = {}
+    const offer: z.infer<typeof PaymentOffer> = {}
     for (const [key, field] of Object.entries(value)) {
       if (key === 'offers') continue
-      if (paymentInfoFieldNames.has(key) || field !== undefined) offer[key] = field
+      if (paymentInfoFieldNames.has(key) || field !== undefined)
+        (offer as Record<string, unknown>)[key] = field
     }
 
     return { offers: [offer] }
@@ -104,3 +105,82 @@ export const DiscoveryDocument = z.looseObject({
   paths: z.optional(z.record(z.string(), PathItem)),
 })
 export type DiscoveryDocument = z.infer<typeof DiscoveryDocument>
+
+/** One offer from an operation's `x-payment-info`. Every field is optional; discovery is advisory. */
+export type PaymentOffer = z.infer<typeof PaymentOffer>
+
+/** The HTTP methods an OpenAPI path item can describe. */
+export type OperationMethod =
+  | 'delete'
+  | 'get'
+  | 'head'
+  | 'options'
+  | 'patch'
+  | 'post'
+  | 'put'
+  | 'trace'
+
+/** One operation of a discovery document, flattened for clients. */
+export type Operation = {
+  /** The operation's HTTP method, lowercase as in OpenAPI. */
+  method: OperationMethod
+  /** The operation's path, relative to the document's server. */
+  path: string
+  /** What the operation costs. Empty when it has no `x-payment-info`. */
+  offers: PaymentOffer[]
+  /** The JSON Schema of an `application/json` request body, when it has one. */
+  requestSchema: Record<string, unknown> | undefined
+  /** The operation's summary, when it has one. */
+  summary: string | undefined
+}
+
+const operationMethods = [
+  'get',
+  'post',
+  'put',
+  'patch',
+  'delete',
+  'head',
+  'options',
+  'trace',
+] as const satisfies readonly OperationMethod[]
+
+/**
+ * Lists every operation in a discovery document with its offers and JSON request schema.
+ *
+ * Accepts a raw `openapi.json` body or an already parsed {@link DiscoveryDocument}, and throws
+ * when the document is invalid. Prices are advisory: the 402 Challenge stays authoritative.
+ *
+ * @example
+ * ```ts
+ * import { listOperations } from 'mppx/discovery'
+ *
+ * const doc = await fetch('https://api.example.com/openapi.json').then((r) => r.json())
+ * for (const { method, path, offers } of listOperations(doc))
+ *   console.log(method, path, offers[0]?.amount)
+ * ```
+ */
+export function listOperations(document: unknown): Operation[] {
+  const doc = DiscoveryDocument.parse(document)
+  const operations: Operation[] = []
+  for (const [path, item] of Object.entries(doc.paths ?? {}))
+    for (const method of operationMethods) {
+      const operation = item[method]
+      if (!operation) continue
+      operations.push({
+        method,
+        path,
+        offers: operation['x-payment-info']?.offers ?? [],
+        requestSchema: jsonSchema(operation.requestBody),
+        summary: operation.summary,
+      })
+    }
+  return operations
+}
+
+/** The `application/json` schema of an OpenAPI request body, if any. */
+function jsonSchema(requestBody: unknown): Record<string, unknown> | undefined {
+  const schema = (requestBody as { content?: Record<string, { schema?: unknown }> } | undefined)
+    ?.content?.['application/json']?.schema
+  return schema && typeof schema === 'object' ? (schema as Record<string, unknown>) : undefined
+}

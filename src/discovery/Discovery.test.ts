@@ -1,4 +1,4 @@
-import { DiscoveryDocument, PaymentInfo, ServiceInfo } from './Discovery.js'
+import { DiscoveryDocument, listOperations, PaymentInfo, ServiceInfo } from './Discovery.js'
 
 describe('PaymentInfo', () => {
   test('normalizes legacy shorthand to offers', () => {
@@ -224,5 +224,67 @@ describe('DiscoveryDocument', () => {
       openapi: '3.1.0',
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('listOperations', () => {
+  const doc = {
+    openapi: '3.1.0',
+    info: { title: 'Forecast API', version: '1.0.0' },
+    paths: {
+      '/v1/forecast': {
+        post: {
+          summary: 'Forecast',
+          'x-payment-info': {
+            amount: '2000',
+            currency: '0x20c0',
+            intent: 'charge',
+            method: 'tempo',
+          },
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: { type: 'object', properties: { city: { type: 'string' } } },
+              },
+            },
+          },
+          responses: { '200': { description: 'OK' }, '402': { description: 'Payment Required' } },
+        },
+        get: { responses: { '200': { description: 'OK' } } },
+      },
+    },
+  }
+
+  test('flattens operations with typed offers and request schemas', () => {
+    const operations = listOperations(doc)
+    expect(operations).toEqual([
+      {
+        method: 'get',
+        path: '/v1/forecast',
+        offers: [],
+        requestSchema: undefined,
+        summary: undefined,
+      },
+      {
+        method: 'post',
+        path: '/v1/forecast',
+        offers: [{ amount: '2000', currency: '0x20c0', intent: 'charge', method: 'tempo' }],
+        requestSchema: { type: 'object', properties: { city: { type: 'string' } } },
+        summary: 'Forecast',
+      },
+    ])
+    expectTypeOf(operations[1]!.offers[0]!.amount).toEqualTypeOf<string | null | undefined>()
+  })
+
+  test('accepts an already parsed document', () => {
+    expect(listOperations(DiscoveryDocument.parse(doc))).toEqual(listOperations(doc))
+  })
+
+  test('returns no operations without paths', () => {
+    expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
+  })
+
+  test('throws on an invalid document', () => {
+    expect(() => listOperations({ openapi: '3.1.0' })).toThrow()
   })
 })
