@@ -3,7 +3,7 @@ import { Mppx as ClientMppx } from 'mppx/client'
 import * as TempoId from 'mppx/extensions/identity/tempo-id'
 import { Mppx } from 'mppx/server'
 import { Base64 } from 'ox'
-import { expect, test } from 'vp/test'
+import { expect, test, vi } from 'vp/test'
 
 const issuer = 'https://id.tempo.xyz'
 const chainId = 4217
@@ -62,9 +62,11 @@ async function createIssuer() {
     use: 'sig',
   }
   let fetches = 0
+  let unavailable = false
   const fetch = (async (input: RequestInfo | URL) => {
     fetches++
     expect(String(input)).toBe(`${issuer}/oauth2/jwks`)
+    if (unavailable) return new Response(null, { status: 503 })
     return Response.json({ keys: [jwk] })
   }) as typeof globalThis.fetch
   async function token(
@@ -75,6 +77,7 @@ async function createIssuer() {
       clientId?: string
       dpop?: TempoId.DpopKey
       exp?: number
+      kid?: string
       typ?: string
     } = {},
   ) {
@@ -98,7 +101,7 @@ async function createIssuer() {
     }
     const encode = (value: unknown) =>
       Base64.fromString(JSON.stringify(value), { pad: false, url: true })
-    const input = `${encode({ alg: 'RS256', kid: 'k1', typ: options.typ ?? 'at+jwt' })}.${encode(claims)}`
+    const input = `${encode({ alg: 'RS256', kid: options.kid ?? 'k1', typ: options.typ ?? 'at+jwt' })}.${encode(claims)}`
     const signature = await crypto.subtle.sign(
       'RSASSA-PKCS1-v1_5',
       keyPair.privateKey,
@@ -127,7 +130,10 @@ async function createIssuer() {
     )
     return `${input}.${Base64.fromBytes(new Uint8Array(signature), { pad: false, url: true })}`
   }
-  return { fetch, fetches: () => fetches, idToken, token }
+  const down = () => {
+    unavailable = true
+  }
+  return { down, fetch, fetches: () => fetches, idToken, token }
 }
 
 async function createDpop(): Promise<TempoId.DpopKey> {
@@ -348,4 +354,29 @@ test('refuses a payer whose account is not clear, before settlement', async () =
 
   expect(response.status).toBe(403)
   expect(settlements).toBe(before)
+})
+
+test('keeps the loaded keys when a refetch for an unknown key ID fails', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const valid = await tempoIssuer.token()
+  const status = async (token: string) =>
+    (
+      await tempoId.verifier.verify(
+        new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+      )
+    ).status
+  expect(await status(valid)).toBe('valid')
+
+  vi.useFakeTimers({ toFake: ['Date'] })
+  try {
+    vi.setSystemTime(Date.now() + 60_000)
+    tempoIssuer.down()
+    const unknown = await tempoIssuer.token({ kid: 'k2' })
+
+    expect(await status(unknown)).toBe('invalid')
+    expect(await status(await tempoIssuer.token())).toBe('valid')
+    expect(tempoIssuer.fetches()).toBe(2)
+  } finally {
+    vi.useRealTimers()
+  }
 })

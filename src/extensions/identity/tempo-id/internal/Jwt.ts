@@ -57,10 +57,14 @@ export function htu(url: string | URL): string {
 
 /**
  * Returns a lookup of an issuer's RS256 keys by key ID, from `<issuer>/oauth2/jwks`. The set is
- * cached for five minutes, and an unknown key ID refetches it at most every 30 seconds.
+ * cached for five minutes, and an unknown key ID refetches it at most every 30 seconds. A failed
+ * fetch keeps the last set that loaded.
  */
 export function keys(issuer: string, fetch: typeof globalThis.fetch) {
-  let cached: { at: number; keys: Promise<Map<string, CryptoKey>> } | undefined
+  // The last key set that loaded, which a failed refetch keeps.
+  let cached: { at: number; keys: Map<string, CryptoKey> } | undefined
+  let pending: Promise<Map<string, CryptoKey>> | undefined
+  let attempted = 0
 
   async function load() {
     const response = await fetch(`${issuer}/oauth2/jwks`, { signal: AbortSignal.timeout(5_000) })
@@ -79,14 +83,28 @@ export function keys(issuer: string, fetch: typeof globalThis.fetch) {
     return result
   }
 
-  function fresh(maxAge: number) {
+  async function fresh(maxAge: number) {
     if (cached && Date.now() - cached.at < maxAge) return cached.keys
-    const entry = { at: Date.now(), keys: load() }
-    entry.keys.catch(() => {
-      if (cached === entry) cached = undefined
-    })
-    cached = entry
-    return entry.keys
+    // Within 30 seconds of the last attempt, the last loaded set serves, so unknown key IDs and an
+    // unreachable issuer cause at most one fetch each 30 seconds.
+    if (cached && !pending && Date.now() - attempted < 30_000) return cached.keys
+    if (!pending) {
+      attempted = Date.now()
+      pending = load()
+        .then((keys) => {
+          cached = { at: Date.now(), keys }
+          return keys
+        })
+        .finally(() => {
+          pending = undefined
+        })
+    }
+    try {
+      return await pending
+    } catch (error) {
+      if (cached) return cached.keys
+      throw error
+    }
   }
 
   return async (kid: string): Promise<CryptoKey | undefined> =>
