@@ -225,7 +225,8 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
   function pointer(ref: string): unknown {
     let target: unknown = doc
     for (const part of ref.slice(2).split('/')) {
-      const key = decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
+      const key = decode(part)
+      if (key === undefined) return undefined
       if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return undefined
       target = (target as Record<string, unknown>)[key]
     }
@@ -233,4 +234,13 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
   }
 
   return (value) => resolveValue(value, new Set())
+}
+
+/** Decodes one JSON Pointer segment of a URI fragment, or `undefined` when its percent-encoding is malformed. */
+function decode(part: string): string | undefined {
+  try {
+    return decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
+  } catch {
+    return undefined
+  }
 }

@@ -366,6 +366,15 @@ describe('listOperations', () => {
     ).toBe(true)
   })
 
+  test('ignores a $ref with malformed percent-encoding', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Malformed', version: '1' },
+      paths: { '/bad': { post: { requestBody: { $ref: '#/%E0' } } } },
+    })
+    expect(operation!.requestSchema).toBeUndefined()
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
