@@ -128,8 +128,8 @@ export type Operation = {
   path: string
   /** What the operation costs. Empty when it has no `x-payment-info`. */
   offers: PaymentOffer[]
-  /** The JSON Schema of an `application/json` request body, when it has one. */
-  requestSchema: Record<string, unknown> | undefined
+  /** The JSON Schema of an `application/json` request body (an object or a boolean schema), when it has one. */
+  requestSchema: Record<string, unknown> | boolean | undefined
   /** The operation's summary, when it has one. */
   summary: string | undefined
 }
@@ -179,8 +179,9 @@ export function listOperations(document: unknown): Operation[] {
 }
 
 /** The `application/json` schema of an OpenAPI request body, if any. */
-function jsonSchema(requestBody: unknown): Record<string, unknown> | undefined {
+function jsonSchema(requestBody: unknown): Record<string, unknown> | boolean | undefined {
   const schema = (requestBody as { content?: Record<string, { schema?: unknown }> } | undefined)
     ?.content?.['application/json']?.schema
+  if (typeof schema === 'boolean') return schema
   return schema && typeof schema === 'object' ? (schema as Record<string, unknown>) : undefined
 }

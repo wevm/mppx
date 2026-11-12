@@ -280,6 +280,18 @@ describe('listOperations', () => {
     expect(listOperations(DiscoveryDocument.parse(doc))).toEqual(listOperations(doc))
   })
 
+  test('keeps boolean request schemas', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Boolean', version: '1' },
+      paths: {
+        '/none': { post: { requestBody: { content: { 'application/json': { schema: false } } } } },
+        '/any': { post: { requestBody: { content: { 'application/json': { schema: true } } } } },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([false, true])
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
