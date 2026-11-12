@@ -391,6 +391,32 @@ describe('listOperations', () => {
     expect(operation!.requestSchema).toEqual({ type: 'string' })
   })
 
+  test('shares one merged schema across operations that share a $ref with siblings', () => {
+    const paths: Record<string, unknown> = {}
+    for (let i = 0; i < 3; i++)
+      paths[`/op${i}`] = { post: { requestBody: { $ref: '#/components/requestBodies/Shared' } } }
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Shared', version: '1' },
+      components: {
+        requestBodies: {
+          Shared: {
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Text', allOf: [{ minLength: 1 }] },
+              },
+            },
+          },
+        },
+        schemas: { Text: { type: 'string' } },
+      },
+      paths,
+    })
+    expect(operations[0]!.requestSchema).toEqual({ allOf: [{ type: 'string' }, { minLength: 1 }] })
+    expect(operations[1]!.requestSchema).toBe(operations[0]!.requestSchema)
+    expect(operations[2]!.requestSchema).toBe(operations[0]!.requestSchema)
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })

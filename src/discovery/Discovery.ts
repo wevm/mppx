@@ -166,6 +166,7 @@ const operationMethods = [
 export function listOperations(document: unknown): Operation[] {
   const doc = DiscoveryDocument.parse(document)
   const resolve = resolver(doc)
+  const merged = new WeakMap<object, Record<string, unknown>>()
   const operations: Operation[] = []
   for (const [path, item] of Object.entries(doc.paths ?? {}))
     for (const method of operationMethods) {
@@ -175,7 +176,7 @@ export function listOperations(document: unknown): Operation[] {
         method,
         path,
         offers: operation['x-payment-info']?.offers ?? [],
-        requestSchema: jsonSchema(resolve, operation.requestBody),
+        requestSchema: jsonSchema(resolve, merged, operation.requestBody),
         summary: operation.summary,
       })
     }
@@ -185,6 +186,7 @@ export function listOperations(document: unknown): Operation[] {
 /** The `application/json` schema of an OpenAPI request body, if any, following local `$ref`s. */
 function jsonSchema(
   resolve: (value: unknown) => unknown,
+  merged: WeakMap<object, Record<string, unknown>>,
   requestBody: unknown,
 ): Record<string, unknown> | boolean | undefined {
   const body = resolve(requestBody) as
@@ -198,8 +200,13 @@ function jsonSchema(
   const { $ref, ...siblings } = raw as Record<string, unknown>
   if ($ref === undefined || Object.keys(siblings).length === 0)
     return schema as Record<string, unknown>
+  // Operations that share a schema object share one merged result.
+  const cached = merged.get(raw as object)
+  if (cached) return cached
   const allOf = Array.isArray(siblings.allOf) ? siblings.allOf : []
-  return { ...siblings, allOf: [schema, ...allOf] }
+  const result = { ...siblings, allOf: [schema, ...allOf] }
+  merged.set(raw as object, result)
+  return result
 }
 
 /**
