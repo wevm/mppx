@@ -280,6 +280,21 @@ test('refuses a payment by a method that does not bind its source', async () => 
   expect(result.status).toBe('forbidden')
 })
 
+test('refuses a Zone payment, which does not bind its source', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+  const request = new Request(url, { headers: { Authorization: `Bearer ${token}` } })
+  const source = `did:pkh:eip155:${chainId}:${payer}`
+
+  const result = await tempoId.paymentCheck.verify({
+    challenge: { method: 'tempo' },
+    credential: { payload: { type: 'zone' }, source },
+    request,
+  } as never)
+
+  expect(result.status).toBe('forbidden')
+})
+
 test('rejects a DPoP proof with a null key', async () => {
   const { tempoId, tempoIssuer } = await setup()
   const dpop = await createDpop()

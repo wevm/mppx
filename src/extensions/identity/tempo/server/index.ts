@@ -228,6 +228,9 @@ export function create(config: create.Config): TempoId {
         // Only the tempo method checks the source against the transaction's sender.
         if (parameters.challenge.method !== 'tempo')
           return { status: 'forbidden', reason: 'Pay with the tempo method.' }
+        // A Zone payment does not bind its source to the paying account.
+        if ((parameters.credential.payload as { type?: unknown } | undefined)?.type === 'zone')
+          return { status: 'forbidden', reason: 'Pay from a Tempo account, not a Zone.' }
         // The source is a did:pkh:eip155:<chainId>:<address>.
         const [, , , chain, address] = parameters.credential.source?.split(':') ?? []
         if (chain !== String(chainId) || !isAddress(address))
