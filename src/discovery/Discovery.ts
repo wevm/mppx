@@ -165,6 +165,7 @@ const operationMethods = [
  */
 export function listOperations(document: unknown): Operation[] {
   const doc = DiscoveryDocument.parse(document)
+  const resolve = resolver(doc)
   const operations: Operation[] = []
   for (const [path, item] of Object.entries(doc.paths ?? {}))
     for (const method of operationMethods) {
@@ -174,7 +175,7 @@ export function listOperations(document: unknown): Operation[] {
         method,
         path,
         offers: operation['x-payment-info']?.offers ?? [],
-        requestSchema: jsonSchema(doc, operation.requestBody),
+        requestSchema: jsonSchema(resolve, operation.requestBody),
         summary: operation.summary,
       })
     }
@@ -183,14 +184,14 @@ export function listOperations(document: unknown): Operation[] {
 
 /** The `application/json` schema of an OpenAPI request body, if any, following local `$ref`s. */
 function jsonSchema(
-  doc: DiscoveryDocument,
+  resolve: (value: unknown) => unknown,
   requestBody: unknown,
 ): Record<string, unknown> | boolean | undefined {
-  const body = resolve(doc, requestBody) as
+  const body = resolve(requestBody) as
     | { content?: Record<string, { schema?: unknown }> }
     | undefined
   const raw = body?.content?.['application/json']?.schema
-  const schema = resolve(doc, raw)
+  const schema = resolve(raw)
   if (typeof schema === 'boolean') return schema
   if (!schema || typeof schema !== 'object') return undefined
   // JSON Schema 2020-12 applies keywords next to `$ref`: keep them alongside the target.
@@ -202,20 +203,34 @@ function jsonSchema(
 }
 
 /**
- * Follows a Reference Object to a local JSON Pointer (`#/components/...`) in the document.
- * Nested references inside the result stay as they are. Returns `undefined` for a reference
- * that is remote, missing or circular.
+ * Returns a function that follows Reference Objects to local JSON Pointers (`#/components/...`)
+ * in the document. Nested references inside a result stay as they are, and a reference that is
+ * remote, missing or circular resolves to `undefined`. Results are cached per reference, so
+ * operations that share a reference chain walk it once.
  */
-function resolve(doc: DiscoveryDocument, value: unknown, seen = new Set<string>()): unknown {
-  const ref = (value as { $ref?: unknown } | undefined)?.$ref
-  if (typeof ref !== 'string') return value
-  if (!ref.startsWith('#/') || seen.has(ref)) return undefined
-  seen.add(ref)
-  let target: unknown = doc
-  for (const part of ref.slice(2).split('/')) {
-    const key = decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
-    if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return undefined
-    target = (target as Record<string, unknown>)[key]
+function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
+  const cache = new Map<string, unknown>()
+
+  function resolveValue(value: unknown, seen: Set<string>): unknown {
+    const ref = (value as { $ref?: unknown } | undefined)?.$ref
+    if (typeof ref !== 'string') return value
+    if (cache.has(ref)) return cache.get(ref)
+    if (!ref.startsWith('#/') || seen.has(ref)) return undefined
+    seen.add(ref)
+    const result = resolveValue(pointer(ref), seen)
+    cache.set(ref, result)
+    return result
   }
-  return resolve(doc, target, seen)
+
+  function pointer(ref: string): unknown {
+    let target: unknown = doc
+    for (const part of ref.slice(2).split('/')) {
+      const key = decodeURIComponent(part).replaceAll('~1', '/').replaceAll('~0', '~')
+      if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return undefined
+      target = (target as Record<string, unknown>)[key]
+    }
+    return target
+  }
+
+  return (value) => resolveValue(value, new Set())
 }

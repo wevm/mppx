@@ -340,6 +340,32 @@ describe('listOperations', () => {
     expect(operation!.requestSchema).toEqual({ maxLength: 10, allOf: [{ type: 'string' }] })
   })
 
+  test('walks a shared $ref chain once', () => {
+    const size = 1000
+    const requestBodies: Record<string, unknown> = {
+      [`B${size}`]: { content: { 'application/json': { schema: { type: 'object' } } } },
+    }
+    const paths: Record<string, unknown> = {}
+    for (let i = 0; i < size; i++) {
+      requestBodies[`B${i}`] = { $ref: `#/components/requestBodies/B${i + 1}` }
+      paths[`/op${i}`] = { post: { requestBody: { $ref: '#/components/requestBodies/B0' } } }
+    }
+    const start = performance.now()
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Chain', version: '1' },
+      components: { requestBodies },
+      paths,
+    })
+    expect(performance.now() - start).toBeLessThan(1000)
+    expect(operations).toHaveLength(size)
+    expect(
+      operations.every(
+        (operation) => (operation.requestSchema as { type?: string })?.type === 'object',
+      ),
+    ).toBe(true)
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
