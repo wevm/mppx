@@ -503,6 +503,28 @@ describe('listOperations', () => {
     )
   })
 
+  test('merges inline operations next to a $ref path item', () => {
+    const doc = (paths: unknown) => ({
+      openapi: '3.1.0',
+      info: { title: 'Merge', version: '1' },
+      components: { pathItems: { Shared: { post: { summary: 'Shared post' } } } },
+      paths,
+    })
+    expect(
+      listOperations(
+        doc({ '/a': { $ref: '#/components/pathItems/Shared', get: { summary: 'Inline get' } } }),
+      ).map(({ method, summary }) => ({ method, summary })),
+    ).toEqual([
+      { method: 'get', summary: 'Inline get' },
+      { method: 'post', summary: 'Shared post' },
+    ])
+    expect(
+      listOperations(
+        doc({ '/b': { $ref: '#/components/pathItems/Missing', get: { summary: 'Inline get' } } }),
+      ).map(({ method }) => method),
+    ).toEqual(['get'])
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })

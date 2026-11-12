@@ -170,10 +170,15 @@ export function listOperations(document: unknown): Operation[] {
   const operations: Operation[] = []
   for (const [path, entry] of Object.entries(doc.paths ?? {})) {
     // A Path Item can itself be a `$ref`, such as to `#/components/pathItems/...`.
-    // An invalid target throws, as an invalid inline Path Item does; an unresolvable one is skipped.
-    const target = entry.$ref === undefined ? entry : resolve(entry)
-    if (target === undefined) continue
-    const item = target === entry ? entry : PathItem.parse(target)
+    // A Path Item `$ref` merges with fields declared next to it (OpenAPI 3.1 leaves conflicts
+    // undefined; inline fields win). An invalid target throws, as an invalid inline Path Item does;
+    // an unresolvable one contributes nothing.
+    let item = entry
+    if (entry.$ref !== undefined) {
+      const { $ref: _, ...inline } = entry
+      const target = resolve(entry)
+      item = { ...(target === undefined ? {} : PathItem.parse(target)), ...inline }
+    }
     for (const method of operationMethods) {
       const operation = item[method]
       if (!operation) continue
