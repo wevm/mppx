@@ -170,8 +170,10 @@ export function listOperations(document: unknown): Operation[] {
   const operations: Operation[] = []
   for (const [path, entry] of Object.entries(doc.paths ?? {})) {
     // A Path Item can itself be a `$ref`, such as to `#/components/pathItems/...`.
-    const item = entry.$ref === undefined ? entry : PathItem.safeParse(resolve(entry)).data
-    if (!item) continue
+    // An invalid target throws, as an invalid inline Path Item does; an unresolvable one is skipped.
+    const target = entry.$ref === undefined ? entry : resolve(entry)
+    if (target === undefined) continue
+    const item = target === entry ? entry : PathItem.parse(target)
     for (const method of operationMethods) {
       const operation = item[method]
       if (!operation) continue

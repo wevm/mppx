@@ -487,6 +487,22 @@ describe('listOperations', () => {
     ])
   })
 
+  test('throws on an invalid $ref path item, as on an invalid inline one', () => {
+    const doc = (paths: unknown) => ({
+      openapi: '3.1.0',
+      info: { title: 'Invalid', version: '1' },
+      components: { pathItems: { Bad: { post: { 'x-payment-info': { amount: '1.5' } } } } },
+      paths,
+    })
+    expect(() =>
+      listOperations(doc({ '/inline': { post: { 'x-payment-info': { amount: '1.5' } } } })),
+    ).toThrow()
+    expect(() => listOperations(doc({ '/ref': { $ref: '#/components/pathItems/Bad' } }))).toThrow()
+    expect(listOperations(doc({ '/missing': { $ref: '#/components/pathItems/Missing' } }))).toEqual(
+      [],
+    )
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
