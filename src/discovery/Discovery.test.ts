@@ -417,6 +417,22 @@ describe('listOperations', () => {
     expect(operations[2]!.requestSchema).toBe(operations[0]!.requestSchema)
   })
 
+  test('follows a long $ref chain without overflowing the stack', () => {
+    const size = 50_000
+    const requestBodies: Record<string, unknown> = {
+      [`B${size}`]: { content: { 'application/json': { schema: { type: 'object' } } } },
+    }
+    for (let i = 0; i < size; i++)
+      requestBodies[`B${i}`] = { $ref: `#/components/requestBodies/B${i + 1}` }
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Long chain', version: '1' },
+      components: { requestBodies },
+      paths: { '/op': { post: { requestBody: { $ref: '#/components/requestBodies/B0' } } } },
+    })
+    expect(operation!.requestSchema).toEqual({ type: 'object' })
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })

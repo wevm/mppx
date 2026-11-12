@@ -218,14 +218,29 @@ function jsonSchema(
 function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
   const cache = new Map<string, unknown>()
 
-  function resolveValue(value: unknown, seen: Set<string>): unknown {
-    const ref = (value as { $ref?: unknown } | undefined)?.$ref
-    if (typeof ref !== 'string') return value
-    if (cache.has(ref)) return cache.get(ref)
-    if (!ref.startsWith('#') || seen.has(ref)) return undefined
-    seen.add(ref)
-    const result = resolveValue(pointer(ref), seen)
-    cache.set(ref, result)
+  function resolveValue(value: unknown): unknown {
+    // A loop rather than recursion, so a long chain can't overflow the stack.
+    const chain = new Set<string>()
+    let current = value
+    let result: unknown
+    for (;;) {
+      const ref = (current as { $ref?: unknown } | undefined)?.$ref
+      if (typeof ref !== 'string') {
+        result = current
+        break
+      }
+      if (cache.has(ref)) {
+        result = cache.get(ref)
+        break
+      }
+      if (!ref.startsWith('#') || chain.has(ref)) {
+        result = undefined
+        break
+      }
+      chain.add(ref)
+      current = pointer(ref)
+    }
+    for (const ref of chain) cache.set(ref, result)
     return result
   }
 
@@ -242,7 +257,7 @@ function resolver(doc: DiscoveryDocument): (value: unknown) => unknown {
     return target
   }
 
-  return (value) => resolveValue(value, new Set())
+  return resolveValue
 }
 
 /** Percent-decodes a URI fragment, or `undefined` when its encoding is malformed. */
