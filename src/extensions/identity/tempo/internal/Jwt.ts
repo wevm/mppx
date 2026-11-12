@@ -16,8 +16,9 @@ export const es256 = {
 
 /** Decodes a compact JWS without verifying it, or returns `undefined` if it is malformed. */
 export function decode(token: string): Decoded | undefined {
+  if (token.length > 16_384) return undefined
   const parts = token.split('.')
-  if (token.length > 16_384 || parts.length !== 3) return undefined
+  if (parts.length !== 3) return undefined
   try {
     const header = JSON.parse(Base64.toString(parts[0]!))
     const claims = JSON.parse(Base64.toString(parts[1]!))
@@ -58,7 +59,8 @@ export function htu(url: string | URL): string {
 /**
  * Returns a lookup of an issuer's RS256 keys by key ID, from `<issuer>/oauth2/jwks`. The set is
  * cached for five minutes, and an unknown key ID refetches it at most every 30 seconds. A failed
- * fetch keeps the last set that loaded.
+ * fetch keeps the last set that loaded for up to one hour after it loaded, so a removed key stops
+ * verifying within an hour even while the issuer is unreachable.
  */
 export function keys(issuer: string, fetch: typeof globalThis.fetch) {
   // The last key set that loaded, which a failed refetch keeps.
@@ -83,11 +85,18 @@ export function keys(issuer: string, fetch: typeof globalThis.fetch) {
     return result
   }
 
+  /** Returns the last loaded set while it is younger than one hour, else `undefined`. */
+  function stale() {
+    if (cached && Date.now() - cached.at < 3_600_000) return cached.keys
+    return undefined
+  }
+
   async function fresh(maxAge: number) {
     if (cached && Date.now() - cached.at < maxAge) return cached.keys
     // Within 30 seconds of the last attempt, the last loaded set serves, so unknown key IDs and an
     // unreachable issuer cause at most one fetch each 30 seconds.
-    if (cached && !pending && Date.now() - attempted < 30_000) return cached.keys
+    const last = stale()
+    if (last && !pending && Date.now() - attempted < 30_000) return last
     if (!pending) {
       attempted = Date.now()
       pending = load()
@@ -102,7 +111,8 @@ export function keys(issuer: string, fetch: typeof globalThis.fetch) {
     try {
       return await pending
     } catch (error) {
-      if (cached) return cached.keys
+      const keys = stale()
+      if (keys) return keys
       throw error
     }
   }

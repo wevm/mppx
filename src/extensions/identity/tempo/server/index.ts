@@ -53,7 +53,9 @@ export function create(config: create.Config): TempoId {
   const invalid = (reason: string) => ({ status: 'invalid', headers, reason }) as const
 
   async function check(request: Request): Promise<Identity.Verification<Types.Caller>> {
-    const [scheme = '', token = ''] = (request.headers.get('Authorization') ?? '').split(' ')
+    // RFC 9110: one or more spaces separate the scheme and the token.
+    const [, scheme = '', token = ''] =
+      /^(\S+) +(\S+) *$/.exec(request.headers.get('Authorization') ?? '') ?? []
     const dpop = scheme.toLowerCase() === 'dpop'
     if (!token || (!dpop && scheme.toLowerCase() !== 'bearer'))
       return { status: 'missing', headers, reason: 'Sign in with Tempo ID.' }
@@ -66,7 +68,7 @@ export function create(config: create.Config): TempoId {
       return { status: 'unavailable', reason: "Tempo ID's signing keys are unavailable." }
     if (!signed) return invalid('The access token signature is invalid.')
 
-    const { aud, client_id, cnf, exp, iss, sub } = jwt.claims
+    const { aud, client_id, cnf, exp, iss, nbf, sub } = jwt.claims
     const now = Math.floor(Date.now() / 1_000)
     // A token that also names another API is that API's too, so only our audience (and Tempo ID's userinfo) passes.
     const audiences = [aud].flat()
@@ -79,6 +81,8 @@ export function create(config: create.Config): TempoId {
       return invalid('The access token is for another API.')
     if (typeof exp !== 'number' || exp + Constants.clockTolerance <= now)
       return invalid('The access token has expired.')
+    if (nbf !== undefined && (typeof nbf !== 'number' || nbf > now + Constants.clockTolerance))
+      return invalid('The access token is not valid yet.')
     if (typeof client_id !== 'string' || (clientIds && !clientIds.includes(client_id)))
       return { status: 'forbidden', reason: 'This app may not call this API.' }
 
@@ -86,7 +90,10 @@ export function create(config: create.Config): TempoId {
     if (dpop !== (cnf?.jkt !== undefined))
       return invalid('The access token scheme does not match its binding.')
     if (dpop) {
-      const reason = await checkProof(request, { jkt: cnf.jkt, now, token })
+      // A replay store failure rejects, so the proof cannot be spent once.
+      const reason = await checkProof(request, { jkt: cnf.jkt, now, token }).catch(() => null)
+      if (reason === null)
+        return { status: 'unavailable', reason: 'The DPoP replay store is unavailable.' }
       if (reason) return invalid(reason)
     }
 
@@ -191,12 +198,9 @@ export function create(config: create.Config): TempoId {
     if (htm !== request.method || htu !== Jwt.htu(request.url))
       return 'The DPoP proof is for another request.'
     if (ath !== (await Jwt.sha256(options.token))) return 'The DPoP proof is for another token.'
+    if (typeof iat !== 'number') return 'The DPoP proof has expired.'
     const expires = iat + Constants.proofMaxAge + Constants.clockTolerance
-    if (
-      typeof iat !== 'number' ||
-      iat > options.now + Constants.clockTolerance ||
-      expires < options.now
-    )
+    if (iat > options.now + Constants.clockTolerance || expires < options.now)
       return 'The DPoP proof has expired.'
     if (typeof jti !== 'string' || !jti) return 'The DPoP proof has no ID.'
     if (
@@ -232,8 +236,16 @@ export function create(config: create.Config): TempoId {
         if ((parameters.credential.payload as { type?: unknown } | undefined)?.type === 'zone')
           return { status: 'forbidden', reason: 'Pay from a Tempo account, not a Zone.' }
         // The source is a did:pkh:eip155:<chainId>:<address>.
-        const [, , , chain, address] = parameters.credential.source?.split(':') ?? []
-        if (chain !== String(chainId) || !isAddress(address))
+        const parts = parameters.credential.source?.split(':') ?? []
+        const [did, pkh, namespace, chain, address] = parts
+        if (
+          parts.length !== 5 ||
+          did !== 'did' ||
+          pkh !== 'pkh' ||
+          namespace !== 'eip155' ||
+          chain !== String(chainId) ||
+          !isAddress(address)
+        )
           return {
             status: 'invalid',
             reason: `The payment must name its source account on chain ${chainId}.`,

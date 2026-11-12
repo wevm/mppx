@@ -78,6 +78,7 @@ async function createIssuer() {
       dpop?: TempoId.DpopKey
       exp?: number
       kid?: string
+      nbf?: number
       typ?: string
     } = {},
   ) {
@@ -95,6 +96,7 @@ async function createIssuer() {
       exp: options.exp ?? now + 300,
       iat: now,
       iss: issuer,
+      ...(options.nbf !== undefined && { nbf: options.nbf }),
       scope: 'openid offline_access',
       sub: 'user_01TEST',
       tempo_accounts: [],
@@ -445,4 +447,86 @@ test('the prover refuses to replace a Payment Credential in Authorization', asyn
   await expect(
     prover.prove(new Request(url, { headers: { Authorization: credential } }), {} as never),
   ).rejects.toThrow(/requiresAuth: true/)
+})
+
+test('rejects an access token before its nbf time', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token({ nbf: Math.floor(Date.now() / 1000) + 600 })
+
+  const result = await tempoId.verifier.verify(
+    new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+  )
+
+  expect(result.status).toBe('invalid')
+})
+
+test('reads a token after several spaces in Authorization', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+
+  const result = await tempoId.verifier.verify(
+    new Request(url, { headers: { Authorization: `Bearer   ${token}` } }),
+  )
+
+  expect(result.status).toBe('valid')
+})
+
+test('reports a failed replay store as unavailable', async () => {
+  const store = Store.memory()
+  const { tempoId, tempoIssuer } = await setup({
+    store: {
+      ...store,
+      tryClaim: () => Promise.reject(new Error('down')),
+      update: () => Promise.reject(new Error('down')),
+    } as never,
+  })
+  const dpop = await createDpop()
+  const token = await tempoIssuer.token({ dpop })
+  const prover = TempoId.Client.prover({ accessToken: () => token, dpop, scope: '*' })
+  const signed = await prover.prove(new Request(url), { created: 0, nonce: '' })
+
+  const result = await tempoId.verifier.verify(signed)
+
+  expect(result.status).toBe('unavailable')
+})
+
+test.each([
+  `did:pkh:eip155:${chainId}:${payer}:extra`,
+  `did:web:eip155:${chainId}:${payer}`,
+  `x:pkh:eip155:${chainId}:${payer}`,
+])('rejects a malformed payment source %s', async (source) => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+  const request = new Request(url, { headers: { Authorization: `Bearer ${token}` } })
+
+  const result = await tempoId.paymentCheck.verify({
+    challenge: { method: 'tempo' },
+    credential: { source },
+    request,
+  } as never)
+
+  expect(result.status).toBe('invalid')
+})
+
+test('stops trusting the loaded keys one hour after they loaded while refetches fail', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token({ exp: Math.floor(Date.now() / 1000) + 7_200 })
+  const status = async () =>
+    (
+      await tempoId.verifier.verify(
+        new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+      )
+    ).status
+  expect(await status()).toBe('valid')
+
+  vi.useFakeTimers({ toFake: ['Date'] })
+  try {
+    tempoIssuer.down()
+    vi.setSystemTime(Date.now() + 1_800_000)
+    expect(await status()).toBe('valid')
+    vi.setSystemTime(Date.now() + 1_860_000)
+    expect(await status()).toBe('unavailable')
+  } finally {
+    vi.useRealTimers()
+  }
 })

@@ -8,6 +8,7 @@ export const tempoSuites: Record<string, number> = {
   'src/cli/cli.test.ts': 5396,
   'src/client/Mppx.test.ts': 789,
   'src/client/internal/Fetch.test.ts': 1490,
+  'src/extensions/identity/tempo/TempoId.localnet.test.ts': 3000,
   'src/mcp/client/McpClient.integration.test.ts': 5423,
   'src/mcp/client/McpClient.test.ts': 444,
   'src/middlewares/elysia.test.ts': 1330,
