@@ -189,9 +189,16 @@ function jsonSchema(
   const body = resolve(doc, requestBody) as
     | { content?: Record<string, { schema?: unknown }> }
     | undefined
-  const schema = resolve(doc, body?.content?.['application/json']?.schema)
+  const raw = body?.content?.['application/json']?.schema
+  const schema = resolve(doc, raw)
   if (typeof schema === 'boolean') return schema
-  return schema && typeof schema === 'object' ? (schema as Record<string, unknown>) : undefined
+  if (!schema || typeof schema !== 'object') return undefined
+  // JSON Schema 2020-12 applies keywords next to `$ref`: keep them alongside the target.
+  const { $ref, ...siblings } = raw as Record<string, unknown>
+  if ($ref === undefined || Object.keys(siblings).length === 0)
+    return schema as Record<string, unknown>
+  const allOf = Array.isArray(siblings.allOf) ? siblings.allOf : []
+  return { ...siblings, allOf: [schema, ...allOf] }
 }
 
 /**

@@ -318,6 +318,28 @@ describe('listOperations', () => {
     ])
   })
 
+  test('keeps keywords next to a schema $ref', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Siblings', version: '1' },
+      components: { schemas: { Text: { type: 'string' } } },
+      paths: {
+        '/style': {
+          post: {
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/Text', maxLength: 10 },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    expect(operation!.requestSchema).toEqual({ maxLength: 10, allOf: [{ type: 'string' }] })
+  })
+
   test('returns no operations without paths', () => {
     expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
   })
