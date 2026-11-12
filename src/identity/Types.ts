@@ -119,6 +119,11 @@ export type Requirement = {
  * @experimental Unstable: may change or be removed in any release.
  */
 export type PaymentCheck<value = unknown> = {
+  /**
+   * The check reads its credential from `Authorization`. A route that uses it needs a server
+   * created with `requiresAuth: true`, so Payment Credentials travel in `Payment-Authorization`.
+   */
+  readonly authorization?: boolean | undefined
   /** Identities the check requires, advertised in every 402 of the route. */
   readonly requires: readonly Requirement[]
   /** Returns the check's outcome for the paid retry (or, without a Credential, for `authorize`). */

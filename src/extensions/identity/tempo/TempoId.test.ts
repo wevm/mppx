@@ -392,3 +392,42 @@ test('ignores an expired ID token', async () => {
   expect(result.status).toBe('valid')
   expect(result.status === 'valid' ? result.value.email : 'refused').toBeUndefined()
 })
+
+test('accepts any app without clientId, and allow reads the app', async () => {
+  const { tempoId, tempoIssuer } = await setup({ clientId: undefined })
+  const token = await tempoIssuer.token({ clientId: 'app_other' })
+  const result = await tempoId.verifier.verify(
+    new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+  )
+  expect(result.status).toBe('valid')
+  expect(result.status === 'valid' && result.value.clientId).toBe('app_other')
+})
+
+test('refuses a route that reads Authorization on a server without requiresAuth', async () => {
+  const { tempoId } = await setup()
+  const mppx = Mppx.create({
+    methods: [serverMethod],
+    realm: 'api.example',
+    secretKey: 'test-secret-key-test-secret-key!',
+  })
+  expect(() => mppx.charge({ ...charge, identity: { payment: tempoId.paymentCheck } })).toThrow(
+    /requiresAuth: true/,
+  )
+})
+
+test('the prover refuses to replace a Payment Credential in Authorization', async () => {
+  const prover = TempoId.Client.prover({ accessToken: () => 'token', scope: '*' })
+  const credential = Credential.serialize({
+    challenge: {
+      id: 'id',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example',
+      request: charge,
+    } as never,
+    payload: { token: 'paid' },
+  })
+  await expect(
+    prover.prove(new Request(url, { headers: { Authorization: credential } }), {} as never),
+  ).rejects.toThrow(/requiresAuth: true/)
+})

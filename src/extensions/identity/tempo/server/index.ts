@@ -43,7 +43,8 @@ export function create(config: create.Config): TempoId {
   const { chainId = 4217, store } = config
   const issuer = new URL(config.issuer ?? Constants.issuer).origin
   const audience = config.audience ?? issuer
-  const clientIds = [config.clientId].flat()
+  // Absent, any app's token passes; `allow` can still decide by `clientId`.
+  const clientIds = config.clientId === undefined ? undefined : [config.clientId].flat()
   const keys = Jwt.keys(issuer, unwrapFetch(config.fetch ?? globalThis.fetch))
   // One verification per request, so a DPoP proof is spent once across both checks.
   const verified = new WeakMap<Request, Promise<Identity.Verification<Types.Caller>>>()
@@ -78,7 +79,7 @@ export function create(config: create.Config): TempoId {
       return invalid('The access token is for another API.')
     if (typeof exp !== 'number' || exp + Constants.clockTolerance <= now)
       return invalid('The access token has expired.')
-    if (!clientIds.includes(client_id))
+    if (typeof client_id !== 'string' || (clientIds && !clientIds.includes(client_id)))
       return { status: 'forbidden', reason: 'This app may not call this API.' }
 
     // RFC 9449: a DPoP-bound token is useless without a proof from its key, and a Bearer token takes none.
@@ -217,8 +218,9 @@ export function create(config: create.Config): TempoId {
   }
 
   return {
-    verifier: { verify: async (request) => allowed(await verify(request)) },
+    verifier: { authorization: true, verify: async (request) => allowed(await verify(request)) },
     paymentCheck: {
+      authorization: true,
       requires: [{ type: Constants.type, issuer }],
       async verify(parameters): Promise<Identity.Verification<Types.Payer>> {
         const caller = await verify(parameters.request)
@@ -258,8 +260,8 @@ export declare namespace create {
     readonly allow?: ((user: Types.Payer) => boolean | Promise<boolean>) | undefined
     /** The chain payments settle on. @default 4217 (Tempo mainnet) */
     readonly chainId?: number | undefined
-    /** The app or apps whose tokens the API accepts. */
-    readonly clientId: string | readonly string[]
+    /** The app or apps whose tokens the API accepts. @default any app */
+    readonly clientId?: string | readonly string[] | undefined
     /** Accepts each DPoP proof once. Without it, a proof can be replayed for five minutes. */
     readonly store?: Store.AtomicStore | undefined
     /** The audience tokens must name. @default the issuer's origin */

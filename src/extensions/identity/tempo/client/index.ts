@@ -1,5 +1,6 @@
 import { Base64 } from 'ox'
 
+import * as Credential from '../../../../Credential.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import { Constants } from '../Constants.js'
@@ -31,6 +32,13 @@ export function prover(config: prover.Config): Identity.Prover {
     async prove(request) {
       const accessToken = await config.accessToken()
       const headers = new Headers(request.headers)
+      // The access token would replace a Payment Credential in Authorization; a server created
+      // with `requiresAuth: true` takes the Credential in Payment-Authorization instead.
+      const authorization = headers.get('Authorization')
+      if (authorization && Credential.extractPaymentScheme(authorization) !== null)
+        throw new TypeError(
+          'The Tempo ID access token needs Authorization, which holds the Payment Credential: the server must set requiresAuth: true.',
+        )
       headers.set('Authorization', `${dpop ? 'DPoP' : 'Bearer'} ${accessToken}`)
       if (dpop) headers.set('DPoP', await proof(dpop, accessToken, request))
       const idToken = await config.idToken?.()
