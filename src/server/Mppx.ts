@@ -1145,7 +1145,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     const hasIdentity = identityRoute.request.length > 0 || paymentCheck !== undefined
     // A verifier that reads Authorization would lose its credential to the Payment Credential.
     if (
-      identityRoute.request.some((verifier) => verifier.authorization) &&
+      (identityRoute.request.some((verifier) => verifier.authorization) ||
+        paymentCheck?.authorization) &&
       credentialHeader !== Constants.Headers.paymentAuthorization
     )
       throw new TypeError(
