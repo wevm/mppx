@@ -380,3 +380,15 @@ test('keeps the loaded keys when a refetch for an unknown key ID fails', async (
     vi.useRealTimers()
   }
 })
+
+test('ignores an expired ID token', async () => {
+  const { tempoId, tempoIssuer } = await setup()
+  const token = await tempoIssuer.token()
+  const idToken = await tempoIssuer.idToken({ exp: Math.floor(Date.now() / 1000) - 3600 })
+  const headers = { Authorization: `Bearer ${token}`, 'Tempo-Id-Token': idToken }
+
+  const result = await tempoId.verifier.verify(new Request(url, { headers }))
+
+  expect(result.status).toBe('valid')
+  expect(result.status === 'valid' ? result.value.email : 'refused').toBeUndefined()
+})

@@ -149,8 +149,8 @@ export function create(config: create.Config): TempoId {
     const { aud, email, email_verified, exp, iss, sub } = jwt.claims
     if (iss !== issuer || ![aud].flat().includes(options.clientId) || sub !== options.sub)
       return 'The ID token is for another user or app.'
-    if (typeof exp !== 'number' || exp + Constants.clockTolerance <= options.now)
-      return 'The ID token has expired. Sign in again.'
+    // An expired ID token names no email, so `allow` decides without it.
+    if (typeof exp !== 'number' || exp + Constants.clockTolerance <= options.now) return {}
     if (typeof email !== 'string') return {}
     return { email: email.toLowerCase(), emailVerified: email_verified === true }
   }
