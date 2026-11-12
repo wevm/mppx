@@ -6,6 +6,8 @@ export * as EmailOtp from './email-otp/index.js'
 export * as Link from './link/index.js'
 /** Persona KYC: a payment check that requires an approved Persona inquiry. */
 export * as Persona from './persona/index.js'
+/** Tempo ID: access tokens that name the user, and a payer bound to the signed-in user. */
+export * as TempoId from './tempo-id/index.js'
 /** Client and server adapters for the TAP agent-recognition signature profile. */
 export * as Tap from './tap/index.js'
 /** Client and server adapters for the Web Bot Auth HTTPS-directory profile. */
