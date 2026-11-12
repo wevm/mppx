@@ -1,3 +1,4 @@
+import * as Currency from '../../Currency.js'
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Assets from '../Assets.js'
 import * as Chains from '../Chains.js'
@@ -38,14 +39,14 @@ export function evm<const parameters extends evm.Parameters>(
   const seen = new Set<string>()
   const methods: ReturnType<typeof charge_>[] = []
   for (const currency of currencies) {
-    const chainId =
-      shared.chainId ?? (Assets.isAsset(currency) ? Assets.toChainId(currency.network) : undefined)
+    const chainId = shared.chainId ?? Currency.chainIdOf(currency)
     if (chainId === undefined)
       throw new Error('EVM currencies require `chainId` or known asset metadata.')
     const resolved = Assets.resolve(currency, Assets.toNetwork(chainId))
     if (!resolved) continue
     // One shared price cannot price non-USD or unknown-denomination token definitions.
-    if (Assets.isToken(currency) && currency.currency !== 'USD') continue
+    if (typeof currency !== 'string' && !Assets.isAsset(currency) && currency.currency !== 'USD')
+      continue
     const key = `${chainId}:${resolved.address.toLowerCase()}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -56,7 +57,7 @@ export function evm<const parameters extends evm.Parameters>(
 }
 
 export namespace evm {
-  /** Accepted EVM currency metadata, including chain-indexed definitions from `viem/tokens`. */
+  /** An accepted EVM currency: an address, a `viem/tokens` token (chain-indexed or resolved), or a known asset. */
   export type Currency = Assets.Currency
   /** Shared EVM settlement parameters and ordered accepted currencies. */
   export type Parameters = Omit<charge_.Parameters, 'currency'> &

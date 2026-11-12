@@ -74,7 +74,7 @@ async function createPayload(request = parseRequest()) {
 }
 
 function serializeCompositeSignature(
-  type: 'keychain' | 'multisig',
+  type: 'keychain' | 'configurable',
   inner: SignatureEnvelope.Primitive,
 ) {
   return SignatureEnvelope.serialize(
@@ -117,7 +117,7 @@ describe('tempo subscription key authorization', () => {
     )
   })
 
-  test.each(['keychain', 'multisig'] as const)(
+  test.each(['keychain', 'configurable'] as const)(
     'rejects %s authorization signatures',
     async (type) => {
       const request = parseRequest()
@@ -128,7 +128,7 @@ describe('tempo subscription key authorization', () => {
           account: {
             async sign({ hash }) {
               const inner = SignatureEnvelope.from(await rootAccount.sign({ hash }))
-              if (inner.type === 'keychain' || inner.type === 'multisig') {
+              if (inner.type === 'keychain' || inner.type === 'configurable') {
                 throw new Error('expected primitive signature')
               }
               return serializeCompositeSignature(type, inner)
@@ -142,14 +142,14 @@ describe('tempo subscription key authorization', () => {
     },
   )
 
-  test.each(['keychain', 'multisig'] as const)(
+  test.each(['keychain', 'configurable'] as const)(
     'rejects serialized %s authorization signatures',
     async (type) => {
       const request = parseRequest()
       const payload = await createPayload(request)
       const authorization = KeyAuthorization.deserialize(payload.signature)
       const [authorizationTuple] = KeyAuthorization.toTuple(authorization)
-      if (!authorization.signature || authorization.signature.type === 'multisig')
+      if (!authorization.signature || authorization.signature.type === 'configurable')
         throw new Error('Expected a primitive authorization signature')
       const signature = authorization.signature
 
@@ -168,7 +168,7 @@ describe('tempo subscription key authorization', () => {
           request,
         }),
       ).toThrow(
-        type === 'multisig'
+        type === 'configurable'
           ? 'keyAuthorization signature is invalid'
           : 'keyAuthorization must use a primitive signature',
       )

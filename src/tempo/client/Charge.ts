@@ -22,6 +22,7 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
+import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
@@ -86,8 +87,14 @@ export function charge(parameters: charge.Parameters = {}) {
     parameters.currencies === undefined
   )
     throw new Error('Tempo charge maxAmount and maxAtomicAmount require currencies.')
+  // Fail at construction for any accepted currency whose decimals cannot parse `maxAmount`.
+  for (const currency of parameters.currencies ?? [])
+    parseMaxAmount(
+      parameters.maxAmount,
+      typeof currency === 'string' ? parameters.decimals : currency.decimals,
+    )
   const caps = {
-    maxAmount: parseMaxAmount(parameters.maxAmount, parameters.decimals),
+    maxAmount: parameters.maxAmount,
     maxAtomicAmount:
       parameters.maxAtomicAmount === undefined ? undefined : BigInt(parameters.maxAtomicAmount),
   }
@@ -127,6 +134,9 @@ export function charge(parameters: charge.Parameters = {}) {
       Client.assertAllowedChainId(parameters.allowedChainIds, chainId)
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
+      // A challenge without a chain ID was checked without one: check its currency on this chain.
+      if (challengeChainId === undefined)
+        assertChallengePolicy(parameters, caps, challenge.request, chainId)
 
       const { request } = challenge
       const { amount, methodDetails } = request
@@ -670,8 +680,10 @@ type ChargeRequest = z.output<typeof Methods.charge.schema.request>
  */
 function assertChallengePolicy(
   parameters: charge.Parameters,
-  caps: { maxAmount: bigint | undefined; maxAtomicAmount: bigint | undefined },
+  caps: { maxAmount: string | undefined; maxAtomicAmount: bigint | undefined },
   request: ChargeRequest,
+  /** Chain the client signs on, once resolved, for a challenge that names none. */
+  signingChainId?: number | undefined,
 ) {
   const { amount, methodDetails, recipient } = request
 
@@ -688,10 +700,20 @@ function assertChallengePolicy(
   if (challengeChainId !== undefined || parameters.allowedChainIds?.length === 0)
     Client.assertAllowedChainId(parameters.allowedChainIds, challengeChainId)
 
-  if (
-    parameters.currencies &&
-    !parameters.currencies.some((c) => c.toLowerCase() === request.currency.toLowerCase())
-  )
+  // Tokens match on the chain the client signs on: the challenge's, else the pinned or resolved
+  // one. Only selection, before a client is resolved, may match a token on any chain it lists,
+  // and `createCredential` checks the currency again on the resolved chain before signing.
+  const currency = parameters.currencies
+    ? Currency.find(parameters.currencies, request.currency, {
+        chainId:
+          challengeChainId ??
+          signingChainId ??
+          parameters.expectedChainId ??
+          (parameters.allowedChainIds?.length === 1 ? parameters.allowedChainIds[0] : undefined),
+        decimals: parameters.decimals,
+      })
+    : undefined
+  if (parameters.currencies && !currency)
     throw new Error(`Tempo charge currency is not allowed: ${request.currency}.`)
 
   if (parameters.expectedRecipients) {
@@ -709,7 +731,10 @@ function assertChallengePolicy(
 
   if (caps.maxAtomicAmount !== undefined && BigInt(amount) > caps.maxAtomicAmount)
     throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
-  if (caps.maxAmount !== undefined && BigInt(amount) > caps.maxAmount)
+  if (
+    caps.maxAmount !== undefined &&
+    BigInt(amount) > parseMaxAmount(caps.maxAmount, currency?.decimals)!
+  )
     throw new Error('Tempo charge amount exceeds maxAmount.')
 }
 
@@ -763,20 +788,22 @@ export declare namespace charge {
      */
     expectedRecipients?: readonly Address[] | undefined
     /**
-     * Allowlist of TIP-20 currency addresses this client will pay in, compared
-     * case-insensitively. Offers in other currencies are skipped during selection
-     * and rejected before signing; an empty list rejects all. Required with
-     * `maxAmount` or `maxAtomicAmount`, which are denominated in the challenge currency.
+     * Allowlist of currencies this client will pay in: TIP-20 addresses, compared
+     * case-insensitively, or `viem/tokens` tokens, matched on the challenge's chain.
+     * Offers in other currencies are skipped during selection and rejected before
+     * signing; an empty list rejects all. Required with `maxAmount` or
+     * `maxAtomicAmount`, which are denominated in the challenge currency.
      */
-    currencies?: readonly Address[] | undefined
+    currencies?: readonly Currency.Currency[] | undefined
     /**
-     * Decimals of the `currencies`, used to parse `maxAmount`. Required with
-     * `maxAmount` because challenges do not carry currency decimals.
+     * Decimals of address `currencies`, used to parse `maxAmount`. Tokens carry their
+     * own. Required with `maxAmount` for addresses, because challenges do not carry
+     * currency decimals.
      */
     decimals?: number | undefined
     /**
      * Maximum display-unit amount (e.g. `'1.5'`) the client is willing to pay per
-     * charge, parsed with `decimals`. Values with more fractional digits than
+     * charge, parsed with the matched currency's decimals. Values with more fractional digits than
      * `decimals` are rejected rather than rounded. Compared against the challenge
      * amount, which includes splits; larger offers are skipped during selection and
      * rejected before signing. Applies per credential, not cumulatively across

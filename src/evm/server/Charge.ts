@@ -1,6 +1,7 @@
 import { getAddress, recoverTypedDataAddress } from 'viem'
 
 import type * as Credential from '../../Credential.js'
+import * as Currency from '../../Currency.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
@@ -234,9 +235,7 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
   let chainId = config.chainId
   let decimals = config.decimals
 
-  if (Assets.isAsset(currency)) {
-    chainId ??= Assets.toChainId(currency.network)
-  }
+  chainId ??= Currency.chainIdOf(currency)
 
   if (chainId !== undefined) {
     const resolved = Assets.resolve(currency, Types.networkOf(chainId))

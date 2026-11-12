@@ -280,7 +280,8 @@ describe.runIf(isLocalnet)('createOpenPayload', () => {
     if (result.payload.action !== 'open') throw new Error('unexpected action')
     const transaction = Transaction.deserialize(result.payload.transaction)
     if (!('nonceKey' in transaction)) throw new Error('unexpected transaction type')
-    expect(transaction.nonce).toBe(0)
+    // Expiring nonces carry a random 48-bit discriminator in `nonce`.
+    expect(transaction.nonce).toBeLessThan(2 ** 48)
     expect(transaction.nonceKey).toBe((1n << 256n) - 1n)
     expect((transaction as { validBefore?: bigint }).validBefore).toBeDefined()
   })

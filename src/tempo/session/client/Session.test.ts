@@ -1,6 +1,7 @@
 import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
+import { defineToken } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
@@ -930,6 +931,50 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(500n)
   })
 
+  test.each([
+    {
+      name: 'an address next to an 18-decimal token on another chain',
+      currencies: [
+        descriptor.token,
+        defineToken({
+          addresses: { 1: '0x0000000000000000000000000000000000000009' },
+          decimals: 18,
+        }),
+      ],
+      maxDeposit: '0.0005',
+    },
+    {
+      name: 'the matched token',
+      currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+      maxDeposit: '5',
+    },
+  ])('parses maxDeposit in the decimals of $name', async ({ currencies, maxDeposit }) => {
+    const method = session({ account, currencies, maxDeposit, getClient: () => client })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge({ suggestedDeposit: '1000' }),
+        context: {},
+      }),
+    )
+
+    expect(openDeposit(payload)).toBe(500n)
+  })
+
+  test('rejects a chainless challenge whose token is not on the signing chain', async () => {
+    const method = session({
+      account,
+      currencies: [defineToken({ addresses: { 4217: descriptor.token }, decimals: 6 })],
+      getClient: () => client,
+    })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge({ methodDetails: { escrowContract: tip20ChannelEscrow } }),
+        context: {},
+      }),
+    ).rejects.toThrow(`Tempo session currency is not allowed: ${descriptor.token}.`)
+  })
+
   test('uses suggestedDeposit when below maxDeposit', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const payload = deserialize(
@@ -1803,6 +1848,27 @@ describe('session spending policy', () => {
     {
       name: 'disallowed currency',
       options: { currencies: [otherCurrency] },
+      error: 'Tempo session currency is not allowed',
+    },
+    {
+      name: 'token currency with its own decimals',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+        maxAmount: '1',
+      },
+      error: undefined,
+    },
+    {
+      name: 'token currency above its decimals cap',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: descriptor.token }, decimals: 2 })],
+        maxAmount: '0.99',
+      },
+      error: 'Tempo session amount exceeds maxAmount.',
+    },
+    {
+      name: 'token currency without the challenge currency',
+      options: { currencies: [defineToken({ addresses: { 42431: otherCurrency }, decimals: 2 })] },
       error: 'Tempo session currency is not allowed',
     },
     {

@@ -462,12 +462,18 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
       return { feePayerSignature: completed.feePayerSignature, transaction: completed.transaction }
     // The signature binds the gas limit, so a local fee payer signs a simulation-only copy
     // with headroom for the node's sponsored `eth_call` overhead. The broadcast keeps its gas.
+    // The node's `eth_call` recovers the fee payer of an expiring-nonce transaction as if its
+    // `nonce` were 0, so the copy zeroes the random discriminator. The broadcast keeps its nonce.
+    const expiring = completed.transaction.nonceKey === maxUint256
     const padded =
-      gas === undefined
+      gas === undefined && !expiring
         ? completed.transaction
         : {
             ...completed.transaction,
-            gas: sponsoredSimulationGas(completed.transaction, policy),
+            ...(gas !== undefined
+              ? { gas: sponsoredSimulationGas(completed.transaction, policy) }
+              : {}),
+            ...(expiring ? { nonce: 0 } : {}),
           }
     const feePayerSignature = await signFeePayerSimulation(padded)
     return feePayerSignature
