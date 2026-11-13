@@ -147,6 +147,7 @@ describe('tempo subscription lifecycle integration', () => {
           account: rootAccount,
           getClient: async () =>
             ({
+              chain: { id: 4217 },
               request: async () => {
                 throw new Error('wallet_authorizeAccessKey should not be called for local account')
               },

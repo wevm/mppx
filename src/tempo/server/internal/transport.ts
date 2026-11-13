@@ -241,31 +241,36 @@ export function sse(
         return chargedResponse
       }
 
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      let charged = false
       const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          // deduction completes before consumer reads
-          const result = await chargePlainResponse()
-          if (!result.ok) {
-            controller.error(
-              insufficientBalance(result.channel.highestVoucherAmount - result.channel.spent),
-            )
-            return
-          }
-          if (!chargedResponse.body) {
-            controller.close()
-            return
-          }
-          const reader = chargedResponse.body.getReader()
+        async pull(controller) {
           try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              controller.enqueue(value)
+            if (!charged) {
+              const result = await chargePlainResponse()
+              if (!result.ok)
+                throw insufficientBalance(
+                  result.channel.highestVoucherAmount - result.channel.spent,
+                )
+              charged = true
+              reader = chargedResponse.body?.getReader()
             }
-          } finally {
-            reader.releaseLock()
-            controller.close()
+            const next = await reader?.read()
+            if (!next || next.done) {
+              reader?.releaseLock()
+              controller.close()
+            } else controller.enqueue(next.value)
+          } catch (error) {
+            await reader?.cancel(error).catch(() => {})
+            reader?.releaseLock()
+            controller.error(error)
           }
+        },
+        async cancel(reason) {
+          if (reader) {
+            await reader.cancel(reason)
+            reader.releaseLock()
+          } else await chargedResponse.body?.cancel(reason)
         },
       })
       return new Response(stream, {

@@ -1,6 +1,6 @@
 import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
@@ -1106,4 +1106,31 @@ describe('sse transport', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
     expect(transport.name).toBe('sse')
   })
+})
+
+test('plain session responses preserve backpressure and propagate cancellation', async () => {
+  const store = memoryStore()
+  await seedChannel(store, 10000000n)
+  let pulls = 0
+  const cancel = vi.fn()
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (++pulls > 128) controller.close()
+      else controller.enqueue(new Uint8Array(16384))
+    },
+    cancel,
+  })
+  const response = await sse({ store }).respondReceipt({
+    credential: makeCredential({ unitType: 'token' }),
+    input: new Request('https://test.example.com/session', { method: 'POST', body: '{}' }),
+    receipt: makeReceipt(),
+    response: new Response(source),
+    challengeId,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(pulls).toBeLessThanOrEqual(3)
+  const reader = response.body!.getReader()
+  await reader.read()
+  await reader.cancel('downstream closed')
+  expect(cancel).toHaveBeenCalledWith('downstream closed')
 })

@@ -59,6 +59,9 @@ export async function sendResponse(
           }
         }
       }
+    } catch (error) {
+      await reader.cancel(error).catch(() => {})
+      if (!connectionClosed && !isResponseClosed(res)) throw error
     } finally {
       res.removeListener('close', onClose)
       reader.releaseLock()
@@ -89,6 +92,7 @@ function waitForDrain(res: http.ServerResponse | http2.Http2ServerResponse): Pro
       res.removeListener('error', onError)
     }
     const onDrain = () => {
+      if (res.writableNeedDrain) return
       cleanup()
       resolve(true)
     }

@@ -179,6 +179,14 @@ export function create(config: create.Config): Proxy {
       replayBody = body
       paidRequest = Replay.withBody(request, body)
       replayKey = Replay.key({
+        authority: replay.authority,
+        scope: JSON.stringify([
+          (config.basePath ?? '').replace(/\/+$/, ''),
+          serviceId,
+          normalizeBaseUrl(service.baseUrl).href,
+          Route.parseRouteKey(matched.key),
+          getConfiguredScope(handler),
+        ]),
         body,
         credential,
         method: request.method,
@@ -603,8 +611,7 @@ function createFetchProxy(
   options?: { fetch?: typeof globalThis.fetch },
 ): (input: URL | RequestInfo, init?: RequestInit) => Promise<Response> {
   const localFetch = options?.fetch ?? globalThis.fetch
-  const targetUrl = new URL(target)
-  if (targetUrl.pathname.endsWith('/')) targetUrl.pathname = targetUrl.pathname.replace(/\/+$/, '')
+  const targetUrl = normalizeBaseUrl(target)
 
   return async (input, init) => {
     const request = new globalThis.Request(input, init)
@@ -627,4 +634,11 @@ function createFetchProxy(
     }
     return localFetch(proxyUrl, proxyInit)
   }
+}
+
+/** Uses the same canonical upstream base for delivery and replay scope. */
+function normalizeBaseUrl(target: string | URL): URL {
+  const url = new URL(target)
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  return url
 }
