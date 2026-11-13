@@ -443,8 +443,29 @@ describe('signing keys', () => {
     await request.text()
     await expect(
       HttpMessageSignature.sign(request, { ...signOptions, key: remoteSigner(keys, { calls }) }),
-    ).rejects.toThrow('Cannot sign a request whose body has already been read.')
+    ).rejects.toThrow('Cannot sign a request whose body has already been read or is locked.')
     expect(calls).toHaveLength(0)
+  })
+
+  test('refuses a locked body without calling the remote signer', async () => {
+    const keys = await keyPair()
+    const calls: Uint8Array[] = []
+    const request = new Request('https://merchant.example/resource', { body: 'x', method: 'POST' })
+    request.body!.getReader()
+    await expect(
+      HttpMessageSignature.sign(request, { ...signOptions, key: remoteSigner(keys, { calls }) }),
+    ).rejects.toThrow('Cannot sign a request whose body has already been read or is locked.')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('signs a request with an unread body', async () => {
+    const keys = await keyPair()
+    const signed = await HttpMessageSignature.sign(
+      new Request('https://merchant.example/resource', { body: 'payload', method: 'POST' }),
+      { ...signOptions, key: remoteSigner(keys) },
+    )
+    expect(await signed.text()).toBe('payload')
+    expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
   })
 
   test('a signer failure propagates unchanged', async () => {
