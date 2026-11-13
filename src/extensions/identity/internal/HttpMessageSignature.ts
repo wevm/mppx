@@ -96,7 +96,8 @@ export async function sign(
   const context = options.context ?? SigningContextInternal.create()
   const created = context.created
   const expires = created + (options.expiresIn ?? 60)
-  const algorithm = algorithmFromKey(options.key)
+  const signer = Signer.resolve(options.key)
+  const algorithm = signer.algorithm
   const parameters = new Map<string, BareItem>([
     ['created', created],
     ['expires', expires],
@@ -117,9 +118,7 @@ export async function sign(
     tag: options.tag,
   }
   const bytes = encode(signatureBase(request, input))
-  const signature = Signer.isSigner(options.key)
-    ? (await Signer.sign(options.key, algorithm, bytes)).buffer
-    : await crypto.subtle.sign(webCryptoAlgorithm(algorithm), options.key, toArrayBuffer(bytes))
+  const signature = (await signer.sign(bytes)).buffer
   const headers = new Headers(request.headers)
   const inputs = parseHeaderDictionary(headers, SignatureHeaders.signatureInput)
   const signatures = parseHeaderDictionary(headers, SignatureHeaders.signature)
@@ -309,26 +308,6 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
     parameters,
     tag,
   }
-}
-
-function algorithmFromKey(key: SigningKey): SignatureAlgorithm {
-  if (Signer.isSigner(key)) {
-    if (isSignatureAlgorithm(key.algorithm)) return key.algorithm
-  } else if (isCryptoKey(key)) {
-    for (const algorithm of Object.values(Algorithms))
-      if (keySupportsAlgorithm(key, algorithm)) return algorithm
-  }
-  throw new TypeError('HTTP message signatures require an Ed25519 or RSA-PSS SHA-512 signing key.')
-}
-
-function isCryptoKey(value: unknown): value is CryptoKey {
-  // Duck-typed so keys from another realm or a WebCrypto polyfill keep working.
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { algorithm?: unknown }).algorithm === 'object' &&
-    (value as { algorithm: unknown }).algorithm !== null
-  )
 }
 
 function isInteger(value: unknown): value is number {

@@ -17,7 +17,7 @@ import * as Identity from 'mppx/identity'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { jwkThumbprint, keyPair } from '~test/Identity.js'
+import { jwkThumbprint, keyPair, remoteSigner } from '~test/Identity.js'
 
 const method = Method.from({
   name: 'test',
@@ -129,13 +129,12 @@ function provers(keys: Awaited<ReturnType<typeof signatureKeys>>, scope: Identit
   return {
     tap: Tap.Client.prover({
       intent: Tap.Constants.intents.payment,
-      key: keys.tap.privateKey,
+      key: keys.tap,
       keyId: 'tap-agent',
       scope,
     }),
     webBotAuth: WebBotAuth.Client.prover({
-      key: keys.webBotAuth.privateKey,
-      keyId: keys.webBotAuthKeyId,
+      key: keys.webBotAuth,
       scope,
       signatureAgent: 'https://agent.example',
     }),
@@ -371,7 +370,7 @@ test('rejects an invalid request-stage identity before creating a payment challe
   try {
     const prover = Tap.Client.prover({
       intent: Tap.Constants.intents.payment,
-      key: untrusted.privateKey,
+      key: untrusted,
       keyId: 'tap-agent',
       scope: '*',
     })
@@ -420,26 +419,28 @@ test('signs every attempt with external signers whose keys never leave them', as
   })
   const signed: string[] = []
   // Stand-ins for a KMS: each holds its private key and only returns signatures.
-  const remote = (name: string, privateKey: CryptoKey) => ({
-    algorithm: Signatures.Algorithms.ed25519,
-    async sign(bytes: Uint8Array) {
-      signed.push(name)
-      return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, bytes.slice()))
-    },
-  })
+  const remote = (name: string, keys: CryptoKeyPair) => {
+    const inner = remoteSigner(keys)
+    return {
+      publicKey: keys.publicKey,
+      sign(parameters: { readonly payload: Uint8Array }) {
+        signed.push(name)
+        return inner.sign(parameters)
+      },
+    }
+  }
 
   try {
     const client = ClientMppx.create({
       identity: [
         WebBotAuth.Client.prover({
-          key: remote('webBotAuth', keys.webBotAuth.privateKey),
-          keyId: keys.webBotAuthKeyId,
+          key: remote('webBotAuth', keys.webBotAuth),
           scope: [new URL(seen.server.url).origin],
           signatureAgent: 'https://agent.example',
         }),
         Tap.Client.prover({
           intent: Tap.Constants.intents.payment,
-          key: remote('tap', keys.tap.privateKey),
+          key: remote('tap', keys.tap),
           keyId: 'tap-agent',
           scope: [new URL(seen.server.url).origin],
         }),
@@ -458,6 +459,7 @@ test('signs every attempt with external signers whose keys never leave them', as
 })
 
 test('never calls an external signer for origins outside its scope', async () => {
+  const keys = await signatureKeys()
   const seen = await createServer(async (request, payments) => {
     const result = await payments.charge(charge)(request)
     return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
@@ -470,7 +472,7 @@ test('never calls an external signer for origins outside its scope', async () =>
         Tap.Client.prover({
           intent: Tap.Constants.intents.payment,
           key: {
-            algorithm: Signatures.Algorithms.ed25519,
+            publicKey: keys.tap.publicKey,
             async sign() {
               calls++
               return new Uint8Array(64)

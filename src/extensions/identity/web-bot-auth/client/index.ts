@@ -3,9 +3,10 @@ import type { Dictionary } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
+import * as JwkThumbprint from '../../internal/JwkThumbprint.js'
+import * as Signer from '../../internal/Signer.js'
 import type { SigningKey } from '../../Types.js'
 import { Constants } from '../Constants.js'
-import * as JwkThumbprint from '../internal/JwkThumbprint.js'
 import * as SignatureAgent from '../internal/SignatureAgent.js'
 
 /**
@@ -22,14 +23,14 @@ export function prover(config: prover.Config): Identity.Prover {
   const signatureAgentKey = config.signatureAgentKey ?? label
   const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime
   const signatureAgent = SignatureAgent.directoryOrigin(config.signatureAgent)
-  if (!JwkThumbprint.is(config.keyId))
-    throw new TypeError('Web Bot Auth keyId must be an RFC 7638 SHA-256 JWK thumbprint.')
+  const { publicKey } = Signer.resolve(config.key)
+  let keyId: Promise<string> | undefined
   if (!signatureAgent) throw new TypeError('Signature-Agent must identify a valid HTTPS origin.')
   if (!Number.isInteger(expiresIn) || expiresIn <= 0)
     throw new RangeError('Web Bot Auth expiresIn must be a positive integer.')
   return {
     scope: config.scope,
-    prove(request, context) {
+    async prove(request, context) {
       const headers = new Headers(request.headers)
       const signatureAgents = parseSignatureAgents(headers)
       if (signatureAgents.has(signatureAgentKey))
@@ -47,7 +48,8 @@ export function prover(config: prover.Config): Identity.Prover {
         context,
         expiresIn,
         key: config.key,
-        keyId: config.keyId,
+        // The keyid is the RFC 7638 thumbprint of the public key, so it can't disagree with it.
+        keyId: await (keyId ??= JwkThumbprint.fromKey(publicKey)),
         label,
         tag: Constants.tag,
       })
@@ -57,10 +59,11 @@ export function prover(config: prover.Config): Identity.Prover {
 
 export declare namespace prover {
   type Config = {
-    /** Ed25519 or RSA-PSS SHA-512 private key or external signer registered for the bot. */
+    /**
+     * Ed25519 or RSA-PSS SHA-512 key pair, or a {@link SigningKey | Signer} for a remote key,
+     * registered for the bot. The `keyid` is the RFC 7638 thumbprint of its public key.
+     */
     key: SigningKey
-    /** RFC 7638 JWK thumbprint for the registered public key. */
-    keyId: string
     /** Origins that receive Web Bot Auth signatures, or `'*'` for any origin. */
     scope: Identity.Prover['scope']
     /** Required HTTPS directory origin, sent with the default `directory` discovery type. */

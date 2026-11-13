@@ -95,7 +95,7 @@ async function createIssuer(options: { acr?: string; answers?: Answer[] } = {}) 
           sub: 'human-1',
           type: World.Constants.type,
         } as never,
-        { key: keys.privateKey, keyId },
+        { key: keys, keyId },
       )
       return Response.json({
         attestation,

@@ -5,6 +5,8 @@ import type * as Store from '../../../../Store.js'
 import { Constants as AttestationConstants } from '../../attestation/Constants.js'
 import { sign, isIssuer } from '../../attestation/Token.js'
 import type * as AttestationTypes from '../../attestation/Types.js'
+import * as Signer from '../../internal/Signer.js'
+import type { SigningKey } from '../../Types.js'
 import { Constants } from '../Constants.js'
 import * as Idp from '../internal/Idp.js'
 
@@ -68,6 +70,7 @@ export function create(config: create.Config): Issuer {
     fetch: config.fetch,
     issuer: (config.worldIssuer ?? Constants.worldIssuer).replace(/\/+$/, ''),
   })
+  Signer.resolve(config.signingKey, ['ed25519'])
   const key = (async () => {
     const jwk = await crypto.subtle.exportKey('jwk', config.signingKey.publicKey)
     if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || !jwk.x)
@@ -381,7 +384,7 @@ export function create(config: create.Config): Issuer {
           sub: await subjectOf(claims.sub, attempt.audience),
           type: Constants.type,
         } as AttestationTypes.Claims,
-        { key: config.signingKey.privateKey, keyId },
+        { key: config.signingKey, keyId },
       ),
       expiresAt: (iat + ttl) * 1_000,
     }
@@ -458,8 +461,11 @@ export declare namespace create {
      * @default [Constants.acr.orb, Constants.acr.orbFace]
      */
     readonly acr?: readonly string[] | undefined
-    /** Ed25519 key pair that signs attestations; its public key is published at the JWKS route. */
-    readonly signingKey: CryptoKeyPair
+    /**
+     * Ed25519 key pair, or a {@link SigningKey | Signer} for a key in a KMS or HSM, that signs
+     * attestations. Its public key is published at the JWKS route.
+     */
+    readonly signingKey: SigningKey
     /**
      * Holds attempts, their poll schedules and the start limit. Share one atomic store across
      * instances, such as `Store.redis()` or `Store.postgres()`.
