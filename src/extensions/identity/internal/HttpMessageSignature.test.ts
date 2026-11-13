@@ -400,6 +400,29 @@ describe('signing keys', () => {
     })
   })
 
+  test.each([
+    [
+      'a label that already exists',
+      { 'Signature-Input': 'test=();created=1', Signature: 'test=:AA==:' },
+      'HTTP message signature label "test" already exists.',
+    ],
+    [
+      'mismatched signature labels',
+      { 'Signature-Input': 'other=();created=1' },
+      'Signature-Input and Signature must contain the same labels.',
+    ],
+  ])('refuses %s without calling the remote signer', async (_, headers, message) => {
+    const keys = await keyPair()
+    const calls: Uint8Array[] = []
+    await expect(
+      HttpMessageSignature.sign(new Request('https://merchant.example/resource', { headers }), {
+        ...signOptions,
+        key: remoteSigner(keys, { calls }),
+      }),
+    ).rejects.toThrow(message)
+    expect(calls).toHaveLength(0)
+  })
+
   test('a signer failure propagates unchanged', async () => {
     const keys = await keyPair()
     const failure = new Error('KMS unavailable.')
