@@ -125,11 +125,15 @@ export async function sign(
     throw new Error('Signature-Input and Signature must contain the same labels.')
   if (inputs.has(input.label) || signatures.has(input.label))
     throw new Error(`HTTP message signature label "${input.label}" already exists.`)
+  if (request.bodyUsed)
+    throw new TypeError('Cannot sign a request whose body has already been read.')
+  inputs.set(input.label, toInnerList(input))
+  // Serializing validates the label and parameters before the signer is called.
+  const signatureInput = serializeDictionary(inputs)
   const bytes = encode(signatureBase(request, input))
   const signature = (await signer.sign(bytes)).buffer
-  inputs.set(input.label, toInnerList(input))
   signatures.set(input.label, [signature, new Map()])
-  headers.set(SignatureHeaders.signatureInput, serializeDictionary(inputs))
+  headers.set(SignatureHeaders.signatureInput, signatureInput)
   headers.set(SignatureHeaders.signature, serializeDictionary(signatures))
   return new Request(request, { headers })
 }

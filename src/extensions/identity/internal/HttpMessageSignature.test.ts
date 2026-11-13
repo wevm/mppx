@@ -423,6 +423,30 @@ describe('signing keys', () => {
     expect(calls).toHaveLength(0)
   })
 
+  test('refuses an invalid label without calling the remote signer', async () => {
+    const keys = await keyPair()
+    const calls: Uint8Array[] = []
+    await expect(
+      HttpMessageSignature.sign(new Request('https://merchant.example/resource'), {
+        ...signOptions,
+        key: remoteSigner(keys, { calls }),
+        label: 'TAP',
+      }),
+    ).rejects.toThrow()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('refuses a consumed body without calling the remote signer', async () => {
+    const keys = await keyPair()
+    const calls: Uint8Array[] = []
+    const request = new Request('https://merchant.example/resource', { body: 'x', method: 'POST' })
+    await request.text()
+    await expect(
+      HttpMessageSignature.sign(request, { ...signOptions, key: remoteSigner(keys, { calls }) }),
+    ).rejects.toThrow('Cannot sign a request whose body has already been read.')
+    expect(calls).toHaveLength(0)
+  })
+
   test('a signer failure propagates unchanged', async () => {
     const keys = await keyPair()
     const failure = new Error('KMS unavailable.')
