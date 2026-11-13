@@ -1,3 +1,5 @@
+import * as vm from 'node:vm'
+
 import { describe, expect, test } from 'vp/test'
 import { keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
@@ -168,6 +170,32 @@ describe('signing keys', () => {
         sign: async (parameters: { payload: Uint8Array }) => wrap(await inner.sign(parameters)),
       })
       expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('may return a Uint8Array from another realm', async () => {
+      const keys = await keyPair()
+      const inner = remoteSigner(keys)
+      const signed = await sign({
+        publicKey: keys.publicKey,
+        async sign(parameters: { payload: Uint8Array }) {
+          const signature = await inner.sign(parameters)
+          // A Uint8Array built in a separate vm context fails instanceof here.
+          const foreign = vm.runInNewContext('new Uint8Array(bytes)', { bytes: [...signature] })
+          expect(foreign instanceof Uint8Array).toBe(false)
+          return foreign
+        },
+      })
+      expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('reject a typed array that is not a Uint8Array from another realm', async () => {
+      const keys = await keyPair()
+      await expect(
+        sign({
+          publicKey: keys.publicKey,
+          sign: async () => vm.runInNewContext('new Uint16Array(32)'),
+        }),
+      ).rejects.toThrow('A Signer must resolve with the raw signature as a Uint8Array.')
     })
 
     test('cannot change the signature after it is checked', async () => {

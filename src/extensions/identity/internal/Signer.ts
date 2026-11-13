@@ -49,7 +49,7 @@ export function resolve(
       publicKey,
       async sign(payload) {
         const signature: unknown = await signer.sign({ payload: Uint8Array.from(payload) })
-        if (!(signature instanceof Uint8Array))
+        if (!isUint8Array(signature))
           throw new TypeError('A Signer must resolve with the raw signature as a Uint8Array.')
         // A copy, so the signer can't change the signature after it is checked.
         const bytes = Uint8Array.from(signature)
@@ -102,6 +102,13 @@ function describe(algorithms: readonly SignatureAlgorithm[]): string {
 
 function invalidKey() {
   return new TypeError('A signing key must be a CryptoKeyPair or a Signer with publicKey and sign.')
+}
+
+/** Whether `value` is a `Uint8Array` (or `Buffer`), including one from another realm. */
+function isUint8Array(value: unknown): value is Uint8Array {
+  return (
+    ArrayBuffer.isView(value) && Object.prototype.toString.call(value) === '[object Uint8Array]'
+  )
 }
 
 function isObject(value: unknown): value is object {
