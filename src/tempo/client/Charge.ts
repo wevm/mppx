@@ -106,7 +106,7 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
   assertZone(parameters.zone)
   // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
-  const pendingZoneWithdrawals = new Map<string, Promise<readonly Hex.Hex[]>>()
+  const pendingZoneWithdrawals = new Map<string, Promise<ZoneWithdrawal>>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -482,7 +482,7 @@ async function createZoneCredential(options: {
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
-  pending: Map<string, Promise<readonly Hex.Hex[]>>
+  pending: Map<string, Promise<ZoneWithdrawal>>
   zone: charge.Zone
   zoneId: number
 }) {
@@ -505,7 +505,18 @@ async function createZoneCredential(options: {
       if (!state.sent) pending.delete(key)
     })
   }
-  const senderTags = await withdrawalRequest
+  const withdrawal = await withdrawalRequest
+  // Derived on every attempt, so a failed read on the Zone is retried without withdrawing again.
+  const senderTags =
+    withdrawal.senderTags ??
+    (await Zone.senderTagCandidates(zone.client, withdrawal).catch((cause) => {
+      const error = new Error(
+        `Zone withdrawal transaction ${withdrawal.transactionHash} was sent, but its sender tag could not be read from the Zone. Retry the challenge to resume without withdrawing again.`,
+      )
+      // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+      Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+      throw error
+    }))
 
   let settled: { hash: Hex.Hex; senderTag: Hex.Hex }
   try {
@@ -519,8 +530,7 @@ async function createZoneCredential(options: {
     throw new Errors.ZoneSettlementPendingError({
       cause,
       challengeId: challenge.id,
-      // More than one candidate only when a redacted Zone RPC hid the tag; the first is the likeliest.
-      senderTag: senderTags[0]!,
+      senderTags,
       zoneId,
     })
   }
@@ -581,9 +591,17 @@ function zoneWithdrawalKey(challenge: unknown) {
 /** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
 const zoneReceiptRecoveryTimeoutMs = 15_000
 
+/** A sent Zone withdrawal: its sender tag when the receipt carried it, and what derives it otherwise. */
+type ZoneWithdrawal = {
+  blockNumber: bigint
+  sender: Address
+  senderTags: readonly Hex.Hex[] | undefined
+  transactionHash: Hex.Hex
+}
+
 /**
- * Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo,
- * and returns its sender tag, or the tags it may have when the Zone RPC hides it.
+ * Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo.
+ * Returns its sender tag, or leaves it to be derived when the Zone RPC hides it from the receipt.
  */
 async function requestZoneWithdrawal(
   options: {
@@ -592,7 +610,7 @@ async function requestZoneWithdrawal(
     zone: charge.Zone
   },
   state: { sent: boolean },
-): Promise<readonly Hex.Hex[]> {
+): Promise<ZoneWithdrawal> {
   const { challenge, clientId, zone } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
@@ -656,20 +674,21 @@ async function requestZoneWithdrawal(
     eventName: 'WithdrawalRequested',
     logs: receipt.logs,
   })
-  if (requested)
-    return [
-      Zone.senderTag({
-        fallbackNonce: requested.args.fallbackNonce,
-        sender: requested.args.sender,
-        transactionHash: receipt.transactionHash,
-      }),
-    ]
-  // A Zone RPC that redacts logs leaves the outbox's event out of the payer's receipt.
-  return Zone.senderTagCandidates(zone.client, {
+  return {
     blockNumber: receipt.blockNumber,
     sender: account.address,
+    // A Zone RPC that redacts logs leaves the outbox's event out of the payer's receipt.
+    senderTags: requested
+      ? [
+          Zone.senderTag({
+            fallbackNonce: requested.args.fallbackNonce,
+            sender: requested.args.sender,
+            transactionHash: receipt.transactionHash,
+          }),
+        ]
+      : undefined,
     transactionHash: receipt.transactionHash,
-  })
+  }
 }
 
 /** Parses `maxAmount` to base units, rejecting values that cannot be represented exactly. */

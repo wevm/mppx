@@ -410,25 +410,34 @@ export declare namespace PaymentSimulationError {
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *
  * Retry the same challenge with the same `tempo.charge` client to resume waiting without
- * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ * withdrawing again, or find the settlement with `senderTag` (or one of `senderTags`) on the Zone's portal.
  */
 export class ZoneSettlementPendingError extends Error {
   override readonly name = 'ZoneSettlementPendingError'
 
   /** ID of the challenge the withdrawal pays. */
   readonly challengeId: string
-  /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
-  readonly senderTag: `0x${string}`
+  /**
+   * Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it.
+   * `undefined` when a Zone RPC hid it and more than one candidate remains: see `senderTags`.
+   */
+  readonly senderTag: `0x${string}` | undefined
+  /** Sender tags the withdrawal may carry: its tag alone when known, else every candidate. */
+  readonly senderTags: readonly `0x${string}`[]
   /** ID of the Zone the withdrawal left. */
   readonly zoneId: number
 
   constructor(options: ZoneSettlementPendingError.Options) {
-    const { cause, challengeId, senderTag, zoneId } = options
+    const { cause, challengeId, zoneId } = options
+    const senderTags = options.senderTags ?? (options.senderTag ? [options.senderTag] : [])
+    const senderTag = senderTags.length === 1 ? senderTags[0] : undefined
+    const withdrawal = senderTag ?? `with sender tag ${senderTags.join(' or ')}`
     super(
-      `Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+      `Zone ${zoneId} withdrawal ${withdrawal} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
     )
     this.challengeId = challengeId
     this.senderTag = senderTag
+    this.senderTags = senderTags
     this.zoneId = zoneId
     // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
     if (cause !== undefined)
@@ -443,7 +452,9 @@ export declare namespace ZoneSettlementPendingError {
     /** ID of the challenge the withdrawal pays. */
     challengeId: string
     /** Sender tag of the withdrawal. */
-    senderTag: `0x${string}`
+    senderTag?: `0x${string}` | undefined
+    /** Sender tags the withdrawal may carry, when a Zone RPC hid its tag. */
+    senderTags?: readonly `0x${string}`[] | undefined
     /** ID of the Zone the withdrawal left. */
     zoneId: number
   }
