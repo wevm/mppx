@@ -278,6 +278,11 @@
       "types": "./dist/extensions/identity/web-bot-auth/index.d.ts",
       "default": "./dist/extensions/identity/web-bot-auth/index.js"
     },
+    "./extensions/identity/world": {
+      "src": "./src/extensions/identity/world/index.ts",
+      "types": "./dist/extensions/identity/world/index.d.ts",
+      "default": "./dist/extensions/identity/world/index.js"
+    },
     "./html": {
       "src": "./src/Html.ts",
       "types": "./dist/Html.d.ts",

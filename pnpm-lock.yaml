@@ -737,6 +737,27 @@ importers:
         specifier: ^4.157.0
         version: 4.158.0(@types/node@26.2.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
+  examples/world-id:
+    dependencies:
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.6.6
+      '@typescript/native-preview':
+        specifier: ^7.0.0-dev.20260707.2
+        version: 7.0.0-dev.20260707.2
+      mppx:
+        specifier: workspace:*
+        version: link:../..
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: ~7.0.2
+        version: 7.0.2
+      viem:
+        specifier: 2.57.1
+        version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+
   examples/x402-express:
     dependencies:
       '@types/express':
