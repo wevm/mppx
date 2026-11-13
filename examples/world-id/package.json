@@ -13,6 +13,6 @@
     "mppx": "workspace:*",
     "tsx": "^4.23.15",
     "typescript": "catalog:",
-    "viem": "2.57.1"
+    "viem": "2.57.19"
   }
 }

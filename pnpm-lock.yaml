@@ -755,8 +755,8 @@ importers:
         specifier: ~7.0.2
         version: 7.0.2
       viem:
-        specifier: 2.57.1
-        version: 2.57.1(bufferutil@4.1.0)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
+        specifier: 2.57.19
+        version: 2.57.19(bufferutil@4.1.0)(mppx@+)(typescript@7.0.2)(utf-8-validate@5.0.10)(zod@4.6.7)
 
   examples/x402-express:
     dependencies:
