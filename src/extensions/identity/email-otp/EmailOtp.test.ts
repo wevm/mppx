@@ -1,7 +1,7 @@
 import type { RequestListener } from 'node:http'
 
 import { Credential, Method, Receipt, z } from 'mppx'
-import { Mppx as ClientMppx } from 'mppx/client'
+import { Fetch, Mppx as ClientMppx } from 'mppx/client'
 import * as Attestation from 'mppx/extensions/identity/attestation'
 import * as EmailOtp from 'mppx/extensions/identity/email-otp'
 import * as Identity from 'mppx/identity'
@@ -9,6 +9,9 @@ import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
+
+import * as Jwks from '../attestation/Jwks.js'
+import * as LinkServer from '../link/server/index.js'
 
 const issuer = 'https://issuer.example'
 
@@ -481,6 +484,48 @@ test.each(['sendCode', 'verifyCode'] as const)(
           })
         : EmailOtp.Client.verifyCode({ code: '123456', id: 'otp-id', fetch, issuer })
     await expect(promise).rejects.toMatchObject({ status: 402 })
+    expect(sign).not.toHaveBeenCalled()
+    expect(raw).toHaveBeenCalledOnce()
+  },
+)
+
+test.each(['nested-identity', 'jwks', 'link-token'] as const)(
+  'does not pay through untagged forwarding: %s',
+  async (operation) => {
+    const sign = vi.fn(clientMethod.createCredential)
+    const server = Mppx.create({
+      methods: [serverMethod],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const raw = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const result = await server.charge(charge)(new Request(input, init))
+      return result.status === 402
+        ? result.challenge
+        : result.withReceipt(Response.json({ keys: [] }))
+    })
+    const payment = ClientMppx.create({
+      fetch: raw,
+      methods: [{ ...clientMethod, createCredential: sign }],
+      polyfill: false,
+    })
+    const forwarded: typeof globalThis.fetch = (input, init) => payment.fetch(input, init)
+    if (operation === 'nested-identity') {
+      const outer = ClientMppx.create({
+        fetch: forwarded,
+        methods: [clientMethod],
+        identity: [{ scope: '*', prove: async (request) => request }],
+        polyfill: false,
+      })
+      expect((await outer.fetch(issuer, Fetch.withoutPayment())).status).toBe(402)
+    } else if (operation === 'jwks') {
+      await expect(Jwks.resolver({ fetch: forwarded })({ issuer, keyId: 'key' })).rejects.toThrow(
+        '402',
+      )
+    } else {
+      await expect(
+        LinkServer.tokenVerifier({ fetch: forwarded, issuer }).attestationChallenge!(),
+      ).rejects.toThrow('402')
+    }
     expect(sign).not.toHaveBeenCalled()
     expect(raw).toHaveBeenCalledOnce()
   },

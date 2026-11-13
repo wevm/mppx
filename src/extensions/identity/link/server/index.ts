@@ -1,6 +1,6 @@
 import { Base64, Bytes } from 'ox'
 
-import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import { unwrapFetch, withoutPayment } from '../../../../client/internal/Fetch.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import { Constants } from '../Constants.js'
@@ -525,7 +525,7 @@ export function presentationVerifier(config: presentationVerifier.Config): Types
   ) as unknown as Fetch
   // The SDK refuses redirects with `redirect: 'error'`, which Workers reject: a 3xx is a failure either way.
   const fetch = (input: string, init: RequestInit) =>
-    base(input, init.redirect === 'error' ? { ...init, redirect: 'manual' } : init)
+    base(input, withoutPayment(init.redirect === 'error' ? { ...init, redirect: 'manual' } : init))
   const getMetadata = metadata({ fetch, issuer, maxAge: 3_600_000, timeout })
 
   return {
@@ -611,11 +611,14 @@ async function getJson(
   options: { origin: string; fetch: Fetch; timeout: number },
 ): Promise<Record<string, unknown>> {
   if (new URL(url).origin !== options.origin) throw new Error(`${url} is not on ${options.origin}.`)
-  const response = await options.fetch(url, {
-    headers: { accept: 'application/json' },
-    redirect: 'manual',
-    signal: AbortSignal.timeout(options.timeout),
-  })
+  const response = await options.fetch(
+    url,
+    withoutPayment({
+      headers: { accept: 'application/json' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(options.timeout),
+    }),
+  )
   if (!response.ok) throw new Error(`${url} answered ${response.status}.`)
   const body = (await response.json()) as unknown
   if (!body || typeof body !== 'object' || Array.isArray(body))

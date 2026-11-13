@@ -282,7 +282,17 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     context?: IdentityClient.SendContext,
   ): Promise<{ response: Response; headers: IdentityClient.ResendHeaders }> =>
     identity
-      ? identity.send(baseFetch, new Request(input, init), context)
+      ? identity.send(
+          (request, nextInit) =>
+            baseFetch(
+              request,
+              (init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment]
+                ? withoutPayment(nextInit)
+                : nextInit,
+            ),
+          new Request(input, init),
+          context,
+        )
       : { response: await baseFetch(input, init), headers: [] }
 
   const request = async (

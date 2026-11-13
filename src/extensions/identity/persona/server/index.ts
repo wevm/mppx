@@ -2,7 +2,7 @@ import { verifyMessage } from 'viem'
 import type { Address, Hex } from 'viem'
 
 import type * as Challenge from '../../../../Challenge.js'
-import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import { unwrapFetch, withoutPayment } from '../../../../client/internal/Fetch.js'
 import type * as Credential from '../../../../Credential.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
@@ -61,18 +61,21 @@ export function create(config: create.Config): Persona {
     // Unwrapped, and resolved per call: a Persona request must never pay a Payment Challenge,
     // even when an mppx client polyfilled globalThis.fetch.
     const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
-    const response = await fetch(new URL(path, apiUrl), {
-      ...init,
-      // A redirect is a failure: never send the bearer key on, nor read another origin's body.
-      redirect: 'manual',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'Persona-Version': apiVersion,
-        ...(init.body !== undefined && { 'Content-Type': 'application/json' }),
-      },
-      signal: AbortSignal.timeout(timeout),
-    })
+    const response = await fetch(
+      new URL(path, apiUrl),
+      withoutPayment({
+        ...init,
+        // A redirect is a failure: never send the bearer key on, nor read another origin's body.
+        redirect: 'manual',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          'Persona-Version': apiVersion,
+          ...(init.body !== undefined && { 'Content-Type': 'application/json' }),
+        },
+        signal: AbortSignal.timeout(timeout),
+      }),
+    )
     // Never surface the upstream body: it may carry request details.
     if (!response.ok) throw new PersonaError(`The Persona API returned ${response.status}.`)
     return response.json()
