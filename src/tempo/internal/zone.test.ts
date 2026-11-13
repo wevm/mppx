@@ -1,3 +1,4 @@
+import { createClient, custom, numberToHex, padHex } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
 import * as Zone from './zone.js'
@@ -27,5 +28,50 @@ describe('Zone', () => {
 
   test('portalAddress', () => {
     expect(Zone.portalAddress(3)).toBe('0x5ad0000000000000000000000000000000000003')
+  })
+
+  describe('senderTagCandidates', () => {
+    const sender = '0x0000000000000000000000000000000000000001'
+    const transactionHash = `0x${'ab'.repeat(32)}` as const
+    /** A Zone client whose outbox reports `before` at block 9 and `after` at block 10. */
+    function clientWith(before: bigint, after: bigint) {
+      return createClient({
+        transport: custom({
+          async request({ method, params }) {
+            if (method !== 'eth_call') throw new Error(`unexpected ${method}`)
+            const [, block] = params as [unknown, string]
+            return padHex(numberToHex(BigInt(block) === 9n ? before : after), { size: 32 })
+          },
+        }),
+      })
+    }
+
+    test('derives one tag per nonce the block added', async () => {
+      const tags = await Zone.senderTagCandidates(clientWith(4n, 6n), {
+        blockNumber: 10n,
+        sender,
+        transactionHash,
+      })
+      expect(tags).toEqual([
+        Zone.senderTag({ fallbackNonce: 5n, sender, transactionHash }),
+        Zone.senderTag({ fallbackNonce: 6n, sender, transactionHash }),
+      ])
+    })
+
+    test('rejects a block that added no withdrawal', async () => {
+      await expect(
+        Zone.senderTagCandidates(clientWith(4n, 4n), { blockNumber: 10n, sender, transactionHash }),
+      ).rejects.toThrow('did not request a withdrawal')
+    })
+
+    test('rejects a nonce range no block could hold', async () => {
+      await expect(
+        Zone.senderTagCandidates(clientWith(0n, 2n ** 63n), {
+          blockNumber: 10n,
+          sender,
+          transactionHash,
+        }),
+      ).rejects.toThrow('more than 64')
+    })
   })
 })

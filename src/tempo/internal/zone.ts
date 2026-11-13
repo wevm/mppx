@@ -19,6 +19,12 @@ export const defaultSettlementTimeoutMs = 60_000
 /** Number of Tempo blocks searched back for a settled Zone withdrawal. */
 const lookbackBlocks = 7_200n
 
+/**
+ * Most sender tags derived for one withdrawal: the withdrawals its Zone block may hold.
+ * Each candidate is a topic in every settlement poll's `eth_getLogs` filter.
+ */
+const maxSenderTagCandidates = 64n
+
 /** Time between polls for a settled Zone withdrawal. */
 const pollingIntervalMs = 500
 
@@ -180,6 +186,11 @@ export async function senderTagCandidates(
   if (after <= before)
     throw new Error(
       `Zone withdrawal transaction ${transactionHash} did not request a withdrawal from the outbox.`,
+    )
+  // The nonces come from the Zone RPC, so a range no block could hold is refused rather than hashed.
+  if (after - before > maxSenderTagCandidates)
+    throw new Error(
+      `Zone withdrawal transaction ${transactionHash} has ${after - before} candidate sender tags, more than ${maxSenderTagCandidates}.`,
     )
   const tags: Hex[] = []
   for (let fallbackNonce = before + 1n; fallbackNonce <= after; fallbackNonce++)
