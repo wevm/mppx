@@ -106,7 +106,7 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
   assertZone(parameters.zone)
   // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
-  const pendingZoneWithdrawals = new Map<string, Promise<Hex.Hex>>()
+  const pendingZoneWithdrawals = new Map<string, Promise<readonly Hex.Hex[]>>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -482,7 +482,7 @@ async function createZoneCredential(options: {
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
-  pending: Map<string, Promise<Hex.Hex>>
+  pending: Map<string, Promise<readonly Hex.Hex[]>>
   zone: charge.Zone
   zoneId: number
 }) {
@@ -505,13 +505,13 @@ async function createZoneCredential(options: {
       if (!state.sent) pending.delete(key)
     })
   }
-  const senderTag = await withdrawalRequest
+  const senderTags = await withdrawalRequest
 
-  let hash: Hex.Hex
+  let settled: { hash: Hex.Hex; senderTag: Hex.Hex }
   try {
-    hash = await Zone.waitForSettlement(client, {
+    settled = await Zone.waitForSettledWithdrawal(client, {
       portal: Zone.portalAddress(zoneId),
-      senderTag,
+      senderTags,
       timeoutMs: settlementTimeoutMs(challenge.expires, zone.settlementTimeoutMs),
       to: recipient,
     })
@@ -519,11 +519,13 @@ async function createZoneCredential(options: {
     throw new Errors.ZoneSettlementPendingError({
       cause,
       challengeId: challenge.id,
-      senderTag,
+      // More than one candidate only when a redacted Zone RPC hid the tag; the first is the likeliest.
+      senderTag: senderTags[0]!,
       zoneId,
     })
   }
   pending.delete(key)
+  const { hash, senderTag } = settled
 
   return Credential.serialize({
     challenge,
@@ -579,7 +581,10 @@ function zoneWithdrawalKey(challenge: unknown) {
 /** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
 const zoneReceiptRecoveryTimeoutMs = 15_000
 
-/** Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo. */
+/**
+ * Requests a Zone withdrawal of the challenge amount to its recipient, bound to the challenge by its memo,
+ * and returns its sender tag, or the tags it may have when the Zone RPC hides it.
+ */
 async function requestZoneWithdrawal(
   options: {
     challenge: Parameters<typeof Credential.serialize>[0]['challenge']
@@ -587,7 +592,7 @@ async function requestZoneWithdrawal(
     zone: charge.Zone
   },
   state: { sent: boolean },
-): Promise<Hex.Hex> {
+): Promise<readonly Hex.Hex[]> {
   const { challenge, clientId, zone } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
@@ -651,10 +656,18 @@ async function requestZoneWithdrawal(
     eventName: 'WithdrawalRequested',
     logs: receipt.logs,
   })
-  if (!requested) throw new Error('Zone withdrawal request did not emit `WithdrawalRequested`.')
-  return Zone.senderTag({
-    fallbackNonce: requested.args.fallbackNonce,
-    sender: requested.args.sender,
+  if (requested)
+    return [
+      Zone.senderTag({
+        fallbackNonce: requested.args.fallbackNonce,
+        sender: requested.args.sender,
+        transactionHash: receipt.transactionHash,
+      }),
+    ]
+  // A Zone RPC that redacts logs leaves the outbox's event out of the payer's receipt.
+  return Zone.senderTagCandidates(zone.client, {
+    blockNumber: receipt.blockNumber,
+    sender: account.address,
     transactionHash: receipt.transactionHash,
   })
 }

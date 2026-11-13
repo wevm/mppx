@@ -5,7 +5,7 @@ import { type Address, createClient, custom, defineChain, type Hex, http, parseU
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { readContract, waitForTransactionReceipt } from 'viem/actions'
 import { tempoLocalnet } from 'viem/chains'
-import { Abis, Actions, Store } from 'viem/tempo'
+import { Abis, Actions, Addresses, Store } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 
 import type { Context } from '../../test/zones/setup.global.js'
@@ -287,6 +287,44 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
       new Request('https://zones.example.com', { headers: { Authorization: credential } }),
     )
     expect(response.status).toBe(200)
+  }, 120_000)
+
+  test('pays when the Zone RPC redacts the outbox events', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient })
+    // A production Zone RPC leaves other contracts' events, such as the outbox's, out of receipts.
+    const redact = (receipt: { logs: { address: Address }[] }) => ({
+      ...receipt,
+      logs: receipt.logs.filter(
+        (log) => log.address.toLowerCase() !== Addresses.zoneOutbox.toLowerCase(),
+      ),
+    })
+    const zone = createClient({
+      account: payer.account,
+      chain: zoneChain,
+      transport: custom({
+        async request(args) {
+          const result = await payer.zone.request(args as never)
+          if (
+            result &&
+            (args.method === 'eth_sendRawTransactionSync' ||
+              args.method === 'eth_getTransactionReceipt')
+          )
+            return redact(result as never)
+          return result
+        },
+      }),
+    })
+
+    const client = Mppx_client.create({
+      fetch: (input, init) => handler(new Request(input, init)),
+      methods: [tempo_client.charge({ getClient: () => l1, zone: { client: zone } })],
+      polyfill: false,
+    })
+    const response = await client.fetch('https://zones.example.com/resource')
+
+    expect(response.status).toBe(200)
+    expect(await balanceOf(l1, recipient)).toBe(parseUnits(price, 6))
   }, 120_000)
 
   test('rejects a Zone the service does not accept', async () => {
