@@ -406,6 +406,91 @@ test('does not send identity to origins outside a prover scope', async () => {
   }
 })
 
+test('signs every attempt with external signers whose keys never leave them', async () => {
+  const keys = await signatureKeys()
+  const { tap, webBotAuth } = verifiers(keys)
+  const seen = await createServer(async (request, payments) => {
+    const result = await payments.charge({ ...charge, identity: [tap, webBotAuth] })(request)
+    if (result.status === 402) return result.challenge
+    return result.withReceipt(
+      new Response(
+        `${result.identity?.get(tap)?.keyId}:${result.identity?.get(webBotAuth)?.keyId}`,
+      ),
+    )
+  })
+  const signed: string[] = []
+  // Stand-ins for a KMS: each holds its private key and only returns signatures.
+  const remote = (name: string, privateKey: CryptoKey) => ({
+    algorithm: Signatures.Algorithms.ed25519,
+    async sign(bytes: Uint8Array) {
+      signed.push(name)
+      return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, bytes.slice()))
+    },
+  })
+
+  try {
+    const client = ClientMppx.create({
+      identity: [
+        WebBotAuth.Client.prover({
+          key: remote('webBotAuth', keys.webBotAuth.privateKey),
+          keyId: keys.webBotAuthKeyId,
+          scope: [new URL(seen.server.url).origin],
+          signatureAgent: 'https://agent.example',
+        }),
+        Tap.Client.prover({
+          intent: Tap.Constants.intents.payment,
+          key: remote('tap', keys.tap.privateKey),
+          keyId: 'tap-agent',
+          scope: [new URL(seen.server.url).origin],
+        }),
+      ],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    const response = await client.fetch(seen.server.url)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe(`tap-agent:${keys.webBotAuthKeyId}`)
+    // The unpaid attempt and the paid retry are each signed once by each prover.
+    expect(signed.toSorted()).toEqual(['tap', 'tap', 'webBotAuth', 'webBotAuth'])
+  } finally {
+    seen.server.close()
+  }
+})
+
+test('never calls an external signer for origins outside its scope', async () => {
+  const seen = await createServer(async (request, payments) => {
+    const result = await payments.charge(charge)(request)
+    return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
+  })
+  let calls = 0
+
+  try {
+    const client = ClientMppx.create({
+      identity: [
+        Tap.Client.prover({
+          intent: Tap.Constants.intents.payment,
+          key: {
+            algorithm: Signatures.Algorithms.ed25519,
+            async sign() {
+              calls++
+              return new Uint8Array(64)
+            },
+          },
+          keyId: 'tap-agent',
+          scope: ['https://elsewhere.example'],
+        }),
+      ],
+      methods: [clientMethod],
+      polyfill: false,
+    })
+    expect((await client.fetch(seen.server.url)).status).toBe(200)
+    expect(calls).toBe(0)
+    expect(seen.signatureInputs).toEqual(['', ''])
+  } finally {
+    seen.server.close()
+  }
+})
+
 test('does not authorize without a credential until the payment check is valid', async () => {
   const authorizing = Method.toServer(method, {
     authorize: () => ({

@@ -1,4 +1,4 @@
-import { expect, test } from 'vp/test'
+import { describe, expect, test } from 'vp/test'
 import { jwkThumbprint, keyPair } from '~test/Identity.js'
 
 import * as Attestation from './index.js'
@@ -38,6 +38,101 @@ test('signs and verifies an attestation', async () => {
     typ: 'mpp-attestation+jwt',
   })
   expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
+})
+
+describe('external signers', () => {
+  function remote(privateKey: CryptoKey, calls: Uint8Array[] = []) {
+    return {
+      algorithm: 'ed25519' as const,
+      async sign(bytes: Uint8Array) {
+        calls.push(bytes)
+        return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, bytes.slice()))
+      },
+    }
+  }
+
+  test('signs the same token as the local key', async () => {
+    // Ed25519 is deterministic, so the same key and claims give an identical token.
+    const { claims, keyId, keys, options } = await setup()
+    const local = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+    const token = await Attestation.sign(claims, { key: remote(keys.privateKey), keyId })
+    expect(token).toBe(local)
+    expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
+  })
+
+  test('passes the JWS signing input to the signer once', async () => {
+    const { claims, keyId, keys } = await setup()
+    const calls: Uint8Array[] = []
+    const token = await Attestation.sign(claims, { key: remote(keys.privateKey, calls), keyId })
+    expect(calls).toHaveLength(1)
+    expect(new TextDecoder().decode(calls[0])).toBe(token.split('.').slice(0, 2).join('.'))
+  })
+
+  test('a token signed by another remote key does not verify', async () => {
+    const { claims, keyId, options } = await setup()
+    const other = await keyPair()
+    expect(
+      await Attestation.verify(
+        await Attestation.sign(claims, { key: remote(other.privateKey), keyId }),
+        options,
+      ),
+    ).toEqual({ reason: 'The attestation signature is invalid.', status: 'invalid' })
+  })
+
+  test('rejects a non-Ed25519 signer before calling it', async () => {
+    const { claims, keyId } = await setup()
+    let called = false
+    await expect(
+      Attestation.sign(claims, {
+        key: {
+          // JavaScript callers can supply another algorithm despite the type.
+          algorithm: 'rsa-pss-sha512' as 'ed25519',
+          async sign() {
+            called = true
+            return new Uint8Array(64)
+          },
+        },
+        keyId,
+      }),
+    ).rejects.toThrow('Attestations require an Ed25519 signer.')
+    expect(called).toBe(false)
+  })
+
+  test.each([0, 63, 65])('rejects a %i-byte signature', async (length) => {
+    const { claims, keyId } = await setup()
+    await expect(
+      Attestation.sign(claims, {
+        key: { algorithm: 'ed25519', sign: async () => new Uint8Array(length) },
+        keyId,
+      }),
+    ).rejects.toThrow('External Ed25519 signer returned ' + length + ' bytes')
+  })
+
+  test('rejects a signature that is not a Uint8Array', async () => {
+    const { claims, keyId } = await setup()
+    await expect(
+      Attestation.sign(claims, {
+        key: { algorithm: 'ed25519', sign: async () => 'c2lnbmF0dXJl' as never },
+        keyId,
+      }),
+    ).rejects.toThrow('External signer must resolve with the raw signature as a Uint8Array.')
+  })
+
+  test('propagates a signer failure', async () => {
+    const { claims, keyId } = await setup()
+    const failure = new Error('KMS unavailable.')
+    await expect(
+      Attestation.sign(claims, {
+        key: {
+          algorithm: 'ed25519',
+          sign: async () => {
+            throw failure
+          },
+        },
+        keyId,
+      }),
+    ).rejects.toBe(failure)
+  })
 })
 
 test('rejects wrong claims, times, keys and tampering', async () => {

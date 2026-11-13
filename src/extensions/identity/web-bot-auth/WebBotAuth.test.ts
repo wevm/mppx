@@ -67,6 +67,84 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
   expect(result).toMatchObject({ status: 'valid' })
 })
 
+test('signs with an external Ed25519 key and preserves a sliced signature', async () => {
+  const keys = await keyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  let calls = 0
+  const signed = await WebBotAuth.Client.prover({
+    scope: '*',
+    key: {
+      algorithm: Signatures.Algorithms.ed25519,
+      async sign(bytes) {
+        calls++
+        expect(new TextDecoder().decode(bytes)).toContain('"@authority": merchant.example')
+        const signature = new Uint8Array(
+          await crypto.subtle.sign('Ed25519', keys.privateKey, Uint8Array.from(bytes).buffer),
+        )
+        const padded = new Uint8Array(signature.length + 16).fill(0xff)
+        padded.set(signature, 8)
+        return padded.subarray(8, 8 + signature.length)
+      },
+    },
+    keyId,
+    signatureAgent: 'https://agent.example',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(calls).toBe(1)
+  expect(
+    await WebBotAuth.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({ status: 'valid', value: { keyId } })
+})
+
+test('propagates external signing failures without returning a proved request', async () => {
+  await expect(
+    WebBotAuth.Client.prover({
+      scope: '*',
+      key: {
+        algorithm: Signatures.Algorithms.ed25519,
+        async sign() {
+          throw new Error('Remote signer unavailable.')
+        },
+      },
+      keyId: 'A'.repeat(43),
+      signatureAgent: 'https://agent.example',
+    }).prove(new Request('https://merchant.example/resource'), attempt()),
+  ).rejects.toThrow('Remote signer unavailable.')
+})
+
+test('signs with an external RSA-PSS SHA-512 key', async () => {
+  const keys = await rsaKeyPair()
+  const keyId = await jwkThumbprint(keys.publicKey)
+  const signed = await WebBotAuth.Client.prover({
+    scope: '*',
+    key: {
+      algorithm: Signatures.Algorithms.rsaPssSha512,
+      async sign(bytes) {
+        return new Uint8Array(
+          await crypto.subtle.sign(
+            { name: 'RSA-PSS', saltLength: 64 },
+            keys.privateKey,
+            bytes.slice(),
+          ),
+        )
+      },
+    },
+    keyId,
+    signatureAgent: 'https://agent.example',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(signed.headers.get('Signature-Input')).toContain('alg="rsa-pss-sha512"')
+  expect(
+    await WebBotAuth.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({ status: 'valid', value: { keyId } })
+})
+
 test('reports directory lookup failures as forbidden (403) identities', async () => {
   const keys = await keyPair()
   const keyId = await jwkThumbprint(keys.publicKey)

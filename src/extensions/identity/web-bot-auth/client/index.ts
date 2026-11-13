@@ -3,6 +3,7 @@ import type { Dictionary } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
+import type { SigningKey } from '../../Types.js'
 import { Constants } from '../Constants.js'
 import * as JwkThumbprint from '../internal/JwkThumbprint.js'
 import * as SignatureAgent from '../internal/SignatureAgent.js'
@@ -56,8 +57,8 @@ export function prover(config: prover.Config): Identity.Prover {
 
 export declare namespace prover {
   type Config = {
-    /** Ed25519 or RSA-PSS SHA-512 private key registered for the bot. */
-    key: CryptoKey
+    /** Ed25519 or RSA-PSS SHA-512 private key or external signer registered for the bot. */
+    key: SigningKey
     /** RFC 7638 JWK thumbprint for the registered public key. */
     keyId: string
     /** Origins that receive Web Bot Auth signatures, or `'*'` for any origin. */

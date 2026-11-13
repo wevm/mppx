@@ -1,5 +1,6 @@
 import type * as Identity from '../../../../identity/Types.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
+import type { SigningKey } from '../../Types.js'
 import { Constants } from '../Constants.js'
 
 /**
@@ -46,8 +47,8 @@ export declare namespace prover {
   type Config = {
     /** TAP signature type for the request. */
     intent: (typeof Constants.intents)[keyof typeof Constants.intents]
-    /** Ed25519 or RSA-PSS SHA-512 private key provisioned to the agent provider. */
-    key: CryptoKey
+    /** Ed25519 or RSA-PSS SHA-512 private key or external signer for the agent provider. */
+    key: SigningKey
     /** Identifier the merchant uses to resolve the signing public key. */
     keyId: string
     /** Origins that receive TAP signatures, or `'*'` for any origin. */

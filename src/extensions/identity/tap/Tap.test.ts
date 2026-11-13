@@ -4,7 +4,7 @@ import * as Identity from 'mppx/identity'
 import { serializeDictionary, serializeInnerList } from 'structured-headers'
 import type { BareItem, InnerList } from 'structured-headers'
 import { expect, test } from 'vp/test'
-import { keyPair } from '~test/Identity.js'
+import { keyPair, rsaKeyPair } from '~test/Identity.js'
 
 test('signs and verifies a request-bound TAP payment intent', async () => {
   const keys = await keyPair()
@@ -80,6 +80,78 @@ test('shares replay protection across verifier instances and TAP intents', async
     reason: 'The signature nonce has already been used.',
     status: 'invalid',
   })
+})
+
+test('signs a TAP payment intent with an external Ed25519 key', async () => {
+  const keys = await keyPair()
+  const signed = await Tap.Client.prover({
+    scope: '*',
+    intent: Tap.Constants.intents.payment,
+    key: {
+      algorithm: Signatures.Algorithms.ed25519,
+      async sign(bytes) {
+        expect(new TextDecoder().decode(bytes)).toContain('"@path": /resource')
+        return new Uint8Array(
+          await crypto.subtle.sign('Ed25519', keys.privateKey, Uint8Array.from(bytes).buffer),
+        )
+      },
+    },
+    keyId: 'remote-tap-agent',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(
+    await Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({
+    status: 'valid',
+    value: { intent: Tap.Constants.intents.payment, keyId: 'remote-tap-agent' },
+  })
+})
+
+test('signs a TAP intent with an external RSA-PSS SHA-512 key', async () => {
+  const keys = await rsaKeyPair()
+  const signed = await Tap.Client.prover({
+    scope: '*',
+    intent: Tap.Constants.intents.payment,
+    key: {
+      algorithm: Signatures.Algorithms.rsaPssSha512,
+      async sign(bytes) {
+        return new Uint8Array(
+          await crypto.subtle.sign(
+            { name: 'RSA-PSS', saltLength: 64 },
+            keys.privateKey,
+            bytes.slice(),
+          ),
+        )
+      },
+    },
+    keyId: 'remote-rsa-agent',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(
+    await Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({ status: 'valid', value: { keyId: 'remote-rsa-agent' } })
+})
+
+test('propagates TAP external signing failures', async () => {
+  await expect(
+    Tap.Client.prover({
+      scope: '*',
+      intent: Tap.Constants.intents.payment,
+      key: {
+        algorithm: Signatures.Algorithms.ed25519,
+        async sign() {
+          throw new Error('HSM unavailable.')
+        },
+      },
+      keyId: 'agent',
+    }).prove(new Request('https://merchant.example/resource'), attempt()),
+  ).rejects.toThrow('HSM unavailable.')
 })
 
 test('verifies externally ordered signature parameters and extensions', async () => {
