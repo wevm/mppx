@@ -37,6 +37,7 @@ import {
   deleteChannel,
   type ChannelSink,
 } from './ChannelStore.js'
+import { resolveMachineTokenFeeToken, resolveMachineTokenOpen } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -215,6 +216,8 @@ export type ClientSessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Fee token selected by the server for open/top-up transactions. */
   feeToken?: Address | undefined
+  /** Whether the payee also accepts a channel funded in MACH, 1:1 with the challenge currency. */
+  machTokenAccepted?: boolean | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
@@ -290,6 +293,8 @@ export type ChallengeContext = {
   feePayer?: boolean | undefined
   feeToken?: Address | undefined
   key: string
+  /** Whether the challenge also accepts a channel funded in MACH, and the client allows MACH. */
+  machTokenAccepted?: boolean | undefined
   operator?: Address | undefined
   payee: Address
   snapshot?: SessionSnapshot | undefined
@@ -412,6 +417,9 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     feeToken: readOptionalAddress(methodDetails.feeToken),
+    machTokenAccepted:
+      Constants.getMethodDetail(methodDetails, Constants.MethodDetailKeys.machTokenAccepted) ===
+      true,
     operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
@@ -463,6 +471,7 @@ export async function resolveChallengeContext(
     feePayer: methodDetails.feePayer,
     feeToken: methodDetails.feeToken,
     key: channelKey({ payee, token, escrow, chainId }),
+    machTokenAccepted: methodDetails.machTokenAccepted,
     operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
@@ -706,11 +715,20 @@ async function resolveAutoSwapCalls(
   parameters: {
     account: Address
     amountOut: bigint
+    chainId: number
     client: Client
     tokenOut: Address
   },
 ): Promise<readonly TempoChannelCall[] | undefined> {
-  if (!autoSwap) return undefined
+  // MACH is never acquired by swapping: a session funds a MACH channel only from MACH already held.
+  if (
+    !autoSwap ||
+    MachineTokenCharge.isMachineToken({
+      chainId: parameters.chainId,
+      currency: parameters.tokenOut,
+    })
+  )
+    return undefined
   return (await AutoSwap.findCalls(parameters.client, {
     account: parameters.account,
     amountOut: parameters.amountOut,
@@ -744,13 +762,16 @@ async function open(
   sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
-  const { account, resolved } = plan
+  const { account } = plan
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
     maxDeposit: plan.maxDeposit,
-    requestAmount: resolved.amount,
-    suggestedDepositRaw: resolved.suggestedDepositRaw,
+    requestAmount: plan.resolved.amount,
+    suggestedDepositRaw: plan.resolved.suggestedDepositRaw,
   })
+  // A machTokenAccepted challenge also accepts a channel in MACH, preferred when MACH covers it.
+  const resolved =
+    (await resolveMachineTokenOpen({ account, deposit, resolved: plan.resolved })) ?? plan.resolved
   await assertMachineTokenDeposit(autoSwap, {
     account: account.address,
     amount: deposit,
@@ -770,6 +791,7 @@ async function open(
     prefixCalls: await resolveAutoSwapCalls(autoSwap, {
       account: account.address,
       amountOut: deposit,
+      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),
@@ -973,10 +995,12 @@ async function manualTopUp(
     await resolveAutoSwapCalls(autoSwap, {
       account: account.address,
       amountOut: additionalDeposit,
+      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),
-    resolved.feeToken,
+    // A reused MACH channel pays fees in a token the payer holds, as its open did.
+    await resolveMachineTokenFeeToken({ account, resolved }),
   )
 }
 

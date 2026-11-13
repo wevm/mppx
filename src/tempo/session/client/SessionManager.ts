@@ -427,6 +427,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     maxDeposit: parameters.maxDeposit,
     topUpAmount: parameters.topUpAmount,
     channelStore: store,
+    currencies: parameters.currencies,
     onChannelUpdate(entry) {
       if (entry.channelId !== runtime.channel?.channelId) runtime.spent = 0n
       runtime.channel = entry
@@ -1231,6 +1232,12 @@ export namespace sessionManager {
       trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined
+      /**
+       * Allowlist of TIP-20 currency addresses the manager pays sessions in, compared
+       * case-insensitively. A list without the chain's MACH keeps a `machTokenAccepted` challenge
+       * in its advertised currency, so the manager reads and writes only that currency's channel.
+       */
+      currencies?: readonly Address[] | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */

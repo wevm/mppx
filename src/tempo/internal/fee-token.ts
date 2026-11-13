@@ -49,6 +49,7 @@ export function defaultFeeTokens(chainId: number | undefined): Address[] {
  *
  * `prioritizeCandidates` checks candidate tokens before account and chain
  * preferences. `allowedTokens` limits every preference to the caller's policy.
+ * `requireBalance` returns `undefined` rather than an unfunded preference.
  */
 export async function resolveFeeToken(parameters: {
   account: Address
@@ -56,8 +57,10 @@ export async function resolveFeeToken(parameters: {
   candidateTokens?: readonly Address[] | undefined
   client: Client
   prioritizeCandidates?: boolean | undefined
+  requireBalance?: boolean | undefined
 }): Promise<Address | undefined> {
-  const { account, allowedTokens, candidateTokens, client, prioritizeCandidates } = parameters
+  const { account, allowedTokens, candidateTokens, client, prioritizeCandidates, requireBalance } =
+    parameters
   const tokens: Address[] = []
 
   if (prioritizeCandidates)
@@ -76,5 +79,26 @@ export async function resolveFeeToken(parameters: {
     if (await hasBalance(client, account, token)) return token
   }
 
-  return tokens[0]
+  return requireBalance ? undefined : tokens[0]
+}
+
+/**
+ * Resolves a stablecoin the account holds to pay gas, trying `preferred` (default: the chain's fee
+ * tokens) in order. Returns `undefined` when none is funded, such as for a MACH-only payer.
+ */
+export async function resolveFundedFeeToken(parameters: {
+  account: Address
+  chainId: number | undefined
+  client: Client
+  preferred?: readonly Address[] | undefined
+}): Promise<Address | undefined> {
+  const { account, chainId, client, preferred = defaultFeeTokens(chainId) } = parameters
+  return resolveFeeToken({
+    account,
+    allowedTokens: preferred,
+    candidateTokens: preferred,
+    client,
+    prioritizeCandidates: true,
+    requireBalance: true,
+  })
 }

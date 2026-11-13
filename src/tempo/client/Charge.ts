@@ -32,7 +32,7 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
+import { defaultFeeTokens, resolveFeeToken, resolveFundedFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Zone from '../internal/zone.js'
@@ -221,55 +221,117 @@ export function charge(parameters: charge.Parameters = {}) {
         },
         recipient: request.recipient as Address,
       })
-      const transferCalls = transfers.map((transfer): AccountResolution.ResolveAccountCall =>
-        Actions.token.transfer.call(client, {
-          amount: BigInt(transfer.amount),
-          ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
-          to: transfer.recipient as Address,
-          token: currency,
-        }),
-      )
+      const toTransferCalls = (token: Address) =>
+        transfers.map((transfer): AccountResolution.ResolveAccountCall =>
+          Actions.token.transfer.call(client, {
+            amount: BigInt(transfer.amount),
+            ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
+            to: transfer.recipient as Address,
+            token,
+          }),
+        )
+      const transferCalls = toTransferCalls(currency)
 
       const autoSwap = AutoSwap.resolve(
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
+      // The payee accepts MACH 1:1 directly, unless the client's `currencies` allowlist leaves it out.
+      const machineToken =
+        methodDetails?.machTokenAccepted === true &&
+        !isMachineTokenCurrency &&
+        MachineTokenCharge.isAllowed(parameters.currencies, chainId)
+          ? MachineTokenCharge.getToken(chainId)
+          : undefined
+      const swapperRoute =
+        methodDetails?.machineTokenEnabled === true
+          ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
+          : undefined
+      // MACH routes in order of preference: a direct transfer, then the legacy swapper, which every
+      // `machineTokenEnabled` server still accepts.
+      const machineTokenRoutes = [
+        ...(machineToken ? [{ calls: toTransferCalls(machineToken), token: machineToken }] : []),
+        ...(swapperRoute ? [{ calls: swapperRoute.calls, token: undefined }] : []),
+      ]
 
-      const machineTokenCandidate = machineTokenEnabled
-        ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
-        : undefined
+      const resolveMode = (payer: { type: string }) => {
+        const explicitMode = context?.mode ?? parameters.mode
+        if (explicitMode) {
+          if (!supportedModes.includes(explicitMode))
+            throw new Error(`Challenge does not support ${explicitMode} mode.`)
+          return explicitMode
+        }
+
+        const preferredMode = payer.type === 'json-rpc' ? 'push' : 'pull'
+        if (supportedModes.includes(preferredMode)) return preferredMode
+        return supportedModes[0]!
+      }
+      const explicitFeeToken = context?.feeToken ?? parameters.feeToken
+      // MACH cannot pay fees, so a MACH payment needs a sponsored pull transaction or a stablecoin
+      // the payer holds. Returns the fee token, `null` when sponsored, or `undefined` without gas.
+      const resolveMachineTokenGas = async (payer: { address: Address; type: string }) => {
+        if (explicitFeeToken) return explicitFeeToken
+        if (methodDetails?.feePayer === true && resolveMode(payer) === 'pull') return null
+        return resolveFundedFeeToken({ account: payer.address, chainId, client })
+      }
+
       let account = defaultAccount
-      let machineTokenRoute: typeof machineTokenCandidate
-      // Whether the account could run the MACH route but lacked the MACH or the route reverted.
+      let machineTokenPayment:
+        | { calls: readonly AccountResolution.ResolveAccountCall[]; feeToken: Address | null }
+        | undefined
+      // Whether the account could pay in MACH but lacked the MACH or the payment reverted.
       let machineTokenUnpayable = false
-      if (machineTokenCandidate) {
-        const machineTokenAccount = await (async () => {
-          try {
-            return await resolveAccount({
-              calls: machineTokenCandidate.calls,
-              kind: 'executeCalls',
-            })
-          } catch {
-            // A machine-token route is optional. A scoped account that cannot
-            // execute it may still be able to satisfy the direct payment.
-            return undefined
-          }
-        })()
-        if (machineTokenAccount) {
-          machineTokenRoute = await MachineTokenCharge.findRoute(client, {
-            account: machineTokenAccount.address,
+      for (const route of machineTokenRoutes) {
+        // Paying in MACH is optional. A scoped account that cannot may still pay the currency.
+        const payer = await resolveAccount({ calls: route.calls, kind: 'executeCalls' }).catch(
+          () => undefined,
+        )
+        if (!payer) continue
+        if (!route.token) {
+          // The swapper route behaves exactly as before `machTokenAccepted` existed.
+          const found = await MachineTokenCharge.findRoute(client, {
+            account: payer.address,
             chainId,
             currency,
             transfers,
           })
-          if (machineTokenRoute) account = machineTokenAccount
-          else machineTokenUnpayable = true
+          if (!found) {
+            machineTokenUnpayable = true
+            continue
+          }
+          const feeToken =
+            explicitFeeToken ??
+            (await resolveFeeToken({
+              account: payer.address,
+              allowedTokens: defaultFeeTokens(chainId),
+              candidateTokens: defaultFeeTokens(chainId),
+              client,
+              prioritizeCandidates: true,
+            }))
+          machineTokenPayment = { calls: route.calls, feeToken: feeToken ?? null }
+          account = payer
+          break
         }
+        const payable = await MachineTokenCharge.canPayDirect(client, {
+          account: payer,
+          amount: BigInt(amount),
+          calls: route.calls,
+          token: route.token,
+        })
+        if (!payable) {
+          machineTokenUnpayable = true
+          continue
+        }
+        const feeToken = await resolveMachineTokenGas(payer)
+        // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
+        if (feeToken === undefined) continue
+        machineTokenPayment = { calls: route.calls, feeToken }
+        account = payer
+        break
       }
 
       let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
-      if (!machineTokenRoute) {
+      if (!machineTokenPayment) {
         account = await resolveAccount({
           kind: 'executeCalls',
           ...(autoSwap ? {} : { calls: transferCalls }),
@@ -297,33 +359,21 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
-      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
-      const allowedFeeTokens = defaultFeeTokens(chainId)
-      const explicitFeeToken = context?.feeToken ?? parameters.feeToken
-      const feeToken = explicitFeeToken
-        ? explicitFeeToken
-        : machineTokenRoute || isMachineTokenCurrency
-          ? await resolveFeeToken({
-              account: account.address,
-              allowedTokens: allowedFeeTokens,
-              candidateTokens: allowedFeeTokens,
-              client,
-              prioritizeCandidates: true,
-            })
-          : undefined
+      const calls = machineTokenPayment?.calls ?? [...(swapCalls ?? []), ...transferCalls]
+      const feeToken = machineTokenPayment
+        ? (machineTokenPayment.feeToken ?? undefined)
+        : (explicitFeeToken ??
+          (isMachineTokenCurrency
+            ? await resolveFeeToken({
+                account: account.address,
+                allowedTokens: defaultFeeTokens(chainId),
+                candidateTokens: defaultFeeTokens(chainId),
+                client,
+                prioritizeCandidates: true,
+              })
+            : undefined))
 
-      const mode = (() => {
-        const explicitMode = context?.mode ?? parameters.mode
-        if (explicitMode) {
-          if (!supportedModes.includes(explicitMode))
-            throw new Error(`Challenge does not support ${explicitMode} mode.`)
-          return explicitMode
-        }
-
-        const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull'
-        if (supportedModes.includes(preferredMode)) return preferredMode
-        return supportedModes[0]!
-      })()
+      const mode = resolveMode(account)
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds

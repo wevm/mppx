@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -16,6 +17,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
@@ -43,6 +45,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
+import { getLockKeys, selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -73,6 +76,15 @@ async function lockChannel(store: ChannelStore, key: string) {
   return () => {
     unlock()
     if (tails.get(key) === current) tails.delete(key)
+  }
+}
+
+/** Locks several payment scopes in a fixed order, so overlapping lock sets cannot deadlock. */
+async function lockChannels(store: ChannelStore, keys: readonly string[]) {
+  const releases: (() => void)[] = []
+  for (const key of [...new Set(keys)].sort()) releases.push(await lockChannel(store, key))
+  return () => {
+    for (const release of releases.reverse()) release()
   }
 }
 
@@ -282,6 +294,35 @@ export function session(parameters: session.Parameters = {}) {
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
+  /**
+   * Resolves a challenge's context. A `currencies` allowlist without the chain's MACH keeps new
+   * spending in the advertised currency, so MACH funding and a server snapshot of a MACH channel
+   * are ignored. A close only settles what a channel already spent, so it still reaches an
+   * existing MACH channel and its refund.
+   */
+  const resolveContext = async (
+    challenge: Challenge.Challenge,
+    options: { close?: boolean | undefined } = {},
+  ): Promise<ChallengeContext> => {
+    const resolved = await resolveChallengeContext({
+      allowCustomEscrow,
+      challenge,
+      escrowOverride,
+      allowedChainIds,
+      getClient,
+    })
+    const { chainId, snapshot } = resolved
+    if (options.close || MachineTokenCharge.isAllowed(policy.currencies, chainId)) return resolved
+    const machineSnapshot =
+      snapshot &&
+      MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
+    return {
+      ...resolved,
+      machTokenAccepted: false,
+      snapshot: machineSnapshot ? undefined : snapshot,
+    }
+  }
+
   const resolveCredentialAccount = async (
     resolved: ChallengeContext,
     context: CredentialContext | undefined,
@@ -337,12 +378,8 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const resolved = await resolveChallengeContext({
-        allowCustomEscrow,
-        challenge,
-        escrowOverride,
-        allowedChainIds,
-        getClient,
+      const challengeContext = await resolveContext(challenge, {
+        close: context?.action === 'close',
       })
       // A challenge without a chain ID was checked without one: check its currency on this chain.
       if (context?.action !== 'close' && challenge.request.methodDetails?.chainId === undefined)
@@ -360,10 +397,9 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        if (automatic) {
-          release = await lockChannel(store, resolved.key)
-          if (attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
-        }
+        if (automatic) release = await lockChannels(store, getLockKeys(challengeContext))
+        let resolved = await selectChannelContext({ context, resolved: challengeContext, store })
+        if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
         if (origin && !entry && resolved.snapshot && !context?.descriptor && !configuredOrigin)
@@ -372,7 +408,9 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannel(store, resolved.key)
+          release = await lockChannels(store, getLockKeys(challengeContext))
+          // Select again: another flow may have opened a channel, possibly in MACH, while this waited.
+          resolved = await selectChannelContext({ context, resolved: challengeContext, store })
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')
@@ -420,7 +458,8 @@ export function session(parameters: session.Parameters = {}) {
             if (!accepted && outcome.status === 'pending') return false
             try {
               if (accepted) {
-                const current = await store.get(resolved.key)
+                // An open that switched to MACH stored its channel under the MACH scope.
+                const current = await store.get(entryKey(opened))
                 if (
                   !current?.opened ||
                   current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
@@ -533,12 +572,10 @@ export function session(parameters: session.Parameters = {}) {
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
     assertSpendingPolicy(policy, challenge.request)
-    const resolved = await resolveChallengeContext({
-      allowCustomEscrow,
-      challenge,
-      escrowOverride,
-      allowedChainIds,
-      getClient,
+    const resolved = await selectChannelContext({
+      context: sessionContext,
+      resolved: await resolveContext(challenge),
+      store,
     })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
@@ -595,12 +632,10 @@ export function session(parameters: session.Parameters = {}) {
       }
 
       const channelKey = (
-        await resolveChallengeContext({
-          allowCustomEscrow,
-          challenge,
-          escrowOverride,
-          allowedChainIds,
-          getClient,
+        await selectChannelContext({
+          context: sessionContextSchema.safeParse(context).data,
+          resolved: await resolveContext(challenge),
+          store,
         })
       ).key
       let channel = await store.get(channelKey)

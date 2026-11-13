@@ -39,6 +39,8 @@ import { requireSessionCredentialPayload, validateChannelState } from './Credent
 import {
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
+  resolveMachineTokenCredential,
+  resolveMachineTokenOffer,
   resolveSessionChannelId,
   resolveSessionSnapshot,
   resolveSessionPaymentRequest,
@@ -133,6 +135,8 @@ type BootstrapPreflightParameters = {
     chainId?: number | undefined
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
+  /** Accepts a channel funded in MACH, 1:1 with the session currency. */
+  machTokenAccepted?: boolean | undefined
   parameterChainId?: number | undefined
   parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
@@ -318,12 +322,17 @@ async function handleBootstrapPreflight(
     source: parameters.credential.source,
     store: parameters.store,
   })
+  const chainId = readBootstrapChainId(request.chainId)
+  const currency = readBootstrapAddress(request.currency, 'currency')
   const snapshot = await resolveSessionSnapshot({
     amount: 0n,
     channelId,
     expected: {
-      chainId: readBootstrapChainId(request.chainId),
-      currency: readBootstrapAddress(request.currency, 'currency'),
+      chainId,
+      currency,
+      machineToken: parameters.machTokenAccepted
+        ? resolveMachineTokenOffer({ chainId, currency })
+        : undefined,
       escrowContract: resolveBootstrapEscrowContract(
         parameters.paymentRequest,
         parameters.parameterEscrowContract,
@@ -371,6 +380,8 @@ export function session<const parameters extends session.Parameters>(
   } = parameters
   const settlementSchedule = resolveSettlementSchedule(parameters.settlementSchedule, decimals)
   SponsorshipLimit.assertParameters(parameters.sponsorshipLimit)
+  // Sessions accept MACH channels only when the payee opts in to direct MACH.
+  const machTokenAccepted = parameters.machTokenAccepted === true
   const onSessionSettlement = parameters.onSessionSettlement
   const onSessionSettlementFailure = parameters.onSessionSettlementFailure
 
@@ -466,11 +477,12 @@ export function session<const parameters extends session.Parameters>(
       })
     : undefined
 
-  const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
-    credential,
-    operation,
-    request,
-  }) => {
+  /**
+   * Parses a credential and resolves what it is verified against: priced in MACH when it uses a
+   * MACH channel a `machTokenAccepted` challenge accepts. Mppx verified the challenge's HMAC
+   * before calling `validate` or `broadcast`.
+   */
+  const resolveCredential = async (credential: Credential.Credential, request: unknown) => {
     const payload = requireSessionCredentialPayload(credential.payload)
     const context = await resolveCredentialVerificationContext({
       decimals,
@@ -479,6 +491,18 @@ export function session<const parameters extends session.Parameters>(
       minVoucherDelta: parameters.minVoucherDelta,
       request,
     })
+    return {
+      payload,
+      ...resolveMachineTokenCredential({ challenge: credential.challenge, context, payload }),
+    }
+  }
+
+  const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
+    credential,
+    operation,
+    request,
+  }) => {
+    const { challenge, context, payload } = await resolveCredential(credential, request)
 
     // A broadcast voucher is checked against the stored channel by the update that accepts it.
     const details =
@@ -490,7 +514,7 @@ export function session<const parameters extends session.Parameters>(
         : await validateCredentialPayload({
             account,
             allowPendingClose: operation === 'broadcast',
-            challenge: credential.challenge,
+            challenge,
             channelStateTtl,
             chainId: context.chainId,
             client: context.client,
@@ -523,15 +547,10 @@ export function session<const parameters extends session.Parameters>(
     envelope,
     request,
   }) => {
-    const { challenge } = credential
-    const payload = requireSessionCredentialPayload(credential.payload)
-    const context = await resolveCredentialVerificationContext({
-      decimals,
-      feePayer: configuredFeePayer,
-      getClient,
-      minVoucherDelta: parameters.minVoucherDelta,
+    const { challenge, context, machineToken, payload } = await resolveCredential(
+      credential,
       request,
-    })
+    )
 
     const prepaidRefundKey = parameters.sse ? `stream:${globalThis.crypto.randomUUID()}` : undefined
     const markPrepaidReceipt = (receipt: Parameters<typeof Transport.markPrepaidSessionTick>[0]) =>
@@ -559,7 +578,7 @@ export function session<const parameters extends session.Parameters>(
         store,
         channel,
       }).catch(ignoreRetryableSettlementFailure)
-    const sessionReceipt = await broadcastCredentialPayload({
+    const receipt = await broadcastCredentialPayload({
       account,
       challenge,
       chargeAmount,
@@ -594,6 +613,9 @@ export function session<const parameters extends session.Parameters>(
       store,
       voucherStateMaxAge: parameters.voucherStateMaxAge,
     })
+
+    // A MACH channel accepted for a machTokenAccepted challenge reports the token it debits.
+    const sessionReceipt = { ...receipt, ...(machineToken && { fundingCurrency: machineToken }) }
 
     if (acceptance.charged) {
       const settlementTxHash = await settleAcceptedCharge(acceptance.charged)
@@ -650,6 +672,7 @@ export function session<const parameters extends session.Parameters>(
             credential,
             input,
             charge: bootstrapCharge,
+            machTokenAccepted,
             decimals,
             defaultRecipient: recipient,
             expires,
@@ -672,6 +695,7 @@ export function session<const parameters extends session.Parameters>(
         decimals,
         defaultFeePayer: feePayer,
         getClient,
+        machTokenAccepted,
         minVoucherDelta: parameters.minVoucherDelta,
         parameterChainId: parameters.chainId,
         parameterEscrowContract: parameters.escrowContract,
@@ -816,6 +840,14 @@ export namespace session {
 
     /** Optional fee token for management and server-driven settle/close transactions. */
     feeToken?: Address | undefined
+    /**
+     * Also accepts channels funded in MACH, 1:1 with the session currency. The payee must be on
+     * MACH's merchant list. Challenges stay priced in the session currency and carry
+     * `machTokenAccepted: true`, so clients holding MACH may open the channel in MACH instead and
+     * older clients keep paying the session currency. MACH channels pay fees in `feeToken` or the
+     * session currency. Throws on chains without MACH; ignored for sessions priced in MACH.
+     */
+    machTokenAccepted?: boolean | undefined
     /**
      * Limits fee-payer-sponsored channel opens and top-ups to `perDay` of each per payer per UTC
      * day (default 5), counted in `store`. The payer is the verified signer of the transaction, never

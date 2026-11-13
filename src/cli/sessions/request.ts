@@ -280,6 +280,8 @@ export async function runPersistentSessionRequest(
       client,
       channelStore,
       credentialContext: parameters.credentialContext,
+      // The registry scope is fixed to the advertised currency, so MACH funding stays off.
+      currencies: [challengeContext.token],
       decimals,
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,

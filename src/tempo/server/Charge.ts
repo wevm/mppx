@@ -69,6 +69,7 @@ export function charge<const parameters extends charge.Parameters>(
   >,
 ): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>> {
   const {
+    machTokenAccepted,
     machineTokenEnabled,
     allowedFeeTokens: configuredAllowedFeeTokens,
     amount,
@@ -168,6 +169,15 @@ export function charge<const parameters extends charge.Parameters>(
     const settlementSender = machineTokenEnabled
       ? MachineTokenCharge.getSettlementSender(chainId)
       : undefined
+    // Direct MACH needs both the signed challenge and the route's current config to accept it, so
+    // switching it on or off never invalidates challenges already issued. It needs no settlement
+    // sender: MACH goes straight to the recipient.
+    const machineToken =
+      methodDetails?.machTokenAccepted === true &&
+      (challenge.request.methodDetails as { machTokenAccepted?: unknown } | undefined)
+        ?.machTokenAccepted === true
+        ? MachineTokenCharge.getToken(chainId)
+        : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -185,6 +195,7 @@ export function charge<const parameters extends charge.Parameters>(
       allowedFeeTokens,
       amount,
       machineTokenEnabled,
+      machineToken,
       chainId,
       challenge,
       client: await getClient({ chainId }),
@@ -223,17 +234,17 @@ export function charge<const parameters extends charge.Parameters>(
           transfers,
         })
       : undefined
-    const matchedCalls =
-      machineRoute?.transfers ??
-      assertTransferCalls(calls, {
-        currency,
-        exactCount: isFeePayerTx,
-        transfers,
-      })
-    assertChallengeBoundCallMemo(matchedCalls, {
-      challengeId: context.challenge.id,
-      realm: context.challenge.realm,
-    })
+    const bound = { challengeId: context.challenge.id, realm: context.challenge.realm }
+    if (machineRoute) assertChallengeBoundCallMemo(machineRoute.transfers, bound)
+    // The challenge currency first; a direct MACH payment pays the same transfers in MACH.
+    const paymentCurrency = machineRoute
+      ? currency
+      : matchFirstCurrency([currency, context.machineToken], (currency) =>
+          assertChallengeBoundCallMemo(
+            assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers }),
+            bound,
+          ),
+        ).currency
 
     if (machineRoute)
       return {
@@ -244,8 +255,8 @@ export function charge<const parameters extends charge.Parameters>(
     try {
       const fundingCurrency = FeePayer.validateCalls(
         calls,
-        { amount, currency, recipient },
-        { currency, expectedTransfers: transfers },
+        { amount, currency: paymentCurrency, recipient },
+        { currency: paymentCurrency, expectedTransfers: transfers },
       )
       return { settlementSenders: [], fundingCurrency }
     } catch (error) {
@@ -283,17 +294,15 @@ export function charge<const parameters extends charge.Parameters>(
       hash: payload.hash as `0x${string}`,
     })
     const sender = source?.address ?? receipt.from
-    const matchedLogs = await assertTransferLogs(receipt, {
+    const matchedLogs = await assertBoundTransferLogs(receipt, {
+      challenge,
       currency,
+      machineToken: context.machineToken,
       sender,
       settlementSenders,
       source,
       transfers,
       validateSender,
-    })
-    assertChallengeBoundMemo(matchedLogs, {
-      challengeId: challenge.id,
-      realm: challenge.realm,
     })
     // The payer is the account the matched transfers debited, not the submitter.
     // Settlement-contract transfers are funded by the transaction sender.
@@ -589,6 +598,7 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
+      machTokenAccepted,
       machineTokenEnabled,
       amount,
       currency,
@@ -660,8 +670,14 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(
           'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
         )
-      if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
+      if (
+        (request.machineTokenEnabled || request.machTokenAccepted) &&
+        !MachineTokenCharge.isSupported(chainId)
+      )
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
+
+      // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
+      const machTokenAccepted = request.machTokenAccepted === true
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -688,7 +704,10 @@ export function charge<const parameters extends charge.Parameters>(
 
       return {
         ...request,
+        // `machineTokenEnabled` keeps legacy swapper clients working during the transition;
+        // `machTokenAccepted` tells current clients they may pay MACH directly.
         machineTokenEnabled: request.machineTokenEnabled || undefined,
+        machTokenAccepted: machTokenAccepted || undefined,
         chainId,
         feePayer: resolvedFeePayer,
       }
@@ -1008,15 +1027,13 @@ export function charge<const parameters extends charge.Parameters>(
                 receipt = recovered
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
-              const matchedLogs = await assertTransferLogs(receipt, {
+              await assertBoundTransferLogs(receipt, {
+                challenge,
                 currency,
+                machineToken: context.machineToken,
                 sender: transaction.from! as `0x${string}`,
                 settlementSenders,
                 transfers,
-              })
-              assertChallengeBoundMemo(matchedLogs, {
-                challengeId: challenge.id,
-                realm: challenge.realm,
               })
               if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
                 throw new VerificationFailedError({
@@ -1136,7 +1153,16 @@ export declare namespace charge {
      * @default 30_000
      */
     confirmationTimeoutMs?: number | undefined
-    /** Enables first-party machine-token funding through the canonical swapper. */
+    /**
+     * Accepts MACH 1:1 transferred directly to the recipient. The recipient must be on MACH's
+     * merchant list. Leave it off when the recipient can't hold MACH, such as a Stripe deposit
+     * address. Enable it only once every server instance runs a version that supports it.
+     */
+    machTokenAccepted?: boolean | undefined
+    /**
+     * Lets payers fund this charge with MACH through the swapper, which pays the recipient in the
+     * challenge currency. Independent of `machTokenAccepted`.
+     */
     machineTokenEnabled?: boolean | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
@@ -1307,6 +1333,9 @@ function chargeBinding(request: ChargeRequest) {
     chainId,
     feePayer,
     machineTokenEnabled,
+    // Not bound: verification requires both the challenge and the route to accept direct MACH, so
+    // switching it on or off keeps challenges already issued valid.
+    machTokenAccepted: _machTokenAccepted,
     splits,
     supportedModes,
     zones,
@@ -1850,6 +1879,67 @@ function toReceipt(reference: string, fundingCurrency?: string) {
     timestamp: new Date().toISOString(),
     reference,
   } as const
+}
+
+/**
+ * Matches a receipt's transfers in the challenge currency and checks their challenge-bound memo.
+ * When that fails and the challenge accepts direct MACH, matches the same transfers in MACH instead.
+ * A failure of both rethrows the challenge-currency error.
+ */
+async function assertBoundTransferLogs(
+  receipt: TransactionReceipt,
+  parameters: Parameters<typeof assertTransferLogs>[1] & {
+    challenge: { id: string; realm: string }
+    machineToken?: `0x${string}` | undefined
+  },
+): Promise<TransferLog[]> {
+  const { challenge, machineToken, ...rest } = parameters
+  const { result } = await matchFirstCurrencyAsync(
+    [rest.currency, machineToken],
+    async (currency) => {
+      const logs = await assertTransferLogs(receipt, { ...rest, currency })
+      assertChallengeBoundMemo(logs, { challengeId: challenge.id, realm: challenge.realm })
+      return logs
+    },
+  )
+  return result
+}
+
+/**
+ * Runs `match` for each currency in order and returns the first that succeeds. When every one
+ * fails, rethrows the first error, which describes the challenge currency.
+ */
+function matchFirstCurrency<result>(
+  currencies: readonly (`0x${string}` | undefined)[],
+  match: (currency: `0x${string}`) => result,
+): { currency: `0x${string}`; result: result } {
+  let first: unknown
+  for (const currency of currencies) {
+    if (!currency) continue
+    try {
+      return { currency, result: match(currency) }
+    } catch (error) {
+      first ??= error
+    }
+  }
+  throw first
+}
+
+/** The async form of `matchFirstCurrency`. */
+async function matchFirstCurrencyAsync<result>(
+  currencies: readonly (`0x${string}` | undefined)[],
+  match: (currency: `0x${string}`) => Promise<result>,
+): Promise<{ currency: `0x${string}`; result: result }> {
+  let first: unknown
+  for (const currency of currencies) {
+    if (!currency) continue
+    try {
+      return { currency, result: await match(currency) }
+    } catch (error) {
+      first ??= error
+    }
+  }
+  throw first
 }
 
 function assertChallengeBoundMemo(

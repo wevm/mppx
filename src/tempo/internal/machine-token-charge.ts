@@ -7,6 +7,7 @@ import {
   isAddress,
   isAddressEqual,
   parseAbi,
+  type Account,
   type Address,
   type Client,
 } from 'viem'
@@ -16,7 +17,7 @@ import { Abis, Actions } from 'viem/tempo'
 import * as Errors from '../../Errors.js'
 import * as defaults from './defaults.js'
 
-/** ABI for the first-party machine-token settlement swapper. */
+/** ABI for the legacy machine-token settlement swapper, still verified for older clients. */
 export const machineTokenSwapperAbi = parseAbi([
   'function swapTo(address inputToken,uint256 amount,address targetToken,address recipient,bytes32 memo)',
 ])
@@ -67,7 +68,7 @@ export function isMachineToken(parameters: {
   )
 }
 
-/** Resolves the canonical first-party settlement route for a compatible charge. */
+/** Resolves the legacy swapper route for a compatible charge, which servers still accept. */
 export function getRoute(parameters: {
   chainId: number | undefined
   currency: Address
@@ -133,7 +134,7 @@ export async function findRoute(
   }
 }
 
-/** Matches an exact first-party settlement route. */
+/** Matches an exact legacy swapper route. */
 export function matchRoute(parameters: {
   calls: readonly Call[]
   chainId: number | undefined
@@ -170,6 +171,24 @@ export function matchRoute(parameters: {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Returns whether a client's `currencies` allowlist lets it pay in MACH on a chain. No allowlist
+ * allows it.
+ */
+export function isAllowed(
+  currencies: readonly string[] | undefined,
+  chainId: number | undefined,
+): boolean {
+  if (!currencies) return true
+  const token = getToken(chainId)
+  return token !== undefined && currencies.some((c) => c.toLowerCase() === token.toLowerCase())
+}
+
+/** Returns the canonical machine token on a chain, if one is deployed. */
+export function getToken(chainId: number | undefined): Address | undefined {
+  return getDeployment(chainId)?.token
 }
 
 /** Returns the trusted sender that settles the configured charge route on a chain. */
@@ -284,4 +303,69 @@ export async function getInsufficientBalanceError(
     fundingUrl: shortfall.fundingUrl,
     reason: shortfall.reason,
   })
+}
+
+/**
+ * Returns whether an account can spend `amount` of a token: its balance covers it and, for an access
+ * key that limits spending, so does its remaining limit. Any failed read returns false.
+ */
+export async function canSpend(
+  client: Client,
+  parameters: { account: Account; amount: bigint; token: Address },
+): Promise<boolean> {
+  const { account, amount, token } = parameters
+  try {
+    const { amount: balance } = await Actions.token.getBalance(client, {
+      account: account.address,
+      token,
+    })
+    if (balance < amount) return false
+    const accessKey = 'accessKeyAddress' in account ? account.accessKeyAddress : undefined
+    if (typeof accessKey !== 'string' || !isAddress(accessKey)) return true
+    const metadata = await Actions.accessKey.getMetadata(client, {
+      account: account.address,
+      accessKey,
+    })
+    if (metadata.spendPolicy !== 'limited') return true
+    const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
+      account: account.address,
+      accessKey,
+      token,
+    })
+    return remaining >= amount
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Returns whether an account can pay a charge directly in the machine token: it can spend the total
+ * and a simulation of the transfer calls succeeds. Any failure returns false, so the caller pays in
+ * the challenge currency instead.
+ */
+export async function canPayDirect(
+  client: Client,
+  parameters: {
+    account: Account
+    amount: bigint
+    calls: readonly Call[]
+    token: Address
+  },
+): Promise<boolean> {
+  const { account, amount, calls, token } = parameters
+  if (!(await canSpend(client, { account, amount, token }))) return false
+  return simulates(client, { account: account.address, calls })
+}
+
+/** Returns whether calls simulate from an account. Any failure returns false. */
+async function simulates(
+  client: Client,
+  parameters: { account: Address; calls: readonly Call[] },
+): Promise<boolean> {
+  try {
+    await call(client, parameters as never)
+    return true
+  } catch {
+    return false
+  }
 }
