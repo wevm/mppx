@@ -8,7 +8,7 @@ import { Request as ServerRequest, Store } from 'mppx/server'
 import { Base64 } from 'ox'
 import { afterEach, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { keyPair } from '~test/Identity.js'
+import { keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
 const worldIssuer = 'https://auth.world.example'
 const clientId = 'app_test'
@@ -192,6 +192,39 @@ test('runs the device flow and signs a pairwise attestation a networked verifier
     status: 'valid',
     value: { issuer: issuer.url, subject: claims.sub },
   })
+})
+
+test('signs with a remote signer, publishing its public key', async () => {
+  const keys = await keyPair()
+  const calls: Uint8Array[] = []
+  const world = await createWorld()
+  const issuer = await createIssuer(world, { signingKey: remoteSigner(keys, { calls }) })
+  const device = await start(issuer)
+  const approved = await poll(issuer, device.id)
+  expect(approved.status).toBe(200)
+  expect(calls).toHaveLength(1)
+  vi.useRealTimers()
+
+  const result = await World.Server.verifier({
+    audience: 'https://api.example',
+    fetch: async (input, init) => (await issuer.handle(new Request(input, init)))!,
+    issuer: issuer.url,
+  }).verify(
+    new Request('https://api.example/report', {
+      headers: { [Attestation.Constants.header]: approved.body.attestation! },
+    }),
+  )
+  expect(result).toMatchObject({ status: 'valid', value: { issuer: issuer.url } })
+})
+
+test('rejects a non-Ed25519 or private-key-only signingKey when created', async () => {
+  const world = await createWorld()
+  await expect(createIssuer(world, { signingKey: await rsaKeyPair() })).rejects.toThrow(
+    'Signing keys must be Ed25519.',
+  )
+  await expect(
+    createIssuer(world, { signingKey: (await keyPair()).privateKey as never }),
+  ).rejects.toThrow('Signing keys are key pairs')
 })
 
 test('derives a different subject per audience', async () => {

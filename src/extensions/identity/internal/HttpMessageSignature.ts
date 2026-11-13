@@ -11,7 +11,8 @@ import type { BareItem, Dictionary, InnerList, Item } from 'structured-headers'
 import type { MaybePromise } from '../../../internal/types.js'
 import * as Store from '../../../Store.js'
 import { Algorithms, Headers as SignatureHeaders } from '../Constants.js'
-import type { KeyResolver, SignatureAlgorithm, SigningContext } from '../Types.js'
+import type { KeyResolver, SignatureAlgorithm, SigningContext, SigningKey } from '../Types.js'
+import * as Signer from './Signer.js'
 import * as SigningContextInternal from './SigningContext.js'
 
 /** RFC 9421 constants used by identity signature profiles. */
@@ -86,7 +87,7 @@ export async function sign(
     components: readonly ComponentInput[]
     expiresIn?: number | undefined
     keyId: string
-    key: CryptoKey
+    key: SigningKey
     label: string
     context?: SigningContext | undefined
     tag: string
@@ -95,7 +96,8 @@ export async function sign(
   const context = options.context ?? SigningContextInternal.create()
   const created = context.created
   const expires = created + (options.expiresIn ?? 60)
-  const algorithm = algorithmFromKey(options.key)
+  const signer = Signer.resolve(options.key)
+  const algorithm = signer.algorithm
   const parameters = new Map<string, BareItem>([
     ['created', created],
     ['expires', expires],
@@ -115,11 +117,8 @@ export async function sign(
     parameters,
     tag: options.tag,
   }
-  const signature = await crypto.subtle.sign(
-    webCryptoAlgorithm(algorithm),
-    options.key,
-    toArrayBuffer(encode(signatureBase(request, input))),
-  )
+  const bytes = encode(signatureBase(request, input))
+  const signature = (await signer.sign(bytes)).buffer
   const headers = new Headers(request.headers)
   const inputs = parseHeaderDictionary(headers, SignatureHeaders.signatureInput)
   const signatures = parseHeaderDictionary(headers, SignatureHeaders.signature)
@@ -311,12 +310,6 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
   }
 }
 
-function algorithmFromKey(key: CryptoKey): SignatureAlgorithm {
-  for (const algorithm of Object.values(Algorithms))
-    if (keySupportsAlgorithm(key, algorithm)) return algorithm
-  throw new TypeError('HTTP message signatures require an Ed25519 or RSA-PSS SHA-512 signing key.')
-}
-
 function isInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value)
 }
@@ -427,5 +420,5 @@ function encode(value: string): Uint8Array {
 }
 
 function toArrayBuffer(value: Uint8Array): ArrayBuffer {
-  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer
+  return Uint8Array.from(value).buffer
 }

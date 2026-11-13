@@ -1,5 +1,5 @@
-import { expect, test } from 'vp/test'
-import { jwkThumbprint, keyPair } from '~test/Identity.js'
+import { describe, expect, test } from 'vp/test'
+import { jwkThumbprint, keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
 import * as Attestation from './index.js'
 
@@ -31,7 +31,7 @@ async function setup() {
 
 test('signs and verifies an attestation', async () => {
   const { claims, keyId, keys, options } = await setup()
-  const token = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+  const token = await Attestation.sign(claims, { key: keys, keyId })
   expect(Attestation.decode(token)?.header).toEqual({
     alg: 'EdDSA',
     kid: keyId,
@@ -40,10 +40,86 @@ test('signs and verifies an attestation', async () => {
   expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
 })
 
+describe('signing keys', () => {
+  test('a remote signer signs the same token as the local key pair', async () => {
+    // Ed25519 is deterministic, so the same key and claims give an identical token.
+    const { claims, keyId, keys, options } = await setup()
+    const local = await Attestation.sign(claims, { key: keys, keyId })
+    const token = await Attestation.sign(claims, { key: remoteSigner(keys), keyId })
+    expect(token).toBe(local)
+    expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
+  })
+
+  test('the signer gets the JWS signing input, once', async () => {
+    const { claims, keys } = await setup()
+    const calls: Uint8Array[] = []
+    const token = await Attestation.sign(claims, { key: remoteSigner(keys, { calls }) })
+    expect(calls).toHaveLength(1)
+    expect(new TextDecoder().decode(calls[0])).toBe(token.split('.').slice(0, 2).join('.'))
+  })
+
+  test('keyId defaults to the RFC 7638 thumbprint of the public key', async () => {
+    const { claims, keyId, keys, options } = await setup()
+    for (const key of [keys, remoteSigner(keys)]) {
+      const token = await Attestation.sign(claims, { key })
+      expect(Attestation.decode(token)?.header.kid).toBe(keyId)
+      expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
+    }
+  })
+
+  test('an explicit keyId is kept', async () => {
+    const { claims, keys } = await setup()
+    const token = await Attestation.sign(claims, { key: remoteSigner(keys), keyId: 'issuer-key-1' })
+    expect(Attestation.decode(token)?.header.kid).toBe('issuer-key-1')
+  })
+
+  test('a signer whose private key does not match its public key fails on the client', async () => {
+    const { claims, keys } = await setup()
+    const other = await keyPair()
+    await expect(
+      Attestation.sign(claims, {
+        key: { publicKey: keys.publicKey, sign: remoteSigner(other).sign },
+      }),
+    ).rejects.toThrow('The Signer returned a signature that does not verify with its publicKey.')
+  })
+
+  test.each([
+    ['an RSA-PSS key pair', rsaKeyPair],
+    ['an RSA-PSS signer', async () => remoteSigner(await rsaKeyPair())],
+  ])('rejects %s: attestations are EdDSA only', async (_, make) => {
+    const { claims } = await setup()
+    await expect(Attestation.sign(claims, { key: (await make()) as never })).rejects.toThrow(
+      'Signing keys must be Ed25519.',
+    )
+  })
+
+  test('rejects a private key alone, as the old API took', async () => {
+    const { claims, keys } = await setup()
+    await expect(Attestation.sign(claims, { key: keys.privateKey as never })).rejects.toThrow(
+      'Signing keys are key pairs',
+    )
+  })
+
+  test('propagates a signer failure', async () => {
+    const { claims, keys } = await setup()
+    const failure = new Error('KMS unavailable.')
+    await expect(
+      Attestation.sign(claims, {
+        key: {
+          publicKey: keys.publicKey,
+          sign: async () => {
+            throw failure
+          },
+        },
+      }),
+    ).rejects.toBe(failure)
+  })
+})
+
 test('rejects wrong claims, times, keys and tampering', async () => {
   const { claims, keyId, keys, options } = await setup()
   const sign = (overrides: Partial<Attestation.Claims>) =>
-    Attestation.sign({ ...claims, ...overrides }, { key: keys.privateKey, keyId })
+    Attestation.sign({ ...claims, ...overrides }, { key: keys, keyId })
   const reason = async (token: string, extra: Partial<Attestation.verify.Options> = {}) => {
     const result = await Attestation.verify(token, { ...options, ...extra })
     return result.status === 'invalid' ? result.reason : 'valid'
@@ -60,7 +136,7 @@ test('rejects wrong claims, times, keys and tampering', async () => {
   expect(await reason(await sign({}), { keyResolver: () => undefined })).toMatch(/No public key/)
 
   const other = await keyPair()
-  const forged = await Attestation.sign(claims, { key: other.privateKey, keyId })
+  const forged = await Attestation.sign(claims, { key: other, keyId })
   expect(await reason(forged)).toMatch(/signature/)
 
   const [header, , signature] = (await sign({})).split('.')
@@ -84,7 +160,7 @@ test('resolves keys from the issuer JSON Web Key Set and caches them', async () 
       return Response.json({ keys: [{ ...jwk, kid: keyId }] })
     },
   })
-  const token = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+  const token = await Attestation.sign(claims, { key: keys, keyId })
   expect(await Attestation.verify(token, { ...options, keyResolver })).toMatchObject({
     status: 'valid',
   })
@@ -134,7 +210,7 @@ test('keeps the last key set when a refresh has no keys list', async () => {
     refreshInterval: 0,
     ttl: 0,
   })
-  const token = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+  const token = await Attestation.sign(claims, { key: keys, keyId })
   expect(await Attestation.verify(token, { ...options, keyResolver })).toMatchObject({
     status: 'valid',
   })
@@ -157,7 +233,7 @@ test('keeps verifying with the last key set while the issuer is down', async () 
     refreshInterval: 0,
     ttl: 0,
   })
-  const token = await Attestation.sign(claims, { key: keys.privateKey, keyId })
+  const token = await Attestation.sign(claims, { key: keys, keyId })
   expect(await Attestation.verify(token, { ...options, keyResolver })).toMatchObject({
     status: 'valid',
   })
@@ -272,7 +348,7 @@ test('verifies one token however many the header repeats', async () => {
   const current = Math.floor(Date.now() / 1_000)
   const forged = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: forger.privateKey, keyId },
+    { key: forger, keyId },
   )
   let lookups = 0
   const verifier = Attestation.Server.verifier({
@@ -299,11 +375,11 @@ test('accepts a valid token behind a forged one with a later expiry', async () =
   const current = Math.floor(Date.now() / 1_000)
   const valid = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const forged = await Attestation.sign(
     { ...claims, exp: current + 3_000, iat: current, sub: 'mallory@example.com' },
-    { key: forger.privateKey, keyId },
+    { key: forger, keyId },
   )
   const verifier = Attestation.Server.verifier({
     audience,
@@ -325,11 +401,11 @@ test('accepts a valid token behind one whose key cannot be resolved', async () =
   const current = Math.floor(Date.now() / 1_000)
   const valid = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const forged = await Attestation.sign(
     { ...claims, exp: current + 3_000, iat: current, sub: 'mallory@example.com' },
-    { key: (await keyPair()).privateKey, keyId: 'unknown' },
+    { key: await keyPair(), keyId: 'unknown' },
   )
   const verifier = Attestation.Server.verifier({
     audience,
@@ -350,7 +426,7 @@ test('accepts an allowed attestation behind one the policy rejects', async () =>
   const { claims, keyId, keys } = await setup()
   const current = Math.floor(Date.now() / 1_000)
   const sign = (sub: string, exp: number) =>
-    Attestation.sign({ ...claims, exp, iat: current, sub }, { key: keys.privateKey, keyId })
+    Attestation.sign({ ...claims, exp, iat: current, sub }, { key: keys, keyId })
   const blocked = await sign('mallory@example.com', current + 3_000)
   const allowed = await sign('dana@example.com', current + 600)
   const verifier = Attestation.Server.verifier({
@@ -374,7 +450,7 @@ test('rejects an attestation whose policy returns an empty reason', async () => 
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const verifier = Attestation.Server.verifier({
     audience,
@@ -436,7 +512,7 @@ test('reports unavailable (503) while the issuer keys are unreachable', async ()
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const verifier = Attestation.Server.verifier({
     audience,
@@ -500,7 +576,7 @@ test('accepts an audience configured with a trailing slash', async () => {
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
     { ...claims, exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const verifier = Attestation.Server.verifier({
     audience: `${audience}/`,
@@ -517,7 +593,7 @@ test('never attaches an attestation over plaintext http', async () => {
   const current = Math.floor(Date.now() / 1_000)
   const token = await Attestation.sign(
     { ...claims, aud: 'http://api.example', exp: current + 600, iat: current },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
   const prover = Attestation.Client.prover({ attestations: [token], scope: '*' })
   const request = await prover.prove(
@@ -529,10 +605,7 @@ test('never attaches an attestation over plaintext http', async () => {
 
 test('verify throws on a non-finite or negative time option', async () => {
   const { claims, keyId, keys, options } = await setup()
-  const token = await Attestation.sign(
-    { ...claims, exp: now - 3_600 },
-    { key: keys.privateKey, keyId },
-  )
+  const token = await Attestation.sign({ ...claims, exp: now - 3_600 }, { key: keys, keyId })
   for (const extra of [
     { clockTolerance: Number.POSITIVE_INFINITY },
     { clockTolerance: Number.NaN },

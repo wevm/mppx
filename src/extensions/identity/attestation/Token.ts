@@ -1,5 +1,9 @@
 import { Base64 } from 'ox'
 
+import { Algorithms } from '../Constants.js'
+import * as JwkThumbprint from '../internal/JwkThumbprint.js'
+import * as Signer from '../internal/Signer.js'
+import type { SigningKey } from '../Types.js'
 import { Constants } from './Constants.js'
 import type * as Types from './Types.js'
 
@@ -26,21 +30,20 @@ export type VerifyResult =
 /**
  * Signs attestation claims as a compact JWS (EdDSA over Ed25519).
  *
- * For issuers. `keyId` should be the RFC 7638 thumbprint of the public key
- * published in the issuer's JSON Web Key Set.
+ * For issuers. `key` is an Ed25519 key pair, or a {@link SigningKey | Signer} whose private key
+ * stays in a KMS, HSM or wallet service. `keyId` defaults to the RFC 7638 thumbprint of its public
+ * key, the `kid` an issuer's JSON Web Key Set publishes for it.
  */
 export async function sign(
   claims: Types.Claims,
-  options: { readonly key: CryptoKey; readonly keyId: string },
+  options: { readonly key: SigningKey; readonly keyId?: string | undefined },
 ): Promise<string> {
-  const header = { alg: Constants.algorithm, kid: options.keyId, typ: Constants.tokenType }
+  const signer = Signer.resolve(options.key, [Algorithms.ed25519])
+  const keyId = options.keyId ?? (await JwkThumbprint.fromKey(signer.publicKey))
+  const header = { alg: Constants.algorithm, kid: keyId, typ: Constants.tokenType }
   const input = `${encode(header)}.${encode(claims)}`
-  const signature = await crypto.subtle.sign(
-    { name: 'Ed25519' },
-    options.key,
-    new TextEncoder().encode(input),
-  )
-  return `${input}.${Base64.fromBytes(new Uint8Array(signature), { pad: false, url: true })}`
+  const signature = await signer.sign(new TextEncoder().encode(input))
+  return `${input}.${Base64.fromBytes(signature, { pad: false, url: true })}`
 }
 
 /** Decodes an attestation without verifying it, or returns `undefined` if it is malformed. */

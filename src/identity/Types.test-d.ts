@@ -17,7 +17,7 @@ test('types: results are typed by the verifier used to look them up', () => {
 })
 
 test('types: TAP provers require an explicit origin scope', () => {
-  const key = {} as CryptoKey
+  const key = {} as CryptoKeyPair
   expectTypeOf(
     Tap.Client.prover({ intent: 'payment', key, keyId: 'agent', scope: '*' }),
   ).toEqualTypeOf<Identity.Prover>()

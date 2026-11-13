@@ -4,14 +4,14 @@ import * as Identity from 'mppx/identity'
 import { serializeDictionary, serializeInnerList } from 'structured-headers'
 import type { BareItem, InnerList } from 'structured-headers'
 import { expect, test } from 'vp/test'
-import { keyPair } from '~test/Identity.js'
+import { keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
 test('signs and verifies a request-bound TAP payment intent', async () => {
   const keys = await keyPair()
   const signer = Tap.Client.prover({
     scope: '*',
     intent: Tap.Constants.intents.payment,
-    key: keys.privateKey,
+    key: keys,
     keyId: 'tap-agent',
   })
   const signed = await signer.prove(new Request('https://merchant.example/resource'), attempt())
@@ -47,7 +47,7 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
       scope: '*',
       expiresIn: Tap.Constants.maximumSignatureLifetime + 1,
       intent: Tap.Constants.intents.payment,
-      key: keys.privateKey,
+      key: keys,
       keyId: 'tap-agent',
     }),
   ).toThrow('TAP expiresIn must be an integer')
@@ -63,13 +63,13 @@ test('shares replay protection across verifier instances and TAP intents', async
   const browse = await Tap.Client.prover({
     scope: '*',
     intent: Tap.Constants.intents.browse,
-    key: keys.privateKey,
+    key: keys,
     keyId: 'tap-agent',
   }).prove(new Request('https://merchant.example/browse'), context)
   const payment = await Tap.Client.prover({
     scope: '*',
     intent: Tap.Constants.intents.payment,
-    key: keys.privateKey,
+    key: keys,
     keyId: 'tap-agent',
   }).prove(new Request('https://merchant.example/payment'), context)
   const createVerifier = () =>
@@ -80,6 +80,61 @@ test('shares replay protection across verifier instances and TAP intents', async
     reason: 'The signature nonce has already been used.',
     status: 'invalid',
   })
+})
+
+test.each([
+  ['Ed25519', keyPair],
+  ['RSA-PSS SHA-512', rsaKeyPair],
+])('signs a TAP payment intent with a remote %s signer', async (_, generate) => {
+  const keys = await generate()
+  const calls: Uint8Array[] = []
+  const signed = await Tap.Client.prover({
+    scope: '*',
+    intent: Tap.Constants.intents.payment,
+    key: remoteSigner(keys, { calls }),
+    keyId: 'remote-tap-agent',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(calls).toHaveLength(1)
+  expect(new TextDecoder().decode(calls[0])).toContain('"@path": /resource')
+  expect(
+    await Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({
+    status: 'valid',
+    value: { intent: Tap.Constants.intents.payment, keyId: 'remote-tap-agent' },
+  })
+})
+
+test('rejects a private key alone when the prover is created', async () => {
+  const keys = await keyPair()
+  expect(() =>
+    Tap.Client.prover({
+      scope: '*',
+      intent: Tap.Constants.intents.payment,
+      key: keys.privateKey as never,
+      keyId: 'agent',
+    }),
+  ).toThrow('Signing keys are key pairs')
+})
+
+test('propagates TAP remote signing failures', async () => {
+  const keys = await keyPair()
+  await expect(
+    Tap.Client.prover({
+      scope: '*',
+      intent: Tap.Constants.intents.payment,
+      key: {
+        publicKey: keys.publicKey,
+        async sign() {
+          throw new Error('HSM unavailable.')
+        },
+      },
+      keyId: 'agent',
+    }).prove(new Request('https://merchant.example/resource'), attempt()),
+  ).rejects.toThrow('HSM unavailable.')
 })
 
 test('verifies externally ordered signature parameters and extensions', async () => {

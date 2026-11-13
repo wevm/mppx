@@ -1,5 +1,7 @@
+import * as vm from 'node:vm'
+
 import { describe, expect, test } from 'vp/test'
-import { keyPair } from '~test/Identity.js'
+import { keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
 import * as Store from '../../../Store.js'
 import { Algorithms, Headers } from '../Constants.js'
@@ -61,13 +63,355 @@ test('rejects non-ASCII signed HTTP header values', async () => {
       new Request('https://example.com', { headers: { 'X-Example': 'café' } }),
       {
         components: ['x-example'],
-        key: keys.privateKey,
+        key: keys,
         keyId: 'test-key',
         label: 'test',
         tag: 'test',
       },
     ),
   ).rejects.toThrow('Signed HTTP header "x-example" is not ASCII.')
+})
+
+describe('signing keys', () => {
+  const context = { created: Math.floor(Date.now() / 1_000) - 1, nonce: 'signing-key-nonce' }
+  const signOptions = {
+    components: ['@authority', '@path'],
+    context,
+    keyId: 'remote',
+    label: 'test',
+    tag: 'test',
+  } as const
+  const request = () => new Request('https://merchant.example/resource')
+  const sign = (
+    key: unknown,
+    options: Partial<Parameters<typeof HttpMessageSignature.sign>[1]> = {},
+  ) => HttpMessageSignature.sign(request(), { ...signOptions, ...options, key: key as never })
+
+  function verify(signed: Request, publicKey: CryptoKey) {
+    return HttpMessageSignature.verify(signed, {
+      keyResolver: () => publicKey,
+      maxAge: 3_600,
+      nonceNamespace: 'signing-keys',
+      nonceStore: Store.memory(),
+      requiredComponents: ['@authority', '@path'],
+      tag: 'test',
+    })
+  }
+
+  describe('remote signers', () => {
+    test('produce the same headers as the local key pair', async () => {
+      // Ed25519 is deterministic, so the same key and signature base give identical bytes.
+      const keys = await keyPair()
+      const local = await sign(keys)
+      const remote = await sign(remoteSigner(keys))
+      expect(remote.headers.get(Headers.signatureInput)).toBe(
+        local.headers.get(Headers.signatureInput),
+      )
+      expect(remote.headers.get(Headers.signature)).toBe(local.headers.get(Headers.signature))
+      expect(await verify(remote, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('get the complete UTF-8 signature base, once', async () => {
+      const keys = await keyPair()
+      const calls: Uint8Array[] = []
+      const signed = await sign(remoteSigner(keys, { calls }))
+      expect(calls).toHaveLength(1)
+      const input = signed.headers.get(Headers.signatureInput)!.replace(/^test=/, '')
+      expect(new TextDecoder().decode(calls[0])).toBe(
+        [
+          '"@authority": merchant.example',
+          '"@path": /resource',
+          '"@signature-params": ' + input,
+        ].join('\n'),
+      )
+    })
+
+    test.each([
+      ['Ed25519', keyPair, 'ed25519'],
+      ['RSA-PSS SHA-512', rsaKeyPair, 'rsa-pss-sha512'],
+    ] as const)('take the %s algorithm from the public key', async (_, generate, alg) => {
+      const keys = await generate()
+      const signed = await sign(remoteSigner(keys))
+      expect(signed.headers.get(Headers.signatureInput)).toContain(';alg="' + alg + '";')
+      expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('work as class instances that use this', async () => {
+      const keys = await keyPair()
+      class KmsSigner {
+        readonly publicKey = keys.publicKey
+        readonly #privateKey = keys.privateKey
+        async sign({ payload }: { readonly payload: Uint8Array }) {
+          return new Uint8Array(
+            await crypto.subtle.sign('Ed25519', this.#privateKey, payload.slice()),
+          )
+        }
+      }
+      expect(await verify(await sign(new KmsSigner()), keys.publicKey)).toMatchObject({
+        status: 'verified',
+      })
+    })
+
+    test.each([
+      [
+        'a view into a larger buffer',
+        (signature: Uint8Array) => {
+          const padded = new Uint8Array(signature.length + 16).fill(0xff)
+          padded.set(signature, 8)
+          return padded.subarray(8, 8 + signature.length)
+        },
+      ],
+      ['a Node.js Buffer', (signature: Uint8Array) => Buffer.from(signature)],
+    ])('may return %s', async (_, wrap) => {
+      const keys = await keyPair()
+      const inner = remoteSigner(keys)
+      const signed = await sign({
+        publicKey: keys.publicKey,
+        sign: async (parameters: { payload: Uint8Array }) => wrap(await inner.sign(parameters)),
+      })
+      expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('may return a Uint8Array from another realm', async () => {
+      const keys = await keyPair()
+      const inner = remoteSigner(keys)
+      const signed = await sign({
+        publicKey: keys.publicKey,
+        async sign(parameters: { payload: Uint8Array }) {
+          const signature = await inner.sign(parameters)
+          // A Uint8Array built in a separate vm context fails instanceof here.
+          const foreign = vm.runInNewContext('new Uint8Array(bytes)', { bytes: [...signature] })
+          expect(foreign instanceof Uint8Array).toBe(false)
+          return foreign
+        },
+      })
+      expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('reject a typed array that is not a Uint8Array from another realm', async () => {
+      const keys = await keyPair()
+      await expect(
+        sign({
+          publicKey: keys.publicKey,
+          sign: async () => vm.runInNewContext('new Uint16Array(32)'),
+        }),
+      ).rejects.toThrow('A Signer must resolve with the raw signature as a Uint8Array.')
+    })
+
+    test('cannot change the signature after it is checked', async () => {
+      const keys = await keyPair()
+      let returned: Uint8Array | undefined
+      const inner = remoteSigner(keys)
+      const signed = await sign({
+        publicKey: keys.publicKey,
+        async sign(parameters: { payload: Uint8Array }) {
+          returned = await inner.sign(parameters)
+          setTimeout(() => returned!.fill(0))
+          return returned
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve))
+      expect(returned!.every((byte) => byte === 0)).toBe(true)
+      expect(signed.headers.get(Headers.signature)).toBe(
+        (await sign(keys)).headers.get(Headers.signature),
+      )
+    })
+
+    test('cannot change the signature base by mutating the payload', async () => {
+      const keys = await keyPair()
+      const inner = remoteSigner(keys)
+      const signed = await sign({
+        publicKey: keys.publicKey,
+        async sign(parameters: { payload: Uint8Array }) {
+          const signature = await inner.sign(parameters)
+          parameters.payload.fill(0)
+          return signature
+        },
+      })
+      expect(await verify(signed, keys.publicKey)).toMatchObject({ status: 'verified' })
+    })
+
+    test('keep existing signatures on the request', async () => {
+      const [first, second] = await Promise.all([keyPair(), keyPair()])
+      const once = await sign(first, { label: 'first' })
+      const twice = await HttpMessageSignature.sign(once, {
+        ...signOptions,
+        key: remoteSigner(second),
+        label: 'second',
+      })
+      const signature = twice.headers.get(Headers.signature)!
+      expect(signature).toMatch(/^first=:[^:]+:, second=:[^:]+:$/)
+      expect(signature.startsWith(once.headers.get(Headers.signature)!)).toBe(true)
+    })
+  })
+
+  describe('the self-check rejects', () => {
+    const mismatch = 'The Signer returned a signature that does not verify with its publicKey.'
+
+    test('a signature from a different private key', async () => {
+      const [signing, claimed] = await Promise.all([keyPair(), keyPair()])
+      await expect(
+        sign({ publicKey: claimed.publicKey, sign: remoteSigner(signing).sign }),
+      ).rejects.toThrow(mismatch)
+    })
+
+    test('an RSA-PSS signature with the wrong salt length', async () => {
+      const keys = await rsaKeyPair()
+      await expect(sign(remoteSigner(keys, { saltLength: 32 }))).rejects.toThrow(mismatch)
+    })
+
+    test('a signature over a digest instead of the payload', async () => {
+      const keys = await keyPair()
+      await expect(
+        sign({
+          publicKey: keys.publicKey,
+          async sign({ payload }: { payload: Uint8Array }) {
+            const digest = await crypto.subtle.digest('SHA-256', payload.slice())
+            return new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, digest))
+          },
+        }),
+      ).rejects.toThrow(mismatch)
+    })
+
+    test('a DER-style signature with extra bytes', async () => {
+      const keys = await keyPair()
+      const inner = remoteSigner(keys)
+      await expect(
+        sign({
+          publicKey: keys.publicKey,
+          sign: async (parameters: { payload: Uint8Array }) =>
+            Uint8Array.from([0x30, 0x44, ...(await inner.sign(parameters))]),
+        }),
+      ).rejects.toThrow(mismatch)
+    })
+
+    test.each([0, 63, 65])('a %i-byte Ed25519 signature', async (length) => {
+      const keys = await keyPair()
+      await expect(
+        sign({ publicKey: keys.publicKey, sign: async () => new Uint8Array(length) }),
+      ).rejects.toThrow(mismatch)
+    })
+
+    test('an empty RSA-PSS signature', async () => {
+      const keys = await rsaKeyPair()
+      await expect(
+        sign({ publicKey: keys.publicKey, sign: async () => new Uint8Array() }),
+      ).rejects.toThrow(mismatch)
+    })
+
+    test.each([
+      ['a base64 string', 'c2lnbmF0dXJl'],
+      ['an ArrayBuffer', new ArrayBuffer(64)],
+      ['a number array', Array.from({ length: 64 }, () => 1)],
+      ['undefined', undefined],
+    ])('%s instead of bytes', async (_, value) => {
+      const keys = await keyPair()
+      await expect(sign({ publicKey: keys.publicKey, sign: async () => value })).rejects.toThrow(
+        'A Signer must resolve with the raw signature as a Uint8Array.',
+      )
+    })
+  })
+
+  describe('configuration errors throw before signing', () => {
+    test('a private key alone, as the old API took', async () => {
+      const keys = await keyPair()
+      await expect(sign(keys.privateKey)).rejects.toThrow(
+        'Signing keys are key pairs: pass { privateKey, publicKey } or a Signer, not a private key alone.',
+      )
+    })
+
+    test.each([
+      ['null', null],
+      ['an empty object', {}],
+      ['a Signer without publicKey', { sign: async () => new Uint8Array(64) }],
+      ['a Signer whose sign is not a function', { publicKey: 'x', sign: 'x' }],
+    ])('%s', async (_, key) => {
+      await expect(sign(key)).rejects.toThrow(
+        'A signing key must be a CryptoKeyPair or a Signer with publicKey and sign.',
+      )
+    })
+
+    test('a Signer whose publicKey is a private key', async () => {
+      const keys = await keyPair()
+      let called = false
+      await expect(
+        sign({
+          publicKey: keys.privateKey,
+          async sign() {
+            called = true
+            return new Uint8Array(64)
+          },
+        }),
+      ).rejects.toThrow('A signing key must be a CryptoKeyPair or a Signer')
+      expect(called).toBe(false)
+    })
+
+    test('a Signer whose publicKey cannot verify', async () => {
+      const keys = await keyPair()
+      const publicKey = await crypto.subtle.importKey(
+        'jwk',
+        await crypto.subtle.exportKey('jwk', keys.publicKey),
+        'Ed25519',
+        true,
+        [],
+      )
+      await expect(sign({ publicKey, sign: remoteSigner(keys).sign })).rejects.toThrow(
+        'A Signer publicKey must have the verify usage.',
+      )
+    })
+
+    test.each([
+      ['ECDSA P-256', { name: 'ECDSA', namedCurve: 'P-256' }],
+      [
+        'RSA-PSS SHA-256',
+        {
+          hash: 'SHA-256',
+          modulusLength: 2_048,
+          name: 'RSA-PSS',
+          publicExponent: new Uint8Array([1, 0, 1]),
+        },
+      ],
+    ])('an unsupported %s key, without calling the signer', async (_, algorithm) => {
+      const keys = (await crypto.subtle.generateKey(algorithm, true, [
+        'sign',
+        'verify',
+      ])) as CryptoKeyPair
+      let called = false
+      await expect(
+        sign({
+          publicKey: keys.publicKey,
+          async sign() {
+            called = true
+            return new Uint8Array(64)
+          },
+        }),
+      ).rejects.toThrow('Signing keys must be Ed25519 or RSA-PSS SHA-512.')
+      await expect(sign(keys)).rejects.toThrow('Signing keys must be Ed25519 or RSA-PSS SHA-512.')
+      expect(called).toBe(false)
+    })
+
+    test('a key pair whose halves use different algorithms', async () => {
+      const [ed25519, rsa] = await Promise.all([keyPair(), rsaKeyPair()])
+      await expect(
+        sign({ privateKey: rsa.privateKey, publicKey: ed25519.publicKey }),
+      ).rejects.toThrow(
+        'The privateKey and publicKey of a signing key pair use different algorithms.',
+      )
+    })
+  })
+
+  test('a signer failure propagates unchanged', async () => {
+    const keys = await keyPair()
+    const failure = new Error('KMS unavailable.')
+    await expect(
+      sign({
+        publicKey: keys.publicKey,
+        sign: async () => {
+          throw failure
+        },
+      }),
+    ).rejects.toBe(failure)
+  })
 })
 
 function vectorRequest(parameters: { input: string; signature: string }): Request {

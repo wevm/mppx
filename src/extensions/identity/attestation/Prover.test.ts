@@ -41,7 +41,7 @@ function sign(claims: Partial<Attestation.Claims> = {}) {
       type: 'email',
       ...claims,
     },
-    { key: keys.privateKey, keyId },
+    { key: keys, keyId },
   )
 }
 
