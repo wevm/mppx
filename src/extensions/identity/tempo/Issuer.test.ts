@@ -329,15 +329,25 @@ test('a DPoP-bound token needs a proof for the issuer endpoint', async () => {
 
 test('rejects a configuration it cannot serve', async () => {
   const signingKey = await keyPair()
+  const store = Store.memory()
   expect(() =>
-    TempoId.Issuer.create({ clientId, signingKey, url: 'http://attest.example' }),
+    TempoId.Issuer.create({ clientId, signingKey, store, url: 'http://attest.example' }),
   ).toThrow('https')
   expect(() =>
-    TempoId.Issuer.create({ clientId, signingKey, types: ['github' as never], url: attestUrl }),
+    TempoId.Issuer.create({
+      clientId,
+      signingKey,
+      store,
+      types: ['github' as never],
+      url: attestUrl,
+    }),
   ).toThrow('github')
-  expect(() => TempoId.Issuer.create({ clientId: [], signingKey, url: attestUrl })).toThrow(
+  expect(() => TempoId.Issuer.create({ clientId: [], signingKey, store, url: attestUrl })).toThrow(
     'clientId',
   )
+  expect(() =>
+    TempoId.Issuer.create({ clientId, signingKey, store: undefined as never, url: attestUrl }),
+  ).toThrow('store')
 })
 
 test('refuses a body over 4096 bytes before reading the token', async () => {
@@ -459,4 +469,75 @@ test('the exchange fails once the issuer stalls past the timeout', async () => {
       type: 'tempo-id',
     }),
   ).rejects.toThrow()
+})
+
+test('a DPoP proof is accepted once, and only for the configured endpoint', async () => {
+  const { issuer, tempoId } = await setup(() => [])
+  const dpop = await createDpop()
+  const accessToken = await tempoId.accessToken({ dpop })
+  const endpoint = `${attestUrl}${TempoId.Constants.attestPath}`
+  // A proof signed for another host's endpoint, sent to this issuer's path.
+  let proofUrl = `https://evil.example${TempoId.Constants.attestPath}`
+  const exchange = async (url: string) => {
+    let headers: Headers | undefined
+    await TempoId.Client.attest({
+      accessToken: () => accessToken,
+      audience: origin,
+      dpop,
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        headers = new Headers(init?.headers)
+        return Response.json({ error: 'stop' }, { status: 500 })
+      }) as typeof globalThis.fetch,
+      issuer: url.replace(TempoId.Constants.attestPath, ''),
+      type: 'tempo-id',
+    }).catch(() => {})
+    return headers!
+  }
+  const send = (headers: Headers, url = endpoint) =>
+    issuer.handle(
+      new Request(url, {
+        body: JSON.stringify({ audience: origin, type: 'tempo-id' }),
+        headers,
+        method: 'POST',
+      }),
+    )
+  const foreign = await exchange(proofUrl)
+  expect((await send(foreign, `https://evil.example${TempoId.Constants.attestPath}`))!.status).toBe(
+    401,
+  )
+  proofUrl = endpoint
+  const own = await exchange(proofUrl)
+  expect((await send(own))!.status).toBe(200)
+  expect((await send(own))!.status).toBe(401)
+})
+
+test('restores stored attestations only for the signed-in user', async () => {
+  const { fetch, tempoId } = await setup(() => [])
+  const alice = await tempoId.accessToken({ sub: 'user_ALICE' })
+  const stored = (await TempoId.Client.attest({
+    accessToken: () => alice,
+    audience: origin,
+    fetch,
+    issuer: attestUrl,
+    type: 'tempo-id',
+  }))!.attestation
+  const presented = async (accessToken: () => string) => {
+    const prover = TempoId.Client.attestations({
+      accessToken,
+      attestations: [stored],
+      fetch,
+      issuer: attestUrl,
+      scope: [origin],
+    })
+    const request = await prover.prove(new Request(url), { created: 0, nonce: 'n' })
+    return request.headers.get(Attestation.Constants.header)
+  }
+  expect(await presented(() => alice)).toBe(stored)
+  const bob = await tempoId.accessToken({ sub: 'user_BOB' })
+  expect(await presented(() => bob)).toBeNull()
+  expect(
+    await presented(() => {
+      throw new Error('signed out')
+    }),
+  ).toBeNull()
 })

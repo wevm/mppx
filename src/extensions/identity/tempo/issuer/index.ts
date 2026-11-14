@@ -52,6 +52,10 @@ export function create(config: create.Config): Issuer {
     signingKey: config.signingKey,
     ttl: config.ttl,
   })
+  if (!config.store)
+    throw new TypeError(
+      'Tempo ID attestation issuer requires store, so each DPoP proof is accepted once.',
+    )
   if (!config.clientId || (Array.isArray(config.clientId) && config.clientId.length === 0))
     throw new TypeError(
       'Tempo ID attestation issuer requires clientId: the apps that may exchange tokens.',
@@ -66,6 +70,8 @@ export function create(config: create.Config): Issuer {
     store: config.store,
   })
   const attestPath = new URL(url).pathname.replace(/\/+$/, '') + Constants.attestPath
+  // DPoP proofs must name this issuer's configured endpoint, never one built from the Host header.
+  const attestUrl = new URL(url).origin + attestPath
 
   async function attest(request: Request): Promise<Response> {
     const body = await readJson(request)
@@ -79,7 +85,9 @@ export function create(config: create.Config): Issuer {
     if (typeof type !== 'string' || !types.includes(type as Type))
       return error(400, `type must be one of ${types.join(', ')}.`)
 
-    const verified = await tempoId.verifier.verify(request)
+    const verified = await tempoId.verifier.verify(
+      new Request(attestUrl, { headers: request.headers, method: request.method }),
+    )
     if (verified.status !== 'valid')
       return error(statusCodes[verified.status], verified.reason ?? 'Sign in with Tempo ID.', {
         ...(verified.status === 'missing' || verified.status === 'invalid'
@@ -148,8 +156,8 @@ export declare namespace create {
     readonly clientId: string | readonly string[]
     /** Decides whether a verified user may get attestations. */
     readonly allow?: ((user: Types.Payer) => MaybePromise<boolean>) | undefined
-    /** Accepts each DPoP proof once. Without it, a proof can be replayed for five minutes. */
-    readonly store?: Store.AtomicStore | undefined
+    /** Accepts each DPoP proof once. Required, so a captured proof cannot be exchanged again. */
+    readonly store: Store.AtomicStore
     /**
      * The audience access tokens must name. Defaults to this issuer's `url`, so a token Tempo ID
      * issued for another API cannot be exchanged here.

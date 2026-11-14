@@ -117,8 +117,15 @@ export function attestations(config: attestations.Config): Identity.Prover {
     } catch {
       // Signed out: no user, so nothing cached is presented.
     }
-    if (!current || current.user !== user)
-      current = { user, prover: create(user, current ? undefined : config.attestations) }
+    if (!current || current.user !== user) {
+      // Stored attestations are restored only for the user they name.
+      const held = current
+        ? undefined
+        : config.attestations?.filter(
+            (token) => user !== undefined && decodeAttestation(token)?.claims.uid === user,
+          )
+      current = { user, prover: create(user, held) }
+    }
     return current.prover
   }
 

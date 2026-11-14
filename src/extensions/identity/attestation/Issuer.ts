@@ -79,23 +79,28 @@ export function create(config: create.Config): Issuer {
       )
         throw new TypeError('Attestation claims must be an object.')
       const now = Math.floor(Date.now() / 1_000)
+      const payload = {
+        ...claims,
+        ...(uid !== undefined && { uid }),
+        ...(handle !== undefined && { handle }),
+        ...(cnf !== undefined && { cnf }),
+        aud: new URL(audience).origin,
+        exp: now + lifetime,
+        iat: now,
+        iss: issuer,
+        jti: crypto.randomUUID(),
+        sub,
+        type,
+      }
+      // Extra claims may carry uid, handle or cnf too: check what is signed, as verify will.
+      if (payload.uid !== undefined && (typeof payload.uid !== 'string' || payload.uid === ''))
+        throw new TypeError('Attestation uid must be a non-empty string.')
+      if (payload.handle !== undefined && typeof payload.handle !== 'string')
+        throw new TypeError('Attestation handle must be a string.')
+      if (payload.cnf !== undefined && !isConfirmation(payload.cnf))
+        throw new TypeError('Attestation cnf must be an object whose jkt and addr are strings.')
       const { keyId } = await key
-      const token = await signToken(
-        {
-          ...claims,
-          ...(uid !== undefined && { uid }),
-          ...(handle !== undefined && { handle }),
-          ...(cnf !== undefined && { cnf }),
-          aud: new URL(audience).origin,
-          exp: now + lifetime,
-          iat: now,
-          iss: issuer,
-          jti: crypto.randomUUID(),
-          sub,
-          type,
-        },
-        { key: config.signingKey, keyId },
-      )
+      const token = await signToken(payload as Types.Claims, { key: config.signingKey, keyId })
       // Servers reject longer tokens, so never hand one out.
       if (token.length > Constants.maxLength)
         throw new TypeError(`Attestation is longer than ${Constants.maxLength} characters.`)

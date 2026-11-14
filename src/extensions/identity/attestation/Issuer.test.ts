@@ -115,6 +115,8 @@ describe('Issuer.create', () => {
     await expect(
       attester.sign({ audience, sub: 'a', type: 'email', claims: { pad: 'x'.repeat(9_000) } }),
     ).rejects.toThrow('longer')
+    for (const claims of [{ uid: 5 }, { handle: 1 }, { cnf: { addr: 1 } }])
+      await expect(attester.sign({ audience, sub: 'a', type: 'email', claims })).rejects.toThrow()
   })
 })
 
