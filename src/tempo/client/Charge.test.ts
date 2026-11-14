@@ -750,6 +750,73 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('links the MACH onramp for the account a resolver picks for the MACH route', async () => {
+    vi.resetModules()
+    const chainId = defaults.chainId.mainnet
+    const machineTokenAccount = privateKeyToAccount(
+      '0x0000000000000000000000000000000000000000000000000000000000000003',
+    )
+    // Only the MACH-route account holds the charge currency, so reading it from that account
+    // instead of the direct-payment one would hide the shortfall.
+    const balances: Record<string, Record<string, bigint>> = {
+      [machineTokenAccount.address.toLowerCase()]: {
+        [currency.toLowerCase()]: 1_500_000n,
+        [defaults.machineToken[chainId].token.toLowerCase()]: 250_000n,
+      },
+    }
+    const readContract = vi.fn(
+      async (_client: unknown, parameters: { address: Address; args: readonly [Address] }) =>
+        balances[parameters.args[0].toLowerCase()]?.[parameters.address.toLowerCase()] ?? 0n,
+    )
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      prepareTransactionRequest,
+      readContract,
+      sendCallsSync: vi.fn(),
+      signTransaction: vi.fn(async () => '0xdeadbeef'),
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedBalances } = await import('./Charge.js')
+      const Errors = await import('../../Errors.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedBalances({
+        account,
+        getClient: () => client,
+        // MACH calls run from one account, direct transfers from the default one.
+        resolveAccount: (info) =>
+          info.operation.kind === 'executeCalls' &&
+          info.operation.calls?.some(
+            (call) => call.to?.toLowerCase() === defaults.machineToken[chainId].token.toLowerCase(),
+          )
+            ? machineTokenAccount
+            : account,
+      })
+      const challenge = createChallenge({
+        amount: '1.5',
+        chainId,
+        machineTokenEnabled: true,
+        supportedModes: ['pull'],
+      })
+
+      const error = await method.createCredential({ challenge, context: {} }).catch((e) => e)
+      expect(error).toBeInstanceOf(Errors.InsufficientBalanceError)
+      expect(error.fundingUrl).toBe(
+        `${defaults.machineTokenFundingBaseUrl}&address=${machineTokenAccount.address}&amount=1.25`,
+      )
+      expect(prepareTransactionRequest).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   test('uses direct calls when a scoped account rejects the machine route', async () => {
     vi.resetModules()
     const chainId = 42431
