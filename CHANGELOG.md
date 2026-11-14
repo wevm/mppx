@@ -1,5 +1,29 @@
 # mppx
 
+## 0.19.0
+
+### Minor Changes
+
+- f2c69d5: Added remote signers (a cloud KMS, an HSM or Turnkey) to the Web Bot Auth and TAP client provers, `Attestation.sign` and the World ID issuer, through one `SigningKey` type: a `CryptoKeyPair` or a `Signer` (`{ publicKey, sign({ payload }) }`). mppx checks each remote signature against `publicKey` before it uses it.
+
+  Breaking: these take a key pair instead of a private key alone. `WebBotAuth.Client.prover` no longer takes `keyId`: it derives the keyid from the public key. `Attestation.sign`'s `keyId` is optional and defaults to the public key's RFC 7638 thumbprint.
+
+  ```diff
+  - WebBotAuth.Client.prover({ key: keys.privateKey, keyId, scope, signatureAgent })
+  + WebBotAuth.Client.prover({ key: keys, scope, signatureAgent })
+  - Tap.Client.prover({ key: keys.privateKey, keyId, intent, scope })
+  + Tap.Client.prover({ key: keys, keyId, intent, scope })
+  - Attestation.sign(claims, { key: keys.privateKey, keyId })
+  + Attestation.sign(claims, { key: keys })
+  ```
+
+### Patch Changes
+
+- 602682c: Fixed HTTP message signing to check a request's signature labels, the new label and a consumed body before it calls a remote signer, so a request it refuses no longer spends a signing operation.
+- f253219: Added `mppx/extensions/identity/tempo`: `TempoId.Server.create` verifies Tempo ID access tokens offline, with DPoP proofs, and returns a payment check that requires a `tempo` payment from a Tempo Account the token grants to the app. Without `clientId` it accepts any app's token. Its `allow` option decides by the user's ID, app, accounts, compliance states, and the email address of an ID token the client sends. `TempoId.Client.prover` sends the access token, a DPoP proof per request, and the optional ID token.
+- 7645703: Added `mppx/extensions/identity/world`: `World.Server.verifier` requires a human verified with World ID, as an `Identity-Attestation` of type `world-id` from a World ID issuer, `World.Issuer` runs that issuer as a shared service or inside an app, and `World.Client.prover` runs the issuer's device flow, shows the human World IdP's approval link and sends the attestation.
+- 3233543: Fixed paying from a Zone whose RPC redacts the outbox's `WithdrawalRequested` event from receipts. The client now derives the sender tag from the outbox's `lastFallbackNonce` and matches the portal's `WithdrawalProcessed` event on Tempo. A failed read of the sender tag is retried with the Challenge, without withdrawing again, and `ZoneSettlementPendingError` has `senderTags`, every candidate tag, with `senderTag` `undefined` when more than one remains.
+
 ## 0.18.1
 
 ### Patch Changes
