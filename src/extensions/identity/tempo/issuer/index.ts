@@ -17,7 +17,7 @@ import type * as Types from '../Types.js'
  *   (`Tempo-Id-Token`) and Tempo ID verified the address.
  *
  * Every attestation carries the user ID as `uid`, so a server can tell that attestations of
- * several types name one user. The access token is checked as `TempoId.Server` checks it,
+ * several types name one user, and the app that exchanged the token as `azp`. The access token is checked as `TempoId.Server` checks it,
  * including its DPoP proof, which the client signs for this endpoint.
  *
  * `handle` answers, relative to `url`:
@@ -104,7 +104,14 @@ export function create(config: create.Config): Issuer {
 
     let token: string
     try {
-      token = await attestation.sign({ audience, sub, type, uid: user.userId })
+      token = await attestation.sign({
+        audience,
+        // The app that exchanged the token, so a server can restrict which apps it accepts.
+        claims: { azp: user.clientId },
+        sub,
+        type,
+        uid: user.userId,
+      })
     } catch {
       return error(400, 'The attestation cannot be signed for this request.')
     }

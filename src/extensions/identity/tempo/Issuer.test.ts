@@ -199,6 +199,7 @@ test('a Tempo ID user gets tempo-id and email attestations from the issuer, then
     aud: origin,
     iss: attestUrl,
     sub: 'user_01TEST',
+    azp: clientId,
     type: 'tempo-id',
     uid: 'user_01TEST',
   })
@@ -539,5 +540,32 @@ test('restores stored attestations only for the signed-in user', async () => {
     await presented(() => {
       throw new Error('signed out')
     }),
+  ).toBeNull()
+})
+
+test('drops the previous user’s attestations from a request already in flight', async () => {
+  const { fetch, tempoId } = await setup(() => [])
+  let accessToken = await tempoId.accessToken({ sub: 'user_ALICE' })
+  const alice = (await TempoId.Client.attest({
+    accessToken: () => accessToken,
+    audience: origin,
+    fetch,
+    issuer: attestUrl,
+    type: 'tempo-id',
+  }))!.attestation
+  const prover = TempoId.Client.attestations({
+    accessToken: () => accessToken,
+    fetch,
+    issuer: attestUrl,
+    scope: [origin],
+  })
+  const carrying = new Request(url, { headers: { [Attestation.Constants.header]: alice } })
+  const context = { created: 0, nonce: 'n' }
+  expect((await prover.prove(carrying, context)).headers.get(Attestation.Constants.header)).toBe(
+    alice,
+  )
+  accessToken = await tempoId.accessToken({ sub: 'user_BOB' })
+  expect(
+    (await prover.prove(carrying, context)).headers.get(Attestation.Constants.header),
   ).toBeNull()
 })

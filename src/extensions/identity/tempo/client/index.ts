@@ -5,7 +5,8 @@ import * as Credential from '../../../../Credential.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import * as Attestation from '../../attestation/client/index.js'
-import { decode as decodeAttestation, isIssuer } from '../../attestation/Token.js'
+import { Constants as AttestationConstants } from '../../attestation/Constants.js'
+import { decode as decodeAttestation, isIssuer, parseHeader } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
 import * as Jwt from '../internal/Jwt.js'
 import type * as Types from '../Types.js'
@@ -132,7 +133,23 @@ export function attestations(config: attestations.Config): Identity.Prover {
   return {
     scope: config.scope,
     async prove(request, context) {
-      return (await resolve()).prove(request, context)
+      const prover = await resolve()
+      // A request already in flight (such as a payment retry) may still carry the previous
+      // user's attestations from this issuer: drop every one that names another user.
+      const issuer = config.issuer.replace(/\/+$/, '')
+      const user = current?.user
+      const sent = parseHeader(request.headers.get(AttestationConstants.header))
+      const kept = sent.filter((token) => {
+        const claims = decodeAttestation(token)?.claims
+        return claims?.iss !== issuer || (user !== undefined && claims.uid === user)
+      })
+      if (kept.length !== sent.length) {
+        const headers = new Headers(request.headers)
+        if (kept.length > 0) headers.set(AttestationConstants.header, kept.join(', '))
+        else headers.delete(AttestationConstants.header)
+        request = new Request(request, { headers })
+      }
+      return prover.prove(request, context)
     },
     async prepare(response, context) {
       return (await resolve()).prepare?.(response, context)
