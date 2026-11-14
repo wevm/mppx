@@ -30,7 +30,13 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
   const { audience, clients, maxAge = Constants.maxAge } = config
   const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
   const cache = new Map<string, { at: number; keys: Promise<JsonWebKey[]> }>()
-  const invalid = (reason: string) => ({ status: 'invalid', reason }) as const
+  // Spec 5.3: a failed Session check is HTTP 400 with `invalid_session`, not 401, so OAuth
+  // clients keep a valid access token.
+  const headers = { 'Content-Type': 'application/json' }
+  const body = (description: string) =>
+    JSON.stringify({ error: 'invalid_session', error_description: description })
+  const invalid = (reason: string) =>
+    ({ status: 'invalid', code: 400, headers, reason: body(reason) }) as const
 
   /** Fetches a client's metadata, without following redirects, then its keys (spec 4.1). */
   async function load(clientId: string): Promise<JsonWebKey[]> {
@@ -59,7 +65,13 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
   return {
     async verify(request) {
       const token = request.headers.get(Constants.sessionHeader)
-      if (!token) return { status: 'missing', reason: 'Send a Poppy-Session header.' }
+      if (!token)
+        return {
+          status: 'missing',
+          code: 400,
+          headers,
+          reason: body('Send a Poppy-Session header.'),
+        }
       const session = Jwt.decode(token)
       if (session?.header.typ !== Constants.sessionType || session.header.alg !== 'ES256')
         return invalid('The Poppy-Session header is not a Session JWT.')
@@ -72,8 +84,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
         return invalid('The Session JWT agent_id is not a string.')
       if (!URL.canParse(iss) || new URL(iss).protocol !== 'https:')
         return invalid('The Session JWT iss is not an HTTPS client_id.')
-      if (clients !== '*' && !clients.includes(iss))
-        return { status: 'forbidden', reason: 'This Personal Agent is not accepted.' }
+      // Checked before any fetch, so callers can't make the verifier request other URLs.
+      if (!clients.includes(iss)) return invalid('This Personal Agent is not accepted.')
       if (aud !== audience) return invalid('The Session JWT is for another Company.')
       if (htm !== request.method || htu !== Jwt.htu(request.url))
         return invalid('The Session JWT is for another request.')
@@ -132,10 +144,10 @@ export declare namespace verifier {
     /** This Company's identifier, compared with `aud`: its OAuth issuer, or `https://{organization.domain}`. */
     audience: string
     /**
-     * Personal Agent `client_id`s to accept, or `'*'` for any. The verifier fetches the
-     * metadata at each accepted `client_id`, so `'*'` lets callers name URLs it fetches.
+     * Personal Agent `client_id`s to accept. The verifier fetches metadata and keys only for
+     * these, so callers can't make it request other URLs, and its key cache stays this size.
      */
-    clients: readonly string[] | '*'
+    clients: readonly string[]
     /** Accepted seconds between a Session JWT's `iat` and now. @default 60 */
     maxAge?: number | undefined
     /** Fetch for client metadata and keys. @default globalThis.fetch */

@@ -65,7 +65,10 @@ describe('Poppy', () => {
 
   test('rejects a missing header', async () => {
     const { verifier } = await setup()
-    expect(await verifier().verify(new Request(url))).toMatchObject({ status: 'missing' })
+    expect(await verifier().verify(new Request(url))).toMatchObject({
+      status: 'missing',
+      code: 400,
+    })
   })
 
   test('binds the Session to the request method and URL', async () => {
@@ -81,11 +84,21 @@ describe('Poppy', () => {
     expect(await verifier({ audience: 'https://other.example' }).verify(request)).toMatchObject({
       status: 'invalid',
     })
-    expect(
-      await verifier({ clients: ['https://other.example/agent.json'] }).verify(request),
-    ).toMatchObject({
-      status: 'forbidden',
+    const refused = await verifier({ clients: ['https://other.example/agent.json'] }).verify(
+      request,
+    )
+    expect(refused).toMatchObject({ status: 'invalid', code: 400 })
+    expect(JSON.parse((refused as { reason: string }).reason)).toMatchObject({
+      error: 'invalid_session',
     })
+  })
+
+  test('fetches nothing for an unlisted client', async () => {
+    const { fetches, prove, verifier } = await setup()
+    await verifier({ clients: ['https://other.example/agent.json'] }).verify(
+      await prove(new Request(url)),
+    )
+    expect(fetches).toHaveLength(0)
   })
 
   test('binds an access token with ath, but not a Payment Credential', async () => {
