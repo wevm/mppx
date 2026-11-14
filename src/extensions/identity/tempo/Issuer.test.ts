@@ -76,13 +76,13 @@ async function createTempoId() {
   const now = () => Math.floor(Date.now() / 1000)
   return {
     fetch,
-    accessToken: (options: { dpop?: TempoId.DpopKey; sub?: string } = {}) =>
+    accessToken: (options: { aud?: string; dpop?: TempoId.DpopKey; sub?: string } = {}) =>
       (async () =>
         sign(
           { typ: 'at+jwt' },
           {
             access_keys: [],
-            aud: tempoIdOrigin,
+            aud: options.aud ?? attestUrl,
             client_id: clientId,
             compliance: {},
             ...(options.dpop && { cnf: { jkt: await thumbprint(options.dpop.jwk) } }),
@@ -329,10 +329,15 @@ test('a DPoP-bound token needs a proof for the issuer endpoint', async () => {
 
 test('rejects a configuration it cannot serve', async () => {
   const signingKey = await keyPair()
-  expect(() => TempoId.Issuer.create({ signingKey, url: 'http://attest.example' })).toThrow('https')
   expect(() =>
-    TempoId.Issuer.create({ signingKey, types: ['github' as never], url: attestUrl }),
+    TempoId.Issuer.create({ clientId, signingKey, url: 'http://attest.example' }),
+  ).toThrow('https')
+  expect(() =>
+    TempoId.Issuer.create({ clientId, signingKey, types: ['github' as never], url: attestUrl }),
   ).toThrow('github')
+  expect(() => TempoId.Issuer.create({ clientId: [], signingKey, url: attestUrl })).toThrow(
+    'clientId',
+  )
 })
 
 test('refuses a body over 4096 bytes before reading the token', async () => {
@@ -393,4 +398,65 @@ test('a new session never presents the previous user’s attestations', async ()
     'user_02OTHER',
   )
   expect(calls.filter((call) => call.startsWith(`POST ${attestUrl}`))).toHaveLength(2)
+})
+
+test('refuses a token Tempo ID issued for another API', async () => {
+  const { issuer, tempoId } = await setup(() => [])
+  const accessToken = await tempoId.accessToken({ aud: 'https://other-api.example' })
+  const response = await issuer.handle(
+    new Request(`${attestUrl}${TempoId.Constants.attestPath}`, {
+      body: JSON.stringify({ audience: origin, type: 'tempo-id' }),
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      method: 'POST',
+    }),
+  )
+  expect(response!.status).toBe(401)
+})
+
+test('sends the ID token on every exchange, so an email policy can allow tempo-id', async () => {
+  const { issuer, tempoId } = await setup(() => [], {
+    allow: (user) => user.emailVerified === true && user.email === 'ada@example.com',
+  })
+  const accessToken = await tempoId.accessToken()
+  const idToken = await tempoId.idToken()
+  const result = await TempoId.Client.attest({
+    accessToken: () => accessToken,
+    audience: origin,
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) =>
+      (await issuer.handle(new Request(input, init)))!) as typeof globalThis.fetch,
+    idToken: () => idToken,
+    issuer: attestUrl,
+    type: 'tempo-id',
+  })
+  expect(result?.attestation).toEqual(expect.any(String))
+})
+
+test('answers 400 for an over-long audience', async () => {
+  const { issuer, tempoId } = await setup(() => [])
+  const accessToken = await tempoId.accessToken()
+  const response = await issuer.handle(
+    new Request(`${attestUrl}${TempoId.Constants.attestPath}`, {
+      body: JSON.stringify({ audience: `https://${'a'.repeat(3_000)}.example`, type: 'tempo-id' }),
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      method: 'POST',
+    }),
+  )
+  expect(response!.status).toBe(400)
+})
+
+test('the exchange fails once the issuer stalls past the timeout', async () => {
+  const stalled = ((_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise((_, reject) =>
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)),
+    )) as typeof globalThis.fetch
+  await expect(
+    TempoId.Client.attest({
+      accessToken: () => 'token',
+      audience: origin,
+      fetch: stalled,
+      issuer: attestUrl,
+      timeout: 0.05,
+      type: 'tempo-id',
+    }),
+  ).rejects.toThrow()
 })

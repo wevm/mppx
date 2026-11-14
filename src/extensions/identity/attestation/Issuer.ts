@@ -38,7 +38,7 @@ export function create(config: create.Config): Issuer {
   if (!isIssuer(issuer))
     throw new TypeError('Attestation issuer must be an https URL (http only on localhost).')
   const ttl = config.ttl ?? defaultTtl
-  if (!Number.isSafeInteger(ttl) || ttl <= 0)
+  if (!isTtl(ttl))
     throw new TypeError('Attestation issuer ttl must be a positive integer of seconds.')
   const { publicKey } = Signer.resolve(config.signingKey, ['ed25519'])
   const jwksPath = new URL(issuer).pathname.replace(/\/+$/, '') + Constants.jwksPath
@@ -64,16 +64,30 @@ export function create(config: create.Config): Issuer {
       if (!isType(type)) throw new TypeError('Attestation type must be a structured-field token.')
       if (typeof sub !== 'string' || sub === '')
         throw new TypeError('Attestation subject must be a non-empty string.')
+      const lifetime = parameters.ttl ?? ttl
+      if (!isTtl(lifetime))
+        throw new TypeError('Attestation ttl must be a positive integer of seconds.')
+      if (uid !== undefined && (typeof uid !== 'string' || uid === ''))
+        throw new TypeError('Attestation uid must be a non-empty string.')
+      if (handle !== undefined && typeof handle !== 'string')
+        throw new TypeError('Attestation handle must be a string.')
+      if (cnf !== undefined && !isConfirmation(cnf))
+        throw new TypeError('Attestation cnf must be an object whose jkt and addr are strings.')
+      if (
+        claims !== undefined &&
+        (typeof claims !== 'object' || claims === null || Array.isArray(claims))
+      )
+        throw new TypeError('Attestation claims must be an object.')
       const now = Math.floor(Date.now() / 1_000)
       const { keyId } = await key
-      return signToken(
+      const token = await signToken(
         {
           ...claims,
           ...(uid !== undefined && { uid }),
           ...(handle !== undefined && { handle }),
           ...(cnf !== undefined && { cnf }),
           aud: new URL(audience).origin,
-          exp: now + (parameters.ttl ?? ttl),
+          exp: now + lifetime,
           iat: now,
           iss: issuer,
           jti: crypto.randomUUID(),
@@ -82,6 +96,10 @@ export function create(config: create.Config): Issuer {
         },
         { key: config.signingKey, keyId },
       )
+      // Servers reject longer tokens, so never hand one out.
+      if (token.length > Constants.maxLength)
+        throw new TypeError(`Attestation is longer than ${Constants.maxLength} characters.`)
+      return token
     },
     async jwks() {
       return { keys: [(await key).jwk] }
@@ -163,6 +181,23 @@ export type SignParameters = {
 /** Whether a value can be sent as a structured-field token in `Identity-Attestation-Required`. */
 function isType(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z*][A-Za-z0-9!#$%&'*+\-.^_`|~:/]*$/.test(value)
+}
+
+/** Whether a value is a usable attestation lifetime: a positive integer of seconds, at most a year. */
+function isTtl(value: unknown): value is number {
+  return (
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 31_536_000
+  )
+}
+
+/** Whether a value is a `cnf` object whose `jkt` and `addr`, when present, are strings. */
+export function isConfirmation(value: unknown): value is Types.Confirmation {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const { addr, jkt } = value as Record<string, unknown>
+  return (
+    (jkt === undefined || typeof jkt === 'string') &&
+    (addr === undefined || typeof addr === 'string')
+  )
 }
 
 /** Default attestation lifetime, in seconds. */

@@ -104,6 +104,17 @@ describe('Issuer.create', () => {
     )
     await expect(attester.sign({ audience, sub: 'a', type: 'two words' })).rejects.toThrow('token')
     await expect(attester.sign({ audience, sub: '', type: 'email' })).rejects.toThrow('subject')
+    for (const ttl of [0, -1, 1.5, Number.POSITIVE_INFINITY, 1e12])
+      await expect(attester.sign({ audience, sub: 'a', type: 'email', ttl })).rejects.toThrow('ttl')
+    await expect(attester.sign({ audience, sub: 'a', type: 'email', uid: '' })).rejects.toThrow(
+      'uid',
+    )
+    await expect(
+      attester.sign({ audience, sub: 'a', type: 'email', cnf: { jkt: 1 } as never }),
+    ).rejects.toThrow('cnf')
+    await expect(
+      attester.sign({ audience, sub: 'a', type: 'email', claims: { pad: 'x'.repeat(9_000) } }),
+    ).rejects.toThrow('longer')
   })
 })
 
@@ -119,6 +130,8 @@ describe('verify', () => {
       [{ uid: '' }, 'user ID'],
       [{ handle: 1 }, 'handle'],
       [{ cnf: 'x' }, 'confirmation'],
+      [{ cnf: { jkt: 123 } }, 'confirmation'],
+      [{ cnf: { addr: ['0x1'] } }, 'confirmation'],
     ] as const) {
       const token = await Attestation.sign({ ...base, ...extra } as never, { key: keys, keyId })
       const result = await Attestation.verify(token, {

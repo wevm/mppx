@@ -93,7 +93,12 @@ export async function verify(token: string, options: verify.Options): Promise<Ve
     return invalid('The attestation user ID is malformed.')
   if (claims.handle !== undefined && typeof claims.handle !== 'string')
     return invalid('The attestation handle is malformed.')
-  if (claims.cnf !== undefined && !isObject(claims.cnf))
+  if (
+    claims.cnf !== undefined &&
+    (!isObject(claims.cnf) ||
+      (claims.cnf.jkt !== undefined && typeof claims.cnf.jkt !== 'string') ||
+      (claims.cnf.addr !== undefined && typeof claims.cnf.addr !== 'string'))
+  )
     return invalid('The attestation confirmation is malformed.')
   if (!isTime(claims.iat) || !isTime(claims.exp))
     return invalid('The attestation times are malformed.')

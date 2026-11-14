@@ -52,9 +52,14 @@ export function create(config: create.Config): Issuer {
     signingKey: config.signingKey,
     ttl: config.ttl,
   })
+  if (!config.clientId || (Array.isArray(config.clientId) && config.clientId.length === 0))
+    throw new TypeError(
+      'Tempo ID attestation issuer requires clientId: the apps that may exchange tokens.',
+    )
   const tempoId = Server.create({
     allow: config.allow,
-    audience: config.tokenAudience,
+    // Only tokens issued for this issuer: a token another API received cannot be exchanged here.
+    audience: config.tokenAudience ?? url,
     clientId: config.clientId,
     fetch: config.fetch,
     issuer: config.issuer,
@@ -69,7 +74,7 @@ export function create(config: create.Config): Issuer {
       audience?: unknown
       type?: unknown
     }
-    if (typeof audience !== 'string' || !isIssuer(audience))
+    if (typeof audience !== 'string' || audience.length > 2_048 || !isIssuer(audience))
       return error(400, 'audience must be an https origin.')
     if (typeof type !== 'string' || !types.includes(type as Type))
       return error(400, `type must be one of ${types.join(', ')}.`)
@@ -89,8 +94,15 @@ export function create(config: create.Config): Issuer {
       sub = user.email
     } else sub = user.userId
 
-    const token = await attestation.sign({ audience, sub, type, uid: user.userId })
-    const exp = decode(token)!.claims.exp as number
+    let token: string
+    try {
+      token = await attestation.sign({ audience, sub, type, uid: user.userId })
+    } catch {
+      return error(400, 'The attestation cannot be signed for this request.')
+    }
+    const exp = decode(token)?.claims.exp
+    if (typeof exp !== 'number')
+      return error(400, 'The attestation cannot be signed for this request.')
     return Response.json(
       { attestation: token, expires_at: new Date(exp * 1_000).toISOString() },
       { headers: { ...cors, 'Cache-Control': 'no-store' } },
@@ -132,13 +144,16 @@ export declare namespace create {
     readonly types?: readonly Type[] | undefined
     /** Seconds each attestation is valid. @default 3600 */
     readonly ttl?: number | undefined
-    /** The app or apps whose access tokens may be exchanged. @default any app */
-    readonly clientId?: string | readonly string[] | undefined
+    /** The app or apps whose access tokens may be exchanged. Required. */
+    readonly clientId: string | readonly string[]
     /** Decides whether a verified user may get attestations. */
     readonly allow?: ((user: Types.Payer) => MaybePromise<boolean>) | undefined
     /** Accepts each DPoP proof once. Without it, a proof can be replayed for five minutes. */
     readonly store?: Store.AtomicStore | undefined
-    /** The audience access tokens must name. @default Tempo ID's origin */
+    /**
+     * The audience access tokens must name. Defaults to this issuer's `url`, so a token Tempo ID
+     * issued for another API cannot be exchanged here.
+     */
     readonly tokenAudience?: string | undefined
     /** Tempo ID's origin. @default 'https://id.tempo.xyz' */
     readonly issuer?: string | undefined

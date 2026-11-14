@@ -167,7 +167,8 @@ export async function attest(
   })
   if (dpop)
     headers.set('DPoP', await proof(dpop, accessToken, new Request(url, { method: 'POST' })))
-  const idToken = type === 'email' ? await parameters.idToken?.() : undefined
+  // Sent on every exchange: an issuer's `allow` may read the verified email for any type.
+  const idToken = await parameters.idToken?.()
   if (idToken) headers.set(Constants.idTokenHeader, idToken)
   // Never pays: an issuer that answers 402 fails the exchange.
   const response = await fetch(
@@ -177,6 +178,7 @@ export async function attest(
       headers,
       method: 'POST',
       redirect: 'manual',
+      signal: AbortSignal.timeout((parameters.timeout ?? 10) * 1_000),
     }),
   )
   const body = (await response.json().catch(() => ({}))) as {
@@ -206,7 +208,9 @@ export declare namespace attest {
     readonly accessToken: () => MaybePromise<string>
     /** The DPoP key that binds the token. Absent, the token is sent as a Bearer token. */
     readonly dpop?: Types.DpopKey | undefined
-    /** Returns the user's ID token, sent only for `email`. */
+    /** Seconds to wait for the issuer before the exchange fails. @default 10 */
+    readonly timeout?: number | undefined
+    /** Returns the user's ID token, which `email` needs and an issuer's policy may read. */
     readonly idToken?: (() => MaybePromise<string | undefined>) | undefined
     /** Fetch implementation. @default globalThis.fetch */
     readonly fetch?: typeof globalThis.fetch | undefined
