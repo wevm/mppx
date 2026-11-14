@@ -334,3 +334,63 @@ test('rejects a configuration it cannot serve', async () => {
     TempoId.Issuer.create({ signingKey, types: ['github' as never], url: attestUrl }),
   ).toThrow('github')
 })
+
+test('refuses a body over 4096 bytes before reading the token', async () => {
+  const { issuer } = await setup(() => [])
+  const response = await issuer.handle(
+    new Request(`${attestUrl}${TempoId.Constants.attestPath}`, {
+      body: JSON.stringify({ audience: origin, type: 'tempo-id', pad: 'x'.repeat(5_000) }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }),
+  )
+  expect(response!.status).toBe(400)
+})
+
+test('the client refuses a plaintext issuer', async () => {
+  const options = { accessToken: () => 'token', scope: [origin] }
+  expect(() =>
+    TempoId.Client.attestations({ ...options, issuer: 'http://attest.example' }),
+  ).toThrow('https')
+  await expect(
+    TempoId.Client.attest({
+      ...options,
+      audience: origin,
+      issuer: 'http://attest.example',
+      type: 'tempo-id',
+    }),
+  ).rejects.toThrow('https')
+})
+
+test('a new session never presents the previous user’s attestations', async () => {
+  const { calls, fetch, tempoId } = await setup(({ fetch }) => [
+    Attestation.Server.verifier({ audience: origin, fetch, issuer: attestUrl, type: 'tempo-id' }),
+  ])
+  let accessToken = await tempoId.accessToken({ sub: 'user_01TEST' })
+  const client = ClientMppx.create({
+    fetch,
+    identity: [
+      TempoId.Client.attestations({
+        accessToken: () => accessToken,
+        fetch,
+        issuer: attestUrl,
+        scope: [origin],
+        types: ['tempo-id'],
+      }),
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const first = await client.fetch(url)
+  expect(((await first.json()) as { claims: Attestation.Claims }[])[0]!.claims.sub).toBe(
+    'user_01TEST',
+  )
+
+  accessToken = await tempoId.accessToken({ sub: 'user_02OTHER' })
+  const second = await client.fetch(url)
+  expect(second.status).toBe(200)
+  expect(((await second.json()) as { claims: Attestation.Claims }[])[0]!.claims.sub).toBe(
+    'user_02OTHER',
+  )
+  expect(calls.filter((call) => call.startsWith(`POST ${attestUrl}`))).toHaveLength(2)
+})

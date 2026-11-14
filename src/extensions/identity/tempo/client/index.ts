@@ -1,10 +1,11 @@
 import { Base64 } from 'ox'
 
-import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import { unwrapFetch, withoutPayment } from '../../../../client/internal/Fetch.js'
 import * as Credential from '../../../../Credential.js'
 import type * as Identity from '../../../../identity/Types.js'
 import type { MaybePromise } from '../../../../internal/types.js'
 import * as Attestation from '../../attestation/client/index.js'
+import { decode as decodeAttestation, isIssuer } from '../../attestation/Token.js'
 import { Constants } from '../Constants.js'
 import * as Jwt from '../internal/Jwt.js'
 import type * as Types from '../Types.js'
@@ -87,16 +88,52 @@ export declare namespace prover {
  * ```
  */
 export function attestations(config: attestations.Config): Identity.Prover {
-  return Attestation.prover({
-    attestations: config.attestations,
-    issuers: [config.issuer],
+  assertIssuer(config.issuer)
+  // Attestations are cached per signed-in user: when the access token names another user (or
+  // none), the cache is dropped, so a new session never presents the previous user's attestations.
+  let current: { readonly user: string | undefined; readonly prover: Identity.Prover } | undefined
+
+  function create(user: string | undefined, held: readonly string[] | undefined) {
+    return Attestation.prover({
+      attestations: held,
+      issuers: [config.issuer],
+      scope: config.scope,
+      types: config.types ?? Constants.attestationTypes,
+      async acquire({ audience, issuer, type }) {
+        const result = await attest({ ...config, audience, issuer, type })
+        if (!result) return undefined
+        // Only keep an attestation for the user this cache belongs to.
+        const uid = decodeAttestation(result.attestation)?.claims.uid
+        return user !== undefined && uid === user ? result.attestation : undefined
+      },
+    })
+  }
+
+  async function resolve() {
+    let user: string | undefined
+    try {
+      const sub = Jwt.decode(await config.accessToken())?.claims.sub
+      user = typeof sub === 'string' && sub ? sub : undefined
+    } catch {
+      // Signed out: no user, so nothing cached is presented.
+    }
+    if (!current || current.user !== user)
+      current = { user, prover: create(user, current ? undefined : config.attestations) }
+    return current.prover
+  }
+
+  return {
     scope: config.scope,
-    types: config.types ?? Constants.attestationTypes,
-    async acquire({ audience, issuer, type }) {
-      const result = await attest({ ...config, audience, issuer, type })
-      return result?.attestation
+    async prove(request, context) {
+      return (await resolve()).prove(request, context)
     },
-  })
+    async prepare(response, context) {
+      return (await resolve()).prepare?.(response, context)
+    },
+    async retry(response, context) {
+      return (await resolve()).retry?.(response, context)
+    },
+  }
 }
 
 export declare namespace attestations {
@@ -119,6 +156,7 @@ export async function attest(
   parameters: attest.Parameters,
 ): Promise<{ readonly attestation: string; readonly expiresAt: Date } | undefined> {
   const { audience, dpop, type } = parameters
+  assertIssuer(parameters.issuer)
   const issuer = parameters.issuer.replace(/\/+$/, '')
   const fetch = unwrapFetch(parameters.fetch ?? globalThis.fetch)
   const accessToken = await parameters.accessToken()
@@ -131,12 +169,16 @@ export async function attest(
     headers.set('DPoP', await proof(dpop, accessToken, new Request(url, { method: 'POST' })))
   const idToken = type === 'email' ? await parameters.idToken?.() : undefined
   if (idToken) headers.set(Constants.idTokenHeader, idToken)
-  const response = await fetch(url, {
-    body: JSON.stringify({ audience, type }),
-    headers,
-    method: 'POST',
-    redirect: 'manual',
-  })
+  // Never pays: an issuer that answers 402 fails the exchange.
+  const response = await fetch(
+    url,
+    withoutPayment({
+      body: JSON.stringify({ audience, type }),
+      headers,
+      method: 'POST',
+      redirect: 'manual',
+    }),
+  )
   const body = (await response.json().catch(() => ({}))) as {
     attestation?: unknown
     error?: unknown
@@ -169,6 +211,14 @@ export declare namespace attest {
     /** Fetch implementation. @default globalThis.fetch */
     readonly fetch?: typeof globalThis.fetch | undefined
   }
+}
+
+/** Throws unless `issuer` is https (http only on localhost), since it receives the user's tokens. */
+function assertIssuer(issuer: string) {
+  if (!isIssuer(issuer.replace(/\/+$/, '')))
+    throw new TypeError(
+      'The Tempo ID attestation issuer must be an https URL (http only on localhost).',
+    )
 }
 
 /** Signs a DPoP proof (RFC 9449) of `accessToken` for one request. */

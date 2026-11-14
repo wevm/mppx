@@ -63,12 +63,8 @@ export function create(config: create.Config): Issuer {
   const attestPath = new URL(url).pathname.replace(/\/+$/, '') + Constants.attestPath
 
   async function attest(request: Request): Promise<Response> {
-    let body: unknown
-    try {
-      body = await request.json()
-    } catch {
-      return error(400, 'The body must be JSON.')
-    }
+    const body = await readJson(request)
+    if (body === undefined) return error(400, `The body must be JSON of at most ${maxBody} bytes.`)
     const { audience, type } = (typeof body === 'object' && body !== null ? body : {}) as {
       audience?: unknown
       type?: unknown
@@ -167,6 +163,42 @@ export type Issuer = {
 }
 
 const cors = { 'Access-Control-Allow-Origin': '*' } as const
+
+/** The largest request body the issuer reads, in bytes. */
+const maxBody = 4_096
+
+/**
+ * Reads a JSON body of at most {@link maxBody} bytes before anything else runs, cancelling the
+ * stream once it is over, or returns `undefined`.
+ */
+async function readJson(request: Request): Promise<unknown> {
+  if (Number(request.headers.get('content-length') ?? 0) > maxBody) return undefined
+  if (!request.body) return undefined
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBody) {
+        reader.cancel().catch(() => {})
+        return undefined
+      }
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    return undefined
+  }
+}
 
 const statusCodes = { missing: 401, invalid: 401, forbidden: 403, unavailable: 503 } as const
 
