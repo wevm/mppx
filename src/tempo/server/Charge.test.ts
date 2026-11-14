@@ -285,8 +285,8 @@ describe('tempo', () => {
         { memos: ['other realm', 'bound'], accepted: false },
         { memos: ['other challenge', 'plain'], accepted: false },
         { memos: ['other realm', 'plain'], accepted: false },
-        { memos: ['plain', 'plain'], accepted: false },
-        { memos: ['custom', 'plain'], accepted: false },
+        { memos: ['plain', 'plain'], accepted: true },
+        { memos: ['custom', 'plain'], accepted: true },
       ])('memos $memos: accepted=$accepted', async ({ memos, accepted }) => {
         const rpcMethods: string[] = []
         const tracedClient = createClient({
@@ -372,8 +372,11 @@ describe('tempo', () => {
             : { type: 'transaction' as const, signature }
         const credential = Credential.serialize(Credential.from({ challenge, payload }))
         rpcMethods.length = 0
+        // Push payments (hash) must carry the challenge-bound memo. Pull payments need no
+        // memo. Both reject any attribution memo for another realm or challenge.
+        const expectAccepted = mode === 'hash' ? accepted && memos.includes('bound') : accepted
 
-        if (accepted) {
+        if (expectAccepted) {
           await expect(handler.validateCredential(credential)).resolves.toMatchObject({
             intent: 'charge',
           })
@@ -396,6 +399,74 @@ describe('tempo', () => {
           expect(rpcMethods).not.toContain('eth_call')
         }
       })
+    })
+
+    test('a pull-settled transaction cannot be redeemed again as a hash credential', async () => {
+      const handler = Mppx_server.create({
+        challengeNonce: false,
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      // Without a nonce, the same route and expires give the same Challenge ID.
+      const expires = new Date(Date.now() + 60_000).toISOString()
+      const issue = async (expiresAt = expires) => {
+        const result = await handler.charge({ amount: '1', decimals: 6, expires: expiresAt })(
+          new Request('https://example.com'),
+        )
+        if (result.status !== 402) throw new Error('expected payment challenge')
+        return Challenge.fromResponse(result.challenge, { methods: [tempo_client.charge()] })
+      }
+      const challenge = await issue()
+      const same = await issue()
+      const other = await issue(new Date(Date.now() + 120_000).toISOString())
+      expect(same.id).toBe(challenge.id)
+      expect(other.id).not.toBe(challenge.id)
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: [
+          tokenTransferCall({
+            amount: 1_000_000n,
+            to: accounts[0].address,
+            token: asset,
+            memo: Attribution.encode({ challengeId: challenge.id, serverId: realm }),
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+      const receipt = await handler.verifyCredential(
+        Credential.serialize(
+          Credential.from({ challenge, payload: { type: 'transaction' as const, signature } }),
+        ),
+      )
+      expect(receipt.status).toBe('success')
+      const hash = receipt.reference as Hex.Hex
+
+      // The broadcast hash is in the record the hash path checks.
+      await expect(
+        handler.verifyCredential(
+          Credential.serialize(
+            Credential.from({ challenge: same, payload: { type: 'hash' as const, hash } }),
+          ),
+        ),
+      ).rejects.toThrow('Transaction hash has already been used')
+      await expect(
+        handler.verifyCredential(
+          Credential.serialize(
+            Credential.from({ challenge: other, payload: { type: 'hash' as const, hash } }),
+          ),
+        ),
+      ).rejects.toThrow('memo is not bound to this challenge')
     })
 
     test('rejects a split payment for both challenges across replay-marker expiry', async () => {
@@ -945,8 +1016,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1010,7 +1081,7 @@ describe('tempo', () => {
       }
 
       const shared = Store.memory()
-      expect(await replay([shared, shared])).toEqual([200, 403])
+      expect(await replay([shared, shared])).toEqual([200, 402])
       // Instance-local stores cannot see each other's claims, which is why production requires a shared store.
       expect(await replay([Store.memory(), Store.memory()])).toEqual([200, 200])
     })
@@ -1084,8 +1155,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1254,8 +1325,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1330,8 +1401,8 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential2) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
       }
@@ -1700,8 +1771,8 @@ describe('tempo', () => {
           const replay = await fetch(httpServer.url, {
             headers: { Authorization: canonicalCredential },
           })
-          expect(replay.status).toBe(403)
-          expect(replay.headers.has('WWW-Authenticate')).toBe(false)
+          expect(replay.status).toBe(402)
+          expect(replay.headers.has('WWW-Authenticate')).toBe(true)
           expect(broadcastTransactions).toHaveLength(1)
         } finally {
           httpServer.close()
@@ -1778,8 +1849,8 @@ describe('tempo', () => {
         const collision = await fetch(httpServer.url, {
           headers: { Authorization: rawCredential },
         })
-        expect(collision.status).toBe(403)
-        expect(collision.headers.has('WWW-Authenticate')).toBe(false)
+        expect(collision.status).toBe(402)
+        expect(collision.headers.has('WWW-Authenticate')).toBe(true)
         const body = (await collision.json()) as { detail: string }
         expect(body.detail).toContain('Transaction hash has already been used.')
 
@@ -1789,8 +1860,8 @@ describe('tempo', () => {
         const replay = await fetch(httpServer.url, {
           headers: { Authorization: rawCredential },
         })
-        expect(replay.status).toBe(403)
-        expect(replay.headers.has('WWW-Authenticate')).toBe(false)
+        expect(replay.status).toBe(402)
+        expect(replay.headers.has('WWW-Authenticate')).toBe(true)
         expect(broadcastTransactions).toEqual([canonicalTransaction])
       } finally {
         httpServer.close()
@@ -2073,8 +2144,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(replayCredential) },
       })
-      expect(replayResponse.status).toBe(403)
-      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
+      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(true)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Transaction hash has already been used.')
 
@@ -2218,9 +2289,9 @@ describe('tempo', () => {
         fetch(httpServer.url, { headers: { Authorization: credential2 } }),
       ])
 
-      expect([resA.status, resB.status].sort()).toEqual([200, 403])
-      expect([resA, resB].find((res) => res.status === 403)!.headers.has('WWW-Authenticate')).toBe(
-        false,
+      expect([resA.status, resB.status].sort()).toEqual([200, 402])
+      expect([resA, resB].find((res) => res.status === 402)!.headers.has('WWW-Authenticate')).toBe(
+        true,
       )
 
       httpServer.close()
@@ -4610,8 +4681,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(replayResponse.status).toBe(403)
-      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
+      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(true)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Proof credential has already been used.')
 
@@ -4675,9 +4746,9 @@ describe('tempo', () => {
         fetch(httpServer.url, { headers: { Authorization: credential } }),
       ])
 
-      expect([resA.status, resB.status].sort()).toEqual([200, 403])
-      expect([resA, resB].find((res) => res.status === 403)!.headers.has('WWW-Authenticate')).toBe(
-        false,
+      expect([resA.status, resB.status].sort()).toEqual([200, 402])
+      expect([resA, resB].find((res) => res.status === 402)!.headers.has('WWW-Authenticate')).toBe(
+        true,
       )
 
       httpServer.close()
@@ -4757,8 +4828,8 @@ describe('tempo', () => {
       const replayResponse = await fetch(`${httpServer.url}/b`, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(replayResponse.status).toBe(403)
-      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(false)
+      expect(replayResponse.status).toBe(402)
+      expect(replayResponse.headers.has('WWW-Authenticate')).toBe(true)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Proof credential has already been used.')
 
@@ -6696,7 +6767,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('server rejects plain transfer without challenge-bound memo', async () => {
+    test('server rejects hash of a plain transfer without the challenge-bound memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -6728,9 +6799,10 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
-        const body = (await response.json()) as { detail: string }
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
 
@@ -6787,16 +6859,17 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
-        const body = (await response.json()) as { detail: string }
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
 
       httpServer.close()
     })
 
-    test('server rejects hash with non-MPP memo', async () => {
+    test('server rejects hash with a memo not in attribution format', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -6832,9 +6905,10 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
-        const body = (await response.json()) as { detail: string }
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
 
@@ -6933,9 +7007,10 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(403)
-        expect(response.headers.has('WWW-Authenticate')).toBe(false)
-        const body = (await response.json()) as { detail: string }
+        expect(response.status).toBe(402)
+        expect(response.headers.has('WWW-Authenticate')).toBe(true)
+        const body = (await response.json()) as { detail: string; type: string }
+        expect(body.type).toBe('https://paymentauth.org/problems/verification-failed')
         expect(body.detail).toContain('memo is not bound to this challenge')
       }
 

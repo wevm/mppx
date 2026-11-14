@@ -124,7 +124,7 @@ export declare namespace MalformedCredentialError {
  * Challenge ID is unknown, expired, or already used.
  */
 export class InvalidChallengeError extends PaymentError {
-  override readonly name = 'InvalidChallengeError'
+  override readonly name: string = 'InvalidChallengeError'
   readonly title = 'Invalid Challenge'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/invalid-challenge'
@@ -180,15 +180,13 @@ export declare namespace VerificationFailedError {
 /**
  * The payment behind a credential is already used or bound elsewhere: the
  * credential was consumed by an earlier request, is being settled by a
- * concurrent one, or its settled transfer is bound to another challenge.
+ * concurrent one, or its Challenge was already answered.
  *
- * Answered with 403 and no challenge (the payment was valid, but policy
- * denies access), since a fresh 402 challenge would invite an auto-paying
- * client to pay again. The problem type stays `verification-failed`.
+ * Answered with 402, a fresh Challenge and problem type `invalid-challenge`,
+ * as the core spec specifies for a replayed Credential.
  */
-export class CredentialReplayedError extends VerificationFailedError {
+export class CredentialReplayedError extends InvalidChallengeError {
   override readonly name = 'CredentialReplayedError'
-  override readonly status = 403
 
   constructor(options: CredentialReplayedError.Options = {}) {
     const { reason = 'Credential has already been used' } = options
@@ -509,7 +507,7 @@ export declare namespace InvalidPayloadError {
  * Request is malformed or contains invalid parameters.
  */
 export class BadRequestError extends PaymentError {
-  override readonly name = 'BadRequestError'
+  override readonly name: string = 'BadRequestError'
   readonly title = 'Bad Request'
   override readonly status = 400
   readonly type = 'https://paymentauth.org/problems/bad-request'
@@ -524,6 +522,19 @@ export declare namespace BadRequestError {
   type Options = {
     /** Reason the request is invalid. */
     reason?: string
+  }
+}
+
+/**
+ * The request carries more than one Payment credential (across `Authorization` and
+ * `Payment-Authorization`, or comma-joined in one field). Answered with 400 and no
+ * Challenge, as the core spec requires.
+ */
+export class MultipleCredentialsError extends BadRequestError {
+  override readonly name = 'MultipleCredentialsError'
+
+  constructor() {
+    super({ reason: 'request carries more than one Payment credential' })
   }
 }
 

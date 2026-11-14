@@ -912,7 +912,7 @@ describe('create', () => {
     const challenge = Challenge.fromResponse(challengeResponse)
     expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
       _mppx_scope: 'GET /api/v1/alpha',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
@@ -957,7 +957,7 @@ describe('create', () => {
     const challenge = Challenge.fromResponse(challengeResponse)
     expect(PaymentRequest.deserialize(challenge.opaque!)).toEqual({
       _mppx_scope: 'shared-scope',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })

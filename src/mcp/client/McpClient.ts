@@ -261,6 +261,10 @@ function createPaymentAwareCallTool<methods extends Methods>(
       )
 
       const nextPaymentRequired = getPaymentRequiredMeta(retryResult)
+      // invalid-challenge answering the credential just sent can mean it was already settled
+      // (a replay): paying the fresh Challenge would pay twice, so the result is final.
+      if (nextPaymentRequired && isInvalidChallenge(nextPaymentRequired))
+        return withReceipt(retryResult)
       if (nextPaymentRequired && attemptsRemaining > 1)
         return retryWithPayment(
           params,
@@ -272,18 +276,23 @@ function createPaymentAwareCallTool<methods extends Methods>(
       return withReceipt(retryResult)
     } catch (error) {
       if (!isPaymentRequiredError(error) || attemptsRemaining <= 1) throw error
+      if (isInvalidChallenge(error.data)) throw error
       return retryWithPayment(params, call, error.data, error, attemptsRemaining - 1)
     }
   }
 
   return async (params, call) => {
+    // A credential the caller attached to the first call gets the same no-repay rule.
+    const credentialSent = params._meta?.[core_Mcp.credentialMetaKey] != null
     try {
       const result = await callTool(params, call.resultSchema, call.requestOptions)
       const paymentRequired = getPaymentRequiredMeta(result)
-      if (paymentRequired) return retryWithPayment(params, call, paymentRequired, result)
+      if (paymentRequired && !(credentialSent && isInvalidChallenge(paymentRequired)))
+        return retryWithPayment(params, call, paymentRequired, result)
       return withReceipt(result)
     } catch (error) {
       if (!isPaymentRequiredError(error)) throw error
+      if (credentialSent && isInvalidChallenge(error.data)) throw error
       return retryWithPayment(params, call, error.data, error)
     }
   }
@@ -294,6 +303,14 @@ function getPaymentRequiredMeta(
 ): PaymentRequiredData | undefined {
   const data = result._meta?.[core_Mcp.paymentRequiredMetaKey]
   return isPaymentRequiredData(data) ? data : undefined
+}
+
+/** Whether payment-required data carries an invalid-challenge problem (such as a replayed credential). */
+function isInvalidChallenge(data: PaymentRequiredData): boolean {
+  return (
+    (data as { problem?: { type?: unknown } }).problem?.type ===
+    'https://paymentauth.org/problems/invalid-challenge'
+  )
 }
 
 function isPaymentRequiredData(value: unknown): value is PaymentRequiredData {

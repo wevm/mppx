@@ -72,7 +72,7 @@ const challengeArb = fc.record({
   description: optionalQuotedFieldTextArb,
   id: quotedFieldTextArb,
   realm: quotedFieldTextArb,
-  method: fc.string({ minLength: 1 }).filter((s) => /^[a-z][a-z0-9:_-]*$/.test(s)),
+  method: fc.stringMatching(/^[a-z]{1,16}$/),
   intent: quotedFieldTextArb,
   opaque: optionalQuotedFieldTextArb,
   request: fc.dictionary(

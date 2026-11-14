@@ -153,7 +153,8 @@ test.each([
     if (response.status !== 402) throw new Error('expected a rejection')
     const problem = (await response.challenge.json()) as Record<string, unknown>
     if (replayed) {
-      expect(response.challenge.status).toBe(403)
+      expect(response.challenge.status).toBe(402)
+      expect(problem.type).toBe('https://paymentauth.org/problems/invalid-challenge')
       expect(problem.detail).toContain('Transaction hash has already been used')
       expect(problem).not.toHaveProperty('fundingUrl')
     } else if (fundingUrl) {

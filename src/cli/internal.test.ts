@@ -79,13 +79,13 @@ describe('retry approval', () => {
     const withMeta = (meta: Record<string, string>) => Challenge.from({ ...challenge, meta })
     expect(() =>
       assertSamePaymentRequest(
-        withMeta({ checkout: 'a', _mppx_nonce: '1', _mppx_identity: '1' }),
+        withMeta({ checkout: 'a', _mpp_nonce: '1', _mppx_identity: '1' }),
         withMeta({ checkout: 'a', _mppx_nonce: '2', _mppx_identity: '2' }),
       ),
     ).not.toThrow()
     // Retries are parsed from the header, so they carry only the serialized opaque.
     const parsed = Challenge.deserialize(
-      Challenge.serialize(withMeta({ checkout: 'a', _mppx_nonce: '3' })),
+      Challenge.serialize(withMeta({ checkout: 'a', _mpp_nonce: '3' })),
     )
     expect(() => assertSamePaymentRequest(withMeta({ checkout: 'a' }), parsed)).not.toThrow()
     expect(() =>

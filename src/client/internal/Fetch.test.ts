@@ -340,6 +340,11 @@ describe('Fetch.from', () => {
   })
 })
 
+/** A final 403: the payment verified, but policy denies access, so no challenge is sent. */
+class ForbiddenError extends Errors.VerificationFailedError {
+  override readonly status = 403
+}
+
 // Minimal mock method — createCredential is only invoked on the 402 retry path.
 const noopMethod = {
   name: 'test',
@@ -1513,8 +1518,8 @@ describe('Fetch.from: 402 retry path', () => {
     }
   })
 
-  test('does not report a 403 credential replay as an unknown outcome', async () => {
-    const replayed = new Errors.CredentialReplayedError()
+  test('does not report a final 403 as an unknown outcome', async () => {
+    const replayed = new ForbiddenError({ reason: 'policy denies access' })
     const events: string[] = []
     const eventDispatcher = Fetch.createEventDispatcher()
     eventDispatcher.on('*', (event) => {
@@ -2495,17 +2500,18 @@ describe('Fetch.from: 402 retry path', () => {
 
   test.each([
     {
-      name: 'replayed credential',
-      error: new Errors.CredentialReplayedError({
-        reason: 'Transaction hash has already been used',
-      }),
+      name: 'policy denial',
+      error: new ForbiddenError({ reason: 'policy denies access' }),
       status: 403,
       payments: 1,
     },
     {
-      name: 'memo bound to another challenge',
-      error: new Errors.CredentialReplayedError({ reason: 'memo is not bound to this challenge' }),
-      status: 403,
+      // A replay gets 402 invalid-challenge with a fresh challenge; paying it would pay twice.
+      name: 'replayed credential',
+      error: new Errors.CredentialReplayedError({
+        reason: 'Transaction hash has already been used',
+      }),
+      status: 402,
       payments: 1,
     },
     {
@@ -2536,6 +2542,59 @@ describe('Fetch.from: 402 retry path', () => {
 
     expect(response.status).toBe(status)
     expect(createCredential).toHaveBeenCalledTimes(payments)
+  })
+
+  test.each([
+    { name: 'Authorization header', headers: { Authorization: 'Payment previously-settled' } },
+    {
+      name: 'Payment-Authorization header',
+      headers: { 'Payment-Authorization': 'Payment previously-settled' },
+    },
+  ])(
+    'does not pay when a credential the caller attached gets invalid-challenge ($name)',
+    async ({ headers }) => {
+      const createCredential = vi.fn(async () => 'credential')
+      const transport = Transport_server.http()
+      const mockFetch = vi.fn(async (input: RequestInfo | URL) =>
+        transport.respondChallenge({
+          challenge: Challenge.fromResponse(make402({ id: 'fresh' })),
+          error: new Errors.CredentialReplayedError({
+            reason: 'Transaction hash has already been used',
+          }),
+          input: new Request(input instanceof Request ? input.url : String(input)),
+        }),
+      )
+      const fetch = Fetch.from({
+        fetch: mockFetch as typeof globalThis.fetch,
+        methods: [{ ...noopMethod, createCredential }],
+      })
+
+      const viaInit = await fetch('https://example.com/api', { headers })
+      const viaRequest = await fetch(new Request('https://example.com/api', { headers }))
+
+      expect(viaInit.status).toBe(402)
+      expect(viaRequest.status).toBe(402)
+      expect(createCredential).not.toHaveBeenCalled()
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  test('pays when an unrelated Authorization scheme gets a 402', async () => {
+    const createCredential = vi.fn(async () => 'credential')
+    let requests = 0
+    const mockFetch: typeof globalThis.fetch = async () =>
+      ++requests === 1 ? make402({ id: 'first' }) : new Response('OK')
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { Authorization: 'Bearer token' },
+    })
+
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
   })
 
   test('invalidates a prepared credential across a generic challenge', async () => {
