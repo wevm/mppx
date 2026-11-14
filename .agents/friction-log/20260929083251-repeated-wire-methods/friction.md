@@ -1,6 +1,7 @@
 ---
 title: 'Repeated wire methods overwrite currency offers during implicit composition'
 severity: 'minor'
+issue: 'wevm/mppx#940'
 ---
 
 ## Expected Behavior
