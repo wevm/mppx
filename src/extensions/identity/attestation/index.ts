@@ -4,12 +4,14 @@
  * to and sent in `Identity-Attestation`.
  *
  * Servers require one with `Server.verifier`, clients present and obtain them with
- * `Client.prover`, and issuers sign them with `sign` and publish their keys as a JSON Web Key
+ * `Client.prover`, and issuers sign them with `Issuer.create` (or `sign`) and publish their keys as a JSON Web Key
  * Set that `Jwks.resolver` reads.
  */
 
 /** Client prover that presents and obtains attestations. */
 export * as Client from './client/index.js'
+/** Issuer that signs attestations and publishes its key. */
+export * as Issuer from './Issuer.js'
 /** Issuer JSON Web Key Set resolver. */
 export * as Jwks from './Jwks.js'
 /** Server verifier that requires an attestation. */
