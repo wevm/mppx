@@ -1,0 +1,144 @@
+import { unwrapFetch } from '../../../../client/internal/Fetch.js'
+import type * as Identity from '../../../../identity/Types.js'
+import * as Jwt from '../../tempo/internal/Jwt.js'
+import { Constants } from '../Constants.js'
+import * as Jws from '../internal/Jws.js'
+import type * as Types from '../Types.js'
+
+/**
+ * Creates a verifier for Poppy's `Poppy-Session` header (Personal Agent Protocol 1.0, spec 5.3).
+ *
+ * It fetches the Personal Agent's client metadata from `client_id` and its keys from
+ * `jwks_uri`, verifies the delegation and the Session JWT, and checks the audience, method, URL,
+ * time and access-token binding. The verified value names the agent, the pseudonymous User and
+ * the Session, so a route can price or allow by them before any payment Challenge.
+ *
+ * A Session never grants account access. When the request also carries an access token, the
+ * verifier for that token must check it was issued to the Session's `clientId`.
+ *
+ * @example
+ * ```ts
+ * const poppy = Poppy.Server.verifier({
+ *   audience: 'https://api.example.com',
+ *   clients: ['https://agent.example/agent.json'],
+ * })
+ *
+ * mppx.charge({ amount: '0.01', identity: [poppy] })
+ * ```
+ */
+export function verifier(config: verifier.Config): Identity.Verifier<Types.Session> {
+  const { audience, clients, maxAge = Constants.maxAge } = config
+  const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
+  const cache = new Map<string, { at: number; keys: Promise<JsonWebKey[]> }>()
+  const invalid = (reason: string) => ({ status: 'invalid', reason }) as const
+
+  /** Fetches a client's metadata, without following redirects, then its keys (spec 4.1). */
+  async function load(clientId: string): Promise<JsonWebKey[]> {
+    const options = { redirect: 'manual', signal: AbortSignal.timeout(5_000) } as const
+    const response = await fetch(clientId, options)
+    if (!response.ok) throw new Error(`Client metadata request failed with ${response.status}.`)
+    const metadata = (await response.json()) as { client_id?: unknown; jwks_uri?: unknown }
+    if (metadata.client_id !== clientId) throw new Error('client_id does not match its URL.')
+    const jwksUri = typeof metadata.jwks_uri === 'string' ? new URL(metadata.jwks_uri) : undefined
+    if (jwksUri?.protocol !== 'https:' || jwksUri.hostname !== new URL(clientId).hostname)
+      throw new Error('jwks_uri must be HTTPS on the client_id domain.')
+    const jwks = await fetch(jwksUri, options)
+    if (!jwks.ok) throw new Error(`Key set request failed with ${jwks.status}.`)
+    return ((await jwks.json()) as { keys?: JsonWebKey[] }).keys ?? []
+  }
+
+  function keys(clientId: string) {
+    const entry = cache.get(clientId)
+    if (entry && Date.now() - entry.at < Constants.keyCacheTtl * 1_000) return entry.keys
+    const loaded = load(clientId)
+    cache.set(clientId, { at: Date.now(), keys: loaded })
+    loaded.catch(() => cache.delete(clientId))
+    return loaded
+  }
+
+  return {
+    async verify(request) {
+      const token = request.headers.get(Constants.sessionHeader)
+      if (!token) return { status: 'missing', reason: 'Send a Poppy-Session header.' }
+      const session = Jwt.decode(token)
+      if (session?.header.typ !== Constants.sessionType || session.header.alg !== 'ES256')
+        return invalid('The Poppy-Session header is not a Session JWT.')
+
+      const { agent_id, ath, aud, htm, htu, iat, iss, jti, sid, sub } = session.claims
+      const strings = [iss, sid, sub, jti]
+      if (strings.some((value) => typeof value !== 'string' || !value))
+        return invalid('The Session JWT is missing a claim.')
+      if (agent_id !== undefined && typeof agent_id !== 'string')
+        return invalid('The Session JWT agent_id is not a string.')
+      if (!URL.canParse(iss) || new URL(iss).protocol !== 'https:')
+        return invalid('The Session JWT iss is not an HTTPS client_id.')
+      if (clients !== '*' && !clients.includes(iss))
+        return { status: 'forbidden', reason: 'This Personal Agent is not accepted.' }
+      if (aud !== audience) return invalid('The Session JWT is for another Company.')
+      if (htm !== request.method || htu !== Jwt.htu(request.url))
+        return invalid('The Session JWT is for another request.')
+      const now = Math.floor(Date.now() / 1_000)
+      if (typeof iat !== 'number' || Math.abs(now - iat) > maxAge)
+        return invalid('The Session JWT is outside its time window.')
+      const accessToken = Jws.accessToken(request.headers)
+      if (accessToken ? ath !== (await Jwt.sha256(accessToken)) : ath !== undefined)
+        return invalid('The Session JWT ath does not match the access token.')
+
+      const delegation =
+        typeof session.header.poppy_dlg === 'string'
+          ? Jwt.decode(session.header.poppy_dlg)
+          : undefined
+      if (!delegation) return invalid('The Session JWT has no delegation.')
+      const { cnf, exp, iat: issued, iss: delegator } = delegation.claims
+      if (delegation.header.typ !== Constants.delegationType || delegator !== iss)
+        return invalid('The delegation is not for this Personal Agent.')
+      if (
+        typeof exp !== 'number' ||
+        typeof issued !== 'number' ||
+        exp <= now ||
+        exp - issued > Constants.maxDelegationLifetime
+      )
+        return invalid('The delegation has expired.')
+
+      let jwks: JsonWebKey[]
+      try {
+        jwks = await keys(iss)
+      } catch {
+        return { status: 'unavailable', reason: "The Personal Agent's keys are unavailable." }
+      }
+      const signer = jwks.find((jwk) => (jwk as { kid?: string }).kid === delegation.header.kid)
+      if (!signer || !(await Jws.verify(delegation, signer, ['ES256', 'PS384'])))
+        return invalid('The delegation signature is invalid.')
+      const delegated = cnf?.jwk as JsonWebKey | undefined
+      if (
+        !delegated ||
+        'd' in delegated ||
+        session.header.kid !== (await Jwt.thumbprint(delegated))
+      )
+        return invalid('The Session JWT key does not match its delegation.')
+      if (!(await Jws.verify(session, delegated, ['ES256'])))
+        return invalid('The Session JWT signature is invalid.')
+
+      return {
+        status: 'valid',
+        value: { agentId: agent_id, clientId: iss, sessionId: sid, userId: sub },
+      }
+    },
+  }
+}
+
+export declare namespace verifier {
+  type Config = {
+    /** This Company's identifier, compared with `aud`: its OAuth issuer, or `https://{organization.domain}`. */
+    audience: string
+    /**
+     * Personal Agent `client_id`s to accept, or `'*'` for any. The verifier fetches the
+     * metadata at each accepted `client_id`, so `'*'` lets callers name URLs it fetches.
+     */
+    clients: readonly string[] | '*'
+    /** Accepted seconds between a Session JWT's `iat` and now. @default 60 */
+    maxAge?: number | undefined
+    /** Fetch for client metadata and keys. @default globalThis.fetch */
+    fetch?: typeof globalThis.fetch | undefined
+  }
+}
