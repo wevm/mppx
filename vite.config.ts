@@ -25,6 +25,10 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/persona',
   ),
+  'mppx/extensions/identity/poppy': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/poppy',
+  ),
   'mppx/extensions/identity/tempo': path.resolve(
     import.meta.dirname,
     'src/extensions/identity/tempo',
