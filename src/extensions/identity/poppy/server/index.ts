@@ -108,6 +108,9 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
         typeof exp !== 'number' ||
         typeof issued !== 'number' ||
         exp <= now ||
+        // A future `iat` would stretch the delegation past its 24-hour lifetime.
+        issued > now + maxAge ||
+        exp <= issued ||
         exp - issued > Constants.maxDelegationLifetime
       )
         return invalid('The delegation has expired.')

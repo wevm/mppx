@@ -133,4 +133,14 @@ describe('Poppy', () => {
   test('limits delegations to 24 hours', async () => {
     await expect(setup({ expiresIn: 24 * 60 * 60 + 1 })).rejects.toThrow(RangeError)
   })
+
+  test('rejects a future-dated delegation', async () => {
+    const now = Date.now
+    Date.now = () => now() + 2 * 24 * 60 * 60 * 1_000
+    const context = await setup().finally(() => {
+      Date.now = now
+    })
+    const result = await context.verifier().verify(await context.prove(new Request(url)))
+    expect(result).toMatchObject({ status: 'invalid' })
+  })
 })
