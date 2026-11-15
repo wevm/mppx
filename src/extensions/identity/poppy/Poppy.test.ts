@@ -288,6 +288,11 @@ describe('Poppy', () => {
     expect(performance.now() - start).toBeLessThan(500)
   })
 
+  test('fails closed when an unterminated quote could hide a token', () => {
+    const value = 'Custom x="a, Bearer at_123'
+    expect(Jws.accessToken(new Headers({ Authorization: value }))).toBeNull()
+  })
+
   test('refuses to sign a Session for an Authorization value it cannot bind', async () => {
     const { prove } = await setup()
     await expect(

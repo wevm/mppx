@@ -66,11 +66,17 @@ export function accessToken(headers: Headers): string | null | undefined {
   const match = /^(?:bearer|dpop)[ \t]+([^\s,"]+)$/i.exec(value)
   if (match) return match[1]
   // Quoted auth-param values can contain anything, so a scheme name inside one doesn't count.
-  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquote(value)) ? null : undefined
+  const unquoted = unquote(value)
+  // An unterminated quote could hide a scheme name, so it fails closed when one appears anywhere.
+  if (unquoted === undefined) return /\b(?:bearer|dpop)\b/i.test(value) ? null : undefined
+  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquoted) ? null : undefined
 }
 
-/** Blanks the contents of quoted strings in one pass, so the input's length bounds the work. */
-function unquote(value: string) {
+/**
+ * Blanks the contents of quoted strings in one pass, so the input's length bounds the work.
+ * Returns `undefined` for an unterminated quoted string.
+ */
+function unquote(value: string): string | undefined {
   let result = ''
   let quoted = false
   for (let i = 0; i < value.length; i++) {
@@ -86,7 +92,7 @@ function unquote(value: string) {
       result += char
     }
   }
-  return result
+  return quoted ? undefined : result
 }
 
 function encode(value: unknown) {
