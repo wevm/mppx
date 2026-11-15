@@ -1,5 +1,14 @@
 # mppx
 
+## 0.19.1
+
+### Patch Changes
+
+- 03bd18d: Hardened `Poppy.Server.verifier`: it rejects invalid `clients` and `maxAge` config, returns `unavailable` instead of throwing on a malformed key set and `invalid` on a non-object `cnf.jwk`, caches a failed key load for 30 seconds, reloads keys once for an unknown `kid` after 30 seconds, only verifies delegations with signing keys that match their `kid` and `alg`, and rejects `Authorization` values that combine an access token with other credentials. `Poppy-Session` is now an `Identity.Headers.request` header, so the proxy no longer forwards it upstream.
+- 9405660: Added `mppx/extensions/identity/poppy`, an identity provider for Poppy (Personal Agent Protocol 1.0) Sessions: `Poppy.Client.prover` signs a fresh `Poppy-Session` JWT for each request, including the paid retry, and `Poppy.Server.verifier` verifies it, with its delegation and the agent's published keys, before any payment Challenge, returning the agent's `client_id`, the pseudonymous User ID, the Session ID and the optional Agent ID.
+- 4e51d05: Fixed `Poppy.Server.verifier` so a failed key reload keeps the agent's previously loaded keys for up to an hour after they loaded, instead of answering `unavailable` until the next reload. The Poppy prover and verifier now bind any single `Bearer` or `DPoP` token, ignore scheme names inside quoted `Authorization` parameters, and the prover throws instead of signing a Session for an `Authorization` value the verifier would reject.
+- 5e21a2e: Added `Errors.SpendingLimitExceededError`. The Tempo charge client and session open and top-up now throw it, or `Errors.InsufficientBalanceError`, when the pre-signing gas estimate reverts with the access key's `SpendingLimitExceeded` or the token's `InsufficientBalance`, instead of signing a transaction that would revert on chain at the fee payer's cost.
+
 ## 0.19.0
 
 ### Minor Changes
