@@ -28,8 +28,12 @@ import type * as Types from '../Types.js'
  */
 export function verifier(config: verifier.Config): Identity.Verifier<Types.Session> {
   const { audience, clients, maxAge = Constants.maxAge } = config
+  if (!Array.isArray(clients) || !clients.every((client) => typeof client === 'string'))
+    throw new TypeError('Poppy clients must be an array of client_id URLs.')
+  if (!Number.isInteger(maxAge) || maxAge <= 0)
+    throw new RangeError('Poppy maxAge must be a positive integer.')
   const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
-  const cache = new Map<string, { at: number; keys: Promise<JsonWebKey[]> }>()
+  const cache = new Map<string, { at: number; ttl: number; keys: Promise<JsonWebKey[]> }>()
   // Spec 5.3: a failed Session check is HTTP 400 with `invalid_session`, not 401, so OAuth
   // clients keep a valid access token.
   const headers = { 'Content-Type': 'application/json' }
@@ -50,16 +54,38 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
       throw new Error('jwks_uri must be HTTPS on the client_id domain.')
     const jwks = await fetch(jwksUri, options)
     if (!jwks.ok) throw new Error(`Key set request failed with ${jwks.status}.`)
-    return ((await jwks.json()) as { keys?: JsonWebKey[] }).keys ?? []
+    const { keys } = (await jwks.json()) as { keys?: unknown }
+    if (!Array.isArray(keys)) throw new Error('The key set has no keys array.')
+    return keys.filter(isObject) as JsonWebKey[]
   }
 
-  function keys(clientId: string) {
-    const entry = cache.get(clientId)
-    if (entry && Date.now() - entry.at < Constants.keyCacheTtl * 1_000) return entry.keys
-    const loaded = load(clientId)
-    cache.set(clientId, { at: Date.now(), keys: loaded })
-    loaded.catch(() => cache.delete(clientId))
-    return loaded
+  /**
+   * Returns a client's keys, loaded at most `maxAge` seconds ago. A load is cached for 5
+   * minutes, and a failed one for 30 seconds, so a failing agent isn't refetched per request.
+   */
+  function keys(clientId: string, maxAge: number = Constants.keyCacheTtl) {
+    const cached = cache.get(clientId)
+    if (cached && Date.now() - cached.at < Math.min(cached.ttl, maxAge) * 1_000) return cached.keys
+    const entry = { at: Date.now(), ttl: Constants.keyCacheTtl as number, keys: load(clientId) }
+    entry.keys.catch(() => {
+      entry.ttl = Constants.keyRetryAfter
+    })
+    cache.set(clientId, entry)
+    return entry.keys
+  }
+
+  /** The published key with the delegation's `kid`, if it may verify the delegation's `alg`. */
+  function signer(jwks: JsonWebKey[], header: Record<string, unknown>) {
+    if (typeof header.kid !== 'string') return undefined
+    return jwks.find((jwk) => {
+      const { alg, key_ops, kid, use } = jwk as JsonWebKey & { kid?: unknown; use?: unknown }
+      return (
+        kid === header.kid &&
+        (use === undefined || use === 'sig') &&
+        (key_ops === undefined || (Array.isArray(key_ops) && key_ops.includes('verify'))) &&
+        (alg === undefined || alg === header.alg)
+      )
+    })
   }
 
   return {
@@ -93,6 +119,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
       if (typeof iat !== 'number' || Math.abs(now - iat) > maxAge)
         return invalid('The Session JWT is outside its time window.')
       const accessToken = Jws.accessToken(request.headers)
+      if (accessToken === null) return invalid('The Authorization header is malformed.')
       if (accessToken ? ath !== (await Jwt.sha256(accessToken)) : ath !== undefined)
         return invalid('The Session JWT ath does not match the access token.')
 
@@ -115,23 +142,24 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
       )
         return invalid('The delegation has expired.')
 
-      let jwks: JsonWebKey[]
+      let key: JsonWebKey | undefined
       try {
-        jwks = await keys(iss)
+        key = signer(await keys(iss), delegation.header)
+        // An unknown key may be newly published: reload once the cache is 30 seconds old.
+        key ??= signer(await keys(iss, Constants.keyRetryAfter), delegation.header)
       } catch {
         return { status: 'unavailable', reason: "The Personal Agent's keys are unavailable." }
       }
-      const signer = jwks.find((jwk) => (jwk as { kid?: string }).kid === delegation.header.kid)
-      if (!signer || !(await Jws.verify(delegation, signer, ['ES256', 'PS384'])))
+      if (!key || !(await Jws.verify(delegation, key, ['ES256', 'PS384'])))
         return invalid('The delegation signature is invalid.')
-      const delegated = cnf?.jwk as JsonWebKey | undefined
+      const delegated: unknown = isObject(cnf) ? cnf.jwk : undefined
       if (
-        !delegated ||
+        !isObject(delegated) ||
         'd' in delegated ||
-        session.header.kid !== (await Jwt.thumbprint(delegated))
+        session.header.kid !== (await Jwt.thumbprint(delegated as JsonWebKey))
       )
         return invalid('The Session JWT key does not match its delegation.')
-      if (!(await Jws.verify(session, delegated, ['ES256'])))
+      if (!(await Jws.verify(session, delegated as JsonWebKey, ['ES256'])))
         return invalid('The Session JWT signature is invalid.')
 
       return {
@@ -156,4 +184,8 @@ export declare namespace verifier {
     /** Fetch for client metadata and keys. @default globalThis.fetch */
     fetch?: typeof globalThis.fetch | undefined
   }
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

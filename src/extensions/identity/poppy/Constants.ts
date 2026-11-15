@@ -18,4 +18,6 @@ export const Constants = {
   maxAge: 60,
   /** Seconds a client's metadata and keys are cached. */
   keyCacheTtl: 300,
+  /** Seconds before a failed load or an unknown key `kid` loads a client's keys again. */
+  keyRetryAfter: 30,
 } as const

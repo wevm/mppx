@@ -1,11 +1,21 @@
 import * as Poppy from 'mppx/extensions/identity/poppy'
+import * as Identity from 'mppx/identity'
 import { describe, expect, test } from 'vp/test'
+
+import * as Jws from './internal/Jws.js'
 
 const clientId = 'https://agent.example/agent.json'
 const audience = 'https://api.example.com'
 const url = 'https://api.example.com/orders?x=1'
 
-async function setup(options: { delegationKid?: string; expiresIn?: number } = {}) {
+async function setup(
+  options: {
+    delegationKid?: string
+    expiresIn?: number
+    /** Signs a custom delegation with the operator key. */
+    delegation?: (privateKey: CryptoKey) => Promise<string>
+  } = {},
+) {
   const operator = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
     'sign',
     'verify',
@@ -16,12 +26,14 @@ async function setup(options: { delegationKid?: string; expiresIn?: number } = {
   ])
   const operatorJwk = { ...(await crypto.subtle.exportKey('jwk', operator.publicKey)), kid: 'op-1' }
   const jwk = await crypto.subtle.exportKey('jwk', delegated.publicKey)
-  const delegation = await Poppy.Client.delegate({
-    clientId,
-    expiresIn: options.expiresIn,
-    key: { kid: options.delegationKid ?? 'op-1', privateKey: operator.privateKey },
-    publicKey: jwk,
-  })
+  const delegation = options.delegation
+    ? await options.delegation(operator.privateKey)
+    : await Poppy.Client.delegate({
+        clientId,
+        expiresIn: options.expiresIn,
+        key: { kid: options.delegationKid ?? 'op-1', privateKey: operator.privateKey },
+        publicKey: jwk,
+      })
   const fetches: string[] = []
   const documents: Record<string, unknown> = {
     [clientId]: { client_id: clientId, jwks_uri: 'https://agent.example/jwks.json' },
@@ -45,7 +57,7 @@ async function setup(options: { delegationKid?: string; expiresIn?: number } = {
   const prove = (request: Request) => prover.prove(request, { created: 0, nonce: 'n' })
   const verifier = (config: Partial<Poppy.Server.verifier.Config> = {}) =>
     Poppy.Server.verifier({ audience, clients: [clientId], fetch, ...config })
-  return { documents, fetches, prove, verifier }
+  return { documents, fetches, operatorJwk, prove, verifier }
 }
 
 describe('Poppy', () => {
@@ -142,5 +154,81 @@ describe('Poppy', () => {
     })
     const result = await context.verifier().verify(await context.prove(new Request(url)))
     expect(result).toMatchObject({ status: 'invalid' })
+  })
+
+  test('rejects invalid config', async () => {
+    const { verifier } = await setup()
+    for (const maxAge of [Number.NaN, Number.POSITIVE_INFINITY, 0, 1.5])
+      expect(() => verifier({ maxAge })).toThrow(RangeError)
+    expect(() => verifier({ clients: clientId as never })).toThrow(TypeError)
+  })
+
+  test('returns unavailable for a malformed key set, and caches the failure', async () => {
+    const { documents, fetches, prove, verifier } = await setup()
+    documents['https://agent.example/jwks.json'] = { keys: 'nope' }
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+      status: 'unavailable',
+    })
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+      status: 'unavailable',
+    })
+    expect(fetches).toHaveLength(2) // one load: metadata and keys
+  })
+
+  test('rejects a non-object cnf.jwk without throwing', async () => {
+    const { prove, verifier } = await setup({
+      delegation(privateKey) {
+        const iat = Math.floor(Date.now() / 1_000)
+        return Jws.sign(
+          { alg: 'ES256', kid: 'op-1', typ: Poppy.Constants.delegationType },
+          { cnf: { jwk: 'x' }, exp: iat + 60, iat, iss: clientId, jti: 'j' },
+          privateKey,
+        )
+      },
+    })
+    expect(await verifier().verify(await prove(new Request(url)))).toMatchObject({
+      status: 'invalid',
+    })
+  })
+
+  test('only verifies delegations with signing keys', async () => {
+    const { documents, operatorJwk, prove, verifier } = await setup()
+    documents['https://agent.example/jwks.json'] = { keys: [{ ...operatorJwk, use: 'enc' }] }
+    expect(await verifier().verify(await prove(new Request(url)))).toMatchObject({
+      status: 'invalid',
+    })
+  })
+
+  test('reloads keys for an unknown kid after 30 seconds', async () => {
+    const { documents, operatorJwk, prove, verifier } = await setup()
+    documents['https://agent.example/jwks.json'] = { keys: [{ ...operatorJwk, kid: 'op-0' }] }
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'invalid' })
+    documents['https://agent.example/jwks.json'] = { keys: [operatorJwk] }
+    const now = Date.now
+    Date.now = () => now() + 31_000
+    try {
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    } finally {
+      Date.now = now
+    }
+  })
+
+  test('binds tab-separated tokens and rejects combined Authorization values', async () => {
+    const { prove, verifier } = await setup()
+    const tab = await prove(new Request(url, { headers: { Authorization: 'Bearer\tat_123' } }))
+    expect(await verifier().verify(tab)).toMatchObject({ status: 'valid' })
+    const swapped = new Request(url, { headers: tab.headers })
+    swapped.headers.set('Authorization', 'Bearer\tat_456')
+    expect(await verifier().verify(swapped)).toMatchObject({ status: 'invalid' })
+    const combined = await prove(
+      new Request(url, { headers: { Authorization: 'Payment eyJ, Bearer at_123' } }),
+    )
+    expect(await verifier().verify(combined)).toMatchObject({ status: 'invalid' })
+  })
+
+  test('marks Poppy-Session as a bearer identity header', () => {
+    expect(Identity.Headers.request).toContain('poppy-session')
   })
 })
