@@ -252,6 +252,24 @@ describe('Poppy', () => {
     }
   })
 
+  test('does not cache fallback keys past their hour', async () => {
+    const { documents, prove, verifier } = await setup({ expiresIn: 2 * 60 * 60 })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    try {
+      Date.now = () => now() + 59 * 60_000 + 50_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+      Date.now = () => now() + 60 * 60_000 + 5_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+        status: 'unavailable',
+      })
+    } finally {
+      Date.now = now
+    }
+  })
+
   test('binds any single token and ignores scheme names in quoted parameters', async () => {
     const { prove, verifier } = await setup()
     const odd = await prove(new Request(url, { headers: { Authorization: 'Bearer 1|abc' } }))

@@ -80,8 +80,11 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
       },
       (error) => {
         entry.ttl = Constants.keyRetryAfter
-        if (last && Date.now() - last.at < Constants.keyStaleTtl * 1_000) return last.keys
-        throw error
+        const left = last ? Constants.keyStaleTtl - (Date.now() - last.at) / 1_000 : 0
+        if (left <= 0) throw error
+        // Cache the fallback no longer than its hour lasts.
+        entry.ttl = Math.min(entry.ttl, left)
+        return last!.keys
       },
     )
     cache.set(clientId, entry)
