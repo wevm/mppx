@@ -215,6 +215,91 @@ describe('Poppy', () => {
     }
   })
 
+  test('keeps cached keys when a reload for an unknown kid fails', async () => {
+    const { documents, prove, verifier } = await setup()
+    const unknown = await setup({ delegationKid: 'op-9' })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    const jwks = documents['https://agent.example/jwks.json']
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    Date.now = () => now() + 31_000
+    try {
+      // A Session whose delegation names an unknown kid forces a reload, which fails.
+      await check.verify(await unknown.prove(new Request(url)))
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    } finally {
+      Date.now = now
+      documents['https://agent.example/jwks.json'] = jwks
+    }
+  })
+
+  test('stops using cached keys an hour after they loaded while reloads fail', async () => {
+    const { documents, prove, verifier } = await setup({ expiresIn: 2 * 60 * 60 })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    try {
+      Date.now = () => now() + 10 * 60_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+      Date.now = () => now() + 61 * 60_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+        status: 'unavailable',
+      })
+    } finally {
+      Date.now = now
+    }
+  })
+
+  test('does not cache fallback keys past their hour', async () => {
+    const { documents, prove, verifier } = await setup({ expiresIn: 2 * 60 * 60 })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    try {
+      Date.now = () => now() + 59 * 60_000 + 50_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+      Date.now = () => now() + 60 * 60_000 + 5_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+        status: 'unavailable',
+      })
+    } finally {
+      Date.now = now
+    }
+  })
+
+  test('binds any single token and ignores scheme names in quoted parameters', async () => {
+    const { prove, verifier } = await setup()
+    const odd = await prove(new Request(url, { headers: { Authorization: 'Bearer 1|abc' } }))
+    expect(JSON.parse(atob(odd.headers.get('Poppy-Session')!.split('.')[1]!))).toHaveProperty('ath')
+    expect(await verifier().verify(odd)).toMatchObject({ status: 'valid' })
+    const quoted = await prove(
+      new Request(url, { headers: { Authorization: 'Custom realm="a, Bearer b"' } }),
+    )
+    expect(await verifier().verify(quoted)).toMatchObject({ status: 'valid' })
+  })
+
+  test('parses a long unterminated quoted Authorization value quickly', () => {
+    const value = 'Custom x="' + '\\"'.repeat(50_000)
+    const start = performance.now()
+    expect(Jws.accessToken(new Headers({ Authorization: value }))).toBeUndefined()
+    expect(performance.now() - start).toBeLessThan(500)
+  })
+
+  test('fails closed when an unterminated quote could hide a token', () => {
+    const value = 'Custom x="a, Bearer at_123'
+    expect(Jws.accessToken(new Headers({ Authorization: value }))).toBeNull()
+  })
+
+  test('refuses to sign a Session for an Authorization value it cannot bind', async () => {
+    const { prove } = await setup()
+    await expect(
+      prove(new Request(url, { headers: { Authorization: 'Payment eyJ, Bearer at_123' } })),
+    ).rejects.toThrow(TypeError)
+  })
+
   test('binds tab-separated tokens and rejects combined Authorization values', async () => {
     const { prove, verifier } = await setup()
     const tab = await prove(new Request(url, { headers: { Authorization: 'Bearer\tat_123' } }))
@@ -222,9 +307,8 @@ describe('Poppy', () => {
     const swapped = new Request(url, { headers: tab.headers })
     swapped.headers.set('Authorization', 'Bearer\tat_456')
     expect(await verifier().verify(swapped)).toMatchObject({ status: 'invalid' })
-    const combined = await prove(
-      new Request(url, { headers: { Authorization: 'Payment eyJ, Bearer at_123' } }),
-    )
+    const combined = new Request(url, { headers: tab.headers })
+    combined.headers.set('Authorization', 'Payment eyJ, Bearer at_123')
     expect(await verifier().verify(combined)).toMatchObject({ status: 'invalid' })
   })
 

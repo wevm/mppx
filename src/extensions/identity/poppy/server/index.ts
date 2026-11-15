@@ -34,6 +34,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
     throw new RangeError('Poppy maxAge must be a positive integer.')
   const fetch = unwrapFetch(config.fetch ?? globalThis.fetch)
   const cache = new Map<string, { at: number; ttl: number; keys: Promise<JsonWebKey[]> }>()
+  // The last key set that loaded for each client, which a failed reload keeps for a while.
+  const loaded = new Map<string, { at: number; keys: JsonWebKey[] }>()
   // Spec 5.3: a failed Session check is HTTP 400 with `invalid_session`, not 401, so OAuth
   // clients keep a valid access token.
   const headers = { 'Content-Type': 'application/json' }
@@ -62,14 +64,29 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
   /**
    * Returns a client's keys, loaded at most `maxAge` seconds ago. A load is cached for 5
    * minutes, and a failed one for 30 seconds, so a failing agent isn't refetched per request.
+   * A failed reload keeps the keys that last loaded, so a request that forces a reload can't
+   * replace them with the failure, but only for an hour after they loaded, so a removed key
+   * stops verifying within an hour even while the agent is unreachable.
    */
   function keys(clientId: string, maxAge: number = Constants.keyCacheTtl) {
     const cached = cache.get(clientId)
     if (cached && Date.now() - cached.at < Math.min(cached.ttl, maxAge) * 1_000) return cached.keys
+    const last = loaded.get(clientId)
     const entry = { at: Date.now(), ttl: Constants.keyCacheTtl as number, keys: load(clientId) }
-    entry.keys.catch(() => {
-      entry.ttl = Constants.keyRetryAfter
-    })
+    entry.keys = entry.keys.then(
+      (keys) => {
+        loaded.set(clientId, { at: Date.now(), keys })
+        return keys
+      },
+      (error) => {
+        entry.ttl = Constants.keyRetryAfter
+        const left = last ? Constants.keyStaleTtl - (Date.now() - last.at) / 1_000 : 0
+        if (left <= 0) throw error
+        // Cache the fallback no longer than its hour lasts.
+        entry.ttl = Math.min(entry.ttl, left)
+        return last!.keys
+      },
+    )
     cache.set(clientId, entry)
     return entry.keys
   }

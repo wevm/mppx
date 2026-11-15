@@ -38,6 +38,9 @@ export function prover(config: prover.Config): Identity.Prover {
     async prove(request) {
       const headers = new Headers(request.headers)
       const token = Jws.accessToken(headers)
+      // The verifier rejects an access token it can't bind, so don't sign a Session it would refuse.
+      if (token === null)
+        throw new TypeError('Authorization must hold one Bearer or DPoP token, or none.')
       const session = await Jws.sign(
         {
           alg: 'ES256',

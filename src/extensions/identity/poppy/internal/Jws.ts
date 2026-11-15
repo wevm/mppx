@@ -63,9 +63,36 @@ export async function verify(jws: Jwt.Decoded, jwk: JsonWebKey, algs: readonly s
 export function accessToken(headers: Headers): string | null | undefined {
   const value = headers.get('Authorization')?.trim()
   if (!value) return undefined
-  const match = /^(?:bearer|dpop)[ \t]+([\w\-.~+/]+=*)$/i.exec(value)
+  const match = /^(?:bearer|dpop)[ \t]+([^\s,"]+)$/i.exec(value)
   if (match) return match[1]
-  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(value) ? null : undefined
+  // Quoted auth-param values can contain anything, so a scheme name inside one doesn't count.
+  const unquoted = unquote(value)
+  // An unterminated quote could hide a scheme name, so it fails closed when one appears anywhere.
+  if (unquoted === undefined) return /\b(?:bearer|dpop)\b/i.test(value) ? null : undefined
+  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquoted) ? null : undefined
+}
+
+/**
+ * Blanks the contents of quoted strings in one pass, so the input's length bounds the work.
+ * Returns `undefined` for an unterminated quoted string.
+ */
+function unquote(value: string): string | undefined {
+  let result = ''
+  let quoted = false
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!
+    if (quoted) {
+      if (char === '\\') i++
+      else if (char === '"') {
+        quoted = false
+        result += char
+      }
+    } else {
+      if (char === '"') quoted = true
+      result += char
+    }
+  }
+  return quoted ? undefined : result
 }
 
 function encode(value: unknown) {
