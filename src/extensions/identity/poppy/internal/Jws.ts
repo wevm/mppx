@@ -55,10 +55,17 @@ export async function verify(jws: Jwt.Decoded, jwk: JsonWebKey, algs: readonly s
   }
 }
 
-/** The OAuth access token a request carries as `Bearer` or `DPoP`; a Payment Credential is not one. */
-export function accessToken(headers: Headers): string | undefined {
-  const [, scheme = '', token] = /^(\S+) +(\S+) *$/.exec(headers.get('Authorization') ?? '') ?? []
-  return ['bearer', 'dpop'].includes(scheme.toLowerCase()) ? token : undefined
+/**
+ * The OAuth access token a request carries as `Bearer` or `DPoP` (a Payment Credential is not
+ * one), `undefined` without one, or `null` when `Authorization` names one of those schemes in any
+ * other form, such as several combined values, so it can't skip the `ath` binding.
+ */
+export function accessToken(headers: Headers): string | null | undefined {
+  const value = headers.get('Authorization')?.trim()
+  if (!value) return undefined
+  const match = /^(?:bearer|dpop)[ \t]+([\w\-.~+/]+=*)$/i.exec(value)
+  if (match) return match[1]
+  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(value) ? null : undefined
 }
 
 function encode(value: unknown) {
