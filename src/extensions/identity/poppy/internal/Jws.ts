@@ -63,9 +63,11 @@ export async function verify(jws: Jwt.Decoded, jwk: JsonWebKey, algs: readonly s
 export function accessToken(headers: Headers): string | null | undefined {
   const value = headers.get('Authorization')?.trim()
   if (!value) return undefined
-  const match = /^(?:bearer|dpop)[ \t]+([\w\-.~+/]+=*)$/i.exec(value)
+  const match = /^(?:bearer|dpop)[ \t]+([^\s,"]+)$/i.exec(value)
   if (match) return match[1]
-  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(value) ? null : undefined
+  // Quoted auth-param values can contain anything, so a scheme name inside one doesn't count.
+  const unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '""')
+  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquoted) ? null : undefined
 }
 
 function encode(value: unknown) {

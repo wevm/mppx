@@ -234,6 +234,42 @@ describe('Poppy', () => {
     }
   })
 
+  test('stops using cached keys an hour after they loaded while reloads fail', async () => {
+    const { documents, prove, verifier } = await setup({ expiresIn: 2 * 60 * 60 })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    try {
+      Date.now = () => now() + 10 * 60_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+      Date.now = () => now() + 61 * 60_000
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({
+        status: 'unavailable',
+      })
+    } finally {
+      Date.now = now
+    }
+  })
+
+  test('binds any single token and ignores scheme names in quoted parameters', async () => {
+    const { prove, verifier } = await setup()
+    const odd = await prove(new Request(url, { headers: { Authorization: 'Bearer 1|abc' } }))
+    expect(JSON.parse(atob(odd.headers.get('Poppy-Session')!.split('.')[1]!))).toHaveProperty('ath')
+    expect(await verifier().verify(odd)).toMatchObject({ status: 'valid' })
+    const quoted = await prove(
+      new Request(url, { headers: { Authorization: 'Custom realm="a, Bearer b"' } }),
+    )
+    expect(await verifier().verify(quoted)).toMatchObject({ status: 'valid' })
+  })
+
+  test('refuses to sign a Session for an Authorization value it cannot bind', async () => {
+    const { prove } = await setup()
+    await expect(
+      prove(new Request(url, { headers: { Authorization: 'Payment eyJ, Bearer at_123' } })),
+    ).rejects.toThrow(TypeError)
+  })
+
   test('binds tab-separated tokens and rejects combined Authorization values', async () => {
     const { prove, verifier } = await setup()
     const tab = await prove(new Request(url, { headers: { Authorization: 'Bearer\tat_123' } }))
@@ -241,9 +277,8 @@ describe('Poppy', () => {
     const swapped = new Request(url, { headers: tab.headers })
     swapped.headers.set('Authorization', 'Bearer\tat_456')
     expect(await verifier().verify(swapped)).toMatchObject({ status: 'invalid' })
-    const combined = await prove(
-      new Request(url, { headers: { Authorization: 'Payment eyJ, Bearer at_123' } }),
-    )
+    const combined = new Request(url, { headers: tab.headers })
+    combined.headers.set('Authorization', 'Payment eyJ, Bearer at_123')
     expect(await verifier().verify(combined)).toMatchObject({ status: 'invalid' })
   })
 

@@ -20,4 +20,6 @@ export const Constants = {
   keyCacheTtl: 300,
   /** Seconds before a failed load or an unknown key `kid` loads a client's keys again. */
   keyRetryAfter: 30,
+  /** Seconds a client's last loaded keys keep verifying while reloads fail. */
+  keyStaleTtl: 60 * 60,
 } as const
