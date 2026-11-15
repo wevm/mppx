@@ -215,6 +215,25 @@ describe('Poppy', () => {
     }
   })
 
+  test('keeps cached keys when a reload for an unknown kid fails', async () => {
+    const { documents, prove, verifier } = await setup()
+    const unknown = await setup({ delegationKid: 'op-9' })
+    const check = verifier()
+    expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    const jwks = documents['https://agent.example/jwks.json']
+    delete documents['https://agent.example/jwks.json']
+    const now = Date.now
+    Date.now = () => now() + 31_000
+    try {
+      // A Session whose delegation names an unknown kid forces a reload, which fails.
+      await check.verify(await unknown.prove(new Request(url)))
+      expect(await check.verify(await prove(new Request(url)))).toMatchObject({ status: 'valid' })
+    } finally {
+      Date.now = now
+      documents['https://agent.example/jwks.json'] = jwks
+    }
+  })
+
   test('binds tab-separated tokens and rejects combined Authorization values', async () => {
     const { prove, verifier } = await setup()
     const tab = await prove(new Request(url, { headers: { Authorization: 'Bearer\tat_123' } }))

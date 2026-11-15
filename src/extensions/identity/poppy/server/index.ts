@@ -62,13 +62,19 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
   /**
    * Returns a client's keys, loaded at most `maxAge` seconds ago. A load is cached for 5
    * minutes, and a failed one for 30 seconds, so a failing agent isn't refetched per request.
+   * A failed reload keeps the keys that last loaded, so a request that forces a reload can't
+   * replace them with the failure.
    */
   function keys(clientId: string, maxAge: number = Constants.keyCacheTtl) {
     const cached = cache.get(clientId)
     if (cached && Date.now() - cached.at < Math.min(cached.ttl, maxAge) * 1_000) return cached.keys
+    const previous = cached?.keys
     const entry = { at: Date.now(), ttl: Constants.keyCacheTtl as number, keys: load(clientId) }
-    entry.keys.catch(() => {
+    entry.keys = entry.keys.catch(async (error) => {
       entry.ttl = Constants.keyRetryAfter
+      const last = await previous?.catch(() => undefined)
+      if (last) return last
+      throw error
     })
     cache.set(clientId, entry)
     return entry.keys
