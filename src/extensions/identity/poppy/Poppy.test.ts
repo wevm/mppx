@@ -263,6 +263,13 @@ describe('Poppy', () => {
     expect(await verifier().verify(quoted)).toMatchObject({ status: 'valid' })
   })
 
+  test('parses a long unterminated quoted Authorization value quickly', () => {
+    const value = 'Custom x="' + '\\"'.repeat(50_000)
+    const start = performance.now()
+    expect(Jws.accessToken(new Headers({ Authorization: value }))).toBeUndefined()
+    expect(performance.now() - start).toBeLessThan(500)
+  })
+
   test('refuses to sign a Session for an Authorization value it cannot bind', async () => {
     const { prove } = await setup()
     await expect(

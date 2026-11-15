@@ -66,8 +66,27 @@ export function accessToken(headers: Headers): string | null | undefined {
   const match = /^(?:bearer|dpop)[ \t]+([^\s,"]+)$/i.exec(value)
   if (match) return match[1]
   // Quoted auth-param values can contain anything, so a scheme name inside one doesn't count.
-  const unquoted = value.replace(/"(?:[^"\\]|\\.)*"/g, '""')
-  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquoted) ? null : undefined
+  return /(?:^|,)\s*(?:bearer|dpop)(?:\s|$)/i.test(unquote(value)) ? null : undefined
+}
+
+/** Blanks the contents of quoted strings in one pass, so the input's length bounds the work. */
+function unquote(value: string) {
+  let result = ''
+  let quoted = false
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!
+    if (quoted) {
+      if (char === '\\') i++
+      else if (char === '"') {
+        quoted = false
+        result += char
+      }
+    } else {
+      if (char === '"') quoted = true
+      result += char
+    }
+  }
+  return result
 }
 
 function encode(value: unknown) {
