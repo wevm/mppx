@@ -12,6 +12,7 @@ export const request = Object.freeze([
   'dpop',
   'identity-attestation',
   'identity-presentation',
+  'poppy-session',
   'tempo-id-token',
 ] as const)
 
