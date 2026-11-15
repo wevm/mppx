@@ -406,6 +406,47 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * The access key that signs a Tempo payment has less spending limit left than the payment needs,
+ * so the client did not sign it.
+ *
+ * The client simulates a payment before it signs. On chain the transaction would revert with the
+ * account keychain's `SpendingLimitExceeded()` error, and a fee payer would still pay for it.
+ * Raise the key's limit, wait for its period to reset, or pay with another key. The simulation
+ * error is the `cause`.
+ */
+export class SpendingLimitExceededError extends Error {
+  override readonly name = 'SpendingLimitExceededError'
+
+  /** Access key that signs the payment, when the account is an access key. */
+  readonly accessKey: `0x${string}` | undefined
+  /** Account that pays. */
+  readonly account: `0x${string}`
+
+  constructor(options: SpendingLimitExceededError.Options) {
+    const { accessKey, account, cause } = options
+    super(
+      `Access key spending limit exceeded: ${accessKey ? `key ${accessKey} of ` : ''}account ${account} cannot pay this amount, so the payment was not signed.`,
+    )
+    this.accessKey = accessKey
+    this.account = account
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace SpendingLimitExceededError {
+  type Options = {
+    /** Access key that signs the payment. */
+    accessKey?: `0x${string}` | undefined
+    /** Account that pays. */
+    account: `0x${string}`
+    /** The simulation error. */
+    cause?: unknown
+  }
+}
+
+/**
  * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *
@@ -583,19 +624,21 @@ export class InsufficientBalanceError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/session/insufficient-balance'
 
   constructor(options: InsufficientBalanceError.Options = {}) {
-    const { fundingUrl, reason } = options
+    const { cause, fundingUrl, reason } = options
     super(
       withFundingUrl(
         reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.',
         fundingUrl,
       ),
-      { fundingUrl },
+      { cause, fundingUrl },
     )
   }
 }
 
 export declare namespace InsufficientBalanceError {
   type Options = {
+    /** Underlying error, such as the failed simulation. Never serialized into Problem Details. */
+    cause?: unknown
     /** Page where the payer can get the funds, such as the MACH onramp. */
     fundingUrl?: string | undefined
     /** Reason for insufficient balance. */
