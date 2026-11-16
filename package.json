@@ -258,6 +258,11 @@
       "types": "./dist/extensions/identity/tap/index.d.ts",
       "default": "./dist/extensions/identity/tap/index.js"
     },
+    "./extensions/identity/erc8004": {
+      "src": "./src/extensions/identity/erc8004/index.ts",
+      "types": "./dist/extensions/identity/erc8004/index.d.ts",
+      "default": "./dist/extensions/identity/erc8004/index.js"
+    },
     "./extensions/identity/email-otp": {
       "src": "./src/extensions/identity/email-otp/index.ts",
       "types": "./dist/extensions/identity/email-otp/index.d.ts",

@@ -2,6 +2,8 @@
 export * as Attestation from './attestation/index.js'
 /** Email address verification with a one-time code. */
 export * as EmailOtp from './email-otp/index.js'
+/** ERC-8004 agents: requests signed, and payments made, by an agent's registered wallet. */
+export * as Erc8004 from './erc8004/index.js'
 /** Link agent identity: attestation tokens and Link-signed claims. */
 export * as Link from './link/index.js'
 /** Persona KYC: a payment check that requires an approved Persona inquiry. */
