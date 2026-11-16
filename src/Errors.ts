@@ -452,6 +452,9 @@ export declare namespace SpendingLimitExceededError {
  *
  * Retry the same challenge with the same `tempo.charge` client to resume waiting without
  * withdrawing again, or find the settlement with `senderTag` (or one of `senderTags`) on the Zone's portal.
+ * A new challenge for the same payment never starts a second withdrawal: from the origin that
+ * issued `challengeId`, it resumes this withdrawal and returns a credential for that challenge;
+ * otherwise it throws this error again.
  */
 export class ZoneSettlementPendingError extends Error {
   override readonly name = 'ZoneSettlementPendingError'
@@ -463,7 +466,7 @@ export class ZoneSettlementPendingError extends Error {
    * `undefined` when a Zone RPC hid it and more than one candidate remains: see `senderTags`.
    */
   readonly senderTag: `0x${string}` | undefined
-  /** Sender tags the withdrawal may carry: its tag alone when known, else every candidate. */
+  /** Sender tags the withdrawal may carry: its tag alone when known, else every candidate. Empty when not yet read. */
   readonly senderTags: readonly `0x${string}`[]
   /** ID of the Zone the withdrawal left. */
   readonly zoneId: number
@@ -472,9 +475,10 @@ export class ZoneSettlementPendingError extends Error {
     const { cause, challengeId, zoneId } = options
     const senderTags = options.senderTags ?? (options.senderTag ? [options.senderTag] : [])
     const senderTag = senderTags.length === 1 ? senderTags[0] : undefined
-    const withdrawal = senderTag ?? `with sender tag ${senderTags.join(' or ')}`
+    const withdrawal =
+      senderTag ?? (senderTags.length ? `with sender tag ${senderTags.join(' or ')}` : undefined)
     super(
-      `Zone ${zoneId} withdrawal ${withdrawal} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+      `Zone ${zoneId} withdrawal ${withdrawal ? `${withdrawal} ` : ''}for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
     )
     this.challengeId = challengeId
     this.senderTag = senderTag

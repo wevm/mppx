@@ -1,7 +1,7 @@
 import type * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Errors from './Errors.js'
-import * as Expires from './Expires.js'
+import * as CredentialExpiry from './internal/CredentialExpiry.js'
 import type { DeepReadonly, ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
 import type * as Html from './server/internal/html/config.js'
@@ -470,7 +470,7 @@ function prepareCredential(
       reason: `no registered method for ${credential.challenge.method}/${credential.challenge.intent}`,
     })
 
-  Expires.assert(credential.challenge.expires, credential.challenge.id)
+  CredentialExpiry.assertFor(method, credential)
 
   let payload: unknown
   try {
