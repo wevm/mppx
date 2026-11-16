@@ -733,8 +733,6 @@ function assertChallengePolicy(
   fee?: bigint | undefined,
 ) {
   const { methodDetails, recipient } = request
-  const amount = BigInt(request.amount) + (fee ?? 0n)
-  const exceeds = fee === undefined ? 'amount exceeds' : 'amount plus Zone withdrawal fee exceeds'
 
   // Chain pinning: reject a challenge whose chain ID conflicts with the pinned one.
   const challengeChainId = methodDetails?.chainId
@@ -778,6 +776,10 @@ function assertChallengePolicy(
     }
   }
 
+  if (caps.maxAtomicAmount === undefined && caps.maxAmount === undefined) return
+  // Parsed only after the checks above pass, and only when a cap needs it.
+  const amount = BigInt(request.amount) + (fee ?? 0n)
+  const exceeds = fee === undefined ? 'amount exceeds' : 'amount plus Zone withdrawal fee exceeds'
   if (caps.maxAtomicAmount !== undefined && amount > caps.maxAtomicAmount)
     throw new Error(`Tempo charge ${exceeds} maxAtomicAmount.`)
   if (caps.maxAmount !== undefined && amount > parseMaxAmount(caps.maxAmount, currency?.decimals)!)
