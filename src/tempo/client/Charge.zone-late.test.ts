@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Credential, Errors } from 'mppx'
 import { tempo as tempo_client } from 'mppx/client'
 import { Mppx, tempo } from 'mppx/server'
 import { createClient, custom, defineChain } from 'viem'
@@ -120,9 +120,15 @@ describe('tempo.charge client: a Zone credential returned after its challenge ex
     // The server may have redeemed or refused the late credential, so a new challenge with the
     // same terms neither reuses it nor pays again while it can still be redeemed.
     const second = await challenge()
-    await expect(method.createCredential(parameters(second))).rejects.toThrow(
-      'has not settled on Tempo yet',
-    )
+    const error = await method.createCredential(parameters(second)).catch((error: Error) => error)
+    expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
+    expect(String(error)).toContain('has not settled on Tempo yet')
+    // It names the challenge the withdrawal paid and the withdrawal's sender tag.
+    const pendingError = error as Errors.ZoneSettlementPendingError
+    expect(pendingError.challengeId).toBe(first.id)
+    expect(pendingError.senderTags).toEqual([
+      (Credential.deserialize(late).payload as { senderTag: string }).senderTag,
+    ])
     expect(mocks.sent).toHaveLength(1)
 
     // Once no server can redeem it, a new challenge is a new payment.

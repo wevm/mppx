@@ -258,6 +258,17 @@ describe('tempo.charge client zone selection', () => {
       expect(calls).toHaveLength(sent)
     })
 
+    test('fails closed between two servers of a scheme with an opaque origin', async () => {
+      // Fetch passes `URL.origin`, which is "null" for every non-HTTP(S) URL.
+      const { calls, first, method, sent } = await outstanding(new URL('app://first').origin)
+      const error = await method
+        .createCredential(parameters(await challenge(), new URL('app://second').origin))
+        .catch((error: Error) => error)
+      expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
+      expect((error as Errors.ZoneSettlementPendingError).challengeId).toBe(first.id)
+      expect(calls).toHaveLength(sent)
+    })
+
     test('fails closed while the first challenge can still be redeemed', async () => {
       const { calls, first, method, sent } = await outstanding('https://example.com')
       vi.useFakeTimers({

@@ -176,7 +176,7 @@ export function charge(parameters: charge.Parameters = {}) {
           challenge,
           clientId,
           client,
-          origin: MethodResponse.getOrigin(credentialParameters),
+          origin: httpOrigin(MethodResponse.getOrigin(credentialParameters)),
           pending: pendingZoneWithdrawals,
           zone: parameters.zone,
           zoneId,
@@ -521,6 +521,8 @@ type PendingZoneWithdrawal = {
    * the same terms fails closed, since the server may have redeemed or refused it.
    */
   redeemedLate?: boolean | undefined
+  /** Sender tags of a withdrawal whose credential was returned after its challenge expired. */
+  senderTags?: readonly Hex.Hex[] | undefined
   /** Payment terms: what another challenge must ask for to be paid by this withdrawal. */
   terms: string | undefined
   /** Calls waiting on this withdrawal for a credential right now. */
@@ -577,8 +579,13 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
     // Its credential was sent after its challenge expired, and its server may still accept or
     // refuse it. Sending it again for this challenge could redeem it twice, and a new payment
     // could pay twice if it was refused, so fail closed until its redemption window ends.
+    // The error names the challenge the withdrawal paid, whose retry gets its credential.
     if (entry.redeemedLate)
-      throw new Errors.ZoneSettlementPendingError({ challengeId: challenge.id, zoneId })
+      throw new Errors.ZoneSettlementPendingError({
+        challengeId: entry.challenge.id,
+        senderTags: entry.senderTags,
+        zoneId,
+      })
     // A call still waiting on it is another payment in flight, not one this challenge retries:
     // sharing its credential would leave one of the two payments unpaid.
     if (entry.waiters > 0) continue
@@ -655,8 +662,10 @@ async function waitForZoneCredential(options: ZoneCredentialOptions, entry: Pend
   // (`zoneCredentialGraceMs`), so it stays for a retry of its own challenge, which would
   // otherwise pay again on Tempo, and blocks other challenges until its window ends.
   if (pending.get(key) === entry) {
-    if (isExpired(challenge.expires)) entry.redeemedLate = true
-    else pending.delete(key)
+    if (isExpired(challenge.expires)) {
+      entry.redeemedLate = true
+      entry.senderTags = [settled.senderTag]
+    } else pending.delete(key)
   }
   const { hash, senderTag } = settled
 
@@ -664,6 +673,22 @@ async function waitForZoneCredential(options: ZoneCredentialOptions, entry: Pend
     challenge,
     payload: { hash, senderTag, type: 'zone', zoneId },
   })
+}
+
+/**
+ * Returns the origin of an HTTP(S) URL, or `undefined` for anything else. Every other scheme
+ * has the opaque origin `"null"`, which can't tell two servers apart, so it never counts as
+ * a verified origin.
+ */
+function httpOrigin(origin: string | undefined) {
+  if (!origin) return undefined
+  try {
+    const url = new URL(origin)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    return url.origin
+  } catch {
+    return undefined
+  }
 }
 
 /**
