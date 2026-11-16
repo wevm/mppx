@@ -1,6 +1,6 @@
 import { Base64, Bytes, Hex } from 'ox'
 import { getAddress, recoverMessageAddress, type Account, type Address, type Client } from 'viem'
-import { verifyMessage } from 'viem/actions'
+import { getChainId, verifyMessage } from 'viem/actions'
 import { createSiweMessage } from 'viem/siwe'
 
 import * as Store from '../Store.js'
@@ -133,22 +133,64 @@ export class InvalidProofError extends Error {
   }
 }
 
-/** Builds the EIP-4361 (SIWE) message a payload signs. */
+/**
+ * Builds the EIP-4361 (SIWE) message a payload signs.
+ *
+ * The layout is viem's `createSiweMessage`, which also validates the fields, but timestamps
+ * are signed exactly as the payload carries them, as the x402 reference does, so a proof
+ * with any RFC 3339 timestamp verifies across implementations.
+ */
 export function toMessage(payload: Omit<Payload, 'signature'>): string {
-  return createSiweMessage({
-    address: getAddress(payload.address),
-    chainId: chainIdOf(payload.chainId),
+  const issuedAt = timestamp(payload.issuedAt, 'issuedAt')
+  const expirationTime = payload.expirationTime
+    ? timestamp(payload.expirationTime, 'expirationTime')
+    : undefined
+  const notBefore = payload.notBefore ? timestamp(payload.notBefore, 'notBefore') : undefined
+  const address = getAddress(payload.address)
+  const chainId = chainIdOf(payload.chainId)
+  // Throws for a field the SIWE format rejects.
+  createSiweMessage({
+    address,
+    chainId,
     domain: payload.domain,
-    ...(payload.expirationTime ? { expirationTime: new Date(payload.expirationTime) } : {}),
-    issuedAt: new Date(payload.issuedAt),
+    ...(expirationTime ? { expirationTime: new Date(expirationTime) } : {}),
+    issuedAt: new Date(issuedAt),
     nonce: payload.nonce,
-    ...(payload.notBefore ? { notBefore: new Date(payload.notBefore) } : {}),
+    ...(notBefore ? { notBefore: new Date(notBefore) } : {}),
     ...(payload.requestId ? { requestId: payload.requestId } : {}),
     ...(payload.resources ? { resources: payload.resources } : {}),
     ...(payload.statement ? { statement: payload.statement } : {}),
     uri: payload.uri,
     version: '1',
   })
+  if (payload.requestId?.includes('\n')) throw new Error('Invalid SIWE message field requestId')
+
+  let prefix = `${payload.domain} wants you to sign in with your Ethereum account:\n${address}\n\n`
+  if (payload.statement) prefix += `${payload.statement}\n`
+  const lines = [
+    `URI: ${payload.uri}`,
+    'Version: 1',
+    `Chain ID: ${chainId}`,
+    `Nonce: ${payload.nonce}`,
+    `Issued At: ${issuedAt}`,
+  ]
+  if (expirationTime) lines.push(`Expiration Time: ${expirationTime}`)
+  if (notBefore) lines.push(`Not Before: ${notBefore}`)
+  if (payload.requestId) lines.push(`Request ID: ${payload.requestId}`)
+  if (payload.resources) {
+    lines.push('Resources:')
+    for (const resource of payload.resources) lines.push(`- ${resource}`)
+  }
+  return `${prefix}\n${lines.join('\n')}`
+}
+
+/** An RFC 3339 date-time, as SIWE timestamps are. */
+const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
+
+function timestamp(value: string, field: string): string {
+  if (!timestampPattern.test(value) || Number.isNaN(Date.parse(value)))
+    throw new Error(`Invalid SIWE message field ${field}`)
+  return value
 }
 
 /** Encodes a payload as a {@link header} value. */
@@ -203,6 +245,7 @@ export function createExtension(parameters: {
 export type ServerOptions = {
   /**
    * Client for verifying smart-wallet (EIP-1271 and EIP-6492) signatures with an RPC call.
+   * It must serve the offer's chain: proofs for another chain are rejected.
    * Without it, only EOA signatures verify.
    */
   client?: Client | undefined
@@ -287,6 +330,18 @@ export async function verify(parameters: {
   } catch {
     // A field the SIWE format rejects, such as a statement with a newline or an invalid URI.
     throw new InvalidProofError('invalid_siwx_payload')
+  }
+
+  // A smart-wallet signature is checked against contract state, so it must be the state of
+  // the chain the proof names.
+  if (options.client) {
+    let clientChainId: number
+    try {
+      clientChainId = options.client.chain?.id ?? (await getChainId(options.client))
+    } catch {
+      throw new InvalidProofError('invalid_siwx_verifier_error')
+    }
+    if (clientChainId !== chainId) throw new InvalidProofError('invalid_siwx_verifier_error')
   }
 
   let valid: boolean
@@ -414,7 +469,14 @@ export function wrapFetch(
       type: chain.type,
       ...(chain.signatureScheme ? { signatureScheme: chain.signatureScheme } : {}),
     }
-    const signature = await account.signMessage({ message: toMessage(unsigned) })
+    let message: string
+    try {
+      message = toMessage(unsigned)
+    } catch {
+      // A challenge the SIWE format can't encode can't be signed: leave the 402 to payment.
+      return response
+    }
+    const signature = await account.signMessage({ message })
     // Not awaited: a fetch that kept a clone of the response would hold the cancel open.
     response.body?.cancel().catch(() => {})
     const headers = new Headers(retry.headers)

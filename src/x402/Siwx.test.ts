@@ -2,7 +2,10 @@ import { Store } from 'mppx'
 import { Mppx as ClientMppx, evm as client_evm } from 'mppx/client'
 import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Siwx, Types as x402_Types } from 'mppx/x402'
+import { createClient, custom } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { base } from 'viem/chains'
+import { createSiweMessage } from 'viem/siwe'
 import { describe, expect, test } from 'vp/test'
 
 const account = privateKeyToAccount(
@@ -206,6 +209,14 @@ describe('x402 sign-in-with-x', () => {
     expect(readChallenge(response).error).toContain('invalid_siwx_signature')
   })
 
+  test('a proof the grant declined is spent', async () => {
+    const { handler } = createRoute({ granted: [] })
+    const proof = await sign(await challenge(handler))
+    expect((await handler(withProof(proof))).status).toBe(402)
+    const replay = await handler(withProof(proof))
+    expect(readChallenge(replay).error).toContain('invalid_siwx_nonce')
+  })
+
   test('a rejected proof does not use up its nonce', async () => {
     const { handler } = createRoute()
     const extension = await challenge(handler)
@@ -218,6 +229,81 @@ describe('x402 sign-in-with-x', () => {
     const forged = await other.signMessage({ message: Siwx.toMessage(unsigned) })
     await handler(withProof(Siwx.encode({ ...unsigned, signature: forged })))
     expect((await handler(withProof(await sign(extension)))).status).toBe(200)
+  })
+
+  test('rejects a smart-wallet check through a client on another chain', async () => {
+    const { handler } = createRoute()
+    const extension = await challenge(handler)
+    const client = createClient({
+      chain: base,
+      transport: custom({
+        async request() {
+          throw new Error('no rpc call expected')
+        },
+      }),
+    })
+    await expect(
+      Siwx.verify({
+        chainId: 84532,
+        options: { client, origin },
+        payload: Siwx.decode(await sign(extension)),
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_siwx_verifier_error' })
+  })
+
+  test("toMessage keeps viem's layout and signs timestamps as sent", () => {
+    const base = {
+      address: account.address,
+      chainId: 'eip155:84532',
+      domain: 'api.example.com',
+      issuedAt: '2026-01-02T03:04:05.678Z',
+      nonce: 'abcdef0123456789',
+      type: 'eip191',
+      uri: url,
+      version: '1',
+    }
+    for (const payload of [
+      base,
+      {
+        ...base,
+        expirationTime: '2026-01-02T03:09:05.678Z',
+        notBefore: '2026-01-02T03:04:00.000Z',
+        requestId: 'req-1',
+        resources: [url, `${origin}/other`],
+        statement: 'Sign in to the API',
+      },
+    ])
+      expect(Siwx.toMessage(payload)).toBe(
+        createSiweMessage({
+          address: payload.address,
+          chainId: 84532,
+          domain: payload.domain,
+          issuedAt: new Date(payload.issuedAt),
+          nonce: payload.nonce,
+          uri: payload.uri,
+          version: '1',
+          ...('statement' in payload
+            ? {
+                expirationTime: new Date(payload.expirationTime),
+                notBefore: new Date(payload.notBefore),
+                requestId: payload.requestId,
+                resources: payload.resources,
+                statement: payload.statement,
+              }
+            : {}),
+        }),
+      )
+    const offset = Siwx.toMessage({ ...base, issuedAt: '2026-01-02T04:04:05+01:00' })
+    expect(offset).toContain('\nIssued At: 2026-01-02T04:04:05+01:00')
+    expect(() => Siwx.toMessage({ ...base, issuedAt: '2026-01-02' })).toThrow()
+  })
+
+  test('accepts a proof whose timestamps are not in toISOString form', async () => {
+    const { handler } = createRoute()
+    const extension = await challenge(handler)
+    const issuedAt = new Date(Date.now() - 1000).toISOString().replace(/\.\d+Z$/, '+00:00')
+    const response = await handler(withProof(await sign(extension, { issuedAt })))
+    expect(response.status).toBe(200)
   })
 
   test('rejects a malformed header', async () => {
@@ -314,6 +400,29 @@ describe('Siwx.wrapFetch', () => {
     const response = await fetch(url, { body, duplex: 'half', method: 'POST' } as RequestInit)
     expect(response.status).toBe(402)
     expect(requests).toHaveLength(1)
+  })
+
+  test('returns the 402 for a challenge the SIWE format cannot encode', async () => {
+    const { handler } = createRoute()
+    let calls = 0
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        calls++
+        const response = await handler(new Request(input, init))
+        const required = readChallenge(response) as Record<string, any>
+        required.extensions[Siwx.extensionKey].info.statement = 'line one\nline two'
+        const headers = new Headers(response.headers)
+        headers.set(
+          x402_Types.paymentRequiredHeader,
+          Buffer.from(JSON.stringify(required)).toString('base64'),
+        )
+        return new Response(null, { status: 402, headers })
+      },
+      { account },
+    )
+    const response = await fetch(url)
+    expect(response.status).toBe(402)
+    expect(calls).toBe(1)
   })
 
   test('does not sign a challenge naming another site', async () => {
