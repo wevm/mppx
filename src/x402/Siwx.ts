@@ -330,13 +330,15 @@ export async function release(parameters: {
   store: Store.AtomicStore
 }): Promise<void> {
   const { payload, store } = parameters
-  const expires = claimExpires(payload)
-  // Checked inside the atomic update: until this request's claim expires nobody else can
-  // claim the nonce, so the stored marker is still this request's own.
-  await store.update(nonceKey(payload), () =>
-    Date.now() < expires ? { op: 'delete', result: undefined } : { op: 'noop', result: undefined },
-  )
+  // Until this request's claim expires nobody else can claim the nonce, so the stored marker
+  // is still this request's own. Close to expiry the claim is left to lapse instead. `delete`
+  // (not `update`) is what frees a native claim, such as one in a Durable Object replay shard.
+  if (Date.now() + releaseMargin >= claimExpires(payload)) return
+  await store.delete(nonceKey(payload))
 }
+
+/** How long before a claim expires {@link release} stops deleting it. */
+const releaseMargin = 5_000
 
 function nonceKey(payload: Pick<Payload, 'nonce'>) {
   return `mppx:x402:siwx:${payload.nonce}`

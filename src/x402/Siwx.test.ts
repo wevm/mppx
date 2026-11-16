@@ -468,6 +468,31 @@ describe('Siwx.release', () => {
     await expect(Siwx.claim({ payload, store })).resolves.toBeUndefined()
   })
 
+  test('frees a claim the store keeps apart from its values', async () => {
+    // Like a Durable Object replay shard: `tryClaim` records claims that `get` and
+    // `update` don't see, and only `delete` releases.
+    const values = Store.memory()
+    const claims = new Map<string, number>()
+    const store = Store.from({
+      get: (key) => values.get(key as never),
+      put: (key, value) => values.put(key as never, value as never),
+      update: (key, fn) => values.update(key as never, fn as never),
+      async delete(key) {
+        claims.delete(key)
+        await values.delete(key as never)
+      },
+      async tryClaim(key, expires) {
+        if ((claims.get(key) ?? 0) > Date.now()) return false
+        claims.set(key, expires)
+        return true
+      },
+    }) as Store.AtomicStore
+    const payload = { issuedAt: new Date().toISOString(), nonce: 'release-native-1' }
+    await Siwx.claim({ payload, store })
+    await Siwx.release({ payload, store })
+    await expect(Siwx.claim({ payload, store })).resolves.toBeUndefined()
+  })
+
   test('leaves a newer claim alone once its own claim expired', async () => {
     const store = Store.memory()
     const nonce = 'release-stale-1'
