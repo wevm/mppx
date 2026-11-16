@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
+import * as Constants from '../../Constants.js'
+import * as Credential from '../../Credential.js'
 import * as Fetch from './Fetch.js'
 
 const url = 'https://api.example.com/jobs'
@@ -217,6 +219,29 @@ describe('Fetch.from: challenge credential header', () => {
       expect(requests[1]!.headers.has(header)).toBe(header === 'Authorization')
     },
   )
+
+  test('sends a lowercase payment-authorization challenge in Payment-Authorization and echoes it', async () => {
+    const lowercase = `${challenge('lowercase')}, header="payment-authorization"`
+    const requests: Request[] = []
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) =>
+      Credential.serialize({ challenge, payload: { signature: '0x' } }),
+    )
+    const fetch = Fetch.from({
+      methods: [{ name: 'test', intent: 'charge', createCredential }],
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init))
+        if (requests.length > 1) return new Response('OK')
+        return new Response(null, { status: 402, headers: { 'WWW-Authenticate': lowercase } })
+      },
+    })
+
+    expect((await fetch(url)).status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(requests[1]!.headers.has('Authorization')).toBe(false)
+    const sent = requests[1]!.headers.get(Constants.Headers.paymentAuthorization)
+    expect(sent).toMatch(/^Payment /)
+    expect(Credential.deserialize(sent!).challenge.header).toBe('payment-authorization')
+  })
 
   test.each(['Authorization', 'X-Payment'])(
     'creates no credential when the only challenge selects the credential header "%s"',

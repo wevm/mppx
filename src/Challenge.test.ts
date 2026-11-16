@@ -1,5 +1,6 @@
-import { Challenge, Constants } from 'mppx'
+import { Challenge, Constants, Credential, PaymentRequest } from 'mppx'
 import { Methods } from 'mppx/tempo'
+import { Base64, Bytes, Hash } from 'ox'
 import { describe, expect, test } from 'vp/test'
 
 describe('from', () => {
@@ -667,7 +668,7 @@ describe('serialize: credential header', () => {
     { header: 'Authorization', expected: undefined },
     { header: 'authorization', expected: undefined },
     { header: 'Payment-Authorization', expected: 'Payment-Authorization' },
-    { header: 'PAYMENT-AUTHORIZATION', expected: 'Payment-Authorization' },
+    { header: 'payment-authorization', expected: 'payment-authorization' },
   ])('behavior: serializes header $header as $expected', ({ header, expected }) => {
     const serialized = Challenge.serialize({ ...challenge, header })
     if (expected === undefined) expect(serialized).not.toContain('header=')
@@ -893,9 +894,69 @@ describe('deserialize', () => {
       }
       const challenge = Challenge.deserialize(value)
       expect(Challenge.credentialHeader(challenge)).toBe(expected)
-      expect(challenge.header).toBe(header === undefined ? undefined : expected)
+      // The received spelling is kept so the credential echoes it unchanged.
+      expect(challenge.header).toBe(header)
     },
   )
+})
+
+describe('credential header binding', () => {
+  const secretKey = 'test-secret-key-test-secret-key-32'
+  const realm = 'api.example.com'
+  const request = { amount: '1000000' }
+
+  // A server that bound the lowercase spelling, as earlier releases did for `header` as configured.
+  function lowercaseBoundChallenge(): Challenge.Challenge {
+    const header = 'payment-authorization'
+    const input = [realm, 'tempo', 'charge', PaymentRequest.serialize(request), '', '', header, '']
+    const mac = Hash.hmac256(Bytes.fromString(secretKey), Bytes.fromString(input.join('|')), {
+      as: 'Bytes',
+    })
+    const id = Base64.fromBytes(mac, { url: true, pad: false })
+    return { id, realm, method: 'tempo', intent: 'charge', request, header }
+  }
+
+  test('behavior: a lowercase-bound challenge verifies after a client round trip', () => {
+    const issued = lowercaseBoundChallenge()
+    expect(Challenge.verify(issued, { secretKey })).toBe(true)
+
+    const wire = Challenge.serialize(issued)
+    expect(wire).toContain('header="payment-authorization"')
+
+    const received = Challenge.deserialize(wire)
+    expect(received.header).toBe('payment-authorization')
+    expect(Challenge.credentialHeader(received)).toBe(Constants.Headers.paymentAuthorization)
+
+    const credential = Credential.deserialize(
+      Credential.serialize({ challenge: received, payload: { signature: '0x' } }),
+    )
+    expect(credential.challenge.header).toBe('payment-authorization')
+    expect(Challenge.verify(credential.challenge, { secretKey })).toBe(true)
+    // Rewriting the echoed spelling breaks the binding.
+    expect(
+      Challenge.verify(
+        { ...credential.challenge, header: Constants.Headers.paymentAuthorization },
+        { secretKey },
+      ),
+    ).toBe(false)
+  })
+
+  test('behavior: locally constructed challenges bind and emit the canonical spelling', () => {
+    const issued = Challenge.from({
+      secretKey,
+      realm,
+      method: 'tempo',
+      intent: 'charge',
+      request,
+      header: 'payment-authorization',
+    })
+    expect(issued.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(issued.id).not.toBe(lowercaseBoundChallenge().id)
+
+    const received = Challenge.deserialize(Challenge.serialize(issued))
+    expect(received.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(Challenge.verify(received, { secretKey })).toBe(true)
+  })
 })
 
 describe('deserializeList', () => {
