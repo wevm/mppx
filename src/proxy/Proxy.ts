@@ -161,14 +161,6 @@ export function create(config: create.Config): Proxy {
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
-    // Proxy starts upstream work before it knows the response's content type. Only a
-    // request-priced session can prepay that work; per-item generation needs manual charge().
-    if (requiresManualGeneration(handler))
-      return new Response(
-        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
-        { status: 500 },
-      )
-
     // With replay, a paid request whose credential already paid for this exact
     // request collects its recorded delivery instead of paying again.
     let paidRequest = request
@@ -242,6 +234,14 @@ export function create(config: create.Config): Proxy {
 
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
+
+    // Proxy starts upstream work before it knows the response's content type. Only a
+    // request-priced session can prepay that work; per-item generation needs manual charge().
+    if (requiresManualGeneration(handler))
+      return new Response(
+        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
+        { status: 500 },
+      )
 
     if (!boundedBody && !replayBody && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)

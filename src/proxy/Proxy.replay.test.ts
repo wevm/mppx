@@ -618,7 +618,7 @@ test.each([false, true])(
   },
 )
 
-test('rejects per-item session proxying before payment or upstream work', async () => {
+test('rejects per-item session proxying before upstream work', async () => {
   const payment = vi.fn()
   const fetch = vi.fn()
   const handler = Object.assign(createPaidHandler(payment), {
@@ -634,6 +634,35 @@ test('rejects per-item session proxying before payment or upstream work', async 
     ],
   })
   expect((await proxy.fetch(paidRequest())).status).toBe(500)
-  expect(payment).not.toHaveBeenCalled()
+  expect(payment).toHaveBeenCalledTimes(1)
   expect(fetch).not.toHaveBeenCalled()
 })
+
+test.each(['POST /generate', 'GET /generate'])(
+  'allows per-item session management through %s',
+  async (route) => {
+    const fetch = vi.fn()
+    const management = new Response('closed')
+    const handler = Object.assign(
+      vi.fn(async () => ({
+        status: 200 as const,
+        withReceipt: () => management,
+      })),
+      {
+        _internal: { intent: 'session', _canonicalRequest: { unitType: 'token' } },
+      },
+    )
+    const proxy = Proxy.create({
+      fetch,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { [route]: handler },
+        }),
+      ],
+    })
+    expect(await proxy.fetch(paidRequest())).toBe(management)
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
