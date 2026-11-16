@@ -92,14 +92,21 @@ export function attestations(config: attestations.Config): Identity.Prover {
   assertIssuer(config.issuer)
   // Attestations are cached per signed-in user: when the access token names another user (or
   // none), the cache is dropped, so a new session never presents the previous user's attestations.
-  let current: { readonly user: string | undefined; readonly prover: Identity.Prover } | undefined
+  type Entry = { readonly user: string | undefined; readonly prover: Identity.Prover }
+  const issuer = config.issuer.replace(/\/+$/, '')
+  const types = config.types ?? Constants.attestationTypes
+  let current: Entry | undefined
+  // Only the latest lookup may replace `current`, so a slow lookup cannot roll it back.
+  let latest = 0
+  // Used while the access token cannot be read: presents nothing, keeps the cache.
+  const unavailable: Entry = { user: undefined, prover: create(undefined, undefined) }
 
   function create(user: string | undefined, held: readonly string[] | undefined) {
     return Attestation.prover({
       attestations: held,
       issuers: [config.issuer],
       scope: config.scope,
-      types: config.types ?? Constants.attestationTypes,
+      types,
       async acquire({ audience, issuer, type }) {
         const result = await attest({ ...config, audience, issuer, type })
         if (!result) return undefined
@@ -110,38 +117,41 @@ export function attestations(config: attestations.Config): Identity.Prover {
     })
   }
 
-  async function resolve() {
+  async function resolve(): Promise<Entry> {
+    const lookup = ++latest
     let user: string | undefined
     try {
       const sub = Jwt.decode(await config.accessToken())?.claims.sub
       user = typeof sub === 'string' && sub ? sub : undefined
     } catch {
-      // Signed out: no user, so nothing cached is presented.
+      // The token could not be read this time: present nothing, but keep the user's cache.
+      return unavailable
     }
-    if (!current || current.user !== user) {
-      // Stored attestations are restored only for the user they name.
-      const held = current
-        ? undefined
-        : config.attestations?.filter(
-            (token) => user !== undefined && decodeAttestation(token)?.claims.uid === user,
-          )
-      current = { user, prover: create(user, held) }
-    }
-    return current.prover
+    if (current && current.user === user) return current
+    // Stored attestations are restored only for this issuer and the user they name.
+    const held = current
+      ? undefined
+      : config.attestations?.filter((token) => {
+          const claims = decodeAttestation(token)?.claims
+          return user !== undefined && claims?.iss === issuer && claims.uid === user
+        })
+    const entry: Entry = { user, prover: create(user, held) }
+    if (lookup === latest) current = entry
+    return entry
   }
 
   return {
     scope: config.scope,
     async prove(request, context) {
-      const prover = await resolve()
+      const { prover, user } = await resolve()
       // A request already in flight (such as a payment retry) may still carry the previous
-      // user's attestations from this issuer: drop every one that names another user.
-      const issuer = config.issuer.replace(/\/+$/, '')
-      const user = current?.user
+      // user's attestations from this prover: drop those, and only those, naming another user.
       const sent = parseHeader(request.headers.get(AttestationConstants.header))
       const kept = sent.filter((token) => {
         const claims = decodeAttestation(token)?.claims
-        return claims?.iss !== issuer || (user !== undefined && claims.uid === user)
+        const ours =
+          claims?.iss === issuer && types.includes(claims.type as never) && claims.uid !== undefined
+        return !ours || (user !== undefined && claims.uid === user)
       })
       if (kept.length !== sent.length) {
         const headers = new Headers(request.headers)
@@ -152,10 +162,10 @@ export function attestations(config: attestations.Config): Identity.Prover {
       return prover.prove(request, context)
     },
     async prepare(response, context) {
-      return (await resolve()).prepare?.(response, context)
+      return (await resolve()).prover.prepare?.(response, context)
     },
     async retry(response, context) {
-      return (await resolve()).retry?.(response, context)
+      return (await resolve()).prover.retry?.(response, context)
     },
   }
 }

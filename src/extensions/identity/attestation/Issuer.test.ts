@@ -115,6 +115,12 @@ describe('Issuer.create', () => {
     ).rejects.toThrow('longer')
     for (const claims of [{ uid: 5 }, { cnf: { addr: 1 } }])
       await expect(attester.sign({ audience, sub: 'a', type: 'email', claims })).rejects.toThrow()
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    for (const claims of [{ big: 1n }, circular])
+      await expect(
+        attester.sign({ audience, sub: 'a', type: 'email', claims }),
+      ).rejects.toBeInstanceOf(Attestation.Issuer.InvalidParametersError)
   })
 })
 

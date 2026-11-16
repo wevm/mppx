@@ -98,6 +98,11 @@ export function create(config: create.Config): Issuer {
         throw new InvalidParametersError(
           'Attestation cnf must be an object whose jkt and addr are strings.',
         )
+      try {
+        JSON.stringify(payload)
+      } catch {
+        throw new InvalidParametersError('Attestation claims must be JSON-serializable.')
+      }
       const { keyId } = await key
       // Anything thrown from here on, other than the length check, is the signer's failure.
       const token = await signToken(payload as Types.Claims, { key: config.signingKey, keyId })

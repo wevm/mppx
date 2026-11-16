@@ -591,3 +591,85 @@ test('answers 503 when the signer is unavailable', async () => {
   expect(response!.status).toBe(503)
   expect(response!.headers.get('Retry-After')).toBe('5')
 })
+
+test('keeps attestations it did not issue, and the same user’s across a failed token read', async () => {
+  const { fetch, tempoId } = await setup(() => [])
+  const alice = await tempoId.accessToken({ sub: 'user_ALICE' })
+  const own = (await TempoId.Client.attest({
+    accessToken: () => alice,
+    audience: origin,
+    fetch,
+    issuer: attestUrl,
+    type: 'tempo-id',
+  }))!.attestation
+  const other = await Attestation.Issuer.create({
+    issuer: 'https://other-issuer.example',
+    signingKey: await keyPair(),
+  }).sign({ audience: origin, sub: 'x', type: 'tempo-id', uid: 'user_ALICE' })
+  let failing = false
+  const prover = TempoId.Client.attestations({
+    accessToken: () => {
+      if (failing) throw new Error('offline')
+      return alice
+    },
+    attestations: [own, other],
+    fetch,
+    issuer: attestUrl,
+    scope: [origin],
+  })
+  const context = { created: 0, nonce: 'n' }
+  const header = async (request: Request) =>
+    (await prover.prove(request, context)).headers.get(Attestation.Constants.header)
+
+  // Another issuer's token with a matching uid is not restored.
+  expect(await header(new Request(url))).toBe(own)
+  // A token from this issuer of a type this prover does not obtain is left alone.
+  const sameIssuerOtherType = await Attestation.Issuer.create({
+    issuer: attestUrl,
+    signingKey: await keyPair(),
+  }).sign({ audience: origin, sub: 'x', type: 'github', uid: 'someone' })
+  const carried = new Request(url, {
+    headers: { [Attestation.Constants.header]: sameIssuerOtherType },
+  })
+  expect(await header(carried)).toContain(sameIssuerOtherType)
+
+  failing = true
+  expect(await header(new Request(url))).toBeNull()
+  failing = false
+  expect(await header(new Request(url))).toBe(own)
+})
+
+test('a slow lookup for the previous user does not roll back the session', async () => {
+  const { fetch, tempoId } = await setup(() => [])
+  const alice = await tempoId.accessToken({ sub: 'user_ALICE' })
+  const bob = await tempoId.accessToken({ sub: 'user_BOB' })
+  const aliceToken = (await TempoId.Client.attest({
+    accessToken: () => alice,
+    audience: origin,
+    fetch,
+    issuer: attestUrl,
+    type: 'tempo-id',
+  }))!.attestation
+  let release: (value: string) => void = () => {}
+  let calls = 0
+  const prover = TempoId.Client.attestations({
+    accessToken: () => {
+      calls++
+      if (calls === 1) return new Promise<string>((resolve) => (release = resolve))
+      return bob
+    },
+    fetch,
+    issuer: attestUrl,
+    scope: [origin],
+  })
+  const context = { created: 0, nonce: 'n' }
+  const carried = new Request(url, { headers: { [Attestation.Constants.header]: aliceToken } })
+  const slow = prover.prove(carried, context)
+  const fast = await prover.prove(carried, context)
+  release(alice)
+  await slow
+  expect(fast.headers.get(Attestation.Constants.header)).toBeNull()
+  expect(
+    (await prover.prove(carried, context)).headers.get(Attestation.Constants.header),
+  ).toBeNull()
+})
