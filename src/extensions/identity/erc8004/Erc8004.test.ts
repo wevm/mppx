@@ -1,6 +1,7 @@
 import { Credential, Method, Receipt, Store, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Erc8004 from 'mppx/extensions/identity/erc8004'
+import * as Identity from 'mppx/identity'
 import { Mppx } from 'mppx/server'
 import {
   createClient,
@@ -212,4 +213,9 @@ test('allow decides by agent', async () => {
   const { handler } = setup({ allow: (agent) => agent.agentId !== 1n })
   const response = await client(handler).fetch(url)
   expect(response.status).toBe(403)
+})
+
+test('marks the agent headers as bearer identity headers, so a proxy does not forward them', () => {
+  expect(Identity.Headers.request).toContain('agent-id')
+  expect(Identity.Headers.request).toContain('agent-signature')
 })
