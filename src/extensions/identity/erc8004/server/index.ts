@@ -43,8 +43,9 @@ const abi = [
  *
  * - `verifier` requires a request signed by the agent's wallet, as the Identity Registry's
  *   `getAgentWallet` names it: an EOA signature, or ERC-1271 for a contract or configurable account.
- * - `paymentCheck` requires a `tempo` payment from the agent's wallet, so the payment itself
- *   proves the agent. Without a Credential (on a route with `authorize`) it requires the signature.
+ * - `paymentCheck` accepts a `tempo` charge paid from the agent's wallet, so the payment itself
+ *   proves the agent. For anything else (no Credential, sessions, Zones, other methods) it
+ *   requires the signature.
  *
  * @example
  * ```ts
@@ -170,15 +171,19 @@ export function create(config: create.Config = {}): Erc8004 {
     paymentCheck: {
       requires: [{ type: Constants.type }],
       async verify({ challenge, credential, request }) {
-        if (!credential) return allowed(await getSigned(request))
+        // Only tempo charges bind the source to the payer: a signed transaction from it, a
+        // transfer it made with this challenge's memo, or a proof it signed. Sessions, Zones and
+        // other methods don't, so they need the agent's signature instead.
+        const type = (credential?.payload as { type?: unknown } | undefined)?.type
+        if (
+          !credential ||
+          challenge.method !== 'tempo' ||
+          challenge.intent !== 'charge' ||
+          (type !== 'transaction' && type !== 'hash' && type !== 'proof')
+        )
+          return allowed(await getSigned(request))
         const agent = await getAgent(request)
         if (agent.status !== 'valid') return agent
-        // Only the tempo method checks the source against the transaction's sender.
-        if (challenge.method !== 'tempo')
-          return { status: 'forbidden', reason: 'Pay with the tempo method.' }
-        // A Zone payment does not bind its source to the paying account.
-        if ((credential.payload as { type?: unknown } | undefined)?.type === 'zone')
-          return { status: 'forbidden', reason: 'Pay from a Tempo account, not a Zone.' }
         // The source is a did:pkh:eip155:<chainId>:<address>.
         const parts = credential.source?.split(':') ?? []
         const [did, pkh, namespace, chain, address = ''] = parts

@@ -69,7 +69,7 @@ const method = Method.from({
   name: 'tempo',
   intent: 'charge',
   schema: {
-    credential: { payload: z.object({ token: z.string() }) },
+    credential: { payload: z.object({ type: z.string() }) },
     request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
   },
 })
@@ -89,7 +89,7 @@ function payFrom(address: Address) {
     async createCredential({ challenge }) {
       return Credential.serialize({
         challenge,
-        payload: { token: 'paid' },
+        payload: { type: 'transaction' },
         source: `did:pkh:eip155:4217:${address}`,
       })
     },
@@ -213,6 +213,25 @@ test('allow decides by agent', async () => {
   const { handler } = setup({ allow: (agent) => agent.agentId !== 1n })
   const response = await client(handler).fetch(url)
   expect(response.status).toBe(403)
+})
+
+test("needs the agent's signature when the payment doesn't bind its source", async () => {
+  const { agents } = setup()
+  const challenge = { intent: 'charge', method: 'tempo' }
+  const source = `did:pkh:eip155:4217:${agentKey.address}`
+  const request = new Request(url, { headers: { 'Agent-Id': `eip155:4217:${registry}:1` } })
+  for (const [intent, type] of [
+    ['session', 'topUp'],
+    ['charge', 'zone'],
+    ['charge', undefined],
+  ] as const) {
+    const result = await agents.paymentCheck.verify({
+      challenge: { ...challenge, intent },
+      credential: { payload: { type }, source },
+      request,
+    } as never)
+    expect(result.status).toBe('invalid')
+  }
 })
 
 test('marks the agent headers as bearer identity headers, so a proxy does not forward them', () => {
