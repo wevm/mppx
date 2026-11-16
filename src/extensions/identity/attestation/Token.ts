@@ -89,6 +89,15 @@ export async function verify(token: string, options: verify.Options): Promise<Ve
     return invalid('The attestation has no subject.')
   if (claims.jti !== undefined && typeof claims.jti !== 'string')
     return invalid('The attestation ID is malformed.')
+  if (claims.uid !== undefined && (typeof claims.uid !== 'string' || claims.uid === ''))
+    return invalid('The attestation user ID is malformed.')
+  if (
+    claims.cnf !== undefined &&
+    (!isObject(claims.cnf) ||
+      (claims.cnf.jkt !== undefined && typeof claims.cnf.jkt !== 'string') ||
+      (claims.cnf.addr !== undefined && typeof claims.cnf.addr !== 'string'))
+  )
+    return invalid('The attestation confirmation is malformed.')
   if (!isTime(claims.iat) || !isTime(claims.exp))
     return invalid('The attestation times are malformed.')
   const now = options.now ?? Math.floor(Date.now() / 1_000)
