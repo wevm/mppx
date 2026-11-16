@@ -5,6 +5,10 @@ import { generateProxy } from '../discovery/OpenApi.js'
 import * as Scope from '../server/internal/scope.js'
 import * as Mppx from '../server/Mppx.js'
 import * as Request from '../server/Request.js'
+import {
+  captureRequestBodyProbe,
+  isSessionContentRequest,
+} from '../tempo/server/internal/request-body.js'
 import * as Headers from './internal/Headers.js'
 import * as Replay from './internal/Replay.js'
 import * as Route from './internal/Route.js'
@@ -161,6 +165,27 @@ export function create(config: create.Config): Proxy {
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
+    let selected: Credential.Credential | undefined
+    try {
+      selected = paymentCredential ? Credential.deserialize(paymentCredential) : undefined
+    } catch {}
+    const manualGeneration = requiresManualGeneration(handler, selected?.challenge)
+    const payload = selected?.payload
+    const action =
+      payload && typeof payload === 'object' && 'action' in payload ? payload.action : undefined
+    // Unverified input only routes management to the verifier; it never authorizes upstream work.
+    const management =
+      selected?.challenge.intent === 'session' &&
+      (action === 'close' ||
+        action === 'topUp' ||
+        !isSessionContentRequest(captureRequestBodyProbe(request)))
+    const unsupportedGeneration = () =>
+      new Response(
+        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
+        { status: 500 },
+      )
+    if (manualGeneration && !management) return unsupportedGeneration()
+
     // With replay, a paid request whose credential already paid for this exact
     // request collects its recorded delivery instead of paying again.
     let paidRequest = request
@@ -235,13 +260,7 @@ export function create(config: create.Config): Proxy {
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
-    // Proxy starts upstream work before it knows the response's content type. Only a
-    // request-priced session can prepay that work; per-item generation needs manual charge().
-    if (requiresManualGeneration(handler))
-      return new Response(
-        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
-        { status: 500 },
-      )
+    if (manualGeneration) return unsupportedGeneration()
 
     if (!boundedBody && !replayBody && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)
@@ -521,12 +540,24 @@ function credentialHeaders(handler: Service.IntentHandler): string[] {
   return names.length > 0 ? names : ['authorization']
 }
 
-function requiresManualGeneration(handler: Service.IntentHandler): boolean {
+function requiresManualGeneration(
+  handler: Service.IntentHandler,
+  selected?: PaymentBinding,
+): boolean {
   if (!('_internal' in handler)) return false
-  type Offer = { intent?: string; _canonicalRequest?: { unitType?: unknown } }
+  type Offer = { name?: string; intent?: string; _canonicalRequest?: { unitType?: unknown } }
   const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
-  return (internal?.offers ?? (internal ? [internal] : [])).some(
-    (offer) => offer.intent === 'session' && offer._canonicalRequest?.unitType !== 'request',
+  const offers = internal?.offers ?? (internal ? [internal] : [])
+  const unsupported = (offer: Offer) =>
+    offer.intent === 'session' && offer._canonicalRequest?.unitType !== 'request'
+  // Mixed methods can still challenge and serve their one-shot charge offer. A session's
+  // canonical route pricing is authoritative, never the unitType echoed by its credential.
+  if (!selected) return offers.length > 0 && offers.every(unsupported)
+  return offers.some(
+    (offer) =>
+      (!offer.name || offer.name === selected.method) &&
+      offer.intent === selected.intent &&
+      unsupported(offer),
   )
 }
 

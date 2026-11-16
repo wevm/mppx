@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vp/test'
 
+import * as Credential from '../Credential.js'
 import * as Mppx from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import * as Proxy from './Proxy.js'
@@ -618,11 +619,11 @@ test.each([false, true])(
   },
 )
 
-test('rejects per-item session proxying before upstream work', async () => {
+test('rejects per-item session proxying before payment or upstream work', async () => {
   const payment = vi.fn()
   const fetch = vi.fn()
   const handler = Object.assign(createPaidHandler(payment), {
-    _internal: { intent: 'session', _canonicalRequest: { unitType: 'token' } },
+    _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
   })
   const proxy = Proxy.create({
     fetch,
@@ -634,7 +635,7 @@ test('rejects per-item session proxying before upstream work', async () => {
     ],
   })
   expect((await proxy.fetch(paidRequest())).status).toBe(500)
-  expect(payment).toHaveBeenCalledTimes(1)
+  expect(payment).not.toHaveBeenCalled()
   expect(fetch).not.toHaveBeenCalled()
 })
 
@@ -649,7 +650,7 @@ test.each(['POST /generate', 'GET /generate'])(
         withReceipt: <response>(_response: response) => management as response,
       })),
       {
-        _internal: { intent: 'session', _canonicalRequest: { unitType: 'token' } },
+        _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
       },
     )
     const proxy = Proxy.create({
@@ -661,8 +662,80 @@ test.each(['POST /generate', 'GET /generate'])(
         }),
       ],
     })
-    expect(await proxy.fetch(paidRequest())).toBe(management)
+    expect(await proxy.fetch(paidRequest({ credential: sessionCredential('close') }))).toBe(
+      management,
+    )
     expect(handler).toHaveBeenCalledTimes(1)
     expect(fetch).not.toHaveBeenCalled()
   },
 )
+
+function sessionCredential(action: string, intent = 'session') {
+  return Credential.serialize({
+    challenge: {
+      id: 'test-challenge',
+      realm: 'proxy.example',
+      method: 'tempo',
+      intent,
+      request: { unitType: 'request' },
+    },
+    payload: { action },
+  }).replace(/^Payment /, '')
+}
+
+test.each(['GET', 'POST'])(
+  'rejects canonical per-item %s content before charging, even with an echoed request unit',
+  async (method) => {
+    const payment = vi.fn()
+    const fetch = vi.fn()
+    const handler = Object.assign(createPaidHandler(payment), {
+      _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+    })
+    const proxy = Proxy.create({
+      fetch,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { [`${method} /generate`]: handler },
+        }),
+      ],
+    })
+    const request = new Request('https://proxy.example/api/generate', {
+      method,
+      headers: { Authorization: `Payment ${sessionCredential('voucher')}` },
+      ...(method === 'POST' ? { body: 'generate' } : {}),
+    })
+    expect((await proxy.fetch(request)).status).toBe(500)
+    expect(payment).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
+
+test('serves a charge credential when composed with an unsupported session offer', async () => {
+  const payment = vi.fn()
+  const fetch = vi.fn(async () => new Response('paid result'))
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: {
+      offers: [
+        { name: 'tempo', intent: 'charge', _canonicalRequest: {} },
+        { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+      ],
+    },
+  })
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  const response = await proxy.fetch(
+    paidRequest({ credential: sessionCredential('charge', 'charge') }),
+  )
+  expect(await response.text()).toBe('paid result')
+  expect(response.headers.get('Payment-Receipt')).toBe('test-receipt')
+  expect(payment).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
