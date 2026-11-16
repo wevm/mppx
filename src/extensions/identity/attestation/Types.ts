@@ -12,9 +12,16 @@ export type Claims = {
   readonly iss: string
   /** Origin of the server the attestation is for, such as `https://api.example`. */
   readonly aud: string
-  /** Attested subject, such as an email address. */
+  /**
+   * Attested subject: an email address or phone number, or the provider's stable identifier for
+   * an account (such as a GitHub user ID), never a handle that can change.
+   */
   readonly sub: string
-  /** Attestation type, such as `email`. */
+  /**
+   * Attestation type: any structured-field token the issuer and server agree on, such as
+   * `email`, `phone`, `github`, `x` or `tempo-id`. One attestation states one fact; an issuer
+   * that knows several of a user's accounts signs one attestation of each type.
+   */
   readonly type: string
   /** Issued-at time, in Unix seconds. */
   readonly iat: number
@@ -22,7 +29,29 @@ export type Claims = {
   readonly exp: number
   /** Unique attestation identifier. */
   readonly jti?: string | undefined
-}
+  /**
+   * The issuer's identifier for the user behind the subject, the same across that issuer's
+   * attestations of every type, so a server can tell that an `email` and a `github`
+   * attestation from one issuer name the same user.
+   */
+  readonly uid?: string | undefined
+  /**
+   * Confirmation (RFC 7800): what the attestation is bound to, such as the key that must sign
+   * each request (`jkt`, an RFC 7638 thumbprint) or the account that pays (`addr`).
+   */
+  readonly cnf?: Confirmation | undefined
+} & Readonly<Record<string, unknown>>
+
+/**
+ * What an attestation is bound to (RFC 7800 `cnf`). Issuers may add other members; a server
+ * enforces the ones it understands.
+ */
+export type Confirmation = {
+  /** RFC 7638 thumbprint of the key that must sign each request. */
+  readonly jkt?: string | undefined
+  /** Address of the account that must pay, such as a Tempo Account. */
+  readonly addr?: string | undefined
+} & Readonly<Record<string, unknown>>
 
 /**
  * Resolves the issuer's public key for an attestation's `kid`. Returns
