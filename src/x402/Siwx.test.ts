@@ -458,3 +458,23 @@ describe('x402 sign-in-with-x in composed routes', () => {
     expect(grants).toEqual(['decline', 'grant'])
   })
 })
+
+describe('Siwx.release', () => {
+  test('deletes the nonce while its claim holds', async () => {
+    const store = Store.memory()
+    const payload = { issuedAt: new Date().toISOString(), nonce: 'release-fresh-1' }
+    await Siwx.claim({ payload, store })
+    await Siwx.release({ payload, store })
+    await expect(Siwx.claim({ payload, store })).resolves.toBeUndefined()
+  })
+
+  test('leaves a newer claim alone once its own claim expired', async () => {
+    const store = Store.memory()
+    const nonce = 'release-stale-1'
+    const stale = { issuedAt: new Date(Date.now() - Siwx.ttl - 2 * 60_000).toISOString(), nonce }
+    const fresh = { issuedAt: new Date().toISOString(), nonce }
+    await Siwx.claim({ payload: fresh, store })
+    await Siwx.release({ payload: stale, store })
+    await expect(Siwx.claim({ payload: fresh, store })).rejects.toThrow('invalid_siwx_nonce')
+  })
+})

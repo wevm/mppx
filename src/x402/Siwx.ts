@@ -314,25 +314,36 @@ export async function claim(parameters: {
   store: Store.AtomicStore
 }): Promise<void> {
   const { payload, store } = parameters
-  const claimed = await Store.tryClaim(
-    store,
-    `mppx:x402:siwx:${payload.nonce}`,
-    Date.parse(payload.issuedAt) + ttl + clockSkew,
-  )
+  const claimed = await Store.tryClaim(store, nonceKey(payload), claimExpires(payload))
   if (!claimed) throw new InvalidProofError('invalid_siwx_nonce')
 }
 
 /**
  * Releases a nonce {@link claim} recorded, so the proof can be accepted again. Call it
  * only for a claim this request made, such as when `grant` declines the wallet.
+ * Does nothing once that claim has expired, since another request may hold the nonce by then.
  */
 export async function release(parameters: {
   /** The claimed proof. */
-  payload: Pick<Payload, 'nonce'>
+  payload: Pick<Payload, 'issuedAt' | 'nonce'>
   /** The store `claim` recorded the nonce in. */
   store: Store.AtomicStore
 }): Promise<void> {
-  await parameters.store.delete(`mppx:x402:siwx:${parameters.payload.nonce}`)
+  const { payload, store } = parameters
+  const expires = claimExpires(payload)
+  // Checked inside the atomic update: until this request's claim expires nobody else can
+  // claim the nonce, so the stored marker is still this request's own.
+  await store.update(nonceKey(payload), () =>
+    Date.now() < expires ? { op: 'delete', result: undefined } : { op: 'noop', result: undefined },
+  )
+}
+
+function nonceKey(payload: Pick<Payload, 'nonce'>) {
+  return `mppx:x402:siwx:${payload.nonce}`
+}
+
+function claimExpires(payload: Pick<Payload, 'issuedAt'>) {
+  return Date.parse(payload.issuedAt) + ttl + clockSkew
 }
 
 /**
