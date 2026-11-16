@@ -1876,6 +1876,48 @@ describe('challenge selection policy', () => {
       await expect(prepared).rejects.toThrow('No method found for challenges')
     else expect((await prepared).challenge.id).toBe(`offer-${selected}`)
   })
+
+  describe('an offer with an oversized amount', () => {
+    const amount = '9'.repeat(100_000)
+
+    test.each([
+      {
+        name: 'is skipped for its currency without parsing the amount',
+        options: { currencies: [otherCurrency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: false,
+      },
+      {
+        name: 'is skipped for its recipient without parsing the amount',
+        options: { currencies: [currency], expectedRecipients: [currency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: false,
+      },
+      {
+        name: 'is accepted without a cap and without parsing the amount',
+        options: { currencies: [currency] },
+        accepted: true,
+        parsed: false,
+      },
+      {
+        name: 'is skipped when it exceeds a cap',
+        options: { currencies: [currency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: true,
+      },
+    ])('$name', ({ accepted, options, parsed }) => {
+      const method = charge({ account, ...(options as charge.Parameters) })
+      const challenge = createChallenge()
+      const offer = { ...challenge, request: { ...challenge.request, amount } }
+      const bigInt = vi.spyOn(globalThis, 'BigInt')
+      try {
+        expect(method.canHandleChallenge!({ challenge: offer } as never)).toBe(accepted)
+        expect(bigInt.mock.calls.some(([value]) => value === amount)).toBe(parsed)
+      } finally {
+        bigInt.mockRestore()
+      }
+    })
+  })
 })
 
 describe('zero-amount recipient policy', () => {
