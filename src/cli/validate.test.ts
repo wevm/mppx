@@ -1474,7 +1474,7 @@ test('captureEventStream drops the tail of an oversized event', async () => {
 })
 
 describe('validate: live mppx server', () => {
-  // An unmodified mppx server issues a fresh `_mppx_nonce` per Challenge and sits behind an API key,
+  // An unmodified mppx server issues a fresh `_mpp_nonce` per Challenge and sits behind an API key,
   // so this catches validate drifting from what real servers send.
   test('validates an unmodified mppx server behind an API key', { timeout: 30_000 }, async () => {
     const { Mppx, tempo } = await import('../server/index.js')

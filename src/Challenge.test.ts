@@ -501,6 +501,20 @@ describe('serialize', () => {
     expect(header).toContain('request="')
   })
 
+  test.each(['Tempo', 'x402', 'my-method', ''])(
+    'error: rejects method %j outside the a-z grammar',
+    (method) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method,
+        intent: 'charge',
+        request: { amount: '1000000' },
+      })
+      expect(() => Challenge.serialize(challenge)).toThrow(`Invalid method: "${method}"`)
+    },
+  )
+
   test('behavior: includes optional fields', () => {
     const challenge = Challenge.from({
       id: 'abc123',
@@ -754,7 +768,17 @@ describe('deserialize', () => {
     {
       name: 'invalid method casing',
       header: 'Payment id="a", realm="api", method="Tempo", intent="charge", request="e30"',
-      error: 'Invalid method: "Tempo". Must be lowercase per spec.',
+      error: 'Invalid method: "Tempo". Must be lowercase letters a-z per spec.',
+    },
+    {
+      name: 'method with digits',
+      header: 'Payment id="a", realm="api", method="x402", intent="charge", request="e30"',
+      error: 'Invalid method: "x402". Must be lowercase letters a-z per spec.',
+    },
+    {
+      name: 'method with punctuation',
+      header: 'Payment id="a", realm="api", method="my-method", intent="charge", request="e30"',
+      error: 'Invalid method: "my-method". Must be lowercase letters a-z per spec.',
     },
     {
       name: 'malformed auth-param',

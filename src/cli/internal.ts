@@ -174,7 +174,7 @@ export function assertSamePaymentRequest(
 
 /**
  * Returns a Challenge's opaque value without the per-issuance nonces mppx servers add
- * (`_mppx_nonce`, `_mppx_identity`), which differ on every Challenge for the same payment.
+ * (`_mpp_nonce` and the legacy `_mppx_nonce`, `_mppx_identity`), which differ on every Challenge for the same payment.
  */
 function stableOpaque(challenge: Challenge.Challenge): string | undefined {
   const opaque =

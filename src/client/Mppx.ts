@@ -616,14 +616,18 @@ export declare namespace create {
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** Called when a 402 challenge is received and no event handler supplies a credential. */
+    /**
+     * Called when a 402 challenge is received and no event handler supplies a credential, before
+     * paying. Return a credential to send it, `undefined` to pay with the method's default
+     * credential, or `false` to decline: nothing is paid and the 402 response is returned.
+     */
     onChallenge?:
       | ((
           challenge: Challenge.Challenge,
           helpers: {
             createCredential: (context?: AnyContextFor<FlattenMethods<methods>>) => Promise<string>
           },
-        ) => Promise<string | undefined>)
+        ) => Promise<string | undefined | false>)
       | undefined
     /** Maximum number of payment challenge retries after the initial response. @default 3 */
     maxPaymentRetries?: Fetch.from.Config['maxPaymentRetries'] | undefined

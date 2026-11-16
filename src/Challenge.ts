@@ -312,6 +312,7 @@ export declare namespace fromMethod {
  * ```
  */
 export function serialize(challenge: Challenge): string {
+  assertMethod(challenge.method)
   const parts = [
     authParam('id', challenge.id),
     authParam('realm', challenge.realm),
@@ -332,6 +333,15 @@ export function serialize(challenge: Challenge): string {
     parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
 
   return `${Constants.Schemes.payment} ${parts.join(', ')}`
+}
+
+/** Payment method identifier grammar: `1*LOWERALPHA` (a-z only). */
+const methodPattern = /^[a-z]+$/
+
+/** @internal Throws unless `method` matches the spec's method identifier grammar (a-z only). */
+function assertMethod(method: string): void {
+  if (!methodPattern.test(method))
+    throw new Error(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
 }
 
 /** @internal */
@@ -377,8 +387,7 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
   if (request.length > maxRequestParameterLength) throw new Error('Request parameter too large.')
-  if (rest.method && !/^[a-z][a-z0-9:_-]*$/.test(rest.method))
-    throw new Error(`Invalid method: "${rest.method}". Must be lowercase per spec.`)
+  if (rest.method !== undefined) assertMethod(rest.method)
 
   return from(
     {
