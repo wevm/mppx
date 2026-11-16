@@ -99,7 +99,7 @@ afterEach(() => {
 })
 
 describe('tempo.charge client: a Zone credential returned after its challenge expired', () => {
-  test('is returned again only for its own challenge, and a new challenge withdraws again', async () => {
+  test('is returned again only for its own challenge, and blocks its terms until its window ends', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const method = tempo_client.charge({
       getClient: () => l1,
@@ -117,10 +117,23 @@ describe('tempo.charge client: a Zone credential returned after its challenge ex
     expect(await method.createCredential(parameters(first))).toBe(late)
     expect(mocks.sent).toHaveLength(1)
 
-    // A new challenge with the same terms is a new payment.
+    // The server may have redeemed or refused the late credential, so a new challenge with the
+    // same terms neither reuses it nor pays again while it can still be redeemed.
     const second = await challenge()
-    const credential = await method.createCredential(parameters(second))
-    expect(Credential.deserialize(credential).challenge.id).toBe(second.id)
+    await expect(method.createCredential(parameters(second))).rejects.toThrow(
+      'has not settled on Tempo yet',
+    )
+    expect(mocks.sent).toHaveLength(1)
+
+    // Once no server can redeem it, a new challenge is a new payment.
+    vi.setSystemTime(new Date(first.expires!).getTime() + 5 * 60_000 + 1_000)
+    const third = await challenge()
+    const credential = await method.createCredential(parameters(third))
+    expect(Credential.deserialize(credential).challenge.id).toBe(third.id)
+    expect(mocks.sent).toHaveLength(2)
+
+    // A retry of the first challenge, no longer tracked, is refused without paying again.
+    await expect(method.createCredential(parameters(first))).rejects.toThrow()
     expect(mocks.sent).toHaveLength(2)
   })
 })

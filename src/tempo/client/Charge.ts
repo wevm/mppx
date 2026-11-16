@@ -24,6 +24,7 @@ import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
+import * as Expires from '../../Expires.js'
 import * as Method from '../../Method.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
 import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
@@ -185,6 +186,9 @@ export function charge(parameters: charge.Parameters = {}) {
         // challenge expires; an expired challenge would invite another payment.
         const outstanding = findZoneWithdrawal(options)
         if (outstanding) return resumeZoneCredential(options, outstanding)
+        // With nothing outstanding, an expired challenge can't be paid: its server refuses any
+        // credential for it, so a payment on Tempo would be lost.
+        if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
         if (settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
           return createZoneCredential(options)
       }
@@ -513,7 +517,8 @@ type PendingZoneWithdrawal = {
   origin: string | undefined
   /**
    * Whether its credential was returned after its challenge expired. Only a retry of that
-   * challenge may get the credential again: the server redeems it once, so it never pays another.
+   * challenge may get the credential again; until its redemption window ends, a challenge with
+   * the same terms fails closed, since the server may have redeemed or refused it.
    */
   redeemedLate?: boolean | undefined
   /** Payment terms: what another challenge must ask for to be paid by this withdrawal. */
@@ -569,8 +574,11 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
       pending.delete(key)
       continue
     }
-    // Its credential was already sent for its own challenge, so this challenge is a new payment.
-    if (entry.redeemedLate) continue
+    // Its credential was sent after its challenge expired, and its server may still accept or
+    // refuse it. Sending it again for this challenge could redeem it twice, and a new payment
+    // could pay twice if it was refused, so fail closed until its redemption window ends.
+    if (entry.redeemedLate)
+      throw new Errors.ZoneSettlementPendingError({ challengeId: challenge.id, zoneId })
     // A call still waiting on it is another payment in flight, not one this challenge retries:
     // sharing its credential would leave one of the two payments unpaid.
     if (entry.waiters > 0) continue
@@ -645,7 +653,7 @@ async function waitForZoneCredential(options: ZoneCredentialOptions, entry: Pend
   // The credential pays once: a later challenge with the same terms is a new payment. One
   // made after its challenge expired is accepted only by a server that grants a grace period
   // (`zoneCredentialGraceMs`), so it stays for a retry of its own challenge, which would
-  // otherwise pay again on Tempo, but no longer pays any other challenge.
+  // otherwise pay again on Tempo, and blocks other challenges until its window ends.
   if (pending.get(key) === entry) {
     if (isExpired(challenge.expires)) entry.redeemedLate = true
     else pending.delete(key)

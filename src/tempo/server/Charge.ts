@@ -101,6 +101,10 @@ export function charge<const parameters extends charge.Parameters>(
     throw new Error(
       `\`zoneCredentialGraceMs\` must be between 0 and ${Zone.redemptionGraceMs} milliseconds.`,
     )
+  // A relay verifies credentials itself, without the local check that a late `zone` credential
+  // settled before its challenge expired, so it can't honor the grace safely.
+  if (relay && zoneCredentialGraceMs > 0)
+    throw new Error('`zoneCredentialGraceMs` is not supported with `relay`.')
   /**
    * Grace for a credential presented after its challenge expired: only a `zone` credential gets
    * one, and only for a challenge issued with the grace on. A challenge issued without it (by an
@@ -1282,6 +1286,8 @@ export declare namespace charge {
      *
      * Enable it once no instance of an earlier release verifies credentials from the same store:
      * such an instance could redeem a marked Challenge and record it only until its expiry.
+     *
+     * Not supported with `relay`, which verifies credentials without the settled-before-expiry check.
      *
      * @default 0
      */

@@ -177,9 +177,11 @@ async function createCredential(
   config: {
     context?: unknown
     method: Method.AnyClient
+    /** Stops resuming a pending Zone settlement once the call is aborted. */
+    signal?: AbortSignal | undefined
   },
 ): Promise<string> {
-  const { context, method } = config
+  const { context, method, signal } = config
 
   if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
@@ -193,7 +195,7 @@ async function createCredential(
           ? { challenge, context: parsedContext }
           : ({ challenge } as never),
       ),
-    { attempts: maxPaymentAttempts },
+    { attempts: maxPaymentAttempts, signal },
   )
 }
 
@@ -252,6 +254,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
     const credential = await createCredential(selected.challenge, {
       context: call.context,
       method: selected.method,
+      signal: call.requestOptions?.signal,
     })
     const parsed = Credential.deserialize(credential)
 
