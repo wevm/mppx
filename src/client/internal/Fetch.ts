@@ -1,5 +1,6 @@
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
+import * as Credential from '../../Credential.js'
 import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as IdentityClient from '../../identity/Client.js'
@@ -511,7 +512,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               // Runtimes do not strip custom payment headers on cross-origin redirects.
               redirect: 'manual',
             },
-            { challenge: selectedChallenge, headers: identityHeaders },
+            // Identity proofs bind to the Challenge the credential pays, which is an earlier
+            // one when a method resumed a payment it started for that Challenge.
+            { challenge: paidChallenge(credential, selectedChallenge), headers: identityHeaders },
           ))
         } catch (cause) {
           outcomeUnknown = unknownOutcome(cause)
@@ -1271,6 +1274,19 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
 }
 
 /** The request's origin, or `undefined` for a relative URL outside a browser. */
+/**
+ * Returns the Challenge a Payment credential pays: `selected` unless the credential carries
+ * another one, as a resumed Zone withdrawal does for the Challenge it was started for.
+ */
+function paidChallenge(credential: string, selected: Challenge.Challenge): Challenge.Challenge {
+  try {
+    const paid = Credential.deserialize(credential).challenge
+    return paid.id === selected.id ? selected : paid
+  } catch {
+    return selected
+  }
+}
+
 function requestOrigin(input: RequestInfo | URL): { origin: string } | undefined {
   try {
     return { origin: resolveRequestUrl(input).origin }

@@ -785,13 +785,15 @@ export function charge<const parameters extends charge.Parameters>(
 
         case 'zone': {
           const { portal, receipt, senderTag } = validated
-          // Held through the grace period too, while the credential can still be presented.
+          // Held through the longest grace any instance may grant, not only this one's: an
+          // instance sharing the store with a larger `zoneCredentialGraceMs` would otherwise
+          // accept the credential again once this marker lapsed.
           if (
             !(await tryClaimZoneWithdrawal(
               store,
               portal,
               senderTag,
-              replayExpires + zoneCredentialGraceMs,
+              replayExpires + Zone.redemptionGraceMs,
             ))
           ) {
             throw new CredentialReplayedError({
@@ -1116,8 +1118,10 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
   })
-  CredentialExpiry.register(method, graceMsFor)
-  return relay ? (Relay.configure(method, relay) as typeof method) : method
+  // A relay verifies credentials itself, without the local proof that a Zone withdrawal settled
+  // before its challenge expired, so a relay-configured method grants no grace.
+  if (relay) return Relay.configure(method, relay) as typeof method
+  return CredentialExpiry.register(method, graceMsFor)
 }
 
 export declare namespace charge {

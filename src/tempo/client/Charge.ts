@@ -508,6 +508,8 @@ type PendingZoneWithdrawal = {
   origin: string | undefined
   /** Payment terms: what another challenge must ask for to be paid by this withdrawal. */
   terms: string | undefined
+  /** Callers waiting on it now. Only a withdrawal nobody waits on pays another challenge. */
+  waiters: number
   withdrawal: Promise<ZoneWithdrawal>
 }
 
@@ -518,12 +520,14 @@ type PendingZoneWithdrawal = {
  */
 function createZoneCredential(options: ZoneCredentialOptions) {
   const { challenge, origin, pending, zoneId } = options
-  // Stored before it is sent, so concurrent and later calls for one challenge or its terms share it.
+  // Stored before it is sent, so concurrent calls for one challenge, and later calls for its
+  // terms once nobody waits on it, share it.
   const state = { sent: false }
   const entry: PendingZoneWithdrawal = {
     challenge,
     origin,
     terms: zoneTermsKey(challenge, zoneId),
+    waiters: 0,
     withdrawal: requestZoneWithdrawal(options, state),
   }
   const key = zoneWithdrawalKey(challenge)
@@ -538,9 +542,10 @@ function createZoneCredential(options: ZoneCredentialOptions) {
 
 /**
  * Returns the outstanding withdrawal that pays this challenge: its own, or, for a new
- * challenge with the same terms, one an earlier challenge started. A withdrawal stays
- * outstanding until it produces a credential, even after its challenge expires: it may
- * have settled, so paying its terms again could pay twice.
+ * challenge with the same terms, one an earlier challenge started that nobody waits on now.
+ * A withdrawal stays outstanding until it produces a credential: it may have settled, so
+ * paying its terms again could pay twice. One that another caller still waits on belongs to
+ * that caller's request, so a concurrent request with the same terms pays its own.
  */
 function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdrawal | undefined {
   const { challenge, pending, zoneId } = options
@@ -548,7 +553,8 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
   if (own) return own
   const terms = zoneTermsKey(challenge, zoneId)
   if (terms === undefined) return undefined
-  for (const entry of pending.values()) if (entry.terms === terms) return entry
+  for (const entry of pending.values())
+    if (entry.terms === terms && entry.waiters === 0) return entry
   return undefined
 }
 
@@ -559,11 +565,9 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
  * or one the caller did not verify, this throws the settlement-pending error instead.
  */
 async function resumeZoneCredential(options: ZoneCredentialOptions, entry: PendingZoneWithdrawal) {
-  const { client, origin, pending, zone, zoneId } = options
+  const { origin, zoneId } = options
   const { challenge } = entry
-  const recipient = (challenge.request as ChargeRequest).recipient as Address
-  const key = zoneWithdrawalKey(challenge)
-  const foreign = key !== zoneWithdrawalKey(options.challenge)
+  const foreign = zoneWithdrawalKey(challenge) !== zoneWithdrawalKey(options.challenge)
   if (
     foreign
       ? !origin || origin !== entry.origin
@@ -575,6 +579,20 @@ async function resumeZoneCredential(options: ZoneCredentialOptions, entry: Pendi
   if (!isRedeemable(challenge.expires))
     throw new Errors.ZoneSettlementPendingError({ challengeId: challenge.id, zoneId })
 
+  entry.waiters++
+  try {
+    return await waitForZoneCredential(options, entry)
+  } finally {
+    entry.waiters--
+  }
+}
+
+/** Waits for `entry`'s withdrawal to settle and returns the `zone` credential that redeems it. */
+async function waitForZoneCredential(options: ZoneCredentialOptions, entry: PendingZoneWithdrawal) {
+  const { client, pending, zone, zoneId } = options
+  const { challenge } = entry
+  const recipient = (challenge.request as ChargeRequest).recipient as Address
+  const key = zoneWithdrawalKey(challenge)
   const withdrawal = await entry.withdrawal
   // Derived on every attempt, so a failed read on the Zone is retried without withdrawing again.
   const senderTags =
@@ -604,11 +622,10 @@ async function resumeZoneCredential(options: ZoneCredentialOptions, entry: Pendi
       zoneId,
     })
   }
-  // The credential pays once: a later challenge with the same terms is a new payment. One
-  // made after its challenge expired is accepted only by a server that grants a grace period
-  // (`zoneCredentialGraceMs`), so the withdrawal stays outstanding and a later challenge for
-  // its terms fails closed instead of paying again.
-  if (pending.get(key) === entry && !isExpired(challenge.expires)) pending.delete(key)
+  // The credential pays once: a later challenge with the same terms is a new payment. That
+  // holds for one made after its challenge expired too: whether a server's grace accepts it or
+  // not, the withdrawal is spent, and keeping it would block those terms for good.
+  if (pending.get(key) === entry) pending.delete(key)
   const { hash, senderTag } = settled
 
   return Credential.serialize({
@@ -690,13 +707,6 @@ function zoneTermsKey(challenge: ZoneCredentialOptions['challenge'], zoneId: num
     request,
     zoneId,
   })
-}
-
-/** Whether a challenge expiring at `expires` has expired. */
-function isExpired(expires: string | undefined) {
-  if (!expires) return false
-  const expiresAt = new Date(expires).getTime()
-  return !Number.isNaN(expiresAt) && Date.now() >= expiresAt
 }
 
 /**

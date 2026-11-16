@@ -272,6 +272,30 @@ describe('tempo.charge client zone selection', () => {
       expect(calls).toHaveLength(sent)
     })
 
+    test('withdraws for a concurrent challenge with the same terms', async () => {
+      const calls: string[] = []
+      const method = tempo_client.charge({
+        getClient: () => l1,
+        zone: { client: failingZoneClient(calls, 'send') },
+      })
+      const [first, second] = [await challenge(), await challenge()]
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      try {
+        const results = [
+          method.createCredential(parameters(first, 'https://example.com')),
+          // The first call still waits on its withdrawal: this request pays its own.
+          method.createCredential(parameters(second, 'https://example.com')),
+        ].map((result) => result.catch((error: Error) => error))
+        await vi.advanceTimersByTimeAsync(30_000)
+        const [a, b] = await Promise.all(results)
+        expect(String(a)).toContain('Zone withdrawal outcome is unknown')
+        expect(b).not.toBeInstanceOf(Errors.ZoneSettlementPendingError)
+      } finally {
+        vi.useRealTimers()
+      }
+      expect(calls.filter((call) => call === 'eth_sendRawTransactionSync')).toHaveLength(2)
+    })
+
     test('withdraws for a challenge with other terms', async () => {
       const { calls, method, sent } = await outstanding('https://example.com')
       await method
