@@ -42,6 +42,8 @@ type WithdrawalFixture = {
 function setup(
   options: {
     withdrawals?: () => WithdrawalFixture[]
+    /** Whether the receipt also carries the portal's payout transfer for each withdrawal. */
+    payoutTransfers?: boolean
     status?: 'success' | 'reverted'
     zones?: number[] | true
   } = {},
@@ -66,6 +68,18 @@ function setup(
       [{ type: 'address' }, { type: 'uint128' }, { type: 'bool' }],
       [w.token ?? currency, w.amount ?? 1_000_000n, w.callbackSuccess ?? true],
     ),
+  })
+
+  // The TIP-20 transfer the portal makes to pay a withdrawal out, carrying its memo.
+  const payoutLog = (w: WithdrawalFixture, index: number) => ({
+    ...processedLog(w, index),
+    address: w.token ?? currency,
+    topics: encodeEventTopics({
+      abi: Abis.tip20,
+      eventName: 'TransferWithMemo',
+      args: { from: portal, to: w.to ?? merchant, memo: w.memo },
+    }),
+    data: encodeAbiParameters([{ type: 'uint256' }], [w.amount ?? 1_000_000n]),
   })
 
   const client = createClient({
@@ -120,7 +134,11 @@ function setup(
             effectiveGasPrice: '0x1',
             contractAddress: null,
             logsBloom: `0x${'00'.repeat(256)}`,
-            logs: withdrawals().map(processedLog),
+            logs: withdrawals().flatMap((w, index) =>
+              options.payoutTransfers
+                ? [processedLog(w, 2 * index), payoutLog(w, 2 * index + 1)]
+                : [processedLog(w, index)],
+            ),
           }
         throw new Error(`unexpected ${method}`)
       },
@@ -168,13 +186,86 @@ function setup(
     )
   }
 
-  return { challenge, credential, rpcMethods, server }
+  return { challenge, credential, rpc: client, rpcMethods, server }
 }
 
 const tagA = `0x${'a1'.repeat(32)}` as const
 const tagB = `0x${'b2'.repeat(32)}` as const
 
 describe('tempo.charge zone credentials', () => {
+  describe('a Zone settlement presented as a hash credential', () => {
+    function hashCredential(challenge: Challenge.Challenge, source?: string) {
+      return Credential.serialize(
+        Credential.from({
+          challenge,
+          payload: { hash: settlementHash, type: 'hash' },
+          ...(source ? { source } : {}),
+        }),
+      )
+    }
+    const portalSource = `did:pkh:eip155:${tempoModerato.id}:${portal}`
+
+    test('is refused after the zone credential redeemed it', async () => {
+      let fixture: WithdrawalFixture[] = []
+      const { challenge, credential, server } = setup({
+        payoutTransfers: true,
+        withdrawals: () => fixture,
+      })
+      const { challenge: c, memo } = await challenge()
+      fixture = [{ senderTag: tagA, memo }]
+      await expect(
+        server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash })),
+      ).resolves.toMatchObject({ reference: settlementHash, status: 'success' })
+      await expect(server.verifyCredential(hashCredential(c, portalSource))).rejects.toThrow(
+        'no matching transfer found',
+      )
+    })
+
+    test.each([
+      ['naming the portal as its source', portalSource],
+      ['without a source', undefined],
+    ])('is refused %s', async (_, source) => {
+      let fixture: WithdrawalFixture[] = []
+      const { challenge, credential, server } = setup({
+        payoutTransfers: true,
+        withdrawals: () => fixture,
+      })
+      const { challenge: c, memo } = await challenge()
+      fixture = [{ senderTag: tagA, memo }]
+      await expect(server.verifyCredential(hashCredential(c, source))).rejects.toThrow(
+        'no matching transfer found',
+      )
+      // The settlement still pays once, through its zone credential.
+      await expect(
+        server.verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash })),
+      ).resolves.toMatchObject({ reference: settlementHash, status: 'success' })
+    })
+
+    test('is refused by a validateSender that accepts any sender', async () => {
+      let fixture: WithdrawalFixture[] = []
+      const client = setup({ payoutTransfers: true, withdrawals: () => fixture })
+      const { challenge: c, memo } = await client.challenge()
+      fixture = [{ senderTag: tagA, memo }]
+      const server = Mppx.create({
+        realm,
+        secretKey: 'test-secret-key-test-secret-key-32',
+        methods: [
+          tempo.charge({
+            account: merchant,
+            currency,
+            getClient: () => client.rpc,
+            testnet: true,
+            validateSender: () => true,
+            zones: [zoneId],
+          }),
+        ],
+      })
+      await expect(server.verifyCredential(hashCredential(c, portalSource))).rejects.toThrow(
+        'no matching transfer found',
+      )
+    })
+  })
+
   test('advertises accepted zones in the challenge', async () => {
     const { challenge } = setup({ zones: [3, 7] })
     const { challenge: c } = await challenge()
