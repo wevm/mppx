@@ -267,7 +267,11 @@ export type ServerOptions = {
    * which a caller controls.
    */
   origin: string
-  /** Atomic store that records used nonces, so each proof is accepted once. */
+  /**
+   * Atomic store that records used nonces, so each proof is accepted once. In a composed
+   * route, give offers that share a backend the same store object: each store object
+   * records the nonce on its own, so two objects over one backend refuse a later offer.
+   */
   store: Store.AtomicStore
 }
 
