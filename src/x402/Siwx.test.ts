@@ -309,4 +309,87 @@ describe('Siwx.wrapFetch', () => {
     expect(response.status).toBe(402)
     expect(calls).toBe(1)
   })
+
+  test('does not sign a challenge reached through a cross-origin redirect', async () => {
+    const { handler } = createRoute()
+    let calls = 0
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        calls++
+        const response = await handler(
+          new Request(url, { headers: new Request(input, init).headers }),
+        )
+        // As native fetch reports a response after following a redirect.
+        Object.defineProperty(response, 'url', { value: url })
+        return response
+      },
+      { account },
+    )
+    const response = await fetch('https://attacker.example/start')
+    expect(response.status).toBe(402)
+    expect(calls).toBe(1)
+  })
+
+  test('does not follow redirects with the proof', async () => {
+    const { handler } = createRoute()
+    const redirects: RequestRedirect[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        const request = new Request(input, init)
+        redirects.push(request.redirect)
+        return handler(request)
+      },
+      { account },
+    )
+    await fetch(url)
+    expect(redirects).toEqual(['follow', 'manual'])
+  })
+
+  test('retries when the underlying fetch keeps a clone of the 402', async () => {
+    const { handler } = createRoute()
+    const kept: Response[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        const response = await handler(new Request(input, init))
+        kept.push(response.clone())
+        return response
+      },
+      { account },
+    )
+    const response = await fetch(url)
+    expect(response.status).toBe(200)
+  })
+})
+
+describe('x402 sign-in-with-x in composed routes', () => {
+  test('keeps every payment offer and lists every chain', async () => {
+    const store = Store.memory()
+    const facilitator = {
+      verify: async () => ({ isValid: true }),
+      settle: async () => ({ network: 'x', success: true, transaction: '0x' }),
+    }
+    const siwx = { grant: () => true, origin, store }
+    const mppx = Mppx.create({
+      methods: [
+        evm({ currency: evm.assets.baseSepolia.USDC, recipient, x402: { facilitator, siwx } }),
+        evm({ currency: evm.assets.base.USDC, recipient, x402: { facilitator, siwx } }),
+      ],
+      secretKey,
+    })
+    const result = await mppx.compose(
+      [mppx.methods[0]!, { amount: '0.25' }],
+      [mppx.methods[1]!, { amount: '0.25' }],
+    )(new Request(url))
+    if (result.status !== 402) throw new Error()
+    const paymentRequired = readChallenge(result.challenge)
+    expect(paymentRequired.error).not.toContain('Cannot merge')
+    expect(paymentRequired.accepts.map((offer) => offer.network)).toEqual([
+      'eip155:84532',
+      'eip155:8453',
+    ])
+    expect(Siwx.fromPaymentRequired(paymentRequired)?.supportedChains).toEqual([
+      { chainId: 'eip155:84532', type: 'eip191' },
+      { chainId: 'eip155:8453', type: 'eip191' },
+    ])
+  })
 })

@@ -351,8 +351,11 @@ export function wrapFetch(
     )
     if (!chain) return response
 
-    // A challenge naming another site must never get this wallet's signature.
-    const target = new URL(response.url || request.url)
+    // A challenge naming another site must never get this wallet's signature. The retry
+    // goes to the requested URL, so a challenge reached through a cross-origin redirect
+    // is refused too: signing it would hand the redirecting site the proof.
+    const target = new URL(request.url)
+    if (response.url && new URL(response.url).origin !== target.origin) return response
     if (extension.info.domain !== target.host || originOf(extension.info.uri) !== target.origin)
       return response
 
@@ -364,9 +367,12 @@ export function wrapFetch(
       ...(chain.signatureScheme ? { signatureScheme: chain.signatureScheme } : {}),
     }
     const signature = await account.signMessage({ message: toMessage(unsigned) })
-    retry.headers.set(header, encode({ ...unsigned, signature }))
-    await response.body?.cancel()
-    return fetch(retry)
+    // Not awaited: a fetch that kept a clone of the response would hold the cancel open.
+    response.body?.cancel().catch(() => {})
+    const headers = new Headers(retry.headers)
+    headers.set(header, encode({ ...unsigned, signature }))
+    // Redirects aren't followed, so no redirect can carry the proof to another site.
+    return fetch(new Request(retry, { headers, redirect: 'manual' }))
   }
 }
 
