@@ -342,26 +342,29 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
   return async ({ input, request }) => {
     const value = input.headers.get(Siwx.header)
     if (!value) return undefined
-    let proof: Awaited<ReturnType<typeof Siwx.verify>>
     try {
-      proof = await Siwx.verify({
+      const payload = Siwx.decode(value)
+      const proof = await Siwx.verify({
         chainId: request.methodDetails.chainId,
         options: siwx,
-        payload: Siwx.decode(value),
+        payload,
       })
+      // Ask grant before using the nonce: in a composed route, an offer that declines the
+      // wallet must leave the proof for a later offer that grants it.
+      if (!(await siwx.grant({ ...proof, request: input }))) return undefined
+      await Siwx.claim({ payload, store: siwx.store })
+      return {
+        receipt: {
+          method: Methods.charge.name,
+          reference: Types.toSource({ address: proof.address, chainId: proof.chainId }),
+          status: 'success',
+          timestamp: new Date().toISOString(),
+        },
+      }
     } catch (error) {
       if (error instanceof Siwx.InvalidProofError)
         throw new VerificationFailedError({ reason: error.code })
       throw error
-    }
-    if (!(await siwx.grant({ ...proof, request: input }))) return undefined
-    return {
-      receipt: {
-        method: Methods.charge.name,
-        reference: Types.toSource({ address: proof.address, chainId: proof.chainId }),
-        status: 'success',
-        timestamp: new Date().toISOString(),
-      },
     }
   }
 }

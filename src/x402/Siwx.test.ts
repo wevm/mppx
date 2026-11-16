@@ -392,4 +392,41 @@ describe('x402 sign-in-with-x in composed routes', () => {
       { chainId: 'eip155:8453', type: 'eip191' },
     ])
   })
+
+  test('an offer that declines the wallet leaves the proof for one that grants it', async () => {
+    const store = Store.memory()
+    const facilitator = {
+      verify: async () => ({ isValid: true }),
+      settle: async () => ({ network: 'x', success: true, transaction: '0x' }),
+    }
+    const grants: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator,
+            siwx: { grant: () => (grants.push('decline'), false), origin, store },
+          },
+        }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: account.address,
+          x402: { facilitator, siwx: { grant: () => (grants.push('grant'), true), origin, store } },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.compose(
+      [mppx.methods[0]!, { amount: '0.25' }],
+      [mppx.methods[1]!, { amount: '0.25' }],
+    )
+    const challenged = await route(new Request(url))
+    if (challenged.status !== 402) throw new Error()
+    const extension = Siwx.fromPaymentRequired(readChallenge(challenged.challenge))!
+    const result = await route(withProof(await sign(extension)))
+    expect(result.status).toBe(200)
+    expect(grants).toEqual(['decline', 'grant'])
+  })
 })

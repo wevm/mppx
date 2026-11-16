@@ -229,14 +229,16 @@ export type ServerOptions = {
 }
 
 /**
- * Verifies a SIWX proof against the server's origin and chain, then records its nonce.
+ * Verifies a SIWX proof against the server's origin and chain. It does not record the
+ * nonce: call {@link claim} once the proof is used, so a check that declines the wallet
+ * leaves the proof for another.
  * Throws {@link InvalidProofError} with the spec's code when the proof is rejected.
  */
 export async function verify(parameters: {
   /** EVM chain ID the server accepts signatures for. */
   chainId: number
   /** The server's SIWX options. */
-  options: Pick<ServerOptions, 'client' | 'origin' | 'store'>
+  options: Pick<ServerOptions, 'client' | 'origin'>
   /** The decoded proof. */
   payload: Payload
 }): Promise<{ address: Address; chainId: number }> {
@@ -292,15 +294,26 @@ export async function verify(parameters: {
   }
   if (!valid) throw new InvalidProofError('invalid_siwx_signature')
 
-  // Claim the nonce last, so a proof that fails verification cannot burn another's nonce.
+  return { address, chainId }
+}
+
+/**
+ * Records a verified proof's nonce so it is accepted once.
+ * Throws {@link InvalidProofError} with `invalid_siwx_nonce` when it was already used.
+ */
+export async function claim(parameters: {
+  /** The verified proof. */
+  payload: Pick<Payload, 'issuedAt' | 'nonce'>
+  /** Atomic store that records used nonces. */
+  store: Store.AtomicStore
+}): Promise<void> {
+  const { payload, store } = parameters
   const claimed = await Store.tryClaim(
-    options.store,
+    store,
     `mppx:x402:siwx:${payload.nonce}`,
-    issuedAt + ttl + clockSkew,
+    Date.parse(payload.issuedAt) + ttl + clockSkew,
   )
   if (!claimed) throw new InvalidProofError('invalid_siwx_nonce')
-
-  return { address, chainId }
 }
 
 /**
