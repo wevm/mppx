@@ -815,12 +815,12 @@ test.each([
   },
 )
 
-test.each(['missing', 'empty'])(
+test.each(['missing', 'undefined'])(
   'rejects session content with %s handler metadata before replay or payment',
   async (metadata) => {
     const payment = vi.fn()
     const handler = createPaidHandler(payment)
-    if (metadata === 'empty') Object.assign(handler, { _internal: { offers: [] } })
+    if (metadata === 'undefined') Object.assign(handler, { _internal: undefined })
     const fetch = vi.fn(
       async () =>
         new Response('data: unmetered\n\n', { headers: { 'content-type': 'text/event-stream' } }),
