@@ -34,8 +34,13 @@ import type * as Types from './Types.js'
  */
 export function create(config: create.Config): Issuer {
   const issuer = config.issuer.replace(/\/+$/, '')
-  if (!isIssuer(issuer))
-    throw new TypeError('Attestation issuer must be an https URL (http only on localhost).')
+  // Key discovery appends a path to the issuer, which a query or fragment would swallow.
+  if (!isIssuer(issuer) || /[?#]/.test(issuer))
+    throw new TypeError(
+      'Attestation issuer must be an https URL (http only on localhost) without a query or fragment.',
+    )
+  if (config.keyId !== undefined && (typeof config.keyId !== 'string' || config.keyId === ''))
+    throw new TypeError('Attestation issuer keyId must be a non-empty string.')
   const ttl = config.ttl ?? defaultTtl
   if (!isTtl(ttl))
     throw new TypeError('Attestation issuer ttl must be a positive integer of seconds.')

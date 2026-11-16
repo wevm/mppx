@@ -96,6 +96,9 @@ describe('Issuer.create', () => {
       Attestation.Issuer.create({ issuer: 'http://issuer.example', signingKey }),
     ).toThrow('https URL')
     expect(() => Attestation.Issuer.create({ issuer, signingKey, ttl: 0 })).toThrow('ttl')
+    for (const url of [issuer + '?tenant=a', issuer + '#a'])
+      expect(() => Attestation.Issuer.create({ issuer: url, signingKey })).toThrow('query')
+    expect(() => Attestation.Issuer.create({ issuer, keyId: '', signingKey })).toThrow('keyId')
     const attester = Attestation.Issuer.create({ issuer, signingKey })
     await expect(attester.sign({ audience: 'ftp://x', sub: 'a', type: 'email' })).rejects.toThrow(
       'audience',

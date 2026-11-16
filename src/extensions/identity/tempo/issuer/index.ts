@@ -42,7 +42,10 @@ import type * as Types from '../Types.js'
  */
 export function create(config: create.Config): Issuer {
   const url = config.url.replace(/\/+$/, '')
-  if (!isIssuer(url)) throw new TypeError('Tempo ID attestation issuer url must be an https URL.')
+  if (!isIssuer(url) || /[?#]/.test(url))
+    throw new TypeError(
+      'Tempo ID attestation issuer url must be an https URL without a query or fragment.',
+    )
   const types = config.types ?? Constants.attestationTypes
   for (const type of types)
     if (!(Constants.attestationTypes as readonly string[]).includes(type))

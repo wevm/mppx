@@ -253,9 +253,9 @@ export declare namespace attest {
 
 /** Throws unless `issuer` is https (http only on localhost), since it receives the user's tokens. */
 function assertIssuer(issuer: string) {
-  if (!isIssuer(issuer.replace(/\/+$/, '')))
+  if (!isIssuer(issuer.replace(/\/+$/, '')) || /[?#]/.test(issuer))
     throw new TypeError(
-      'The Tempo ID attestation issuer must be an https URL (http only on localhost).',
+      'The Tempo ID attestation issuer must be an https URL (http only on localhost) without a query or fragment.',
     )
 }
 

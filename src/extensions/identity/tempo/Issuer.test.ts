@@ -335,6 +335,9 @@ test('rejects a configuration it cannot serve', async () => {
     TempoId.Issuer.create({ clientId, signingKey, store, url: 'http://attest.example' }),
   ).toThrow('https')
   expect(() =>
+    TempoId.Issuer.create({ clientId, signingKey, store, url: attestUrl + '?a=1' }),
+  ).toThrow('query')
+  expect(() =>
     TempoId.Issuer.create({
       clientId,
       signingKey,
@@ -368,6 +371,9 @@ test('the client refuses a plaintext issuer', async () => {
   expect(() =>
     TempoId.Client.attestations({ ...options, issuer: 'http://attest.example' }),
   ).toThrow('https')
+  expect(() => TempoId.Client.attestations({ ...options, issuer: attestUrl + '#a' })).toThrow(
+    'query',
+  )
   await expect(
     TempoId.Client.attest({
       ...options,
