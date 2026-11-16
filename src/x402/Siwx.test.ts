@@ -743,6 +743,46 @@ describe('x402 sign-in-with-x in composed routes', () => {
     const single = mppx.compose([mppx.methods[1]!, { amount: '0.25' }])
     expect((await single(withProof(proof))).status).toBe(402)
   })
+
+  test('a later offer with its own store refuses a proof an earlier offer found replayed', async () => {
+    const facilitator = {
+      verify: async () => ({ isValid: true }),
+      settle: async () => ({ network: 'x', success: true, transaction: '0x' }),
+    }
+    const grants: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator,
+            siwx: { grant: () => (grants.push('first'), true), origin, store: Store.memory() },
+          },
+        }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: account.address,
+          x402: {
+            facilitator,
+            siwx: { grant: () => (grants.push('second'), true), origin, store: Store.memory() },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.compose(
+      [mppx.methods[0]!, { amount: '0.25' }],
+      [mppx.methods[1]!, { amount: '0.25' }],
+    )
+    const challenged = await route(new Request(url))
+    if (challenged.status !== 402) throw new Error()
+    const proof = await sign(Siwx.fromPaymentRequired(readChallenge(challenged.challenge))!)
+    expect((await route(withProof(proof))).status).toBe(200)
+    expect(grants).toEqual(['first'])
+    expect((await route(withProof(proof))).status).toBe(402)
+    expect(grants).toEqual(['first'])
+  })
 })
 
 describe('Siwx.release', () => {

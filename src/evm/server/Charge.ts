@@ -341,6 +341,12 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
 const siwxClaims = new WeakMap<Request, WeakMap<Store.AtomicStore, Set<string>>>()
 
 /**
+ * SIWX nonces an offer of each request found already used. Later offers of a composed
+ * route refuse them too, so an offer whose store never saw the nonce can't accept a replay.
+ */
+const siwxReplays = new WeakMap<Request, Set<string>>()
+
+/**
  * Grants a request that carries a valid x402 SIWX proof without payment, when the
  * server's `grant` approves the wallet. A request without a proof, or one `grant`
  * refuses, gets the route's 402; an invalid proof gets it with the spec's error code.
@@ -369,8 +375,16 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
       const claimed = stores.get(siwx.store) ?? new Set<string>()
       stores.set(siwx.store, claimed)
       const key = `${payload.nonce}:${payload.issuedAt}`
+      const replays = siwxReplays.get(input) ?? new Set<string>()
+      siwxReplays.set(input, replays)
+      if (replays.has(key)) throw new Siwx.InvalidProofError('invalid_siwx_nonce')
       if (!claimed.has(key)) {
-        await Siwx.claim({ payload, store: siwx.store })
+        try {
+          await Siwx.claim({ payload, store: siwx.store })
+        } catch (error) {
+          if (error instanceof Siwx.InvalidProofError) replays.add(key)
+          throw error
+        }
         claimed.add(key)
       }
       const granted = Boolean(await siwx.grant({ ...proof, request: copy }))
