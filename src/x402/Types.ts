@@ -115,7 +115,7 @@ export const PaymentRequirementsSchema = z.object({
 export type PaymentRequirements = z.infer<typeof PaymentRequirementsSchema>
 
 /** x402 v2 protocol extension value. */
-export const ExtensionSchema = z.object({
+export const ExtensionSchema = z.looseObject({
   info: z.record(z.string(), z.unknown()),
   schema: z.record(z.string(), z.unknown()),
 })

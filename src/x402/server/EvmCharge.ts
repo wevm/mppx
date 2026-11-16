@@ -15,6 +15,7 @@ import * as Scope from '../../server/internal/scope.js'
 import * as ServerTransport from '../../server/Transport.js'
 import * as x402_Header from '../Header.js'
 import * as x402_RouteBinding from '../internal/RouteBinding.js'
+import * as Siwx from '../Siwx.js'
 import * as x402_Types from '../Types.js'
 import * as x402_Facilitator from './Facilitator.js'
 
@@ -60,6 +61,11 @@ export type Options = {
    * @default 'required'
    */
   routeBinding?: RouteBindingMode | undefined
+  /**
+   * Accepts x402 `sign-in-with-x` (SIWX) proofs: a wallet that signs the 402's
+   * challenge, and that `grant` approves, gets the resource without paying.
+   */
+  siwx?: Siwx.ServerOptions | undefined
 }
 
 /** How a route-scoped charge binds an x402 credential to its route. */
@@ -70,6 +76,7 @@ export type ResolvedOptions = {
   facilitator?: x402_Types.Facilitator | undefined
   maxTimeoutSeconds: number
   routeBinding: RouteBindingMode
+  siwx?: Siwx.ServerOptions | undefined
 }
 
 export type Path = {
@@ -105,6 +112,7 @@ export function resolveOptions(parameters: {
       : {}),
     maxTimeoutSeconds: parameters.options?.maxTimeoutSeconds ?? 300,
     routeBinding: parameters.options?.routeBinding ?? 'required',
+    ...(parameters.options?.siwx ? { siwx: parameters.options.siwx } : {}),
   }
 }
 
@@ -239,7 +247,18 @@ export function createPath(config: ResolvedOptions): Path {
           accepts: [toPaymentRequirements(request, config)],
           error:
             options.error?.message ?? `${x402_Types.paymentSignatureHeader} header is required`,
-          extensions: routeExtensions(options.challenge, options.input),
+          extensions: {
+            ...routeExtensions(options.challenge, options.input),
+            ...(config.siwx
+              ? {
+                  [Siwx.extensionKey]: Siwx.createExtension({
+                    chainId: request.methodDetails.chainId,
+                    origin: config.siwx.origin,
+                    url: options.input.url,
+                  }),
+                }
+              : {}),
+          },
           resource: { url: options.input.url },
           x402Version: 2,
         }),

@@ -7,6 +7,7 @@ import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as ServerTransport from '../../server/Transport.js'
 import * as X402 from '../../x402/server/EvmCharge.js'
+import * as Siwx from '../../x402/Siwx.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
@@ -29,6 +30,7 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const transport = httpTransport(paths)
 
   return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
+    ...(config.x402.siwx ? { authorize: siwxAuthorize(config.x402.siwx) } : {}),
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
@@ -329,6 +331,39 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
       return paths.x402.respondReceipt(options, response)
     },
   })
+}
+
+/**
+ * Grants a request that carries a valid x402 SIWX proof without payment, when the
+ * server's `grant` approves the wallet. A request without a proof, or one `grant`
+ * refuses, gets the route's 402; an invalid proof gets it with the spec's error code.
+ */
+function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Methods.charge> {
+  return async ({ input, request }) => {
+    const value = input.headers.get(Siwx.header)
+    if (!value) return undefined
+    let proof: Awaited<ReturnType<typeof Siwx.verify>>
+    try {
+      proof = await Siwx.verify({
+        chainId: request.methodDetails.chainId,
+        options: siwx,
+        payload: Siwx.decode(value),
+      })
+    } catch (error) {
+      if (error instanceof Siwx.InvalidProofError)
+        throw new VerificationFailedError({ reason: error.code })
+      throw error
+    }
+    if (!(await siwx.grant({ ...proof, request: input }))) return undefined
+    return {
+      receipt: {
+        method: Methods.charge.name,
+        reference: Types.toSource({ address: proof.address, chainId: proof.chainId }),
+        status: 'success',
+        timestamp: new Date().toISOString(),
+      },
+    }
+  }
 }
 
 function assertAddressEqual(actual: string, expected: string, reason: string) {
