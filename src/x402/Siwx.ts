@@ -243,10 +243,11 @@ export function createExtension(parameters: {
 
 /**
  * Percent-encodes the characters a URL's path and query may keep (such as `|`, `{` or
- * `^`) that an RFC 3986 URI, and so a SIWE message's `URI`, can't hold.
+ * `^`) that an RFC 3986 URI, and so a SIWE message's `URI`, can't hold, including a `%`
+ * that doesn't start a valid percent escape.
  */
 function siweSafe(pathAndQuery: string) {
-  return pathAndQuery.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@/?%]/g, (char) =>
+  return pathAndQuery.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@/?%]|%(?![0-9A-Fa-f]{2})/g, (char) =>
     Array.from(
       new TextEncoder().encode(char),
       (byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`,

@@ -345,6 +345,16 @@ describe('Siwx.createExtension', () => {
     // `sign` builds the SIWE message, which throws for a URI it can't hold.
     await expect(sign(extension)).resolves.toBeTypeOf('string')
   })
+
+  test('percent-encodes a % that does not start a valid escape', async () => {
+    const extension = Siwx.createExtension({
+      chainId: 84532,
+      origin,
+      url: `${origin}/100%?a=%zz&b=%2F&c=%4`,
+    })
+    expect(extension.info.uri).toBe(`${origin}/100%25?a=%25zz&b=%2F&c=%254`)
+    await expect(sign(extension)).resolves.toBeTypeOf('string')
+  })
 })
 
 describe('Siwx grant', () => {
