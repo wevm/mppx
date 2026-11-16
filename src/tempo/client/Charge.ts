@@ -511,6 +511,11 @@ type PendingZoneWithdrawal = {
   challenge: ZoneCredentialOptions['challenge']
   /** HTTP origin that issued the challenge, when known. */
   origin: string | undefined
+  /**
+   * Whether its credential was returned after its challenge expired. Only a retry of that
+   * challenge may get the credential again: the server redeems it once, so it never pays another.
+   */
+  redeemedLate?: boolean | undefined
   /** Payment terms: what another challenge must ask for to be paid by this withdrawal. */
   terms: string | undefined
   /** Calls waiting on this withdrawal for a credential right now. */
@@ -564,6 +569,8 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
       pending.delete(key)
       continue
     }
+    // Its credential was already sent for its own challenge, so this challenge is a new payment.
+    if (entry.redeemedLate) continue
     // A call still waiting on it is another payment in flight, not one this challenge retries:
     // sharing its credential would leave one of the two payments unpaid.
     if (entry.waiters > 0) continue
@@ -637,9 +644,12 @@ async function waitForZoneCredential(options: ZoneCredentialOptions, entry: Pend
   }
   // The credential pays once: a later challenge with the same terms is a new payment. One
   // made after its challenge expired is accepted only by a server that grants a grace period
-  // (`zoneCredentialGraceMs`), so the withdrawal stays outstanding through the longest grace
-  // and a later challenge for its terms fails closed instead of paying again until then.
-  if (pending.get(key) === entry && !isExpired(challenge.expires)) pending.delete(key)
+  // (`zoneCredentialGraceMs`), so it stays for a retry of its own challenge, which would
+  // otherwise pay again on Tempo, but no longer pays any other challenge.
+  if (pending.get(key) === entry) {
+    if (isExpired(challenge.expires)) entry.redeemedLate = true
+    else pending.delete(key)
+  }
   const { hash, senderTag } = settled
 
   return Credential.serialize({
