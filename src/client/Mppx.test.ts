@@ -445,7 +445,7 @@ describe('prepareRequest', () => {
       requests.push(request)
       if (requests.length === 1)
         return new Response(null, { headers: { location: '/checkout' }, status: 303 })
-      if (requests.length === 2) return paymentRequired('Payment-Credential')
+      if (requests.length === 2) return paymentRequired('Payment-Authorization')
       return new Response(null, { headers: { location: '/elsewhere' }, status: 307 })
     })
     const mppx = setup(fetch as typeof globalThis.fetch)
@@ -478,7 +478,7 @@ describe('prepareRequest', () => {
     expect(requests).toHaveLength(3)
     expect(requests[2]?.url).toBe('https://shop.example/checkout')
     expect(requests[2]?.redirect).toBe('manual')
-    expect(requests[2]?.headers.get('Payment-Credential')).toMatch(/^Payment /)
+    expect(requests[2]?.headers.get('Payment-Authorization')).toMatch(/^Payment /)
   })
 
   test('security: strips credentials on pre-payment cross-origin redirects', async () => {
