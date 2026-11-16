@@ -1559,6 +1559,9 @@ async function assertTransferLogs(
         return log.kind === 'transfer'
       })()
       if (!memoMatches) continue
+      // A Zone portal's payout settles a Zone withdrawal, which pays only through its `zone`
+      // credential, so the same settlement can't also be redeemed by transaction hash.
+      if (Zone.isPortalAddress(log.args.from)) continue
       if (
         !(await isValidTransferSender({
           expectedSender: parameters.sender,

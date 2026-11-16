@@ -26,6 +26,15 @@ describe('Zone', () => {
     expect(Zone.isId(0)).toBe(false)
   })
 
+  test('isPortalAddress', () => {
+    expect(Zone.isPortalAddress(Zone.portalAddress(3))).toBe(true)
+    expect(Zone.isPortalAddress(`0x${Zone.portalAddress(3).slice(2).toUpperCase()}`)).toBe(true)
+    expect(Zone.isPortalAddress(Zone.portalAddress(6))).toBe(true)
+    expect(Zone.isPortalAddress(Zone.portalAddress(7))).toBe(true)
+    expect(Zone.isPortalAddress('0x5AD1000000000000000000000000000000000000')).toBe(false)
+    expect(Zone.isPortalAddress('0x2222222222222222222222222222222222222222')).toBe(false)
+  })
+
   test('portalAddress', () => {
     expect(Zone.portalAddress(3)).toBe('0x5ad0000000000000000000000000000000000003')
   })

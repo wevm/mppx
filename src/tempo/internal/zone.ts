@@ -84,6 +84,20 @@ export function portalAddress(zoneId: number): Address {
   return Addresses.zonePortal(zoneId) as Address
 }
 
+/** Prefix of every Zone portal address but the legacy ones: the Zone ID fills the last 8 bytes. */
+const portalAddressPrefix = portalAddress(0).slice(0, -16).toLowerCase()
+
+/** Zone IDs whose portals predate the prefixed addresses. */
+const legacyPortalZoneIds = [6, 7] as const
+
+/** Whether `address` is the Tempo portal of some Zone. */
+export function isPortalAddress(address: Address): boolean {
+  return (
+    address.toLowerCase().startsWith(portalAddressPrefix) ||
+    legacyPortalZoneIds.some((zoneId) => TempoAddress.isEqual(address, portalAddress(zoneId)))
+  )
+}
+
 /**
  * Derives a Zone ID from a Zone chain ID.
  *
