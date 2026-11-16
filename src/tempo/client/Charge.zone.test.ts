@@ -298,3 +298,72 @@ describe('tempo.charge client zone selection', () => {
     expect(String(error)).not.toContain('zone used')
   })
 })
+
+describe('tempo.charge client zone withdrawal fee', () => {
+  // The challenge charges 1 token (1_000_000 base units at 6 decimals); the Zone charges a fee of 5.
+  const fee = 5n
+
+  /** A Zone client that quotes `fee`, then fails to send the withdrawal. */
+  function feeZoneClient(calls: string[]) {
+    return createClient({
+      account: payer,
+      chain: defineChain({ ...tempoModerato, id: 1_424_310_003, name: 'Zone' }),
+      transport: custom(
+        {
+          async request({ method }) {
+            calls.push(method)
+            if (method === 'eth_chainId') return `0x${(1_424_310_003).toString(16)}`
+            if (method === 'eth_call') return `0x${fee.toString(16).padStart(64, '0')}`
+            if (method === 'eth_getBlockByNumber')
+              return { baseFeePerGas: '0x1', number: '0x1', timestamp: '0x1' }
+            if (method === 'eth_sendRawTransactionSync') throw new Error('send refused')
+            return '0x1'
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+  }
+
+  test.each([
+    {
+      name: 'atomic cap below amount plus fee',
+      caps: { maxAtomicAmount: '1000004' },
+      error: 'Tempo charge amount plus Zone withdrawal fee exceeds maxAtomicAmount.',
+    },
+    {
+      name: 'display cap below amount plus fee',
+      caps: { decimals: 6, maxAmount: '1.000004' },
+      error: 'Tempo charge amount plus Zone withdrawal fee exceeds maxAmount.',
+    },
+  ])('rejects a withdrawal before sending it: $name', async ({ caps, error }) => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      currencies: [currency],
+      getClient: () => l1,
+      zone: { client: feeZoneClient(calls) },
+      ...caps,
+    })
+    await expect(
+      method.createCredential({ challenge: (await challenge()) as never, context: {} }),
+    ).rejects.toThrow(error)
+    expect(calls).not.toContain('eth_sendRawTransactionSync')
+  })
+
+  test.each([
+    { name: 'atomic cap equal to amount plus fee', caps: { maxAtomicAmount: '1000005' } },
+    { name: 'display cap equal to amount plus fee', caps: { decimals: 6, maxAmount: '1.000005' } },
+  ])('withdraws when the amount plus fee fits: $name', async ({ caps }) => {
+    const calls: string[] = []
+    const method = tempo_client.charge({
+      currencies: [currency],
+      getClient: () => l1,
+      zone: { client: feeZoneClient(calls) },
+      ...caps,
+    })
+    await expect(
+      method.createCredential({ challenge: (await challenge()) as never, context: {} }),
+    ).rejects.toThrow()
+    expect(calls).toContain('eth_sendRawTransactionSync')
+  })
+})

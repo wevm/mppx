@@ -170,6 +170,8 @@ export function charge(parameters: charge.Parameters = {}) {
           settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
       )
         return createZoneCredential({
+          // The withdrawal fee is paid on top of the amount, so both must fit the caps.
+          assertFee: (fee) => assertChallengePolicy(parameters, caps, request, chainId, fee),
           challenge,
           clientId,
           client,
@@ -486,6 +488,7 @@ function transactionHash(credential: string): Hex.Hex | undefined {
  * by sender tag and the Tempo transaction hash that settled it.
  */
 async function createZoneCredential(options: {
+  assertFee: (fee: bigint) => void
   challenge: Parameters<typeof Credential.serialize>[0]['challenge']
   client: viem_Client
   clientId: string | undefined
@@ -612,13 +615,15 @@ type ZoneWithdrawal = {
  */
 async function requestZoneWithdrawal(
   options: {
+    /** Rejects a withdrawal fee that would take the payment past the client policy. */
+    assertFee: (fee: bigint) => void
     challenge: Parameters<typeof Credential.serialize>[0]['challenge']
     clientId: string | undefined
     zone: charge.Zone
   },
   state: { sent: boolean },
 ): Promise<ZoneWithdrawal> {
-  const { challenge, clientId, zone } = options
+  const { assertFee, challenge, clientId, zone } = options
   const request = challenge.request as ChargeRequest
   const account = zone.client.account
   if (!account) throw new Error('`zone.client` requires an account.')
@@ -633,6 +638,7 @@ async function requestZoneWithdrawal(
 
   // The outbox pulls the amount plus its withdrawal fee.
   const fee = await Actions.zone.getWithdrawalFee(zone.client)
+  assertFee(fee)
   const [, withdrawal] = Actions.zone.requestWithdrawal.calls({
     amount,
     // A bounced payout refunds the payer, not the payee's Zone address.
@@ -723,8 +729,12 @@ function assertChallengePolicy(
   request: ChargeRequest,
   /** Chain the client signs on, once resolved, for a challenge that names none. */
   signingChainId?: number | undefined,
+  /** Zone withdrawal fee paid on top of the amount, which the caps cover too. */
+  fee?: bigint | undefined,
 ) {
-  const { amount, methodDetails, recipient } = request
+  const { methodDetails, recipient } = request
+  const amount = BigInt(request.amount) + (fee ?? 0n)
+  const exceeds = fee === undefined ? 'amount exceeds' : 'amount plus Zone withdrawal fee exceeds'
 
   // Chain pinning: reject a challenge whose chain ID conflicts with the pinned one.
   const challengeChainId = methodDetails?.chainId
@@ -768,13 +778,10 @@ function assertChallengePolicy(
     }
   }
 
-  if (caps.maxAtomicAmount !== undefined && BigInt(amount) > caps.maxAtomicAmount)
-    throw new Error('Tempo charge amount exceeds maxAtomicAmount.')
-  if (
-    caps.maxAmount !== undefined &&
-    BigInt(amount) > parseMaxAmount(caps.maxAmount, currency?.decimals)!
-  )
-    throw new Error('Tempo charge amount exceeds maxAmount.')
+  if (caps.maxAtomicAmount !== undefined && amount > caps.maxAtomicAmount)
+    throw new Error(`Tempo charge ${exceeds} maxAtomicAmount.`)
+  if (caps.maxAmount !== undefined && amount > parseMaxAmount(caps.maxAmount, currency?.decimals)!)
+    throw new Error(`Tempo charge ${exceeds} maxAmount.`)
 }
 
 export declare namespace charge {
@@ -845,14 +852,15 @@ export declare namespace charge {
      * charge, parsed with the matched currency's decimals. Values with more fractional digits than
      * `decimals` are rejected rather than rounded. Compared against the challenge
      * amount, which includes splits; larger offers are skipped during selection and
-     * rejected before signing. Applies per credential, not cumulatively across
-     * payment retries. Requires `currencies`.
+     * rejected before signing. A payment from a Zone balance also pays the Zone's
+     * withdrawal fee, so the amount plus that fee must fit, checked before withdrawing.
+     * Applies per credential, not cumulatively across payment retries. Requires `currencies`.
      */
     maxAmount?: string | undefined
     /**
      * Maximum amount the client is willing to pay per charge, in raw base units of
-     * the challenge currency (compared directly with the challenge `amount`).
-     * Checked like `maxAmount`. Requires `currencies`.
+     * the challenge currency (compared directly with the challenge `amount`, plus the
+     * withdrawal fee for a Zone payment). Checked like `maxAmount`. Requires `currencies`.
      */
     maxAtomicAmount?: string | undefined
     /**
