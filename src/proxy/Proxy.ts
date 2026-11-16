@@ -193,7 +193,7 @@ export function create(config: create.Config): Proxy {
     let replayKey: string | undefined
     // Identity and session routes retain their normal verification and metered delivery.
     const credential =
-      replay && !fallbackMatch && !requiresFreshVerification(handler)
+      replay && !fallbackMatch && !requiresFreshVerification(handler, selected?.challenge)
         ? paymentCredential
         : undefined
     if (replay && credential) {
@@ -545,11 +545,19 @@ function requiresManualGeneration(
   selected?: PaymentBinding,
 ): boolean {
   if (!('_internal' in handler)) return false
-  type Offer = { name?: string; intent?: string; _canonicalRequest?: { unitType?: unknown } }
+  type Offer = {
+    name?: string
+    intent?: string
+    _canonicalRequest?: { unitType?: unknown; amount?: unknown }
+    _transport?: { name?: string }
+  }
   const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
   const offers = internal?.offers ?? (internal ? [internal] : [])
   const unsupported = (offer: Offer) =>
-    offer.intent === 'session' && offer._canonicalRequest?.unitType !== 'request'
+    offer.intent === 'session' &&
+    offer._transport?.name !== 'http' &&
+    offer._canonicalRequest?.amount !== '0' &&
+    offer._canonicalRequest?.unitType !== 'request'
   // Mixed methods can still challenge and serve their one-shot charge offer. A session's
   // canonical route pricing is authoritative, never the unitType echoed by its credential.
   if (!selected) return offers.length > 0 && offers.every(unsupported)
@@ -562,19 +570,23 @@ function requiresManualGeneration(
 }
 
 /** Identity and session offers must re-run authorization and delivery-time metering on every request. */
-function requiresFreshVerification(handler: Service.IntentHandler): boolean {
+function requiresFreshVerification(
+  handler: Service.IntentHandler,
+  selected?: PaymentBinding,
+): boolean {
   if (!('_internal' in handler)) return false
-  const internal = handler._internal as
-    | {
-        _identity?: boolean
-        intent?: string
-        offers?: readonly { _identity?: boolean; intent?: string }[]
-      }
-    | undefined
-  if (!internal) return false
-  if (internal.offers)
-    return internal.offers.some((offer) => offer._identity || offer.intent === 'session')
-  return internal._identity === true || internal.intent === 'session'
+  type Offer = { _identity?: boolean; name?: string; intent?: string }
+  const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
+  const offers = internal?.offers ?? (internal ? [internal] : [])
+  return (
+    offers.some((offer) => offer._identity) ||
+    offers.some(
+      (offer) =>
+        offer.intent === 'session' &&
+        (!selected ||
+          (selected.intent === 'session' && (!offer.name || offer.name === selected.method))),
+    )
+  )
 }
 
 function getConfiguredScope(handler: Service.IntentHandler): string | undefined {

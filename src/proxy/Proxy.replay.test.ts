@@ -639,36 +639,42 @@ test('rejects per-item session proxying before payment or upstream work', async 
   expect(fetch).not.toHaveBeenCalled()
 })
 
-test.each(['POST /generate', 'GET /generate'])(
-  'allows per-item session management through %s',
-  async (route) => {
-    const fetch = vi.fn()
-    const management = new Response('closed')
-    const handler = Object.assign(
-      vi.fn(async () => ({
-        status: 200 as const,
-        withReceipt: <response>(_response: response) => management as response,
-      })),
-      {
-        _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
-      },
-    )
-    const proxy = Proxy.create({
-      fetch,
-      services: [
-        Service.from('api', {
-          baseUrl: 'https://upstream.example',
-          routes: { [route]: handler },
-        }),
-      ],
-    })
-    expect(await proxy.fetch(paidRequest({ credential: sessionCredential('close') }))).toBe(
-      management,
-    )
-    expect(handler).toHaveBeenCalledTimes(1)
-    expect(fetch).not.toHaveBeenCalled()
-  },
-)
+test.each(
+  ['POST /generate', 'GET /generate'].flatMap((route) =>
+    ['close', 'topUp', 'open', 'voucher'].map((action) => ({ route, action })),
+  ),
+)('allows per-item $action management through $route', async ({ route, action }) => {
+  const fetch = vi.fn()
+  const management = new Response('closed')
+  const handler = Object.assign(
+    vi.fn(async () => ({
+      status: 200 as const,
+      withReceipt: <response>(_response: response) => management as response,
+    })),
+    {
+      _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+    },
+  )
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { [route]: handler },
+      }),
+    ],
+  })
+  const request =
+    action === 'close' || action === 'topUp'
+      ? paidRequest({ credential: sessionCredential(action) })
+      : new Request('https://proxy.example/api/generate', {
+          method: 'POST',
+          headers: { Authorization: `Payment ${sessionCredential(action)}` },
+        })
+  expect(await proxy.fetch(request)).toBe(management)
+  expect(handler).toHaveBeenCalledTimes(1)
+  expect(fetch).not.toHaveBeenCalled()
+})
 
 function sessionCredential(action: string, intent = 'session') {
   return Credential.serialize({
@@ -739,3 +745,72 @@ test('serves a charge credential when composed with an unsupported session offer
   expect(payment).toHaveBeenCalledTimes(1)
   expect(fetch).toHaveBeenCalledTimes(1)
 })
+
+test('recovers a composed charge delivery without verifying the single-use payment twice', async () => {
+  const payment = vi.fn()
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: {
+      offers: [
+        { name: 'tempo', intent: 'charge', _canonicalRequest: {} },
+        {
+          name: 'tempo',
+          intent: 'session',
+          _canonicalRequest: { unitType: 'token' },
+          _transport: { name: 'sse' },
+        },
+      ],
+    },
+  })
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+    .mockResolvedValue(new Response('paid result'))
+  const proxy = Proxy.create({
+    fetch,
+    replay: { store: Store.memory() },
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  const request = () => paidRequest({ credential: sessionCredential('charge', 'charge') })
+  expect((await proxy.fetch(request())).status).toBe(503)
+  expect(await (await proxy.fetch(request())).text()).toBe('paid result')
+  expect(await (await proxy.fetch(request())).text()).toBe('paid result')
+  expect(payment).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+test.each([
+  { transport: 'http', amount: '1' },
+  { transport: 'sse', amount: '0' },
+])(
+  'allows safe $transport automatic proxy sessions with amount $amount',
+  async ({ transport, amount }) => {
+    const payment = vi.fn()
+    const handler = Object.assign(createPaidHandler(payment), {
+      _internal: {
+        name: 'tempo',
+        intent: 'session',
+        _canonicalRequest: { unitType: 'page', amount },
+        _transport: { name: transport },
+      },
+    })
+    const fetch = vi.fn(async () => new Response('paid page'))
+    const proxy = Proxy.create({
+      fetch,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    expect(
+      await (await proxy.fetch(paidRequest({ credential: sessionCredential('voucher') }))).text(),
+    ).toBe('paid page')
+    expect(payment).toHaveBeenCalledTimes(1)
+  },
+)

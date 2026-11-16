@@ -282,6 +282,63 @@ describe('serve', () => {
     }))
   }
 
+  test.each([undefined, false])(
+    'credits rejected automatic generation even when autoCreditPrepaid=%s',
+    async (autoCreditPrepaid) => {
+      const store = memoryStore()
+      await seedChannel(store, 10n)
+      await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+      let advanced = false
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(
+          readStream(
+            serve({
+              store,
+              channelId,
+              challengeId,
+              tickCost: 1n,
+              prepaidUnits: 1,
+              autoCreditPrepaid,
+              refundIdempotencyKey: 'rejected-automatic',
+              generate: (async function* () {
+                advanced = true
+                yield 'unpaid'
+              })(),
+            }),
+          ),
+        ).rejects.toThrow('require a generator')
+        expect(await store.getChannel(channelId)).toMatchObject({
+          spent: 0n,
+          units: 0,
+          prepaidRefunds: {},
+        })
+      }
+      expect(advanced).toBe(false)
+    },
+  )
+
+  test('credits rejected automatic generation when canceled before its first pull', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10n)
+    await store.updateChannel(channelId, (current) => ({ ...current!, spent: 1n, units: 1 }))
+    const stream = serve({
+      store,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      prepaidUnits: 1,
+      generate: (async function* () {
+        yield 'must not advance'
+      })(),
+    })
+    await stream.cancel()
+    expect(await store.getChannel(channelId)).toMatchObject({
+      spent: 0n,
+      units: 0,
+      prepaidRefunds: {},
+    })
+  })
+
   test('rejects automatic billable generation before advancing its source', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 10n)

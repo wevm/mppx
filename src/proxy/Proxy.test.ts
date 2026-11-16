@@ -1001,7 +1001,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
             'GET /v1/scrape': sessionHandler.session({
               amount: '1',
               decimals: 6,
-              unitType: 'request',
+              unitType: 'page',
             }),
           },
         }),
@@ -1059,7 +1059,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
             'GET /v1/scrape': sessionHandler.session({
               amount: '1',
               decimals: 6,
-              unitType: 'request',
+              unitType: 'page',
             }),
           },
         }),
