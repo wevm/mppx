@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import * as Challenge from '../../Challenge.js'
+import * as PendingSettlement from '../../client/internal/PendingSettlement.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as Credential from '../../Credential.js'
@@ -184,8 +185,15 @@ async function createCredential(
 
   const parsedContext =
     method.context && context !== undefined ? method.context.parse(context) : undefined
-  return method.createCredential(
-    parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
+  // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+  return PendingSettlement.resume(
+    () =>
+      method.createCredential(
+        parsedContext !== undefined
+          ? { challenge, context: parsedContext }
+          : ({ challenge } as never),
+      ),
+    { attempts: maxPaymentAttempts },
   )
 }
 

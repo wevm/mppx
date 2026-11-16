@@ -11,6 +11,7 @@ import {
 } from 'viem'
 import {
   getTransaction,
+  getBlock,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -26,9 +27,11 @@ import {
   BroadcastOutcomeUnknownError,
   CredentialReplayedError,
   PaymentError,
+  PaymentExpiredError,
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as CredentialExpiry from '../../internal/CredentialExpiry.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
@@ -170,7 +173,7 @@ export function charge<const parameters extends charge.Parameters>(
       : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
-    Expires.assert(challenge.expires, challenge.id)
+    assertCredentialExpires(credential)
 
     if (isZeroAmount && payload.type !== 'proof')
       throw new MismatchError('Zero-amount challenges require a proof credential.', {})
@@ -366,6 +369,15 @@ export function charge<const parameters extends charge.Parameters>(
       })
     if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
       throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+
+    // A credential presented after its challenge expired is accepted only for a withdrawal
+    // that settled before then; see `Zone.redemptionGraceMs`.
+    const expiresAt = Date.parse(challenge.expires!)
+    if (expiresAt <= Date.now()) {
+      const block = await getBlock(client, { blockNumber: receipt.blockNumber })
+      if (Number(block.timestamp) * 1000 >= expiresAt)
+        throw new PaymentExpiredError({ expires: challenge.expires! })
+    }
 
     return { hash, portal, receipt, senderTag }
   }
@@ -729,8 +741,8 @@ export function charge<const parameters extends charge.Parameters>(
             ? request.feePayer
             : feePayer
           : undefined
-      const expires = challenge.expires
-      Expires.assert(expires, challenge.id)
+      assertCredentialExpires(credential)
+      const expires = challenge.expires!
       const replayExpires = Date.parse(expires)
 
       switch (validated.type) {
@@ -761,7 +773,15 @@ export function charge<const parameters extends charge.Parameters>(
 
         case 'zone': {
           const { portal, receipt, senderTag } = validated
-          if (!(await tryClaimZoneWithdrawal(store, portal, senderTag, replayExpires))) {
+          // Held through the grace period too, while the credential can still be presented.
+          if (
+            !(await tryClaimZoneWithdrawal(
+              store,
+              portal,
+              senderTag,
+              replayExpires + Zone.redemptionGraceMs,
+            ))
+          ) {
             throw new CredentialReplayedError({
               reason: 'Zone withdrawal has already been used',
             })
@@ -1084,6 +1104,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
   })
+  CredentialExpiry.register(method, zoneCredentialGraceMs)
   return relay ? (Relay.configure(method, relay) as typeof method) : method
 }
 
@@ -1658,6 +1679,26 @@ function getZoneWithdrawalStoreKey(
   senderTag: `0x${string}`,
 ): `mppx:charge:${string}` {
   return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`
+}
+
+/**
+ * A `zone` credential is accepted for `Zone.redemptionGraceMs` after its challenge expires,
+ * so a payer whose withdrawal settled in time can still redeem it on retry. Validation then
+ * requires the settlement to predate the expiry.
+ */
+function zoneCredentialGraceMs(credential: { payload: unknown }) {
+  const { payload } = credential
+  return typeof payload === 'object' &&
+    payload !== null &&
+    'type' in payload &&
+    payload.type === 'zone'
+    ? Zone.redemptionGraceMs
+    : undefined
+}
+
+/** Asserts the credential's challenge has not expired, or is a `zone` credential within its grace period. */
+function assertCredentialExpires(credential: Parameters<typeof CredentialExpiry.assert>[0]) {
+  CredentialExpiry.assert(credential, zoneCredentialGraceMs(credential))
 }
 
 async function tryClaimZoneWithdrawal(

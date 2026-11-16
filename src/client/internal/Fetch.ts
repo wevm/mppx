@@ -10,6 +10,7 @@ import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
+import * as PendingSettlement from './PendingSettlement.js'
 import * as ProofRealm from './ProofRealm.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
 
@@ -407,7 +408,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
             if (!MethodChallenge.has(selected.method))
-              return resolveCredential(selectedChallenge, selected.method, credentialContext)
+              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+              return PendingSettlement.resume(
+                () =>
+                  resolveCredential(selectedChallenge, selected.method, credentialContext, {
+                    origin: resolveRequestUrl(paymentInput).origin,
+                  }),
+                { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+              )
             const attempt: MethodResponse.Attempt = {
               origin: resolveRequestUrl(paymentInput).origin,
               prepare: () =>
@@ -1181,13 +1189,13 @@ async function resolveCredential(
   challenge: Challenge.Challenge,
   mi: Method.AnyClient,
   context: unknown,
-  attempt?: MethodResponse.Attempt | undefined,
+  attempt?: MethodResponse.Attempt | { origin: string } | undefined,
 ): Promise<string> {
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
   if (attempt?.origin) MethodResponse.attachOrigin(parameters, attempt.origin)
-  if (attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
+  if (attempt && 'prepare' in attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
   return mi.createCredential(parameters as never)
 }
 

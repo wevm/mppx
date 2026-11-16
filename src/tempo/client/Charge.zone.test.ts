@@ -6,6 +6,9 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { describe, expect, test, vi } from 'vp/test'
 
+import * as MethodResponse from '../../client/internal/MethodResponse.js'
+import * as Errors from '../../Errors.js'
+
 const merchant = '0x2222222222222222222222222222222222222222'
 const currency = '0x20c0000000000000000000000000000000000001'
 const payer = privateKeyToAccount(
@@ -203,6 +206,79 @@ describe('tempo.charge client zone selection', () => {
       'Zone withdrawal outcome is unknown',
     )
     expect(calls).toHaveLength(sent)
+  })
+
+  describe('a new challenge for a payment whose withdrawal is outstanding', () => {
+    /** Leaves a withdrawal for a first challenge with an unknown outcome. */
+    async function outstanding(origin?: string) {
+      const calls: string[] = []
+      const method = tempo_client.charge({
+        getClient: () => l1,
+        zone: { client: failingZoneClient(calls, 'send') },
+      })
+      const first = await challenge()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      try {
+        const result = method
+          .createCredential(parameters(first, origin))
+          .catch((error: Error) => error)
+        await vi.advanceTimersByTimeAsync(30_000)
+        expect(String(await result)).toContain('Zone withdrawal outcome is unknown')
+      } finally {
+        vi.useRealTimers()
+      }
+      return { calls, first, method, sent: calls.length }
+    }
+
+    function parameters(c: Challenge.Challenge, origin?: string) {
+      const parameters = { challenge: c as never, context: {} }
+      if (origin) MethodResponse.attachOrigin(parameters, origin)
+      return parameters
+    }
+
+    test('resumes that withdrawal from the origin that issued the first challenge', async () => {
+      const { calls, method, sent } = await outstanding('https://example.com')
+      const second = await challenge()
+      await expect(
+        method.createCredential(parameters(second, 'https://example.com')),
+      ).rejects.toThrow('Zone withdrawal outcome is unknown')
+      expect(calls).toHaveLength(sent)
+    })
+
+    test.each([
+      ['another origin', 'https://other.example'],
+      ['an unknown origin', undefined],
+    ])('fails closed under %s', async (_, origin) => {
+      const { calls, first, method, sent } = await outstanding('https://example.com')
+      const error = await method
+        .createCredential(parameters(await challenge(), origin))
+        .catch((error: Error) => error)
+      expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
+      expect((error as Errors.ZoneSettlementPendingError).challengeId).toBe(first.id)
+      expect(calls).toHaveLength(sent)
+    })
+
+    test('fails closed after the first challenge can no longer be redeemed', async () => {
+      const { calls, first, method, sent } = await outstanding('https://example.com')
+      vi.useFakeTimers({ now: new Date(first.expires!).getTime() + 5 * 60_000 + 1 })
+      try {
+        const error = await method
+          .createCredential(parameters(await challenge(), 'https://example.com'))
+          .catch((error: Error) => error)
+        expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
+      } finally {
+        vi.useRealTimers()
+      }
+      expect(calls).toHaveLength(sent)
+    })
+
+    test('withdraws for a challenge with other terms', async () => {
+      const { calls, method, sent } = await outstanding('https://example.com')
+      await method
+        .createCredential(parameters(await challenge({ amount: '2' }), 'https://example.com'))
+        .catch(() => {})
+      expect(calls.length).toBeGreaterThan(sent)
+    })
   })
 
   test('retries a withdrawal that reverted', async () => {

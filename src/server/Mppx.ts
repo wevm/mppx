@@ -10,6 +10,7 @@ import * as IdentityRequirements from '../identity/internal/Requirements.js'
 import * as IdentityServer from '../identity/Server.js'
 import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
+import * as CredentialExpiry from '../internal/CredentialExpiry.js'
 import * as Env from '../internal/env.js'
 import type { DeepReadonly, MaybePromise } from '../internal/types.js'
 import { warnOnce } from '../internal/warnOnce.js'
@@ -767,7 +768,7 @@ export function create<
     }
 
     try {
-      Expires.assert(credential.challenge.expires, credential.challenge.id)
+      CredentialExpiry.assertFor(mi, credential)
     } catch (e) {
       if (e instanceof Errors.PaymentError) await fail(e)
       throw e
@@ -1646,7 +1647,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
       // Reject credentials without expires (fail-closed) or with expired timestamp
       try {
-        Expires.assert(credential.challenge.expires, credential.challenge.id)
+        CredentialExpiry.assertFor(method, credential)
       } catch (error) {
         await emitPaymentFailed({
           challenge,

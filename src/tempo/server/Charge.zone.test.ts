@@ -42,6 +42,8 @@ type WithdrawalFixture = {
 function setup(
   options: {
     withdrawals?: () => WithdrawalFixture[]
+    /** When the settlement transaction's block was produced, in Unix milliseconds. */
+    settledAt?: number
     status?: 'success' | 'reverted'
     zones?: number[] | true
   } = {},
@@ -122,6 +124,13 @@ function setup(
             logsBloom: `0x${'00'.repeat(256)}`,
             logs: withdrawals().map(processedLog),
           }
+        if (method === 'eth_getBlockByNumber')
+          return {
+            hash: settlementHash,
+            number: '0x10',
+            timestamp: `0x${Math.floor((options.settledAt ?? Date.now()) / 1000).toString(16)}`,
+            transactions: [],
+          }
         throw new Error(`unexpected ${method}`)
       },
     }),
@@ -175,6 +184,62 @@ const tagA = `0x${'a1'.repeat(32)}` as const
 const tagB = `0x${'b2'.repeat(32)}` as const
 
 describe('tempo.charge zone credentials', () => {
+  test('accepts a withdrawal settled before the challenge expired, presented after', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const expiresAt = Date.now() - 1_000
+    const { challenge, credential, server } = setup({
+      settledAt: expiresAt - 30_000,
+      withdrawals: () => fixture,
+    })
+    const { challenge: c, memo } = await challenge({ expires: new Date(expiresAt).toISOString() })
+    fixture = [{ senderTag: tagA, memo }]
+    const serialized = credential(c, { senderTag: tagA, hash: settlementHash })
+    const receipt = await server.verifyCredential(serialized)
+    expect(receipt).toMatchObject({ method: 'tempo', reference: settlementHash, status: 'success' })
+    await expect(server.verifyCredential(serialized)).rejects.toThrow(
+      'Zone withdrawal has already been used',
+    )
+  })
+
+  test('rejects a withdrawal settled after the challenge expired', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const expiresAt = Date.now() - 10_000
+    const { challenge, credential, server } = setup({
+      settledAt: expiresAt + 5_000,
+      withdrawals: () => fixture,
+    })
+    const { challenge: c, memo } = await challenge({ expires: new Date(expiresAt).toISOString() })
+    fixture = [{ senderTag: tagA, memo }]
+    const error = await server
+      .verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash }))
+      .catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+  })
+
+  test('rejects a zone credential presented after the redemption grace period', async () => {
+    const { challenge, credential, rpcMethods, server } = setup()
+    const expires = new Date(Date.now() - Zone.redemptionGraceMs - 1_000).toISOString()
+    const { challenge: c } = await challenge({ expires })
+    const error = await server
+      .verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash }))
+      .catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
+  test('gives no grace to other credentials of an expired challenge', async () => {
+    const { challenge, rpcMethods, server } = setup()
+    const { challenge: c } = await challenge({
+      expires: new Date(Date.now() - 1_000).toISOString(),
+    })
+    const hash = Credential.serialize(
+      Credential.from({ challenge: c, payload: { hash: settlementHash, type: 'hash' } }),
+    )
+    const error = await server.verifyCredential(hash).catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
   test('advertises accepted zones in the challenge', async () => {
     const { challenge } = setup({ zones: [3, 7] })
     const { challenge: c } = await challenge()

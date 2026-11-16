@@ -16,6 +16,13 @@ import * as TempoAddress from './address.js'
 /** Default time a payer waits for a Zone withdrawal to settle on Tempo. */
 export const defaultSettlementTimeoutMs = 60_000
 
+/**
+ * How long after its challenge expires a `zone` credential is still accepted, when its
+ * withdrawal settled on Tempo before the challenge expired. A payer keeps a withdrawal it
+ * has not redeemed for as long, so no retry in that time withdraws again.
+ */
+export const redemptionGraceMs = 5 * 60_000
+
 /** Number of Tempo blocks searched back for a settled Zone withdrawal. */
 const lookbackBlocks = 7_200n
 
