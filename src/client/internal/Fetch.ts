@@ -411,9 +411,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               // A Zone withdrawal still settling is resumed for this challenge, not paid again.
               return PendingSettlement.resume(
                 () =>
-                  resolveCredential(selectedChallenge, selected.method, credentialContext, {
-                    origin: resolveRequestUrl(paymentInput).origin,
-                  }),
+                  resolveCredential(
+                    selectedChallenge,
+                    selected.method,
+                    credentialContext,
+                    requestOrigin(paymentInput),
+                  ),
                 { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
               )
             const attempt: MethodResponse.Attempt = {
@@ -1265,6 +1268,15 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   if (input instanceof URL) return input
   if (input instanceof Request) return new URL(input.url)
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
+}
+
+/** The request's origin, or `undefined` for a relative URL outside a browser. */
+function requestOrigin(input: RequestInfo | URL): { origin: string } | undefined {
+  try {
+    return { origin: resolveRequestUrl(input).origin }
+  } catch {
+    return undefined
+  }
 }
 
 /** Rejects Request modes whose paid retry cannot carry a credential to the server. */

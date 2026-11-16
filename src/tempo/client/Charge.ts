@@ -604,8 +604,11 @@ async function resumeZoneCredential(options: ZoneCredentialOptions, entry: Pendi
       zoneId,
     })
   }
-  // The credential pays once: a later challenge with the same terms is a new payment.
-  if (pending.get(key) === entry) pending.delete(key)
+  // The credential pays once: a later challenge with the same terms is a new payment. One
+  // made after its challenge expired is accepted only by a server that grants a grace period
+  // (`zoneCredentialGraceMs`), so the withdrawal stays outstanding and a later challenge for
+  // its terms fails closed instead of paying again.
+  if (pending.get(key) === entry && !isExpired(challenge.expires)) pending.delete(key)
   const { hash, senderTag } = settled
 
   return Credential.serialize({
@@ -689,9 +692,16 @@ function zoneTermsKey(challenge: ZoneCredentialOptions['challenge'], zoneId: num
   })
 }
 
+/** Whether a challenge expiring at `expires` has expired. */
+function isExpired(expires: string | undefined) {
+  if (!expires) return false
+  const expiresAt = new Date(expires).getTime()
+  return !Number.isNaN(expiresAt) && Date.now() >= expiresAt
+}
+
 /**
- * Whether a credential for a challenge expiring at `expires` can still be redeemed: until
- * `Zone.redemptionGraceMs` after it expires, for a withdrawal that settled before then.
+ * Whether a credential for a challenge expiring at `expires` may still be redeemed: until
+ * `Zone.redemptionGraceMs`, the longest server grace, after it expires.
  */
 function isRedeemable(expires: string | undefined) {
   if (!expires) return true

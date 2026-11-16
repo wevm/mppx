@@ -45,6 +45,7 @@ function setup(
     /** When the settlement transaction's block was produced, in Unix milliseconds. */
     settledAt?: number
     status?: 'success' | 'reverted'
+    zoneCredentialGraceMs?: number
     zones?: number[] | true
   } = {},
 ) {
@@ -145,6 +146,7 @@ function setup(
         currency,
         getClient: () => client,
         testnet: true,
+        zoneCredentialGraceMs: options.zoneCredentialGraceMs,
         zones: options.zones ?? [zoneId],
       }),
     ],
@@ -190,6 +192,7 @@ describe('tempo.charge zone credentials', () => {
     const { challenge, credential, server } = setup({
       settledAt: expiresAt - 30_000,
       withdrawals: () => fixture,
+      zoneCredentialGraceMs: 60_000,
     })
     const { challenge: c, memo } = await challenge({ expires: new Date(expiresAt).toISOString() })
     fixture = [{ senderTag: tagA, memo }]
@@ -207,6 +210,7 @@ describe('tempo.charge zone credentials', () => {
     const { challenge, credential, server } = setup({
       settledAt: expiresAt + 5_000,
       withdrawals: () => fixture,
+      zoneCredentialGraceMs: 60_000,
     })
     const { challenge: c, memo } = await challenge({ expires: new Date(expiresAt).toISOString() })
     fixture = [{ senderTag: tagA, memo }]
@@ -216,9 +220,28 @@ describe('tempo.charge zone credentials', () => {
     expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
   })
 
+  test('accepts no zone credential after its challenge expired by default', async () => {
+    const { challenge, credential, rpcMethods, server } = setup({ settledAt: Date.now() - 60_000 })
+    const { challenge: c } = await challenge({
+      expires: new Date(Date.now() - 1_000).toISOString(),
+    })
+    const error = await server
+      .verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash }))
+      .catch((e) => e)
+    expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
+  test.each([-1, Number.NaN, Zone.redemptionGraceMs + 1])(
+    'rejects zoneCredentialGraceMs %s',
+    (zoneCredentialGraceMs) => {
+      expect(() => setup({ zoneCredentialGraceMs })).toThrow('zoneCredentialGraceMs')
+    },
+  )
+
   test('rejects a zone credential presented after the redemption grace period', async () => {
-    const { challenge, credential, rpcMethods, server } = setup()
-    const expires = new Date(Date.now() - Zone.redemptionGraceMs - 1_000).toISOString()
+    const { challenge, credential, rpcMethods, server } = setup({ zoneCredentialGraceMs: 60_000 })
+    const expires = new Date(Date.now() - 61_000).toISOString()
     const { challenge: c } = await challenge({ expires })
     const error = await server
       .verifyCredential(credential(c, { senderTag: tagA, hash: settlementHash }))
@@ -228,7 +251,7 @@ describe('tempo.charge zone credentials', () => {
   })
 
   test('gives no grace to other credentials of an expired challenge', async () => {
-    const { challenge, rpcMethods, server } = setup()
+    const { challenge, rpcMethods, server } = setup({ zoneCredentialGraceMs: 60_000 })
     const { challenge: c } = await challenge({
       expires: new Date(Date.now() - 1_000).toISOString(),
     })

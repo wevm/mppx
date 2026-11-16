@@ -89,8 +89,20 @@ export function charge<const parameters extends charge.Parameters>(
     supportedModes,
     validateSender,
     waitForConfirmation = true,
+    zoneCredentialGraceMs = 0,
     zones,
   } = parameters
+  if (
+    !Number.isFinite(zoneCredentialGraceMs) ||
+    zoneCredentialGraceMs < 0 ||
+    zoneCredentialGraceMs > Zone.redemptionGraceMs
+  )
+    throw new Error(
+      `\`zoneCredentialGraceMs\` must be between 0 and ${Zone.redemptionGraceMs} milliseconds.`,
+    )
+  /** Grace for a credential presented after its challenge expired: only `zone` credentials get one. */
+  const graceMsFor = (credential: { payload: unknown }) =>
+    isZoneCredential(credential) ? zoneCredentialGraceMs : undefined
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
@@ -173,7 +185,7 @@ export function charge<const parameters extends charge.Parameters>(
       : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
-    assertCredentialExpires(credential)
+    CredentialExpiry.assert(credential, graceMsFor(credential))
 
     if (isZeroAmount && payload.type !== 'proof')
       throw new MismatchError('Zero-amount challenges require a proof credential.', {})
@@ -371,7 +383,7 @@ export function charge<const parameters extends charge.Parameters>(
       throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
 
     // A credential presented after its challenge expired is accepted only for a withdrawal
-    // that settled before then; see `Zone.redemptionGraceMs`.
+    // that settled before then; see `zoneCredentialGraceMs`.
     const expiresAt = Date.parse(challenge.expires!)
     if (expiresAt <= Date.now()) {
       const block = await getBlock(client, { blockNumber: receipt.blockNumber })
@@ -741,7 +753,7 @@ export function charge<const parameters extends charge.Parameters>(
             ? request.feePayer
             : feePayer
           : undefined
-      assertCredentialExpires(credential)
+      CredentialExpiry.assert(credential, graceMsFor(credential))
       const expires = challenge.expires!
       const replayExpires = Date.parse(expires)
 
@@ -779,7 +791,7 @@ export function charge<const parameters extends charge.Parameters>(
               store,
               portal,
               senderTag,
-              replayExpires + Zone.redemptionGraceMs,
+              replayExpires + zoneCredentialGraceMs,
             ))
           ) {
             throw new CredentialReplayedError({
@@ -1104,7 +1116,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
   })
-  CredentialExpiry.register(method, zoneCredentialGraceMs)
+  CredentialExpiry.register(method, graceMsFor)
   return relay ? (Relay.configure(method, relay) as typeof method) : method
 }
 
@@ -1244,6 +1256,19 @@ export declare namespace charge {
      * polling for a receipt.
      */
     waitForConfirmation?: boolean | undefined
+    /**
+     * How long, in milliseconds, after its challenge expires a `zone` credential is still
+     * accepted, for a withdrawal that settled on Tempo before the challenge expired. Lets a
+     * payer whose withdrawal settled late in the challenge's lifetime redeem it on retry.
+     * At most 5 minutes (`300_000`).
+     *
+     * Enable it only once no instance of an earlier release redeems credentials from the same
+     * store: those record a redeemed withdrawal only until its challenge expires, so the grace
+     * would accept it again.
+     *
+     * @default 0
+     */
+    zoneCredentialGraceMs?: number | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults &
@@ -1681,24 +1706,12 @@ function getZoneWithdrawalStoreKey(
   return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`
 }
 
-/**
- * A `zone` credential is accepted for `Zone.redemptionGraceMs` after its challenge expires,
- * so a payer whose withdrawal settled in time can still redeem it on retry. Validation then
- * requires the settlement to predate the expiry.
- */
-function zoneCredentialGraceMs(credential: { payload: unknown }) {
+/** Whether a credential pays with a Zone withdrawal. */
+function isZoneCredential(credential: { payload: unknown }) {
   const { payload } = credential
-  return typeof payload === 'object' &&
-    payload !== null &&
-    'type' in payload &&
-    payload.type === 'zone'
-    ? Zone.redemptionGraceMs
-    : undefined
-}
-
-/** Asserts the credential's challenge has not expired, or is a `zone` credential within its grace period. */
-function assertCredentialExpires(credential: Parameters<typeof CredentialExpiry.assert>[0]) {
-  CredentialExpiry.assert(credential, zoneCredentialGraceMs(credential))
+  return (
+    typeof payload === 'object' && payload !== null && 'type' in payload && payload.type === 'zone'
+  )
 }
 
 async function tryClaimZoneWithdrawal(
