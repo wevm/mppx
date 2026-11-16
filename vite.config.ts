@@ -17,6 +17,10 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/email-otp',
   ),
+  'mppx/extensions/identity/erc8004': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/erc8004',
+  ),
   'mppx/extensions/identity/link': path.resolve(
     import.meta.dirname,
     'src/extensions/identity/link',

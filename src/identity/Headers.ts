@@ -9,6 +9,8 @@
  * their own extra sensitive headers in `Prover.headers`.
  */
 export const request = Object.freeze([
+  'agent-id',
+  'agent-signature',
   'dpop',
   'identity-attestation',
   'identity-presentation',
