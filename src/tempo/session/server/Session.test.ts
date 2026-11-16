@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Secp256k1 } from 'ox'
-import { TxEnvelopeTempo } from 'ox/tempo'
+import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   createClient,
@@ -317,12 +317,17 @@ async function createOpenPayload(
     args: [payee, operator, token, deposit, salt, authorizedSigner],
   })
   const signingClient = createSigningClient(account)
-  const transaction = (await Transaction.serialize({
+  const envelope = TxEnvelopeTempo.from({
     chainId,
     calls: [{ to: escrow, data }],
     feeToken: parameters.feeToken ?? token,
-    nonce: 0,
-  })) as Hex
+    nonce: 0n,
+  })
+  const transaction = TxEnvelopeTempo.serialize(envelope, {
+    signature: SignatureEnvelope.from(
+      await account.sign({ hash: TxEnvelopeTempo.getSignPayload(envelope) }),
+    ),
+  }) as Hex
   const expiringNonceHash = Channel.computeExpiringNonceHash(
     Transaction.deserialize(
       transaction as Transaction.TransactionSerializedTempo,
@@ -1604,7 +1609,10 @@ describe('precompile server session unit guardrails', () => {
     expect(stored?.highestVoucherAmount).toBe(100n)
     if (!stored || !ChannelStore.isPrecompileState(stored))
       throw new Error('expected precompile state')
-    expect(stored.descriptor).toEqual(openPayload.descriptor)
+    expect(stored.descriptor).toEqual({
+      ...openPayload.descriptor,
+      payer: payer.address.toLowerCase(),
+    })
   })
 
   test('reopening existing precompile channel with higher voucher updates highest voucher only', async () => {
@@ -1772,7 +1780,7 @@ describe('precompile server session unit guardrails', () => {
 
     const stored = await store.getChannel(openPayload.channelId)
     expect(receipt.acceptedCumulative).toBe('100')
-    expect(stored?.authorizedSigner).toBe(payer.address)
+    expect(stored?.authorizedSigner?.toLowerCase()).toBe(payer.address.toLowerCase())
   })
 
   test('accepts precompile top-up and preserves spent accounting', async () => {
