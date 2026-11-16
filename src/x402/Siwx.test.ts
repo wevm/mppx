@@ -384,6 +384,49 @@ describe('Siwx grant', () => {
     expect(result.status).toBe(200)
     expect(await request.text()).toBe('{"task":1}')
   })
+
+  test('a request whose body was already read still grants, without the body', async () => {
+    const store = Store.memory()
+    const bodies: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator: {
+              async verify() {
+                return { isValid: true }
+              },
+              async settle() {
+                throw new Error('not settled')
+              },
+            },
+            siwx: {
+              grant: async ({ request }) => {
+                bodies.push(await request.text())
+                return true
+              },
+              origin,
+              store,
+            },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    const post = (headers: HeadersInit = {}) =>
+      new Request(url, { body: '{"task":1}', headers, method: 'POST' })
+    const first = await route(post())
+    if (first.status !== 402) throw new Error('expected a 402')
+    const extension = Siwx.fromPaymentRequired(readChallenge(first.challenge))!
+    const request = post({ [Siwx.header]: await sign(extension) })
+    await request.text()
+    const result = await route(request)
+    expect(result.status).toBe(200)
+    expect(bodies).toEqual([''])
+  })
 })
 
 describe('Siwx.wrapFetch', () => {

@@ -356,6 +356,10 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
         options: siwx,
         payload,
       })
+      // A copy, as canOffer and selectOffers get, so a grant that reads the body leaves it
+      // for the route handler. Taken before the claim, so a body already read can't spend the
+      // nonce: grant then gets the request without its body.
+      const copy = cloneGrantInput(input)
       // Reserve the nonce before grant, so a replayed proof never reaches grant. A claim this
       // request already made (a composed offer before this one declined) is shared, so a later
       // offer can still grant the wallet; a proof every offer declined stays spent, so it can't
@@ -369,9 +373,7 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
         await Siwx.claim({ payload, store: siwx.store })
         claimed.add(key)
       }
-      // A copy, as canOffer and selectOffers get, so a grant that reads the body leaves it
-      // for the route handler.
-      const granted = Boolean(await siwx.grant({ ...proof, request: input.clone() }))
+      const granted = Boolean(await siwx.grant({ ...proof, request: copy }))
       if (!granted) return undefined
       return {
         receipt: {
@@ -386,6 +388,19 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
         throw new VerificationFailedError({ reason: error.code })
       throw error
     }
+  }
+}
+
+/** Clones a request for `grant`, falling back to a bodyless copy when its body was read. */
+function cloneGrantInput(input: Request): Request {
+  try {
+    return input.clone()
+  } catch {
+    return new globalThis.Request(input.url, {
+      headers: new Headers(input.headers),
+      method: input.method,
+      signal: input.signal,
+    })
   }
 }
 
