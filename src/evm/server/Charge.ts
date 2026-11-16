@@ -6,6 +6,7 @@ import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as ServerTransport from '../../server/Transport.js'
+import type * as Store from '../../Store.js'
 import * as X402 from '../../x402/server/EvmCharge.js'
 import * as Siwx from '../../x402/Siwx.js'
 import * as Assets from '../Assets.js'
@@ -333,8 +334,11 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
   })
 }
 
-/** SIWX nonces each request has claimed, shared by the offers of a composed route. */
-const siwxClaims = new WeakMap<Request, Set<string>>()
+/**
+ * SIWX nonces each request has claimed, per replay store, shared by the offers of a
+ * composed route. Offers with their own stores each record the nonce in theirs.
+ */
+const siwxClaims = new WeakMap<Request, WeakMap<Store.AtomicStore, Set<string>>>()
 
 /**
  * Grants a request that carries a valid x402 SIWX proof without payment, when the
@@ -356,12 +360,14 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
       // request already made (a composed offer before this one declined) is shared, so a later
       // offer can still grant the wallet; a proof every offer declined stays spent, so it can't
       // be replayed once grant would approve the wallet. Clients sign a fresh proof each time.
-      const claimed = siwxClaims.get(input) ?? new Set<string>()
+      const stores = siwxClaims.get(input) ?? new WeakMap<Store.AtomicStore, Set<string>>()
+      siwxClaims.set(input, stores)
+      const claimed = stores.get(siwx.store) ?? new Set<string>()
+      stores.set(siwx.store, claimed)
       const key = `${payload.nonce}:${payload.issuedAt}`
       if (!claimed.has(key)) {
         await Siwx.claim({ payload, store: siwx.store })
         claimed.add(key)
-        siwxClaims.set(input, claimed)
       }
       const granted = Boolean(await siwx.grant({ ...proof, request: input }))
       if (!granted) return undefined
