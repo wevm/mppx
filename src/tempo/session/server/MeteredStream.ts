@@ -61,6 +61,10 @@ export type MeteredStreamOptions = {
 /** Applies voucher reservation and spend commits to an async session stream. */
 export async function* meterIterable(options: MeteredStreamOptions): AsyncGenerator<string> {
   const manual = typeof options.generate === 'function'
+  if (!manual && options.tickCost > 0n && !options.chargeOnce)
+    throw new TypeError(
+      'Billable per-item streams require a generator that calls stream.charge() before starting work.',
+    )
   let prepaidUnits = options.prepaidUnits ?? 0
   const signal = options.signal ?? new AbortController().signal
   const reservation = {
@@ -109,6 +113,11 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     await options.onChargeCommitted?.(channel)
   }
   try {
+    if (!manual && options.chargeOnce) {
+      await charge()
+      await commit()
+      charged = true
+    }
     const iterable =
       typeof options.generate === 'function'
         ? options.generate({ charge, signal })

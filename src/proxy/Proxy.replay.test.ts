@@ -581,3 +581,59 @@ describe('replay ttl scope', () => {
     expect(upstreamSignal?.aborted).toBe(false)
   })
 })
+
+test.each([false, true])(
+  're-verifies session retries including composed offers (%s)',
+  async (composed) => {
+    const onPayment = vi.fn()
+    const handler = Object.assign(createPaidHandler(onPayment), {
+      _internal: composed
+        ? {
+            offers: [
+              { intent: 'charge', _canonicalRequest: {} },
+              { intent: 'session', _canonicalRequest: { unitType: 'request' } },
+            ],
+          }
+        : { intent: 'session', _canonicalRequest: { unitType: 'request' } },
+    })
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValue(
+        new Response('data: paid\n\n', { headers: { 'Content-Type': 'text/event-stream' } }),
+      )
+    const proxy = Proxy.create({
+      fetch,
+      replay: { store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    expect((await proxy.fetch(paidRequest())).status).toBe(503)
+    expect(await (await proxy.fetch(paidRequest())).text()).toBe('data: paid\n\n')
+    expect(onPayment).toHaveBeenCalledTimes(2)
+  },
+)
+
+test('rejects per-item session proxying before payment or upstream work', async () => {
+  const payment = vi.fn()
+  const fetch = vi.fn()
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: { intent: 'session', _canonicalRequest: { unitType: 'token' } },
+  })
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  expect((await proxy.fetch(paidRequest())).status).toBe(500)
+  expect(payment).not.toHaveBeenCalled()
+  expect(fetch).not.toHaveBeenCalled()
+})

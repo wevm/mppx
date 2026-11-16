@@ -158,6 +158,18 @@ export function assertCredentialSourceCanSpend(parameters: {
   })
 }
 
+/** Binds an opening payment to the payer authenticated by its signed transaction. */
+function assertCredentialSourceIsPayer(
+  source: string | undefined,
+  chainId: number,
+  payer: Address,
+) {
+  if (source !== undefined && !isAddressEqual(readCredentialSourceAddress(source, chainId), payer))
+    throw new VerificationFailedError({
+      reason: 'credential source does not match transaction payer',
+    })
+}
+
 function readCredentialSourceAddress(source: string | undefined, chainId: number): Address {
   const prefix = `did:pkh:eip155:${chainId}:`
   if (!source?.startsWith(prefix))
@@ -515,6 +527,7 @@ async function validateOpenCredential(
     requestAmount: request.amount,
   })
   assertSameDescriptor(transaction.descriptor, payload.descriptor)
+  assertCredentialSourceIsPayer(parameters.credentialSource, chainId, transaction.descriptor.payer)
   if (cumulativeAmount > transaction.openDeposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
   const valid = await Voucher.verifyVoucher(
@@ -860,6 +873,7 @@ async function handleOpenCredential(
         requestAmount: request.amount,
       })
       assertSameDescriptor(prepared.descriptor, payload.descriptor)
+      assertCredentialSourceIsPayer(parameters.credentialSource, chainId, prepared.descriptor.payer)
       if (cumulativeAmount > prepared.openDeposit)
         throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
       const valid = await Voucher.verifyVoucher(

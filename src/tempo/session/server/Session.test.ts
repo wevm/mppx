@@ -566,6 +566,50 @@ async function persistPrecompileChannel(
 }
 
 describe('precompile server session unit guardrails', () => {
+  test.each([payer.address, wrongPayer.address])(
+    'binds open source to the payer, not its delegated signer (%s)',
+    async (source) => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const payload = await createOpenPayload({ authorizedSigner: wrongPayer.address })
+      payload.signature = await Voucher.signVoucher(
+        createSigningClient(wrongPayer),
+        wrongPayer,
+        { channelId: payload.channelId, cumulativeAmount: 100n },
+        tip20ChannelEscrow,
+        chainId,
+      )
+      const method = session({
+        amount: '100',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () =>
+          createServerClient([], payer, payload.channelId, {
+            descriptor: payload.descriptor,
+            receipt: transactionReceipt([openedLog(payload)]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          }),
+      })
+      const verification = method.verify({
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload,
+          source: `did:pkh:eip155:${chainId}:${source}`,
+        },
+        request: verifyRequest(payload.channelId),
+      })
+      if (source === wrongPayer.address) {
+        await expect(verification).rejects.toThrow(
+          'credential source does not match transaction payer',
+        )
+        expect(await store.getChannel(payload.channelId)).toBeNull()
+      } else await expect(verification).resolves.toMatchObject({ channelId: payload.channelId })
+    },
+  )
   test('request marks TIP-1034 session challenges', async () => {
     const { method } = createServer()
 

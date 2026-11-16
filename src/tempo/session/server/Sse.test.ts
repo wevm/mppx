@@ -5,6 +5,7 @@ import { ChannelClosedError } from '../../../Errors.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
+import type { SessionController } from './MeteredStream.js'
 import {
   formatNeedVoucherEvent,
   formatReceiptEvent,
@@ -248,8 +249,13 @@ describe('serve', () => {
     return result
   }
 
-  async function* generate(values: string[]): AsyncGenerator<string> {
-    for (const v of values) yield v
+  function generate(values: string[]) {
+    return async function* (stream: SessionController) {
+      for (const value of values) {
+        await stream.charge()
+        yield value
+      }
+    }
   }
 
   function seedChannel(
@@ -275,6 +281,25 @@ describe('serve', () => {
       createdAt: new Date().toISOString(),
     }))
   }
+
+  test('rejects automatic billable generation before advancing its source', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 10n)
+    let started = false
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1n,
+      generate: (async function* () {
+        started = true
+        yield 'unpaid'
+      })(),
+    })
+    await expect(readStream(stream)).rejects.toThrow('require a generator')
+    expect(started).toBe(false)
+    expect((await storage.getChannel(channelId))!.spent).toBe(0n)
+  })
 
   test('does not exhaust the generator before the response is consumed', async () => {
     const storage = memoryStore()
@@ -349,7 +374,7 @@ describe('serve', () => {
   })
 
   test.each(['generator', 'first check', 'delivery check'] as const)(
-    'credits an unsettled prepaid item after failure in %s',
+    'credits a prepaid item only before manual work starts: %s',
     async (failure) => {
       const store = memoryStore()
       await seedChannel(store, 10n)
@@ -366,13 +391,16 @@ describe('serve', () => {
           checks++
           if (checks === (failure === 'first check' ? 1 : 2)) throw new Error('delivery failed')
         },
-        generate: (async function* () {
+        generate: async function* (stream) {
           if (failure === 'generator') throw new Error('delivery failed')
+          await stream.charge()
           yield 'not delivered'
-        })(),
+        },
       })
       await expect(readStream(stream)).rejects.toThrow('delivery failed')
-      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
+      expect(await store.getChannel(channelId)).toMatchObject(
+        failure === 'delivery check' ? { spent: 1n, units: 1 } : { spent: 0n, units: 0 },
+      )
     },
   )
 
@@ -490,10 +518,12 @@ describe('serve', () => {
       tickCost: 1n,
       autoCreditPrepaid: true,
       prepaidUnits: 1,
-      generate: (async function* () {
+      generate: async function* (stream) {
+        await stream.charge()
+
         yield 'delivered'
         throw new Error('later failure')
-      })(),
+      },
     }).getReader()
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('delivered')
     await expect(reader.read()).rejects.toThrow('later failure')
@@ -634,13 +664,14 @@ describe('serve', () => {
           challengeId,
           tickCost: 1n,
           prepaidUnits: 1,
-          generate: (async function* () {
+          generate: async function* (stream) {
             await ChannelStore.creditChannel(store, channelId, 1n, {
               idempotencyKey: 'merchant',
               units: 1,
             })
+            await stream.charge()
             yield await Promise.reject(new Error('merchant refunded'))
-          })(),
+          },
         }),
       ),
     ).rejects.toThrow('merchant refunded')
@@ -746,10 +777,10 @@ describe('serve', () => {
           tickCost: 1n,
           prepaidUnits: 1,
           autoCreditPrepaid: true,
-          generate: (async function* () {
+          generate: async function* () {
             await store.updateChannel(channelId, () => null)
             yield await Promise.reject(new Error('delivery failed'))
-          })(),
+          },
           onRefundRequired(refund) {
             refunds.push(refund)
           },
@@ -1122,9 +1153,10 @@ describe('serve', () => {
 
     const controller = new AbortController()
 
-    async function* infiniteGen(): AsyncGenerator<string> {
+    async function* infiniteGen(stream: SessionController): AsyncGenerator<string> {
       let i = 0
       while (true) {
+        await stream.charge()
         yield `chunk-${i++}`
         await new Promise((r) => setTimeout(r, 5))
       }
@@ -1135,7 +1167,7 @@ describe('serve', () => {
       channelId,
       challengeId,
       tickCost: 1000000n,
-      generate: infiniteGen(),
+      generate: infiniteGen,
       signal: controller.signal,
     })
 
@@ -1159,8 +1191,9 @@ describe('serve', () => {
     const controller = new AbortController()
     const cleanup = vi.fn()
 
-    async function* idleGen(): AsyncGenerator<string> {
+    async function* idleGen(stream: SessionController): AsyncGenerator<string> {
       try {
+        await stream.charge()
         yield 'queued'
       } finally {
         cleanup()
@@ -1172,7 +1205,7 @@ describe('serve', () => {
       channelId,
       challengeId,
       tickCost: 1000000n,
-      generate: idleGen(),
+      generate: idleGen,
       signal: controller.signal,
     })
 

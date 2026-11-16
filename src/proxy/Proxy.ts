@@ -161,14 +161,24 @@ export function create(config: create.Config): Proxy {
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
+    // Proxy starts upstream work before it knows the response's content type. Only a
+    // request-priced session can prepay that work; per-item generation needs manual charge().
+    if (requiresManualGeneration(handler))
+      return new Response(
+        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
+        { status: 500 },
+      )
+
     // With replay, a paid request whose credential already paid for this exact
     // request collects its recorded delivery instead of paying again.
     let paidRequest = request
     let replayBody: Uint8Array | undefined
     let replayKey: string | undefined
-    // Routes with identity verifiers keep paying normally: a replay would skip them.
+    // Identity and session routes retain their normal verification and metered delivery.
     const credential =
-      replay && !fallbackMatch && !requiresIdentity(handler) ? paymentCredential : undefined
+      replay && !fallbackMatch && !requiresFreshVerification(handler)
+        ? paymentCredential
+        : undefined
     if (replay && credential) {
       const body =
         boundedBody ??
@@ -511,15 +521,29 @@ function credentialHeaders(handler: Service.IntentHandler): string[] {
   return names.length > 0 ? names : ['authorization']
 }
 
-/** Whether a paid handler, or any offer of a composed one, requires identity verifiers. */
-function requiresIdentity(handler: Service.IntentHandler): boolean {
+function requiresManualGeneration(handler: Service.IntentHandler): boolean {
+  if (!('_internal' in handler)) return false
+  type Offer = { intent?: string; _canonicalRequest?: { unitType?: unknown } }
+  const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
+  return (internal?.offers ?? (internal ? [internal] : [])).some(
+    (offer) => offer.intent === 'session' && offer._canonicalRequest?.unitType !== 'request',
+  )
+}
+
+/** Identity and session offers must re-run authorization and delivery-time metering on every request. */
+function requiresFreshVerification(handler: Service.IntentHandler): boolean {
   if (!('_internal' in handler)) return false
   const internal = handler._internal as
-    | { _identity?: boolean; offers?: readonly { _identity?: boolean }[] }
+    | {
+        _identity?: boolean
+        intent?: string
+        offers?: readonly { _identity?: boolean; intent?: string }[]
+      }
     | undefined
   if (!internal) return false
-  if (internal.offers) return internal.offers.some((offer) => offer._identity)
-  return internal._identity === true
+  if (internal.offers)
+    return internal.offers.some((offer) => offer._identity || offer.intent === 'session')
+  return internal._identity === true || internal.intent === 'session'
 }
 
 function getConfiguredScope(handler: Service.IntentHandler): string | undefined {
