@@ -1,5 +1,12 @@
 # mppx
 
+## 0.20.1
+
+### Patch Changes
+
+- 067dd8f: Added `Attestation.Issuer.create`, which signs audience-bound identity attestations of any type with a local or remote Ed25519 key and serves its JSON Web Key Set, and the optional `uid` and `cnf` attestation claims, so one issuer can attest several linked accounts (such as `email`, `github` and `x`) of one user. Added `TempoId.Issuer`, which exchanges a Tempo ID access token for `tempo-id` and `email` attestations, and `TempoId.Client.attestations` and `TempoId.Client.attest`, which obtain them.
+- be2ae65: Added x402 `sign-in-with-x` support: `evm.charge({ x402: { siwx } })` lets a wallet that signs the 402's challenge get the resource without paying when `grant` approves it, and `Siwx.wrapFetch` answers that challenge on the client before mppx pays.
+
 ## 0.20.0
 
 ### Minor Changes
