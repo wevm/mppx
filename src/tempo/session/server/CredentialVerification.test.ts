@@ -1,4 +1,9 @@
+import { Secp256k1 } from 'ox'
+import { KeyAuthorization, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import type { Address, Hex } from 'viem'
+import { createClient, custom, encodeFunctionResult } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Abis } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
@@ -9,6 +14,7 @@ import * as Channel from '../precompile/Channel.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
 import {
+  assertCredentialSourceIsPayer,
   assertOpenCredentialCoversRequest,
   broadcastCredentialPayload,
   requireSessionCredentialAction,
@@ -302,5 +308,98 @@ describe('SessionCredentialGuards', () => {
       ).rejects.toThrow('credential source does not match channel payer or authorized signer')
       expect(verifyVoucher).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('open source transaction authentication', () => {
+  const rootKey = `0x${'ab'.repeat(32)}` as const
+  const keyKey = `0x${'cd'.repeat(32)}` as const
+  const root = privateKeyToAccount(rootKey).address
+  const accessKey = privateKeyToAccount(keyKey).address
+  const chainId = 4217
+  const source = `did:pkh:eip155:${chainId}:${root}`
+  afterEach(() => vi.restoreAllMocks())
+
+  test.each([
+    'direct',
+    'unsigned',
+    'forged sender',
+    'active key',
+    'revoked key',
+    'expired key',
+    'unknown key',
+    'inline key',
+    'wrong chain',
+    'expired authorization',
+  ])('authenticates %s', async (kind) => {
+    const inline = ['inline key', 'wrong chain', 'expired authorization'].includes(kind)
+    const keychain =
+      inline || ['active key', 'revoked key', 'expired key', 'unknown key'].includes(kind)
+    const authorization = KeyAuthorization.from({
+      address: accessKey,
+      chainId: kind === 'wrong chain' ? 999n : BigInt(chainId),
+      type: 'secp256k1',
+      ...(kind === 'expired authorization' ? { expiry: 1 } : {}),
+    })
+    const envelope = TxEnvelopeTempo.from({
+      chainId,
+      calls: [{ to: root, data: '0x' }],
+      nonce: 0n,
+      ...(kind === 'forged sender' ? { feePayerSignature: null } : {}),
+      ...(inline
+        ? {
+            keyAuthorization: KeyAuthorization.from({
+              ...authorization,
+              signature: SignatureEnvelope.from(
+                Secp256k1.sign({
+                  payload: KeyAuthorization.getSignPayload(authorization),
+                  privateKey: rootKey,
+                }),
+              ),
+            }),
+          }
+        : {}),
+    })
+    const primitive = SignatureEnvelope.from(
+      Secp256k1.sign({
+        payload: TxEnvelopeTempo.getSignPayload(envelope),
+        privateKey: keychain || kind === 'forged sender' ? keyKey : rootKey,
+      }),
+    )
+    const signature = keychain
+      ? SignatureEnvelope.from({
+          type: 'keychain',
+          userAddress: root,
+          version: 'v1',
+          inner: primitive,
+        })
+      : primitive
+    const serialized = TxEnvelopeTempo.serialize(envelope, {
+      ...(kind === 'unsigned' ? {} : { signature }),
+      ...(kind === 'forged sender' ? { format: 'feePayer' as const, sender: root } : {}),
+    })
+    const rpc = vi.fn(async () => {
+      if (kind === 'unknown key') throw new Error('unavailable')
+      return encodeFunctionResult({
+        abi: Abis.accountKeychain,
+        functionName: 'getKey',
+        result: {
+          signatureType: 0,
+          keyId: accessKey,
+          isRevoked: kind === 'revoked key',
+          expiry: kind === 'expired key' ? 1n : 9999999999n,
+          enforceLimits: false,
+        },
+      })
+    })
+    const client = createClient({ transport: custom({ request: rpc }, { retryCount: 0 }) })
+    const result = assertCredentialSourceIsPayer(source, chainId, root, serialized, client)
+    if (['direct', 'active key', 'inline key'].includes(kind))
+      await expect(result).resolves.toBeUndefined()
+    else
+      await expect(result).rejects.toThrow(
+        'credential source is not authenticated by transaction signature',
+      )
+    if (kind === 'active key') expect(rpc).toHaveBeenCalledOnce()
   })
 })
