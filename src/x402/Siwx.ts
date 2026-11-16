@@ -361,6 +361,9 @@ export function wrapFetch(
 ): typeof globalThis.fetch {
   const { account } = parameters
   return async (input, init) => {
+    // A streamed upload can't be sent again without holding all of it in memory, so it
+    // passes through untouched and a 402 for it is paid as usual.
+    if (isStreamed(input, init)) return fetch(input, init)
     const request = new Request(input, init)
     // Keep a copy so a request body can be sent again with the proof.
     const retry = request.clone()
@@ -422,6 +425,12 @@ function chainIdOf(value: string): number {
   const match = /^eip155:(\d+)$/.exec(value)
   if (!match) throw new InvalidProofError('invalid_siwx_chain_id')
   return Number(match[1])
+}
+
+/** Whether a request's body is a stream, rather than a value that can be sent again. */
+function isStreamed(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
+  if (init?.body !== undefined && init.body !== null) return init.body instanceof ReadableStream
+  return input instanceof Request && input.body !== null
 }
 
 function originOf(value: string): string | undefined {

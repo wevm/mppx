@@ -294,6 +294,28 @@ describe('Siwx.wrapFetch', () => {
     expect(bodies).toEqual(['{"task":1}', '{"task":1}'])
   })
 
+  test('passes a streamed upload through without signing', async () => {
+    const { handler } = createRoute()
+    const requests: Request[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        const request = new Request(input, init)
+        requests.push(request)
+        return handler(request)
+      },
+      { account },
+    )
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"task":1}'))
+        controller.close()
+      },
+    })
+    const response = await fetch(url, { body, duplex: 'half', method: 'POST' } as RequestInit)
+    expect(response.status).toBe(402)
+    expect(requests).toHaveLength(1)
+  })
+
   test('does not sign a challenge naming another site', async () => {
     const { handler } = createRoute()
     let calls = 0
