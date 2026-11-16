@@ -43,9 +43,9 @@ const abi = [
  *
  * - `verifier` requires a request signed by the agent's wallet, as the Identity Registry's
  *   `getAgentWallet` names it: an EOA signature, or ERC-1271 for a contract or configurable account.
- * - `paymentCheck` accepts a `tempo` charge paid from the agent's wallet, so the payment itself
- *   proves the agent. For anything else (no Credential, sessions, Zones, other methods) it
- *   requires the signature.
+ * - `paymentCheck` accepts a `tempo` charge the agent's wallet signed (a transaction or proof), so
+ *   the payment itself proves the agent. For anything else (no Credential, transaction hashes,
+ *   sessions, Zones, other methods) it requires the signature.
  *
  * @example
  * ```ts
@@ -171,15 +171,15 @@ export function create(config: create.Config = {}): Erc8004 {
     paymentCheck: {
       requires: [{ type: Constants.type }],
       async verify({ challenge, credential, request }) {
-        // Only tempo charges bind the source to the payer: a signed transaction from it, a
-        // transfer it made with this challenge's memo, or a proof it signed. Sessions, Zones and
-        // other methods don't, so they need the agent's signature instead.
+        // Only a tempo charge the source signed binds it to the payer: a transaction or a proof.
+        // A hash credential doesn't (the charge's validateSender can accept another payer), and
+        // neither do sessions, Zones or other methods, so they need the agent's signature instead.
         const type = (credential?.payload as { type?: unknown } | undefined)?.type
         if (
           !credential ||
           challenge.method !== 'tempo' ||
           challenge.intent !== 'charge' ||
-          (type !== 'transaction' && type !== 'hash' && type !== 'proof')
+          (type !== 'transaction' && type !== 'proof')
         )
           return allowed(await getSigned(request))
         const agent = await getAgent(request)

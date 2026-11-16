@@ -222,6 +222,7 @@ test("needs the agent's signature when the payment doesn't bind its source", asy
   const request = new Request(url, { headers: { 'Agent-Id': `eip155:4217:${registry}:1` } })
   for (const [intent, type] of [
     ['session', 'topUp'],
+    ['charge', 'hash'],
     ['charge', 'zone'],
     ['charge', undefined],
   ] as const) {
