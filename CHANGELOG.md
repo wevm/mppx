@@ -1,5 +1,15 @@
 # mppx
 
+## 0.20.0
+
+### Minor Changes
+
+- e2d81d0: Required manual charges before billable per-item stream generation; billable automatic SSE proxy sessions now require request pricing. Session replay retains payment verification, and opening credentials bind their source to the signed transaction payer.
+
+### Patch Changes
+
+- d8292be: Added `mppx/extensions/identity/erc8004`: an ERC-8004 agent identity provider. The client prover signs each request with the agent's wallet, and the server's verifier and payment check require that the wallet the Identity Registry names (on Tempo mainnet by default) signed the request or signed the transaction or proof of a `tempo` charge (transaction hashes, sessions, Zones and other methods need the signature). The proxy and cross-origin redirects drop its `Agent-Id` and `Agent-Signature` headers.
+
 ## 0.19.1
 
 ### Patch Changes
