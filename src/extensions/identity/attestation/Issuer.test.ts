@@ -117,7 +117,12 @@ describe('Issuer.create', () => {
       await expect(attester.sign({ audience, sub: 'a', type: 'email', claims })).rejects.toThrow()
     const circular: Record<string, unknown> = {}
     circular.self = circular
-    for (const claims of [{ big: 1n }, circular])
+    for (const claims of [
+      { big: 1n },
+      circular,
+      { toJSON: () => ({ sub: 'other' }) },
+      { cnf: { toJSON: () => ({}) } },
+    ])
       await expect(
         attester.sign({ audience, sub: 'a', type: 'email', claims }),
       ).rejects.toBeInstanceOf(Attestation.Issuer.InvalidParametersError)

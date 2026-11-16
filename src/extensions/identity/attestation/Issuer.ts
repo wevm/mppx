@@ -98,6 +98,12 @@ export function create(config: create.Config): Issuer {
         throw new InvalidParametersError(
           'Attestation cnf must be an object whose jkt and addr are strings.',
         )
+      // A toJSON hook would make JSON.stringify sign something other than this payload.
+      if (
+        'toJSON' in payload ||
+        (typeof payload.cnf === 'object' && payload.cnf !== null && 'toJSON' in payload.cnf)
+      )
+        throw new InvalidParametersError('Attestation claims must not define toJSON.')
       try {
         JSON.stringify(payload)
       } catch {
