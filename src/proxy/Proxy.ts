@@ -544,7 +544,7 @@ function requiresManualGeneration(
   handler: Service.IntentHandler,
   selected?: PaymentBinding,
 ): boolean {
-  if (!('_internal' in handler)) return false
+  if (!('_internal' in handler)) return selected?.intent === 'session'
   type Offer = {
     name?: string
     intent?: string
@@ -561,11 +561,12 @@ function requiresManualGeneration(
   // Mixed methods can still challenge and serve their one-shot charge offer. A session's
   // canonical route pricing is authoritative, never the unitType echoed by its credential.
   if (!selected) return offers.length > 0 && offers.every(unsupported)
-  return offers.some(
-    (offer) =>
-      (!offer.name || offer.name === selected.method) &&
-      offer.intent === selected.intent &&
-      unsupported(offer),
+  const selectedOffers = offers.filter(
+    (offer) => (!offer.name || offer.name === selected.method) && offer.intent === selected.intent,
+  )
+  return (
+    (selected.intent === 'session' && selectedOffers.length === 0) ||
+    selectedOffers.some(unsupported)
   )
 }
 
@@ -574,18 +575,14 @@ function requiresFreshVerification(
   handler: Service.IntentHandler,
   selected?: PaymentBinding,
 ): boolean {
+  if (selected?.intent === 'session') return true
   if (!('_internal' in handler)) return false
   type Offer = { _identity?: boolean; name?: string; intent?: string }
   const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
   const offers = internal?.offers ?? (internal ? [internal] : [])
   return (
     offers.some((offer) => offer._identity) ||
-    offers.some(
-      (offer) =>
-        offer.intent === 'session' &&
-        (!selected ||
-          (selected.intent === 'session' && (!offer.name || offer.name === selected.method))),
-    )
+    (!selected && offers.some((offer) => offer.intent === 'session'))
   )
 }
 

@@ -1,6 +1,6 @@
 # Manual charges for billable streams
 
-Per-item session streams now require a generator function that calls `stream.charge()` before billable work starts. Automatic iterables and upstream SSE responses remain supported for request-priced routes and free streams. Billable SSE-enabled proxy session routes require `unitType: 'request'`; zero-priced streams remain automatic. Plain HTTP sessions still prepay each request with their configured unit label. Put per-item and request-priced session offers on separate routes. Composed one-shot charge offers and verified session management remain supported.
+Per-item session streams now require a generator function that calls `stream.charge()` before billable work starts. Automatic iterables and upstream SSE responses remain supported for request-priced routes and free streams. Billable SSE-enabled proxy session routes require `unitType: 'request'`; zero-priced streams remain automatic. Plain HTTP sessions still prepay each request with their configured unit label. Put per-item and request-priced session offers on separate routes. Composed one-shot charge offers and verified session management remain supported. Pass session handlers directly to proxy routes, or preserve their `_internal` metadata when wrapping them; session content is rejected when canonical pricing metadata is unavailable.
 
 ```ts
 return result.withReceipt(async function* (stream) {

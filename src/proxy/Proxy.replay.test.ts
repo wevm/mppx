@@ -814,3 +814,57 @@ test.each([
     expect(payment).toHaveBeenCalledTimes(1)
   },
 )
+
+test.each(['missing', 'empty'])(
+  'rejects session content with %s handler metadata before replay or payment',
+  async (metadata) => {
+    const payment = vi.fn()
+    const handler = createPaidHandler(payment)
+    if (metadata === 'empty') Object.assign(handler, { _internal: { offers: [] } })
+    const fetch = vi.fn(
+      async () =>
+        new Response('data: unmetered\n\n', { headers: { 'content-type': 'text/event-stream' } }),
+    )
+    const proxy = Proxy.create({
+      fetch,
+      replay: { store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    for (let attempt = 0; attempt < 2; attempt++)
+      expect(
+        (await proxy.fetch(paidRequest({ credential: sessionCredential('voucher') }))).status,
+      ).toBe(500)
+    expect(payment).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
+
+test('reverifies opaque session management instead of caching its response', async () => {
+  const fetch = vi.fn()
+  const management = new Response('closed')
+  const handler = vi.fn(async () => ({
+    status: 200 as const,
+    withReceipt: <response>(_response: response) => management as response,
+  }))
+  const proxy = Proxy.create({
+    fetch,
+    replay: { store: Store.memory() },
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  for (let attempt = 0; attempt < 2; attempt++)
+    expect(await proxy.fetch(paidRequest({ credential: sessionCredential('close') }))).toBe(
+      management,
+    )
+  expect(handler).toHaveBeenCalledTimes(2)
+  expect(fetch).not.toHaveBeenCalled()
+})
