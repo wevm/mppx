@@ -18,6 +18,7 @@ import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import * as x402_Header from '../x402/Header.js'
+import * as x402_Siwx from '../x402/Siwx.js'
 import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
 import * as ChallengeMeta from './internal/challengeMeta.js'
@@ -3580,7 +3581,10 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   const incompatible = rest.some(
     (value) =>
       !isDeepStrictEqual(value.resource, first.resource) ||
-      !isDeepStrictEqual(value.extensions, first.extensions),
+      !isDeepStrictEqual(
+        withoutSiwx(value.extensions as Record<string, unknown> | undefined),
+        withoutSiwx(first.extensions as Record<string, unknown> | undefined),
+      ),
   )
   if (incompatible)
     return [
@@ -3594,13 +3598,41 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   const error = [first.error, ...rest.map((value) => value.error)]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join('; ')
+  const siwx = mergeSiwx([first, ...rest])
   return [
     x402_Header.encodePaymentRequired({
       ...first,
       accepts: [first.accepts, ...rest.map((value) => value.accepts)].flat(),
+      ...(siwx ? { extensions: { ...first.extensions, [x402_Siwx.extensionKey]: siwx } } : {}),
       ...(error ? { error } : {}),
     }),
   ]
+}
+
+/**
+ * Each SIWX offer carries its own nonce, so offers differ only in that and their chains.
+ * Nonces aren't tied to the offer that issued them, so one challenge listing every
+ * offer's chains serves all of them.
+ */
+function mergeSiwx(
+  values: readonly { extensions?: Record<string, unknown> | undefined }[],
+): x402_Siwx.Extension | undefined {
+  const extensions = values
+    .map((value) => x402_Siwx.fromPaymentRequired(value))
+    .filter((value): value is x402_Siwx.Extension => value !== undefined)
+  const [first] = extensions
+  if (!first) return undefined
+  const chains = new Map<string, x402_Siwx.Chain>()
+  for (const extension of extensions)
+    for (const chain of extension.supportedChains)
+      chains.set(`${chain.chainId}:${chain.type}`, chain)
+  return { ...first, supportedChains: [...chains.values()] }
+}
+
+function withoutSiwx(extensions: Record<string, unknown> | undefined) {
+  if (!extensions) return extensions
+  const { [x402_Siwx.extensionKey]: _, ...rest } = extensions
+  return rest
 }
 
 /**

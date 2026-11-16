@@ -23,6 +23,7 @@ describe('scrub', () => {
       'PAYMENT-REQUIRED': 'required',
       'PAYMENT-RESPONSE': 'response',
       'PAYMENT-SIGNATURE': 'signature',
+      'SIGN-IN-WITH-X': 'proof',
       'WWW-Authenticate': 'Payment id="abc"',
     })
     const result = Headers.scrub(headers)
@@ -32,6 +33,7 @@ describe('scrub', () => {
     expect(result.has('payment-required')).toBe(false)
     expect(result.has('payment-response')).toBe(false)
     expect(result.has('payment-signature')).toBe(false)
+    expect(result.has('sign-in-with-x')).toBe(false)
     expect(result.has('www-authenticate')).toBe(false)
     expect(result.get('content-type')).toBe('application/json')
   })
