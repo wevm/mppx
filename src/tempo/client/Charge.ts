@@ -24,7 +24,10 @@ import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
+import * as Expires from '../../Expires.js'
 import * as Method from '../../Method.js'
+import * as PaymentRequest from '../../PaymentRequest.js'
+import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
@@ -106,8 +109,8 @@ export function charge(parameters: charge.Parameters = {}) {
   })
   const getAccount = Account.getResolver({ account: parameters.account })
   assertZone(parameters.zone)
-  // Zone withdrawals still settling, by challenge ID, so a retry resumes waiting instead of paying again.
-  const pendingZoneWithdrawals = new Map<string, Promise<ZoneWithdrawal>>()
+  // Zone withdrawals still settling, by challenge, so a retry resumes waiting instead of paying again.
+  const pendingZoneWithdrawals = new Map<string, PendingZoneWithdrawal>()
 
   const method = Method.toClient(Methods.charge, {
     // Skip offers that violate client policy so an acceptable offer can be chosen.
@@ -121,7 +124,8 @@ export function charge(parameters: charge.Parameters = {}) {
     },
     context: chargeContextSchema,
 
-    async createCredential({ challenge, context }) {
+    async createCredential(credentialParameters) {
+      const { challenge, context } = credentialParameters
       assertChallengePolicy(parameters, caps, challenge.request)
       // Sign on the pinned chain when the challenge omits a chain ID.
       const challengeChainId = challenge.request.methodDetails?.chainId
@@ -163,22 +167,31 @@ export function charge(parameters: charge.Parameters = {}) {
         supportedModes.includes('push') &&
         (explicitMode === undefined || explicitMode === 'push') &&
         Zone.isAccepted(methodDetails?.zones as Zone.Accepted | undefined, zoneId) &&
-        !methodDetails?.splits &&
-        // A withdrawal can't be undone, so start one only when it can settle before the
-        // challenge expires; an expired challenge would invite another payment.
-        (pendingZoneWithdrawals.has(zoneWithdrawalKey(challenge)) ||
-          settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
-      )
-        return createZoneCredential({
+        !methodDetails?.splits
+      ) {
+        const options = {
           // The withdrawal fee is paid on top of the amount, so both must fit the caps.
-          assertFee: (fee) => assertChallengePolicy(parameters, caps, request, chainId, fee),
+          assertFee: (fee: bigint) =>
+            assertChallengePolicy(parameters, caps, request, chainId, fee),
           challenge,
           clientId,
           client,
+          origin: httpOrigin(MethodResponse.getOrigin(credentialParameters)),
           pending: pendingZoneWithdrawals,
           zone: parameters.zone,
           zoneId,
-        })
+        }
+        // A withdrawal can't be undone, so one still outstanding for these terms is resumed,
+        // even under a new challenge, and a new one starts only when it can settle before the
+        // challenge expires; an expired challenge would invite another payment.
+        const outstanding = findZoneWithdrawal(options)
+        if (outstanding) return resumeZoneCredential(options, outstanding)
+        // With nothing outstanding, an expired challenge can't be paid: its server refuses any
+        // credential for it, so a payment on Tempo would be lost.
+        if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
+        if (settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
+          return createZoneCredential(options)
+      }
 
       const defaultAccount = getAccount(client, context)
       const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
@@ -482,40 +495,140 @@ function transactionHash(credential: string): Hex.Hex | undefined {
   return keccak256(serialized)
 }
 
+/** Inputs for paying a challenge from a Zone balance. */
+type ZoneCredentialOptions = {
+  /** Rejects a withdrawal fee that would take the payment past the client policy. */
+  assertFee: (fee: bigint) => void
+  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
+  client: viem_Client
+  clientId: string | undefined
+  /** HTTP origin the challenge came from, when the caller verified it. */
+  origin: string | undefined
+  pending: Map<string, PendingZoneWithdrawal>
+  zone: charge.Zone
+  zoneId: number
+}
+
+/** A Zone withdrawal that was sent, or is being sent, and has not yet produced a credential. */
+type PendingZoneWithdrawal = {
+  /** Challenge the withdrawal pays, bound to it by its memo. */
+  challenge: ZoneCredentialOptions['challenge']
+  /** HTTP origin that issued the challenge, when known. */
+  origin: string | undefined
+  /**
+   * Whether its credential was returned after its challenge expired. Only a retry of that
+   * challenge may get the credential again; until its redemption window ends, a challenge with
+   * the same terms fails closed, since the server may have redeemed or refused it.
+   */
+  redeemedLate?: boolean | undefined
+  /** Sender tags of a withdrawal whose credential was returned after its challenge expired. */
+  senderTags?: readonly Hex.Hex[] | undefined
+  /** Payment terms: what another challenge must ask for to be paid by this withdrawal. */
+  terms: string | undefined
+  /** Calls waiting on this withdrawal for a credential right now. */
+  waiters: number
+  withdrawal: Promise<ZoneWithdrawal>
+}
+
 /**
  * Pays a challenge from a Zone balance: requests a withdrawal to the recipient
  * with the challenge-bound memo, and returns a `zone` credential that names it
  * by sender tag and the Tempo transaction hash that settled it.
  */
-async function createZoneCredential(options: {
-  assertFee: (fee: bigint) => void
-  challenge: Parameters<typeof Credential.serialize>[0]['challenge']
-  client: viem_Client
-  clientId: string | undefined
-  pending: Map<string, Promise<ZoneWithdrawal>>
-  zone: charge.Zone
-  zoneId: number
-}) {
-  const { challenge, client, pending, zone, zoneId } = options
-  const request = challenge.request as ChargeRequest
-  const recipient = request.recipient as Address
-  // The whole challenge, so a challenge from another realm or request with the same ID never matches.
-  const key = zoneWithdrawalKey(challenge)
-
-  // A withdrawal can't be undone, so a retry after a failed wait resumes it instead of paying again.
-  // Concurrent calls for one challenge share the request, which is stored before it is sent.
-  let withdrawalRequest = pending.get(key)
-  if (!withdrawalRequest) {
-    const state = { sent: false }
-    withdrawalRequest = requestZoneWithdrawal(options, state)
-    pending.set(key, withdrawalRequest)
-    // Only a failure before the transaction was sent is safe to retry. After that, the
-    // withdrawal may have gone through, so retries of this challenge keep failing.
-    withdrawalRequest.catch(() => {
-      if (!state.sent) pending.delete(key)
-    })
+function createZoneCredential(options: ZoneCredentialOptions) {
+  const { challenge, origin, pending, zoneId } = options
+  // Stored before it is sent, so concurrent and later calls for one challenge or its terms share it.
+  const state = { sent: false }
+  const entry: PendingZoneWithdrawal = {
+    challenge,
+    origin,
+    terms: zoneTermsKey(challenge, zoneId),
+    waiters: 0,
+    withdrawal: requestZoneWithdrawal(options, state),
   }
-  const withdrawal = await withdrawalRequest
+  const key = zoneWithdrawalKey(challenge)
+  pending.set(key, entry)
+  // Only a failure before the transaction was sent is safe to retry. After that, the
+  // withdrawal may have gone through, so retries of this challenge keep failing.
+  entry.withdrawal.catch(() => {
+    if (!state.sent && pending.get(key) === entry) pending.delete(key)
+  })
+  return resumeZoneCredential(options, entry)
+}
+
+/**
+ * Returns the outstanding withdrawal that pays this challenge: its own, or, for a new
+ * challenge with the same terms, one an earlier challenge started and no call is still
+ * waiting on. A withdrawal stays outstanding until it produces a credential, even after its
+ * challenge expires: it may have settled, so paying its terms again could pay twice. It
+ * stops paying other challenges once its own can no longer be redeemed.
+ */
+function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdrawal | undefined {
+  const { challenge, pending, zoneId } = options
+  const own = pending.get(zoneWithdrawalKey(challenge))
+  if (own) return own
+  const terms = zoneTermsKey(challenge, zoneId)
+  if (terms === undefined) return undefined
+  for (const [key, entry] of pending) {
+    if (entry.terms !== terms) continue
+    // No server accepts its credential any more, so it can't pay this challenge.
+    if (!isRedeemable(entry.challenge.expires)) {
+      pending.delete(key)
+      continue
+    }
+    // Its credential was sent after its challenge expired, and its server may still accept or
+    // refuse it. Sending it again for this challenge could redeem it twice, and a new payment
+    // could pay twice if it was refused, so fail closed until its redemption window ends.
+    // The error names the challenge the withdrawal paid, whose retry gets its credential.
+    if (entry.redeemedLate)
+      throw new Errors.ZoneSettlementPendingError({
+        challengeId: entry.challenge.id,
+        senderTags: entry.senderTags,
+        zoneId,
+      })
+    // A call still waiting on it is another payment in flight, not one this challenge retries:
+    // sharing its credential would leave one of the two payments unpaid.
+    if (entry.waiters > 0) continue
+    return entry
+  }
+  return undefined
+}
+
+/**
+ * Waits for an outstanding withdrawal to settle and returns a `zone` credential for the
+ * challenge it pays. A withdrawal started for an earlier challenge pays only that challenge,
+ * so its credential is sent only back to the origin that issued it; under any other origin,
+ * or one the caller did not verify, this throws the settlement-pending error instead.
+ */
+async function resumeZoneCredential(options: ZoneCredentialOptions, entry: PendingZoneWithdrawal) {
+  // Counted from the call itself, before any await, so a concurrent call sees it.
+  entry.waiters++
+  try {
+    return await waitForZoneCredential(options, entry)
+  } finally {
+    entry.waiters--
+  }
+}
+
+/** Waits for {@link resumeZoneCredential}'s withdrawal to settle and serializes its credential. */
+async function waitForZoneCredential(options: ZoneCredentialOptions, entry: PendingZoneWithdrawal) {
+  const { client, origin, pending, zone, zoneId } = options
+  const { challenge } = entry
+  const recipient = (challenge.request as ChargeRequest).recipient as Address
+  const key = zoneWithdrawalKey(challenge)
+  const foreign = key !== zoneWithdrawalKey(options.challenge)
+  if (
+    foreign
+      ? !origin || origin !== entry.origin
+      : origin !== undefined && entry.origin !== undefined && origin !== entry.origin
+  )
+    throw new Errors.ZoneSettlementPendingError({ challengeId: challenge.id, zoneId })
+  // Past its redemption window, the server refuses the challenge's credential, but the
+  // withdrawal may still have paid it: fail closed rather than withdraw again.
+  if (!isRedeemable(challenge.expires))
+    throw new Errors.ZoneSettlementPendingError({ challengeId: challenge.id, zoneId })
+
+  const withdrawal = await entry.withdrawal
   // Derived on every attempt, so a failed read on the Zone is retried without withdrawing again.
   const senderTags =
     withdrawal.senderTags ??
@@ -544,13 +657,38 @@ async function createZoneCredential(options: {
       zoneId,
     })
   }
-  pending.delete(key)
+  // The credential pays once: a later challenge with the same terms is a new payment. One
+  // made after its challenge expired is accepted only by a server that grants a grace period
+  // (`zoneCredentialGraceMs`), so it stays for a retry of its own challenge, which would
+  // otherwise pay again on Tempo, and blocks other challenges until its window ends.
+  if (pending.get(key) === entry) {
+    if (isExpired(challenge.expires)) {
+      entry.redeemedLate = true
+      entry.senderTags = [settled.senderTag]
+    } else pending.delete(key)
+  }
   const { hash, senderTag } = settled
 
   return Credential.serialize({
     challenge,
     payload: { hash, senderTag, type: 'zone', zoneId },
   })
+}
+
+/**
+ * Returns the origin of an HTTP(S) URL, or `undefined` for anything else. Every other scheme
+ * has the opaque origin `"null"`, which can't tell two servers apart, so it never counts as
+ * a verified origin.
+ */
+function httpOrigin(origin: string | undefined) {
+  if (!origin) return undefined
+  try {
+    const url = new URL(origin)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    return url.origin
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -586,7 +724,10 @@ function settlesBeforeExpiry(expires: string | undefined, settlementTimeoutMs: n
   return new Date(expires).getTime() - Date.now() > timeoutMs + zoneSubmissionMarginMs
 }
 
-/** Returns how long to wait for settlement: `settlementTimeoutMs`, cut short at `expires`. */
+/**
+ * Returns how long to wait for settlement: `settlementTimeoutMs`, cut short at `expires`. After
+ * `expires`, it looks once: only a settlement from before then can still be redeemed.
+ */
 function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: number | undefined) {
   const timeoutMs = settlementTimeoutMs ?? Zone.defaultSettlementTimeoutMs
   if (!expires) return timeoutMs
@@ -596,6 +737,50 @@ function settlementTimeoutMs(expires: string | undefined, settlementTimeoutMs: n
 /** Keys a Zone withdrawal by its whole Challenge. Unlike `Challenge.serialize`, it accepts any field value. */
 function zoneWithdrawalKey(challenge: unknown) {
   return JSON.stringify(challenge)
+}
+
+/**
+ * Keys what a challenge asks a Zone withdrawal to pay: its realm, request, digest and route
+ * metadata, everything a server compares when it accepts another challenge's credential,
+ * but not its ID, expiry or issuance nonce. `undefined` when its metadata can't be read.
+ */
+function zoneTermsKey(challenge: ZoneCredentialOptions['challenge'], zoneId: number) {
+  let meta: Record<string, string> | undefined
+  try {
+    meta =
+      challenge.opaque !== undefined
+        ? (PaymentRequest.deserialize(challenge.opaque) as Record<string, string>)
+        : challenge.meta
+  } catch {
+    return undefined
+  }
+  const { digest, intent, method, realm, request } = challenge
+  return PaymentRequest.serialize({
+    digest,
+    intent,
+    meta: ChallengeMeta.routeMeta(meta),
+    method,
+    realm,
+    request,
+    zoneId,
+  })
+}
+
+/** Whether a challenge expiring at `expires` has expired. */
+function isExpired(expires: string | undefined) {
+  if (!expires) return false
+  const expiresAt = new Date(expires).getTime()
+  return !Number.isNaN(expiresAt) && Date.now() >= expiresAt
+}
+
+/**
+ * Whether a credential for a challenge expiring at `expires` may still be redeemed: until
+ * `Zone.redemptionGraceMs`, the longest server grace, after it expires.
+ */
+function isRedeemable(expires: string | undefined) {
+  if (!expires) return true
+  const expiresAt = new Date(expires).getTime()
+  return Number.isNaN(expiresAt) || Date.now() < expiresAt + Zone.redemptionGraceMs
 }
 
 /** How long to look for a withdrawal's receipt on the Zone after its send response fails. */
@@ -614,13 +799,7 @@ type ZoneWithdrawal = {
  * Returns its sender tag, or leaves it to be derived when the Zone RPC hides it from the receipt.
  */
 async function requestZoneWithdrawal(
-  options: {
-    /** Rejects a withdrawal fee that would take the payment past the client policy. */
-    assertFee: (fee: bigint) => void
-    challenge: Parameters<typeof Credential.serialize>[0]['challenge']
-    clientId: string | undefined
-    zone: charge.Zone
-  },
+  options: Pick<ZoneCredentialOptions, 'assertFee' | 'challenge' | 'clientId' | 'zone'>,
   state: { sent: boolean },
 ): Promise<ZoneWithdrawal> {
   const { assertFee, challenge, clientId, zone } = options

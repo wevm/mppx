@@ -10,6 +10,7 @@ import * as IdentityRequirements from '../identity/internal/Requirements.js'
 import * as IdentityServer from '../identity/Server.js'
 import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
+import * as CredentialExpiry from '../internal/CredentialExpiry.js'
 import * as Env from '../internal/env.js'
 import type { DeepReadonly, MaybePromise } from '../internal/types.js'
 import { warnOnce } from '../internal/warnOnce.js'
@@ -766,13 +767,6 @@ export function create<
       )
     }
 
-    try {
-      Expires.assert(credential.challenge.expires, credential.challenge.id)
-    } catch (e) {
-      if (e instanceof Errors.PaymentError) await fail(e)
-      throw e
-    }
-
     if (methodCandidates.length > 1) {
       const matches = [
         ...new Set(
@@ -792,6 +786,15 @@ export function create<
           }),
         )
       mi = matches[0]!
+    }
+
+    // Checked against the method that matched: only it knows how long after expiry it accepts
+    // the credential.
+    try {
+      CredentialExpiry.assertFor(mi, credential)
+    } catch (e) {
+      if (e instanceof Errors.PaymentError) await fail(e)
+      throw e
     }
 
     if (parameters.requireValidate && !mi.validate)
@@ -1646,7 +1649,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
       // Reject credentials without expires (fail-closed) or with expired timestamp
       try {
-        Expires.assert(credential.challenge.expires, credential.challenge.id)
+        CredentialExpiry.assertFor(method, credential)
       } catch (error) {
         await emitPaymentFailed({
           challenge,
@@ -2321,7 +2324,9 @@ async function resolveRouteChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(
+      CredentialExpiry.issuanceMeta(parameters.method, parameters.meta),
+    ),
     realm: effectiveRealm,
     request: request as never,
     secretKey: parameters.secretKey,
@@ -2350,7 +2355,9 @@ function createFallbackChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(
+      CredentialExpiry.issuanceMeta(parameters.method, parameters.meta),
+    ),
     realm:
       parameters.realm ??
       (parameters.capturedRequest
@@ -2697,7 +2704,7 @@ declare namespace MethodFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601) or Date. */
     expires?: z.DatetimeInput | undefined
-    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce; clients MUST echo opaque unchanged. */
+    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce, and `_mppx_expiry_grace` marks a challenge whose method accepts some credentials after it expires; clients MUST echo opaque unchanged. */
     meta?: Record<string, string> | undefined
     /** Optional route/resource scope bound via reserved challenge metadata. */
     scope?: string | undefined
