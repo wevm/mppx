@@ -176,6 +176,7 @@ describe('x402 sign-in-with-x', () => {
       'invalid_siwx_unsupported_chain',
     ],
     ['a short nonce', { nonce: 'abc' }, 'invalid_siwx_nonce'],
+    ['a statement with a newline', { statement: 'two\nlines' }, 'invalid_siwx_payload'],
   ] as const)('rejects %s before checking the signature', async (_name, overrides, code) => {
     const { handler } = createRoute()
     const extension = await challenge(handler)
@@ -425,8 +426,13 @@ describe('x402 sign-in-with-x in composed routes', () => {
     const challenged = await route(new Request(url))
     if (challenged.status !== 402) throw new Error()
     const extension = Siwx.fromPaymentRequired(readChallenge(challenged.challenge))!
-    const result = await route(withProof(await sign(extension)))
+    const proof = await sign(extension)
+    const result = await route(withProof(proof))
     expect(result.status).toBe(200)
+    expect(grants).toEqual(['decline', 'grant'])
+    // A replay is refused before any offer asks grant again.
+    const replay = await route(withProof(proof))
+    expect(replay.status).toBe(402)
     expect(grants).toEqual(['decline', 'grant'])
   })
 })

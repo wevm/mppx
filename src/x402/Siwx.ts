@@ -281,7 +281,13 @@ export async function verify(parameters: {
   if (!/^0x[0-9a-fA-F]+$/.test(payload.signature))
     throw new InvalidProofError('invalid_siwx_signature')
   const signature = payload.signature as Hex.Hex
-  const message = toMessage(payload)
+  let message: string
+  try {
+    message = toMessage(payload)
+  } catch {
+    // A field the SIWE format rejects, such as a statement with a newline or an invalid URI.
+    throw new InvalidProofError('invalid_siwx_payload')
+  }
 
   let valid: boolean
   try {
@@ -314,6 +320,19 @@ export async function claim(parameters: {
     Date.parse(payload.issuedAt) + ttl + clockSkew,
   )
   if (!claimed) throw new InvalidProofError('invalid_siwx_nonce')
+}
+
+/**
+ * Releases a nonce {@link claim} recorded, so the proof can be accepted again. Call it
+ * only for a claim this request made, such as when `grant` declines the wallet.
+ */
+export async function release(parameters: {
+  /** The claimed proof. */
+  payload: Pick<Payload, 'nonce'>
+  /** The store `claim` recorded the nonce in. */
+  store: Store.AtomicStore
+}): Promise<void> {
+  await parameters.store.delete(`mppx:x402:siwx:${parameters.payload.nonce}`)
 }
 
 /**

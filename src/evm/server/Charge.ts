@@ -349,10 +349,17 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
         options: siwx,
         payload,
       })
-      // Ask grant before using the nonce: in a composed route, an offer that declines the
-      // wallet must leave the proof for a later offer that grants it.
-      if (!(await siwx.grant({ ...proof, request: input }))) return undefined
+      // Reserve the nonce before grant, so a replayed proof never reaches grant, and
+      // release it when grant declines, so in a composed route a later offer that grants
+      // the wallet can still accept the proof.
       await Siwx.claim({ payload, store: siwx.store })
+      let granted = false
+      try {
+        granted = Boolean(await siwx.grant({ ...proof, request: input }))
+      } finally {
+        if (!granted) await Siwx.release({ payload, store: siwx.store })
+      }
+      if (!granted) return undefined
       return {
         receipt: {
           method: Methods.charge.name,
