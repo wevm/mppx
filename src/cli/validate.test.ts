@@ -696,19 +696,35 @@ describe('validate: error handling', () => {
     expect(output).toContain('Malformed credential returns 402 (Got 422)')
     expect(output).toContain('Returning 422 prevents the client from retrying with a valid payment')
   })
+  test(
+    'fails a challenge that selects an unsupported credential header',
+    { timeout: 15_000 },
+    async () => {
+      const challenge = Challenge.serialize(makeChallenge())
+      const server = await testServer((_req, res) => {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: `${challenge}, header="X-Payment"`,
+        })
+        res.end()
+      })
+      const { output } = await serve(['validate', server.url, '--endpoint', 'POST:/api/test'])
+      expect(output).toContain('Unsupported credential header')
+    },
+  )
+
   test('names the probed credential header in the hint', { timeout: 15_000 }, async () => {
-    const server = await mppServer(makeChallenge({ header: 'Payment-Credential' }), {
+    const server = await mppServer(makeChallenge({ header: 'Payment-Authorization' }), {
       errorStatus: 500,
     })
     const { output } = await serve(['validate', server.url])
-    expect(output).toContain('When the Payment-Credential header contains an invalid credential')
+    expect(output).toContain('When the Payment-Authorization header contains an invalid credential')
   })
 
   test(
     'sends -H headers and the Challenge credential header with the malformed Credential',
     { timeout: 15_000 },
     async () => {
-      const challenge = makeChallenge({ header: 'Payment-Credential' })
+      const challenge = makeChallenge({ header: 'Payment-Authorization' })
       const garbage = `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`
       const probes: http.IncomingHttpHeaders[] = []
       const server = await testServer((req, res) => {
@@ -723,7 +739,7 @@ describe('validate: error handling', () => {
           res.end()
           return
         }
-        if (req.headers['payment-credential'] === garbage) probes.push(req.headers)
+        if (req.headers['payment-authorization'] === garbage) probes.push(req.headers)
         res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
         res.end()
       })

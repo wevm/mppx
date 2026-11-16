@@ -101,6 +101,58 @@ describe('from', () => {
     expect(Challenge.credentialHeader(challenge)).toBe(Constants.Headers.authorization)
   })
 
+  test.each(['authorization', 'AUTHORIZATION'])(
+    'behavior: treats %s as the default credential header',
+    (header) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        header,
+      })
+
+      expect(challenge.header).toBeUndefined()
+      expect(Challenge.serialize(challenge)).not.toContain('header=')
+    },
+  )
+
+  test('behavior: canonicalizes the Payment-Authorization credential header', () => {
+    const parameters = {
+      secretKey: 'test-secret-key-test-secret-key-32',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+    }
+    const challenge = Challenge.from({ ...parameters, header: 'payment-authorization' })
+    const canonical = Challenge.from({
+      ...parameters,
+      header: Constants.Headers.paymentAuthorization,
+    })
+
+    expect(challenge.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(challenge.id).toBe(canonical.id)
+    expect(Challenge.serialize(challenge)).toContain('header="Payment-Authorization"')
+  })
+
+  test.each(['X-Payment', 'Payment-Credential', ''])(
+    'error: rejects the credential header "%s"',
+    (header) => {
+      expect(() =>
+        Challenge.from({
+          id: 'abc123',
+          realm: 'api.example.com',
+          method: 'tempo',
+          intent: 'charge',
+          request: { amount: '1000000' },
+          header,
+        }),
+      ).toThrow('Unsupported credential header')
+    },
+  )
+
   test('error: rejects empty id', () => {
     expect(() =>
       Challenge.from({
@@ -601,6 +653,37 @@ describe('serialize', () => {
   })
 })
 
+describe('serialize: credential header', () => {
+  const challenge = {
+    id: 'abc123',
+    realm: 'api.example.com',
+    method: 'tempo',
+    intent: 'charge',
+    request: { amount: '1000000' },
+  }
+
+  test.each([
+    { header: undefined, expected: undefined },
+    { header: 'Authorization', expected: undefined },
+    { header: 'authorization', expected: undefined },
+    { header: 'Payment-Authorization', expected: 'Payment-Authorization' },
+    { header: 'PAYMENT-AUTHORIZATION', expected: 'Payment-Authorization' },
+  ])('behavior: serializes header $header as $expected', ({ header, expected }) => {
+    const serialized = Challenge.serialize({ ...challenge, header })
+    if (expected === undefined) expect(serialized).not.toContain('header=')
+    else expect(serialized).toContain(`header="${expected}"`)
+  })
+
+  test.each(['X-Payment', ''])(
+    'error: refuses to serialize the credential header "%s"',
+    (header) => {
+      expect(() => Challenge.serialize({ ...challenge, header })).toThrow(
+        'Unsupported credential header',
+      )
+    },
+  )
+})
+
 describe('deserialize', () => {
   const paymentHeader = Challenge.serialize(
     Challenge.from({
@@ -789,6 +872,30 @@ describe('deserialize', () => {
 
     expect(() => Challenge.deserialize(header)).toThrow('Request parameter too large.')
   })
+
+  test.each([
+    { header: undefined, expected: Constants.Headers.authorization },
+    { header: 'Payment-Authorization', expected: Constants.Headers.paymentAuthorization },
+    { header: 'payment-authorization', expected: Constants.Headers.paymentAuthorization },
+    { header: 'Authorization', expected: undefined },
+    { header: '', expected: undefined },
+    { header: 'X-Payment', expected: undefined },
+  ])(
+    'behavior: credential header $header selects $expected (undefined: rejected)',
+    ({ header, expected }) => {
+      const value = header === undefined ? paymentHeader : `${paymentHeader}, header="${header}"`
+
+      if (expected === undefined) {
+        expect(() => Challenge.deserialize(value)).toThrow(
+          'Unsupported credential header: challenges may only select Payment-Authorization.',
+        )
+        return
+      }
+      const challenge = Challenge.deserialize(value)
+      expect(Challenge.credentialHeader(challenge)).toBe(expected)
+      expect(challenge.header).toBe(header === undefined ? undefined : expected)
+    },
+  )
 })
 
 describe('deserializeList', () => {
@@ -854,6 +961,18 @@ describe('deserializeList', () => {
 
     expect(() => Challenge.deserializeList(header)).toThrow('No Payment schemes found.')
   })
+
+  test.each(['Authorization', 'X-Payment', ''])(
+    'behavior: skips a challenge with the credential header "%s"',
+    (header) => {
+      const unsupported = `${Challenge.serialize(baseChallenge)}, header="${header}"`
+
+      expect(
+        Challenge.deserializeList(`${unsupported}, ${secondHeader}`).map(({ id }) => id),
+      ).toEqual(['second'])
+      expect(Challenge.deserializeList(unsupported)).toEqual([])
+    },
+  )
 })
 
 describe('fromHeaders', () => {

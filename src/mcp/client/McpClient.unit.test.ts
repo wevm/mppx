@@ -185,3 +185,63 @@ describe('MCP client zero-amount Tempo proofs', () => {
     expect(createCredential).toHaveBeenCalledOnce()
   })
 })
+
+describe('MCP client challenge credential header', () => {
+  const challenge = (id: string) =>
+    Challenge.from({ id, intent: 'charge', method: 'tempo', realm: 'api.example.com', request: {} })
+
+  function setup(challenges: readonly unknown[]) {
+    const calls: { _meta?: Record<string, unknown> }[] = []
+    const client = {
+      async callTool(params: { _meta?: Record<string, unknown> }) {
+        calls.push(params)
+        if (calls.length === 1)
+          throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+            challenges,
+            httpStatus: 402,
+          })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    }
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const mcp = McpClient.wrap(client as unknown as Pick<Client, 'callTool'>, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+    return { calls, createCredential, mcp }
+  }
+
+  test.each(['Authorization', 'X-Payment'])(
+    'pays the valid challenge when another selects the credential header "%s"',
+    async (header) => {
+      const { calls, createCredential, mcp } = setup([
+        { ...challenge('unsupported'), header },
+        challenge('valid'),
+      ])
+
+      const result = await mcp.callTool({ name: 'paid_tool', arguments: {} })
+
+      expect(result.content).toEqual([{ type: 'text', text: 'ok' }])
+      expect(createCredential).toHaveBeenCalledOnce()
+      expect(createCredential.mock.calls[0]![0].challenge.id).toBe('valid')
+      expect(calls).toHaveLength(2)
+    },
+  )
+
+  test.each(['Authorization', 'X-Payment'])(
+    'creates no credential when the only challenge selects the credential header "%s"',
+    async (header) => {
+      const { calls, createCredential, mcp } = setup([{ ...challenge('unsupported'), header }])
+
+      await expect(mcp.callTool({ name: 'paid_tool', arguments: {} })).rejects.toThrow(
+        'No compatible payment method',
+      )
+      expect(createCredential).not.toHaveBeenCalled()
+      expect(calls).toHaveLength(1)
+    },
+  )
+})

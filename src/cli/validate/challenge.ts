@@ -170,7 +170,15 @@ export async function validateChallenge(
   }
 
   if (challenges.length === 0) {
-    results.push(fail('Challenge parseable', 'No Payment challenges found in header'))
+    // List parsing skips challenges it may not pay (such as an unsupported credential header);
+    // report why the first one was skipped.
+    let reason = 'No Payment challenges found in header'
+    try {
+      Challenge.fromResponse(response)
+    } catch (error) {
+      reason = (error as Error).message
+    }
+    results.push(fail('Challenge parseable', reason))
     return { results }
   }
 

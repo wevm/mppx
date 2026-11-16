@@ -9,6 +9,23 @@ import * as z from './zod.js'
 
 const maxRequestParameterLength = 16 * 1024
 
+const unsupportedCredentialHeaderMessage =
+  'Unsupported credential header: challenges may only select Payment-Authorization.'
+
+/**
+ * Thrown when a challenge selects a credential header other than `Payment-Authorization`.
+ * List parsing skips such challenges so the client can still pay another one.
+ *
+ * @internal
+ */
+class UnsupportedCredentialHeaderError extends Error {
+  override readonly name = 'UnsupportedCredentialHeaderError'
+
+  constructor() {
+    super(unsupportedCredentialHeaderMessage)
+  }
+}
+
 /**
  * Schema for a payment challenge.
  *
@@ -26,9 +43,16 @@ export const Schema = z.object({
   digest: z.optional(z.string().check(z.regex(/^sha-256=/, 'Invalid digest format'))),
   /** Optional expiration timestamp (ISO 8601). */
   expires: z.optional(z.datetime()),
-  /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+  /**
+   * Optional HTTP field name to carry the payment credential. When omitted, uses Authorization.
+   * When present, it MUST be `Payment-Authorization` (matched case-insensitively and stored
+   * canonically).
+   */
   header: z.optional(
-    z.string().check(z.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name')),
+    z.pipe(
+      z.string().check(z.refine(isPaymentAuthorizationHeader, unsupportedCredentialHeaderMessage)),
+      z.transform((): string => Constants.Headers.paymentAuthorization),
+    ),
   ),
   /** Unique challenge identifier (HMAC-bound). */
   id: z.string().check(z.minLength(1)),
@@ -139,15 +163,15 @@ export function from<
 
   // `Authorization` is the implicit protocol default and is intentionally not
   // advertised on the wire. This preserves the legacy challenge binding and
-  // lets servers opt into an alternate credential field explicitly.
-  const header = isDefaultCredentialHeader(suppliedHeader) ? undefined : suppliedHeader
+  // lets servers opt into `Payment-Authorization` explicitly.
+  const header = normalizeCredentialHeader(suppliedHeader)
 
   const expires = parameters.expires ? z.toDatetimeString(parameters.expires) : undefined
   const opaque =
     parameters.opaque ?? (meta !== undefined ? PaymentRequest.serialize(meta) : undefined)
   const id = secretKey
     ? computeId(
-        { ...parameters, expires, ...(meta !== undefined && { meta }), opaque },
+        { ...parameters, expires, header, ...(meta !== undefined && { meta }), opaque },
         { secretKey },
       )
     : (parameters as { id: string }).id
@@ -188,7 +212,10 @@ export declare namespace from {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
-    /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+    /**
+     * Optional HTTP field name to carry the payment credential: `Payment-Authorization`, or
+     * `Authorization` (the default, not advertised). Any other value throws.
+     */
     header?: string | undefined
     /** Intent type (e.g., "charge", "session"). */
     intent: string
@@ -284,7 +311,10 @@ export declare namespace fromMethod {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
-    /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+    /**
+     * Optional HTTP field name to carry the payment credential: `Payment-Authorization`, or
+     * `Authorization` (the default, not advertised). Any other value throws.
+     */
     header?: string | undefined
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
@@ -324,9 +354,8 @@ export function serialize(challenge: Challenge): string {
     parts.push(authParam('description', challenge.description))
   if (challenge.digest !== undefined) parts.push(authParam('digest', challenge.digest))
   if (challenge.expires !== undefined) parts.push(authParam('expires', challenge.expires))
-  const credentialHeader = challenge.header
-  if (credentialHeader !== undefined && !isDefaultCredentialHeader(credentialHeader))
-    parts.push(authParam('header', credentialHeader))
+  const credentialHeader = normalizeCredentialHeader(challenge.header)
+  if (credentialHeader !== undefined) parts.push(authParam('header', credentialHeader))
   if (challenge.opaque !== undefined) parts.push(authParam('opaque', challenge.opaque))
   else if (challenge.meta !== undefined)
     parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
@@ -379,6 +408,10 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   if (request.length > maxRequestParameterLength) throw new Error('Request parameter too large.')
   if (rest.method && !/^[a-z][a-z0-9:_-]*$/.test(rest.method))
     throw new Error(`Invalid method: "${rest.method}". Must be lowercase per spec.`)
+  // Validate the raw value before `from` treats `Authorization` as the omitted default: a
+  // received challenge may only select `Payment-Authorization`.
+  if (rest.header !== undefined && !isPaymentAuthorizationHeader(rest.header))
+    throw new UnsupportedCredentialHeaderError()
 
   return from(
     {
@@ -645,6 +678,9 @@ export function fromHeadersList<
  * Deserializes a `WWW-Authenticate` header value that may contain multiple
  * Payment challenges (comma-separated per RFC 9110 §11.6.1).
  *
+ * Challenges that select a credential header other than `Payment-Authorization`
+ * are skipped, so the result may be empty.
+ *
  * @param value - The raw WWW-Authenticate header value.
  * @param options - Optional settings to narrow the challenge type.
  * @returns An array of deserialized challenges.
@@ -657,10 +693,17 @@ export function deserializeList<
 
   // Slice each scheme from its `Payment ` prefix up to the next scheme boundary,
   // trimming any trailing comma/whitespace between schemes.
-  return starts.map((start, i) => {
+  return starts.flatMap((start, i) => {
     const end = i + 1 < starts.length ? starts[i + 1]! : value.length
     const chunk = value.slice(start, end).replace(/,\s*$/, '')
-    return deserialize(chunk, options)
+    try {
+      return [deserialize(chunk, options)]
+    } catch (error) {
+      // A challenge with an unsupported credential header gets no credential,
+      // but must not stop the client from paying another challenge.
+      if (error instanceof UnsupportedCredentialHeaderError) return []
+      throw error
+    }
   })
 }
 
@@ -721,9 +764,8 @@ function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
     challenge.digest ?? '',
   ]
   // Keep opaque in the final optional slot required by the Payment auth scheme.
-  const credentialHeader = challenge.header
-  if (credentialHeader !== undefined && !isDefaultCredentialHeader(credentialHeader))
-    values.push(credentialHeader)
+  const credentialHeader = normalizeCredentialHeader(challenge.header)
+  if (credentialHeader !== undefined) values.push(credentialHeader)
   values.push(challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : ''))
   return values.join('|')
 }
@@ -733,9 +775,39 @@ export function credentialHeader(challenge: Challenge): string {
   return challenge.header ?? Constants.Headers.authorization
 }
 
-/** Returns whether a credential header is the implicit HTTP authentication default. */
-function isDefaultCredentialHeader(header: string | undefined): boolean {
-  return header?.toLowerCase() === Constants.Headers.authorization.toLowerCase()
+/**
+ * Returns whether a challenge object selects a credential header a client must not send a Payment
+ * credential for: any `header` other than `Payment-Authorization` (matched case-insensitively).
+ *
+ * Use it on challenge objects received outside `WWW-Authenticate`, such as MCP payment-required
+ * data, to skip such a challenge while still paying another one.
+ *
+ * @internal
+ */
+export function hasUnsupportedCredentialHeader(challenge: unknown): boolean {
+  if (typeof challenge !== 'object' || challenge === null || !('header' in challenge)) return false
+  const { header } = challenge as { header: unknown }
+  return (
+    header !== undefined && !(typeof header === 'string' && isPaymentAuthorizationHeader(header))
+  )
+}
+
+/** Returns whether a header name is `Payment-Authorization`, ignoring ASCII case. */
+function isPaymentAuthorizationHeader(header: string): boolean {
+  // Without the `u` flag, `i` folds ASCII letters only.
+  return /^payment-authorization$/i.test(header)
+}
+
+/**
+ * Normalizes a locally configured credential header: `Authorization` (any case) is the
+ * implicit default and is not advertised, `Payment-Authorization` is canonicalized, and any
+ * other value throws because servers MUST NOT emit it.
+ */
+function normalizeCredentialHeader(header: string | undefined): string | undefined {
+  if (header === undefined) return undefined
+  if (/^authorization$/i.test(header)) return undefined
+  if (isPaymentAuthorizationHeader(header)) return Constants.Headers.paymentAuthorization
+  throw new UnsupportedCredentialHeaderError()
 }
 
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */
