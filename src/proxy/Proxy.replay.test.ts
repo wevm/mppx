@@ -646,7 +646,7 @@ test.each(['POST /generate', 'GET /generate'])(
     const handler = Object.assign(
       vi.fn(async () => ({
         status: 200 as const,
-        withReceipt: () => management,
+        withReceipt: <response>(_response: response) => management as response,
       })),
       {
         _internal: { intent: 'session', _canonicalRequest: { unitType: 'token' } },
