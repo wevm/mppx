@@ -34,6 +34,7 @@ import * as Expires from '../../Expires.js'
 import * as CredentialExpiry from '../../internal/CredentialExpiry.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
 import type * as Html from '../../server/internal/html/config.ts'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -100,9 +101,20 @@ export function charge<const parameters extends charge.Parameters>(
     throw new Error(
       `\`zoneCredentialGraceMs\` must be between 0 and ${Zone.redemptionGraceMs} milliseconds.`,
     )
-  /** Grace for a credential presented after its challenge expired: only `zone` credentials get one. */
-  const graceMsFor = (credential: { payload: unknown }) =>
-    isZoneCredential(credential) ? zoneCredentialGraceMs : undefined
+  /**
+   * Grace for a credential presented after its challenge expired: only a `zone` credential gets
+   * one, and only for a challenge issued with the grace on. A challenge issued without it (by an
+   * earlier release, whose replay claims end at the expiry, or with no grace) gets none.
+   */
+  const graceMsFor = (credential: {
+    challenge: Parameters<typeof ChallengeMeta.hasExpiryGrace>[0]
+    payload: unknown
+  }) =>
+    zoneCredentialGraceMs > 0 &&
+    isZoneCredential(credential) &&
+    ChallengeMeta.hasExpiryGrace(credential.challenge)
+      ? zoneCredentialGraceMs
+      : undefined
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
@@ -1117,7 +1129,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
   })
-  CredentialExpiry.register(method, graceMsFor)
+  CredentialExpiry.register(method, graceMsFor, { issue: zoneCredentialGraceMs > 0 })
   return relay ? (Relay.configure(method, relay) as typeof method) : method
 }
 
@@ -1263,9 +1275,13 @@ export declare namespace charge {
      * payer whose withdrawal settled late in the challenge's lifetime redeem it on retry.
      * At most 5 minutes (`300_000`).
      *
-     * Enable it only once no instance of an earlier release redeems credentials from the same
-     * store: those record a redeemed withdrawal only until its challenge expires, so the grace
-     * would accept it again.
+     * Only a Challenge issued while the grace is on gets it: issuance marks the Challenge in its
+     * HMAC-bound `opaque` metadata (`_mppx_expiry_grace`). A Challenge issued without the mark,
+     * by an earlier release or with no grace, is rejected at its expiry as before, since an
+     * earlier release records a redeemed withdrawal only until then.
+     *
+     * Enable it once no instance of an earlier release verifies credentials from the same store:
+     * such an instance could redeem a marked Challenge and record it only until its expiry.
      *
      * @default 0
      */

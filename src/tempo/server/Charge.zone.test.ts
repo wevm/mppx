@@ -14,6 +14,7 @@ import { tempoModerato } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
+import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
 import * as Attribution from '../Attribution.js'
 import * as Zone from '../internal/zone.js'
 
@@ -41,6 +42,8 @@ type WithdrawalFixture = {
 
 function setup(
   options: {
+    /** The currency the server's method charges in. */
+    currency?: Address
     withdrawals?: () => WithdrawalFixture[]
     /** When the settlement transaction's block was produced, in Unix milliseconds. */
     settledAt?: number
@@ -162,7 +165,7 @@ function setup(
     methods: [
       tempo.charge({
         account: merchant,
-        currency,
+        currency: options.currency ?? currency,
         getClient: () => client,
         ...(options.store && { store: options.store as never }),
         testnet: true,
@@ -302,7 +305,7 @@ describe('tempo.charge zone credentials', () => {
     const store = Store.memory()
     const expiresAt = Date.now() + 60_000
     const options = { settledAt: Date.now(), store, withdrawals: () => fixture }
-    const strict = setup(options)
+    const strict = setup({ ...options, zoneCredentialGraceMs: 1_000 })
     const { challenge: c, memo } = await strict.challenge({
       expires: new Date(expiresAt).toISOString(),
     })
@@ -320,6 +323,90 @@ describe('tempo.charge zone credentials', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  test('marks only challenges issued with the grace on', async () => {
+    const { challenge: strict } = await setup().challenge()
+    const { challenge: lenient } = await setup({ zoneCredentialGraceMs: 60_000 }).challenge()
+    expect(ChallengeMeta.hasExpiryGrace(strict)).toBe(false)
+    expect(ChallengeMeta.hasExpiryGrace(lenient)).toBe(true)
+  })
+
+  test('gives no grace to a challenge issued without it', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const expiresAt = Date.now() + 60_000
+    const options = { settledAt: Date.now(), withdrawals: () => fixture }
+    // Issued by a server without the grace, as an earlier release issues every challenge: its
+    // replay claim may already have ended at the expiry.
+    const { challenge: c, memo } = await setup(options).challenge({
+      expires: new Date(expiresAt).toISOString(),
+    })
+    fixture = [{ senderTag: tagA, memo }]
+    const lenient = setup({ ...options, zoneCredentialGraceMs: 60_000 })
+    vi.useFakeTimers({ now: expiresAt + 1_000, toFake: ['Date'] })
+    try {
+      const error = await lenient.server
+        .verifyCredential(lenient.credential(c, { senderTag: tagA, hash: settlementHash }))
+        .catch((e) => e)
+      expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(lenient.rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
+  test('refuses a challenge that adds the grace marker itself', async () => {
+    const expiresAt = Date.now() - 1_000
+    const { credential, rpcMethods, server } = setup({
+      settledAt: expiresAt - 30_000,
+      zoneCredentialGraceMs: 60_000,
+    })
+    const { challenge: c } = await setup().challenge({
+      expires: new Date(expiresAt).toISOString(),
+    })
+    // The challenge ID binds `opaque`, so a client can't add the marker to a challenge.
+    const forged = Challenge.from({
+      ...c,
+      meta: ChallengeMeta.withExpiryGrace(c.meta, true),
+      opaque: undefined,
+    })
+    expect(ChallengeMeta.hasExpiryGrace(forged)).toBe(true)
+    await expect(
+      server.verifyCredential(credential(forged, { senderTag: tagA, hash: settlementHash })),
+    ).rejects.toThrow()
+    expect(rpcMethods).not.toContain('eth_getTransactionReceipt')
+  })
+
+  test('takes the expiry grace from the method that matches the challenge', async () => {
+    let fixture: WithdrawalFixture[] = []
+    const expiresAt = Date.now() - 1_000
+    const lenient = setup({
+      currency: otherCurrency,
+      settledAt: expiresAt - 30_000,
+      withdrawals: () => fixture,
+      zoneCredentialGraceMs: 60_000,
+    })
+    const { challenge: c, memo } = await lenient.challenge({
+      expires: new Date(expiresAt).toISOString(),
+    })
+    fixture = [{ memo, senderTag: tagA, token: otherCurrency }]
+    const shared = {
+      account: merchant as Address,
+      getClient: () => lenient.rpc,
+      testnet: true,
+      zones: [zoneId],
+    }
+    const server = Mppx.create({
+      realm,
+      secretKey: 'test-secret-key-test-secret-key-32',
+      methods: [
+        tempo.charge({ ...shared, currency }),
+        tempo.charge({ ...shared, currency: otherCurrency, zoneCredentialGraceMs: 60_000 }),
+      ],
+    })
+    await expect(
+      server.verifyCredential(lenient.credential(c, { senderTag: tagA, hash: settlementHash })),
+    ).resolves.toMatchObject({ reference: settlementHash, status: 'success' })
   })
 
   test('rejects a withdrawal settled after the challenge expired', async () => {
