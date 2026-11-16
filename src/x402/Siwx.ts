@@ -233,12 +233,25 @@ export function createExtension(parameters: {
       expirationTime: new Date(now + ttl).toISOString(),
       issuedAt: new Date(now).toISOString(),
       nonce: Hex.fromBytes(Bytes.random(16)).slice(2),
-      uri: origin.origin + new URL(url).pathname + new URL(url).search,
+      uri: origin.origin + siweSafe(new URL(url).pathname + new URL(url).search),
       version: '1',
     },
     schema: payloadJsonSchema,
     supportedChains: [{ chainId: `eip155:${chainId}`, type: 'eip191' }],
   }
+}
+
+/**
+ * Percent-encodes the characters a URL's path and query may keep (such as `|`, `{` or
+ * `^`) that an RFC 3986 URI, and so a SIWE message's `URI`, can't hold.
+ */
+function siweSafe(pathAndQuery: string) {
+  return pathAndQuery.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@/?%]/g, (char) =>
+    Array.from(
+      new TextEncoder().encode(char),
+      (byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`,
+    ).join(''),
+  )
 }
 
 /** Server options for accepting SIWX proofs on an x402 route. */
@@ -439,8 +452,16 @@ export function wrapFetch(
     const request = new Request(input, init)
     // Keep a copy so a request body can be sent again with the proof.
     const retry = request.clone()
-    const response = await fetch(request)
-    if (response.status !== 402 || request.headers.has(header) || !account.signMessage)
+    // A Request drops init's symbol-keyed controls, such as mppx's payment opt-out, so
+    // they are passed along beside it on every call.
+    const controls = symbolControls(init)
+    const response = await fetch(request, controls)
+    if (
+      response.status !== 402 ||
+      request.headers.has(header) ||
+      carriesPayment(request.headers) ||
+      !account.signMessage
+    )
       return response
 
     const value = response.headers.get(Types.paymentRequiredHeader)
@@ -486,8 +507,28 @@ export function wrapFetch(
     const headers = new Headers(retry.headers)
     headers.set(header, encode({ ...unsigned, signature }))
     // Redirects aren't followed, so no redirect can carry the proof to another site.
-    return fetch(new Request(retry, { headers, redirect: 'manual' }))
+    return fetch(new Request(retry, { headers, redirect: 'manual' }), controls)
   }
+}
+
+/** The symbol-keyed entries of a fetch `init`, which a `Request` doesn't keep. */
+function symbolControls(init: RequestInit | undefined): RequestInit | undefined {
+  if (!init) return undefined
+  const symbols = Object.getOwnPropertySymbols(init)
+  if (symbols.length === 0) return undefined
+  const controls: Record<symbol, unknown> = {}
+  for (const symbol of symbols) controls[symbol] = (init as Record<symbol, unknown>)[symbol]
+  return controls as RequestInit
+}
+
+/**
+ * Whether a request already carries a payment credential. Its 402 means the payment was
+ * refused, so it is returned as is rather than sending the same credential again with a proof.
+ */
+function carriesPayment(headers: Headers) {
+  if (headers.has(Types.paymentSignatureHeader) || headers.has(Types.legacyPaymentSignatureHeader))
+    return true
+  return /^payment\s/i.test(headers.get('authorization') ?? '')
 }
 
 export declare namespace wrapFetch {

@@ -369,7 +369,9 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
         await Siwx.claim({ payload, store: siwx.store })
         claimed.add(key)
       }
-      const granted = Boolean(await siwx.grant({ ...proof, request: input }))
+      // A copy, as canOffer and selectOffers get, so a grant that reads the body leaves it
+      // for the route handler.
+      const granted = Boolean(await siwx.grant({ ...proof, request: input.clone() }))
       if (!granted) return undefined
       return {
         receipt: {

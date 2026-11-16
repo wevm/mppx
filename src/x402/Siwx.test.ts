@@ -334,6 +334,58 @@ describe('x402 sign-in-with-x', () => {
   })
 })
 
+describe('Siwx.createExtension', () => {
+  test('percent-encodes URL characters a SIWE URI cannot hold', async () => {
+    const extension = Siwx.createExtension({
+      chainId: 84532,
+      origin,
+      url: `${origin}/a|b{c}^d?q=\`x\`[1]`,
+    })
+    expect(extension.info.uri).toBe(`${origin}/a%7Cb%7Bc%7D%5Ed?q=%60x%60%5B1%5D`)
+    // `sign` builds the SIWE message, which throws for a URI it can't hold.
+    await expect(sign(extension)).resolves.toBeTypeOf('string')
+  })
+})
+
+describe('Siwx grant', () => {
+  test('a grant that reads the body leaves it for the route handler', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator: {
+              async verify() {
+                return { isValid: true }
+              },
+              async settle() {
+                throw new Error('not settled')
+              },
+            },
+            siwx: {
+              grant: async ({ request }) => (await request.text()) === '{"task":1}',
+              origin,
+              store: Store.memory(),
+            },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    const post = (headers: HeadersInit = {}) =>
+      new Request(url, { body: '{"task":1}', headers, method: 'POST' })
+    const first = await route(post())
+    if (first.status !== 402) throw new Error('expected a 402')
+    const extension = Siwx.fromPaymentRequired(readChallenge(first.challenge))!
+    const request = post({ [Siwx.header]: await sign(extension) })
+    const result = await route(request)
+    expect(result.status).toBe(200)
+    expect(await request.text()).toBe('{"task":1}')
+  })
+})
+
 describe('Siwx.wrapFetch', () => {
   test('signs in once and skips payment for a granted wallet', async () => {
     const { handler, settled } = createRoute()
@@ -362,6 +414,45 @@ describe('Siwx.wrapFetch', () => {
     const response = await mppx.fetch(url)
     expect(response.status).toBe(200)
     expect(settled).toEqual(['settle'])
+  })
+
+  test('keeps symbol-keyed init controls on every call', async () => {
+    const { handler } = createRoute()
+    const control = Symbol.for('mppx.fetch.skipPayment')
+    const seen: unknown[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        seen.push((init as Record<symbol, unknown> | undefined)?.[control])
+        return handler(new Request(input, init))
+      },
+      { account },
+    )
+    const response = await fetch(url, { [control]: true } as RequestInit)
+    expect(response.status).toBe(200)
+    expect(seen).toEqual([true, true])
+  })
+
+  test('returns the 402 of a request that already carries a payment', async () => {
+    const { handler } = createRoute()
+    const requests: Request[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        requests.push(new Request(input, init))
+        // The server refuses the payment with its SIWX-offering 402.
+        return handler(new Request(url))
+      },
+      { account },
+    )
+    for (const headers of [
+      { Authorization: 'Payment abc' },
+      { [x402_Types.paymentSignatureHeader]: 'abc' },
+      { [x402_Types.legacyPaymentSignatureHeader]: 'abc' },
+    ]) {
+      requests.length = 0
+      const response = await fetch(url, { headers })
+      expect(response.status).toBe(402)
+      expect(requests).toHaveLength(1)
+    }
   })
 
   test('resends a request body with the proof', async () => {
