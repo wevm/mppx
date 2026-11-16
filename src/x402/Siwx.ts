@@ -461,6 +461,10 @@ export function wrapFetch(
       response.status !== 402 ||
       request.headers.has(header) ||
       carriesPayment(request.headers) ||
+      carriesSingleUseProof(request.headers) ||
+      // A 402 reached through a redirect is left to payment: the retry goes to the requested
+      // URL without following redirects, and would send a redirected POST's body again.
+      response.redirected ||
       !account.signMessage
     )
       return response
@@ -530,6 +534,15 @@ function carriesPayment(headers: Headers) {
   if (headers.has(Types.paymentSignatureHeader) || headers.has(Types.legacyPaymentSignatureHeader))
     return true
   return /^payment\s/i.test(headers.get('authorization') ?? '')
+}
+
+/**
+ * Whether a request carries an identity proof bound to a single send, such as an HTTP message
+ * signature (Web Bot Auth, TAP) or a DPoP proof. Resending it with a SIWX proof would be
+ * refused as a replay, so its 402 is returned as is and the caller's own retry signs afresh.
+ */
+function carriesSingleUseProof(headers: Headers) {
+  return headers.has('signature-input') || headers.has('dpop')
 }
 
 export declare namespace wrapFetch {

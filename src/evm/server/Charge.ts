@@ -366,28 +366,35 @@ function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Meth
       // for the route handler. Taken before the claim, so a body already read can't spend the
       // nonce: grant then gets the request without its body.
       const copy = cloneGrantInput(input)
-      // Reserve the nonce before grant, so a replayed proof never reaches grant. A claim this
-      // request already made (a composed offer before this one declined) is shared, so a later
-      // offer can still grant the wallet; a proof every offer declined stays spent, so it can't
-      // be replayed once grant would approve the wallet. Clients sign a fresh proof each time.
-      const stores = siwxClaims.get(input) ?? new WeakMap<Store.AtomicStore, Set<string>>()
-      siwxClaims.set(input, stores)
-      const claimed = stores.get(siwx.store) ?? new Set<string>()
-      stores.set(siwx.store, claimed)
-      const key = `${payload.nonce}:${payload.issuedAt}`
-      const replays = siwxReplays.get(input) ?? new Set<string>()
-      siwxReplays.set(input, replays)
-      if (replays.has(key)) throw new Siwx.InvalidProofError('invalid_siwx_nonce')
-      if (!claimed.has(key)) {
-        try {
-          await Siwx.claim({ payload, store: siwx.store })
-        } catch (error) {
-          if (error instanceof Siwx.InvalidProofError) replays.add(key)
-          throw error
+      // The copy's body tees the request's, so it is cancelled once grant returns: an unread
+      // copy would otherwise buffer everything the route handler later streams from the request.
+      let granted: boolean
+      try {
+        // Reserve the nonce before grant, so a replayed proof never reaches grant. A claim this
+        // request already made (a composed offer before this one declined) is shared, so a later
+        // offer can still grant the wallet; a proof every offer declined stays spent, so it can't
+        // be replayed once grant would approve the wallet. Clients sign a fresh proof each time.
+        const stores = siwxClaims.get(input) ?? new WeakMap<Store.AtomicStore, Set<string>>()
+        siwxClaims.set(input, stores)
+        const claimed = stores.get(siwx.store) ?? new Set<string>()
+        stores.set(siwx.store, claimed)
+        const key = `${payload.nonce}:${payload.issuedAt}`
+        const replays = siwxReplays.get(input) ?? new Set<string>()
+        siwxReplays.set(input, replays)
+        if (replays.has(key)) throw new Siwx.InvalidProofError('invalid_siwx_nonce')
+        if (!claimed.has(key)) {
+          try {
+            await Siwx.claim({ payload, store: siwx.store })
+          } catch (error) {
+            if (error instanceof Siwx.InvalidProofError) replays.add(key)
+            throw error
+          }
+          claimed.add(key)
         }
-        claimed.add(key)
+        granted = Boolean(await siwx.grant({ ...proof, request: copy }))
+      } finally {
+        releaseGrantInput(copy)
       }
-      const granted = Boolean(await siwx.grant({ ...proof, request: copy }))
       if (!granted) return undefined
       return {
         receipt: {
@@ -416,6 +423,13 @@ function cloneGrantInput(input: Request): Request {
       signal: input.signal,
     })
   }
+}
+
+/** Cancels a grant copy's body, so its tee branch stops buffering the request's body. */
+function releaseGrantInput(copy: Request): void {
+  if (!copy.body || copy.bodyUsed) return
+  // Not awaited: a tee branch's cancel settles only once the other branch is done too.
+  void copy.body.cancel().catch(() => {})
 }
 
 function assertAddressEqual(actual: string, expected: string, reason: string) {

@@ -395,6 +395,46 @@ describe('Siwx grant', () => {
     expect(await request.text()).toBe('{"task":1}')
   })
 
+  test('a grant that leaves the body unread releases its copy', async () => {
+    const copies: Request[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator: {
+              async verify() {
+                return { isValid: true }
+              },
+              async settle() {
+                throw new Error('not settled')
+              },
+            },
+            siwx: {
+              grant: ({ request }) => (copies.push(request), true),
+              origin,
+              store: Store.memory(),
+            },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    const post = (headers: HeadersInit = {}) =>
+      new Request(url, { body: '{"task":1}', headers, method: 'POST' })
+    const first = await route(post())
+    if (first.status !== 402) throw new Error('expected a 402')
+    const extension = Siwx.fromPaymentRequired(readChallenge(first.challenge))!
+    const request = post({ [Siwx.header]: await sign(extension) })
+    const result = await route(request)
+    expect(result.status).toBe(200)
+    expect(copies).toHaveLength(1)
+    expect(copies[0]!.bodyUsed).toBe(true)
+    expect(await request.text()).toBe('{"task":1}')
+  })
+
   test('a request whose body was already read still grants, without the body', async () => {
     const store = Store.memory()
     const bodies: string[] = []
@@ -604,6 +644,46 @@ describe('Siwx.wrapFetch', () => {
     const response = await fetch('https://attacker.example/start')
     expect(response.status).toBe(402)
     expect(calls).toBe(1)
+  })
+
+  test('returns a 402 reached through a same-origin redirect', async () => {
+    const { handler } = createRoute()
+    const methods: string[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        const request = new Request(input, init)
+        methods.push(request.method)
+        const response = await handler(new Request(url, { headers: request.headers }))
+        // As native fetch reports a response after following a redirect.
+        Object.defineProperty(response, 'redirected', { value: true })
+        return response
+      },
+      { account },
+    )
+    const response = await fetch(url + '/old', { body: '{"task":1}', method: 'POST' })
+    expect(response.status).toBe(402)
+    expect(methods).toEqual(['POST'])
+  })
+
+  test('returns the 402 of a request that carries a single-use identity proof', async () => {
+    const { handler } = createRoute()
+    const requests: Request[] = []
+    const fetch = Siwx.wrapFetch(
+      async (input, init) => {
+        requests.push(new Request(input, init))
+        return handler(new Request(url))
+      },
+      { account },
+    )
+    for (const headers of [
+      { Signature: 'sig1=:abc:', 'Signature-Input': 'sig1=("@authority");nonce="n"' },
+      { DPoP: 'eyJ' },
+    ]) {
+      requests.length = 0
+      const response = await fetch(url, { headers })
+      expect(response.status).toBe(402)
+      expect(requests).toHaveLength(1)
+    }
   })
 
   test('does not follow redirects with the proof', async () => {
