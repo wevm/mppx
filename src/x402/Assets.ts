@@ -1,27 +1,37 @@
 import { getAddress } from 'viem'
 import type { Token } from 'viem/tokens'
 
+import * as Currency_ from '../Currency.js'
 import type { Asset, EvmNetwork, ExactTransfer } from './Types.js'
 
 const knownAsset = Symbol('mppx.x402.asset')
 
-/** Known x402 asset metadata. */
+/**
+ * Known x402 asset metadata: a token resolved to one chain, as `ousd(4217)` is, with the
+ * transfer metadata that EIP-3009 and Permit2 signing need.
+ */
 export type KnownAsset = Asset & {
   readonly [knownAsset]: true
+  /** Chain ID of `network`. */
+  chainId: number
   network: EvmNetwork
 }
 
-/** Viem token metadata from `viem/tokens`. */
+/**
+ * Viem token metadata from `viem/tokens`.
+ * @deprecated Use `Token` from `viem/tokens`.
+ */
 export type ViemToken = Token
 
-/** Currency metadata accepted by EVM and x402 payment config. */
-export type Currency = `0x${string}` | KnownAsset | ViemToken
+/** Currency accepted by EVM and x402 payment config: any mppx `Currency`, or a known asset. */
+export type Currency = Currency_.Currency | KnownAsset
 
 /** Creates typed x402 asset metadata for custom tokens. */
 export function define(parameters: define.Parameters): KnownAsset {
   return {
     [knownAsset]: true,
     address: parameters.address,
+    chainId: toChainId(parameters.network),
     decimals: parameters.decimals,
     network: parameters.network,
     transfer: parameters.transfer,
@@ -138,13 +148,7 @@ export function isAsset(value: unknown): value is KnownAsset {
 }
 
 /** Returns true when a value is a `viem/tokens` token definition. */
-export function isToken(value: unknown): value is ViemToken {
-  return (
-    typeof value === 'function' &&
-    typeof (value as Partial<ViemToken>).addresses === 'object' &&
-    typeof (value as Partial<ViemToken>).decimals === 'number'
-  )
-}
+export const isToken: (value: unknown) => value is Token = Currency_.isToken
 
 /** Returns true when a currency is a raw address without chain metadata. */
 export function isRawAddress(currency: Currency): currency is `0x${string}` {
@@ -162,18 +166,13 @@ export function resolve(currency: Currency, network: EvmNetwork): resolve.Result
     }
   }
 
-  if (isToken(currency)) {
-    const address = currency.addresses[toChainId(network)]
-    if (!address) return undefined
-    return {
-      address,
-      decimals: currency.decimals,
-      name: currency.name,
-    }
-  }
-
+  if (typeof currency === 'string') return { address: currency }
+  const resolved = Currency_.resolve(currency, { chainId: toChainId(network) })
+  if (!resolved) return undefined
   return {
-    address: currency,
+    address: resolved.address,
+    decimals: resolved.decimals,
+    name: resolved.name,
   }
 }
 

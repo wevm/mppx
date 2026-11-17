@@ -17,6 +17,10 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/email-otp',
   ),
+  'mppx/extensions/identity/erc8004': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/erc8004',
+  ),
   'mppx/extensions/identity/link': path.resolve(
     import.meta.dirname,
     'src/extensions/identity/link',
@@ -25,10 +29,22 @@ const alias = {
     import.meta.dirname,
     'src/extensions/identity/persona',
   ),
+  'mppx/extensions/identity/poppy': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/poppy',
+  ),
+  'mppx/extensions/identity/tempo': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/tempo',
+  ),
   'mppx/extensions/identity/tap': path.resolve(import.meta.dirname, 'src/extensions/identity/tap'),
   'mppx/extensions/identity/web-bot-auth': path.resolve(
     import.meta.dirname,
     'src/extensions/identity/web-bot-auth',
+  ),
+  'mppx/extensions/identity/world': path.resolve(
+    import.meta.dirname,
+    'src/extensions/identity/world',
   ),
   'mppx/extensions/identity': path.resolve(import.meta.dirname, 'src/extensions/identity'),
   'mppx/identity': path.resolve(import.meta.dirname, 'src/identity'),

@@ -22,6 +22,7 @@ const paymentHeaders = new Set([
   'payment-session',
   'payment-session-snapshot',
   'payment-signature',
+  'sign-in-with-x',
   'www-authenticate',
 ])
 

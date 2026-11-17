@@ -82,7 +82,7 @@ async function createIssuer() {
           sub: entry.email,
           type: 'email',
         },
-        { key: keys.privateKey, keyId },
+        { key: keys, keyId },
       )
       return Response.json({
         attestation,
@@ -299,7 +299,7 @@ test('does not store an attestation for another requirement from an issuer', asy
       sub: 'mallory@example.com',
       type: 'email',
     },
-    { key: fake.keys.privateKey, keyId: fake.keyId },
+    { key: fake.keys, keyId: fake.keyId },
   )
   const sent: (string | null)[] = []
   const prover = Attestation.Client.prover({

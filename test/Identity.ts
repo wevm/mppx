@@ -32,3 +32,24 @@ export async function jwkThumbprint(key: CryptoKey): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
   return Buffer.from(digest).toString('base64url')
 }
+
+/**
+ * A Signer that holds `keys.privateKey` the way a KMS would: callers only get signatures back.
+ * `calls` records each payload; `saltLength` overrides the RSA-PSS salt.
+ */
+export function remoteSigner(
+  keys: CryptoKeyPair,
+  options: { calls?: Uint8Array[] | undefined; saltLength?: number | undefined } = {},
+) {
+  const parameters =
+    keys.privateKey.algorithm.name === 'RSA-PSS'
+      ? { name: 'RSA-PSS', saltLength: options.saltLength ?? 64 }
+      : { name: 'Ed25519' }
+  return {
+    publicKey: keys.publicKey,
+    async sign({ payload }: { readonly payload: Uint8Array }) {
+      options.calls?.push(payload)
+      return new Uint8Array(await crypto.subtle.sign(parameters, keys.privateKey, payload.slice()))
+    },
+  }
+}

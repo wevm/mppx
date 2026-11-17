@@ -2,7 +2,7 @@ import * as Signatures from 'mppx/extensions/identity'
 import * as WebBotAuth from 'mppx/extensions/identity/web-bot-auth'
 import * as Identity from 'mppx/identity'
 import { expect, test } from 'vp/test'
-import { jwkThumbprint, keyPair, rsaKeyPair } from '~test/Identity.js'
+import { jwkThumbprint, keyPair, remoteSigner, rsaKeyPair } from '~test/Identity.js'
 
 import * as HttpMessageSignature from '../internal/HttpMessageSignature.js'
 
@@ -13,8 +13,7 @@ test('emits and verifies a signed Signature-Agent member', async () => {
   const signed = await WebBotAuth.Client.prover({
     scope: '*',
     expiresIn: WebBotAuth.Constants.defaultSignatureLifetime + 1,
-    key: keys.privateKey,
-    keyId,
+    key: keys,
     signatureAgent: `${signatureAgent}/`,
   }).prove(new Request('https://merchant.example/resource'), attempt())
 
@@ -48,8 +47,7 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
   const algorithms: Signatures.SignatureAlgorithm[] = []
   const signed = await WebBotAuth.Client.prover({
     scope: '*',
-    key: keys.privateKey,
-    keyId,
+    key: keys,
     signatureAgent: 'https://agent.example',
   }).prove(new Request('https://merchant.example/resource'), attempt())
   const result = await WebBotAuth.Server.verifier({
@@ -67,13 +65,73 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
   expect(result).toMatchObject({ status: 'valid' })
 })
 
+test('derives the keyid from the public key, for key pairs and remote signers', async () => {
+  for (const generate of [keyPair, rsaKeyPair]) {
+    const keys = await generate()
+    const keyId = await jwkThumbprint(keys.publicKey)
+    for (const key of [keys, remoteSigner(keys)]) {
+      const signed = await WebBotAuth.Client.prover({
+        scope: '*',
+        key,
+        signatureAgent: 'https://agent.example',
+      }).prove(new Request('https://merchant.example/resource'), attempt())
+      expect(signed.headers.get('Signature-Input')).toContain('keyid="' + keyId + '"')
+      expect(
+        await WebBotAuth.Server.verifier({
+          keyResolver: ({ keyId: candidate }) => (candidate === keyId ? keys.publicKey : undefined),
+          nonceStore: Identity.Store.memory(),
+        }).verify(signed),
+      ).toMatchObject({ status: 'valid', value: { keyId } })
+    }
+  }
+})
+
+test('signs with a remote Ed25519 signer once per attempt', async () => {
+  const keys = await keyPair()
+  const calls: Uint8Array[] = []
+  const prover = WebBotAuth.Client.prover({
+    scope: '*',
+    key: remoteSigner(keys, { calls }),
+    signatureAgent: 'https://agent.example',
+  })
+  await prover.prove(new Request('https://merchant.example/a'), attempt())
+  await prover.prove(new Request('https://merchant.example/b'), attempt())
+  expect(calls).toHaveLength(2)
+  expect(new TextDecoder().decode(calls[0])).toContain('"@authority": merchant.example')
+})
+
+test('fails on the client when a remote signer uses the wrong key', async () => {
+  const [registered, other] = await Promise.all([keyPair(), keyPair()])
+  await expect(
+    WebBotAuth.Client.prover({
+      scope: '*',
+      key: { publicKey: registered.publicKey, sign: remoteSigner(other).sign },
+      signatureAgent: 'https://agent.example',
+    }).prove(new Request('https://merchant.example/resource'), attempt()),
+  ).rejects.toThrow('The Signer returned a signature that does not verify with its publicKey.')
+})
+
+test('propagates remote signing failures without returning a proved request', async () => {
+  const keys = await keyPair()
+  await expect(
+    WebBotAuth.Client.prover({
+      scope: '*',
+      key: {
+        publicKey: keys.publicKey,
+        async sign() {
+          throw new Error('Remote signer unavailable.')
+        },
+      },
+      signatureAgent: 'https://agent.example',
+    }).prove(new Request('https://merchant.example/resource'), attempt()),
+  ).rejects.toThrow('Remote signer unavailable.')
+})
+
 test('reports directory lookup failures as forbidden (403) identities', async () => {
   const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
   const signed = await WebBotAuth.Client.prover({
     scope: '*',
-    key: keys.privateKey,
-    keyId,
+    key: keys,
     signatureAgent: 'https://agent.example',
   }).prove(new Request('https://merchant.example/resource'), attempt())
 
@@ -106,12 +164,11 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
   const signatureAgent = 'https://agent.example'
   const signed = await WebBotAuth.Client.prover({
     scope: '*',
-    key: signingKeys.privateKey,
-    keyId: advertisedKeyId,
+    key: signingKeys,
     signatureAgent,
   }).prove(new Request('https://merchant.example/resource'), attempt())
   const verifier = WebBotAuth.Server.verifier({
-    keyResolver: () => signingKeys.publicKey,
+    keyResolver: () => advertisedKeys.publicKey,
     nonceStore: Identity.Store.memory(),
   })
 
@@ -143,7 +200,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
           parameters: new Map([['key', WebBotAuth.Constants.label]]),
         },
       ],
-      key: advertisedKeys.privateKey,
+      key: advertisedKeys,
       keyId: advertisedKeyId,
       label: WebBotAuth.Constants.label,
       tag: WebBotAuth.Constants.tag,
@@ -162,16 +219,15 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
 
 test('validates signer and verifier configuration', async () => {
   const keys = await keyPair()
-  const keyId = await jwkThumbprint(keys.publicKey)
-  const config = { key: keys.privateKey, keyId, signatureAgent: 'https://agent.example' }
+  const config = { key: keys, signatureAgent: 'https://agent.example' }
 
   expect(() =>
     WebBotAuth.Client.prover({
       scope: '*',
       ...config,
-      keyId: 'not-a-thumbprint',
+      key: keys.privateKey as never,
     }),
-  ).toThrow('Web Bot Auth keyId must be an RFC 7638 SHA-256 JWK thumbprint.')
+  ).toThrow('Signing keys are key pairs')
   expect(() =>
     WebBotAuth.Client.prover({
       scope: '*',

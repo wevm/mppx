@@ -1,5 +1,7 @@
 import type * as Identity from '../../../../identity/Types.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
+import * as Signer from '../../internal/Signer.js'
+import type { SigningKey } from '../../Types.js'
 import { Constants } from '../Constants.js'
 
 /**
@@ -18,6 +20,7 @@ export function prover(config: prover.Config): Identity.Prover {
   const tag =
     config.intent === Constants.intents.payment ? Constants.tags.payment : Constants.tags.browse
   const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime
+  Signer.resolve(config.key)
   if (
     !Number.isInteger(expiresIn) ||
     expiresIn <= 0 ||
@@ -46,8 +49,11 @@ export declare namespace prover {
   type Config = {
     /** TAP signature type for the request. */
     intent: (typeof Constants.intents)[keyof typeof Constants.intents]
-    /** Ed25519 or RSA-PSS SHA-512 private key provisioned to the agent provider. */
-    key: CryptoKey
+    /**
+     * Ed25519 or RSA-PSS SHA-512 key pair, or a {@link SigningKey | Signer} for a remote key,
+     * provisioned to the agent provider.
+     */
+    key: SigningKey
     /** Identifier the merchant uses to resolve the signing public key. */
     keyId: string
     /** Origins that receive TAP signatures, or `'*'` for any origin. */

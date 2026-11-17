@@ -11,7 +11,8 @@ import type { BareItem, Dictionary, InnerList, Item } from 'structured-headers'
 import type { MaybePromise } from '../../../internal/types.js'
 import * as Store from '../../../Store.js'
 import { Algorithms, Headers as SignatureHeaders } from '../Constants.js'
-import type { KeyResolver, SignatureAlgorithm, SigningContext } from '../Types.js'
+import type { KeyResolver, SignatureAlgorithm, SigningContext, SigningKey } from '../Types.js'
+import * as Signer from './Signer.js'
 import * as SigningContextInternal from './SigningContext.js'
 
 /** RFC 9421 constants used by identity signature profiles. */
@@ -86,7 +87,7 @@ export async function sign(
     components: readonly ComponentInput[]
     expiresIn?: number | undefined
     keyId: string
-    key: CryptoKey
+    key: SigningKey
     label: string
     context?: SigningContext | undefined
     tag: string
@@ -95,7 +96,8 @@ export async function sign(
   const context = options.context ?? SigningContextInternal.create()
   const created = context.created
   const expires = created + (options.expiresIn ?? 60)
-  const algorithm = algorithmFromKey(options.key)
+  const signer = Signer.resolve(options.key)
+  const algorithm = signer.algorithm
   const parameters = new Map<string, BareItem>([
     ['created', created],
     ['expires', expires],
@@ -115,11 +117,7 @@ export async function sign(
     parameters,
     tag: options.tag,
   }
-  const signature = await crypto.subtle.sign(
-    webCryptoAlgorithm(algorithm),
-    options.key,
-    toArrayBuffer(encode(signatureBase(request, input))),
-  )
+  // Check the existing signatures first, so a request this refuses never reaches a remote signer.
   const headers = new Headers(request.headers)
   const inputs = parseHeaderDictionary(headers, SignatureHeaders.signatureInput)
   const signatures = parseHeaderDictionary(headers, SignatureHeaders.signature)
@@ -127,9 +125,16 @@ export async function sign(
     throw new Error('Signature-Input and Signature must contain the same labels.')
   if (inputs.has(input.label) || signatures.has(input.label))
     throw new Error(`HTTP message signature label "${input.label}" already exists.`)
+  // `new Request(request)` below throws on a read or locked body: refuse it before signing.
+  if (request.bodyUsed || request.body?.locked)
+    throw new TypeError('Cannot sign a request whose body has already been read or is locked.')
   inputs.set(input.label, toInnerList(input))
+  // Serializing validates the label and parameters before the signer is called.
+  const signatureInput = serializeDictionary(inputs)
+  const bytes = encode(signatureBase(request, input))
+  const signature = (await signer.sign(bytes)).buffer
   signatures.set(input.label, [signature, new Map()])
-  headers.set(SignatureHeaders.signatureInput, serializeDictionary(inputs))
+  headers.set(SignatureHeaders.signatureInput, signatureInput)
   headers.set(SignatureHeaders.signature, serializeDictionary(signatures))
   return new Request(request, { headers })
 }
@@ -311,12 +316,6 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
   }
 }
 
-function algorithmFromKey(key: CryptoKey): SignatureAlgorithm {
-  for (const algorithm of Object.values(Algorithms))
-    if (keySupportsAlgorithm(key, algorithm)) return algorithm
-  throw new TypeError('HTTP message signatures require an Ed25519 or RSA-PSS SHA-512 signing key.')
-}
-
 function isInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value)
 }
@@ -427,5 +426,5 @@ function encode(value: string): Uint8Array {
 }
 
 function toArrayBuffer(value: Uint8Array): ArrayBuffer {
-  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer
+  return Uint8Array.from(value).buffer
 }

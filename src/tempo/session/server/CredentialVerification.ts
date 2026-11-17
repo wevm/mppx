@@ -1,3 +1,4 @@
+import { TxEnvelopeTempo } from 'ox/tempo'
 import {
   isAddress,
   isAddressEqual,
@@ -6,6 +7,7 @@ import {
   type Address,
   type Hex,
 } from 'viem'
+import { Actions } from 'viem/tempo'
 
 import type * as Challenge from '../../../Challenge.js'
 import {
@@ -40,6 +42,7 @@ import {
   reportSessionSettlementFailure,
   trackSendAttempts,
 } from './Settlement.js'
+import { verifiedPayer } from './SponsorshipLimit.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
 export function authorizedSigner(descriptor: Channel.ChannelDescriptor): Address {
@@ -156,6 +159,53 @@ export function assertCredentialSourceCanSpend(parameters: {
   throw new VerificationFailedError({
     reason: 'credential source does not match channel payer or authorized signer',
   })
+}
+
+/** Binds an opening payment to the payer authenticated by its signed transaction. */
+export async function assertCredentialSourceIsPayer(
+  source: string | undefined,
+  chainId: number,
+  payer: Address,
+  serializedTransaction: Hex,
+  client: Chain.TransactionClient,
+) {
+  if (source === undefined) return
+  if (!isAddressEqual(readCredentialSourceAddress(source, chainId), payer))
+    throw new VerificationFailedError({
+      reason: 'credential source does not match transaction payer',
+    })
+  let valid = false
+  try {
+    const signer = verifiedPayer(serializedTransaction)
+    const { signature, keyAuthorization } = TxEnvelopeTempo.deserialize(
+      serializedTransaction as TxEnvelopeTempo.Serialized,
+    )
+    if (signer && signature?.type !== 'keychain') valid = isAddressEqual(signer, payer)
+    else if (
+      signer &&
+      signature?.type === 'keychain' &&
+      isAddressEqual(signature.userAddress, payer)
+    ) {
+      if (keyAuthorization)
+        valid =
+          isAddressEqual(signer, payer) &&
+          (keyAuthorization.chainId === 0n || keyAuthorization.chainId === BigInt(chainId)) &&
+          (keyAuthorization.expiry == null || keyAuthorization.expiry > Date.now() / 1_000)
+      else {
+        const metadata = await Actions.accessKey.getMetadata(client, {
+          account: payer,
+          accessKey: signer,
+        })
+        valid = !metadata.isRevoked && metadata.expiry > BigInt(Math.floor(Date.now() / 1_000))
+      }
+    }
+  } catch {
+    // Unavailable authorization state cannot authenticate a claimed identity.
+  }
+  if (!valid)
+    throw new VerificationFailedError({
+      reason: 'credential source is not authenticated by transaction signature',
+    })
 }
 
 function readCredentialSourceAddress(source: string | undefined, chainId: number): Address {
@@ -515,6 +565,13 @@ async function validateOpenCredential(
     requestAmount: request.amount,
   })
   assertSameDescriptor(transaction.descriptor, payload.descriptor)
+  await assertCredentialSourceIsPayer(
+    parameters.credentialSource,
+    chainId,
+    transaction.descriptor.payer,
+    payload.transaction,
+    client,
+  )
   if (cumulativeAmount > transaction.openDeposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
   const valid = await Voucher.verifyVoucher(
@@ -860,6 +917,13 @@ async function handleOpenCredential(
         requestAmount: request.amount,
       })
       assertSameDescriptor(prepared.descriptor, payload.descriptor)
+      await assertCredentialSourceIsPayer(
+        parameters.credentialSource,
+        chainId,
+        prepared.descriptor.payer,
+        payload.transaction,
+        client,
+      )
       if (cumulativeAmount > prepared.openDeposit)
         throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
       const valid = await Voucher.verifyVoucher(

@@ -25,6 +25,19 @@ describe('x402 public interface', () => {
     expectTypeOf(mppx.evm.charge({ amount: '0.01' })).toBeFunction()
   })
 
+  test('server evm charge takes x402 extra and a facilitator payTo', async () => {
+    const facilitator = 'https://facilitator.example'
+    evm.charge({
+      currency: evm.assets.base.USDC,
+      recipient: await evm.facilitatorPayTo(facilitator, { network: 'eip155:8453' }),
+      x402: {
+        facilitator,
+        extra: { tempoSettlement: '0x5555555555555555555555555555555555555555' },
+      },
+    })
+    expectTypeOf(evm.facilitatorPayTo).returns.resolves.toEqualTypeOf<`0x${string}`>()
+  })
+
   test('client evm charge exposes account config and policies', () => {
     const method = clientEvm.charge({
       account: {} as Account,
