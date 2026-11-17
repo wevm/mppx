@@ -129,8 +129,9 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
         }),
       })
 
+      const extensions = toJsonExtensions(settled.extensions)
       return Receipt.from({
-        ...(settled.extensions ? { extensions: settled.extensions } : {}),
+        ...(extensions ? { extensions } : {}),
         method: Types.paymentMethod,
         reference: settled.reference,
         status: 'success',
@@ -441,4 +442,19 @@ function releaseGrantInput(copy: Request): void {
 function assertAddressEqual(actual: string, expected: string, reason: string) {
   if (getAddress(actual) === getAddress(expected)) return
   throw new VerificationFailedError({ reason })
+}
+
+/**
+ * Normalizes settler extensions to the JSON the receipt header carries. A value that isn't a
+ * plain JSON object is dropped, so a settled payment never fails on its receipt.
+ */
+function toJsonExtensions(extensions: unknown): Record<string, unknown> | undefined {
+  if (!extensions || typeof extensions !== 'object' || Array.isArray(extensions)) return undefined
+  try {
+    const json = JSON.parse(JSON.stringify(extensions)) as unknown
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined
+    return Object.keys(json).length ? (json as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
 }
