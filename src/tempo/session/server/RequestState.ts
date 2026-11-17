@@ -519,8 +519,8 @@ type MachineTokenCredentialResolution = {
  * challenge were priced in MACH, which it accepts 1:1.
  *
  * Call it only after the challenge's HMAC was verified (Mppx does so before `validate` and
- * `broadcast`). It substitutes only when both the signed challenge and the route's current request
- * carry `machTokenAccepted: true` and the credential's channel token is MACH, so a channel in any
+ * `broadcast`). It substitutes only when the route's request carries `machTokenAccepted: true`
+ * and the credential's channel token is MACH, so a channel in any
  * other token is still checked against the challenge currency and rejected.
  */
 export function resolveMachineTokenCredential(parameters: {
@@ -531,7 +531,6 @@ export function resolveMachineTokenCredential(parameters: {
   const { challenge, context, payload } = parameters
   const unchanged = { challenge, context }
   if (!isObject(challenge.request.methodDetails)) return unchanged
-  if (challenge.request.methodDetails.machTokenAccepted !== true) return unchanged
   if (context.methodDetails.machTokenAccepted !== true) return unchanged
   const machineToken = MachineTokenCharge.getToken(context.chainId)
   if (!machineToken || isAddressEqual(context.request.currency as Address, machineToken))

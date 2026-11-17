@@ -126,13 +126,3 @@ async function findFeeToken(parameters: {
         : [challenge.request.currency as Address, ...defaultFeeTokens(chainId)],
   })
 }
-
-/**
- * Returns the scopes an automatic open locks: the challenge currency's and, for a
- * `machTokenAccepted` challenge, the MACH channel's too. The open may land on either, so locking
- * both keeps concurrent opens from funding two channels in the same scope.
- */
-export function getLockKeys(resolved: ChallengeContext): readonly string[] {
-  const machineTokenKey = resolveMachineTokenContext(resolved)?.key
-  return machineTokenKey ? [resolved.key, machineTokenKey] : [resolved.key]
-}

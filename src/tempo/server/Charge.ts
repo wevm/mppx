@@ -200,15 +200,9 @@ export function charge<const parameters extends charge.Parameters>(
     const settlementSender = machineTokenEnabled
       ? MachineTokenCharge.getSettlementSender(chainId)
       : undefined
-    // Direct MACH needs both the signed challenge and the route's current config to accept it, so
-    // switching it on or off never invalidates challenges already issued. It needs no settlement
-    // sender: MACH goes straight to the recipient.
+    // Direct MACH goes straight to the recipient, so it needs no settlement sender.
     const machineToken =
-      methodDetails?.machTokenAccepted === true &&
-      (challenge.request.methodDetails as { machTokenAccepted?: unknown } | undefined)
-        ?.machTokenAccepted === true
-        ? MachineTokenCharge.getToken(chainId)
-        : undefined
+      methodDetails?.machTokenAccepted === true ? MachineTokenCharge.getToken(chainId) : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     CredentialExpiry.assert(credential, graceMsFor(credential))
@@ -1408,9 +1402,7 @@ function chargeBinding(request: ChargeRequest) {
     chainId,
     feePayer,
     machineTokenEnabled,
-    // Not bound: verification requires both the challenge and the route to accept direct MACH, so
-    // switching it on or off keeps challenges already issued valid.
-    machTokenAccepted: _machTokenAccepted,
+    machTokenAccepted,
     splits,
     supportedModes,
     zones,
@@ -1421,6 +1413,7 @@ function chargeBinding(request: ChargeRequest) {
 
   return {
     machineTokenEnabled,
+    machTokenAccepted,
     amount,
     chainId,
     currency,

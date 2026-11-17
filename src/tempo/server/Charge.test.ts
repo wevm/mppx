@@ -2037,8 +2037,7 @@ describe('tempo', () => {
       expect(challenge!.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       expect(challenge!.request.methodDetails).not.toHaveProperty('machTokenAccepted')
 
-      // Switching direct MACH on keeps challenges issued before it valid: they bind as before, and
-      // only a challenge that carries the flag accepts MACH.
+      // Like any other route field, switching direct MACH on invalidates challenges issued before.
       const preOptIn = challenge!
       await issue(true)
       challenge = preOptIn
@@ -2061,9 +2060,7 @@ describe('tempo', () => {
       )
       const preOptInBody =
         preOptInResult.status === 402 ? await preOptInResult.challenge.text() : ''
-      // It reaches payment verification instead of failing the challenge binding.
-      expect(preOptInBody).not.toContain('invalid-challenge')
-      expect(preOptInBody).toContain('verification-failed')
+      expect(preOptInBody).toContain('invalid-challenge')
 
       // Direct MACH works without the swapper flag.
       await issue(false, true)

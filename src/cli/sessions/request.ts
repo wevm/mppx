@@ -190,22 +190,14 @@ export async function runPersistentSessionRequest(
     chainId: challengeContext.chainId,
   }
   // A `machTokenAccepted` challenge also accepts a channel funded in MACH, which the session
-  // manager may open or reuse instead, so the registry serves and locks that scope too.
+  // manager may open or reuse instead, so the registry serves that scope too. The challenge
+  // scope's lock already serializes those opens.
   const machineToken = resolveMachineTokenContext(challengeContext)?.token
   const machineTokenScope = machineToken ? { ...scope, token: machineToken } : undefined
   const scopes = machineTokenScope ? [scope, machineTokenScope] : [scope]
   const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
   const registry = parameters.registry ?? createSessionRegistry()
-  const locks: Awaited<ReturnType<typeof registry.acquire>>[] = []
-  const lock = {
-    async release() {
-      for (const lock of locks.splice(0).reverse()) await lock.release()
-    },
-  }
-  try {
-    for (const scope of scopes) locks.push(await registry.acquire(scope))
-  } catch (cause) {
-    await lock.release()
+  const lock = await registry.acquire(scope).catch((cause: unknown) => {
     if (cause instanceof SessionBusyError)
       throw new Errors.IncurError({
         code: cause.code,
@@ -214,7 +206,7 @@ export async function runPersistentSessionRequest(
         cause,
       })
     throw cause
-  }
+  })
 
   try {
     const selectedId =

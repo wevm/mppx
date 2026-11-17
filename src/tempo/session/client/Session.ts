@@ -44,7 +44,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { getLockKeys, selectChannelContext } from './MachineToken.js'
+import { selectChannelContext } from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   getSessionSnapshot,
@@ -75,15 +75,6 @@ async function lockChannel(store: ChannelStore, key: string) {
   return () => {
     unlock()
     if (tails.get(key) === current) tails.delete(key)
-  }
-}
-
-/** Locks several payment scopes in a fixed order, so overlapping lock sets cannot deadlock. */
-async function lockChannels(store: ChannelStore, keys: readonly string[]) {
-  const releases: (() => void)[] = []
-  for (const key of [...new Set(keys)].sort()) releases.push(await lockChannel(store, key))
-  return () => {
-    for (const release of releases.reverse()) release()
   }
 }
 
@@ -375,7 +366,8 @@ export function session(parameters: session.Parameters = {}) {
       let release = () => {}
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
-        if (automatic) release = await lockChannels(store, getLockKeys(challengeContext))
+        // One lock per challenge scope serializes opens, including one that lands in MACH.
+        if (automatic) release = await lockChannel(store, challengeContext.key)
         let resolved = await selectChannelContext({ context, resolved: challengeContext, store })
         if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
@@ -386,7 +378,7 @@ export function session(parameters: session.Parameters = {}) {
           )
         let plan = await resolveCredentialPlan(resolved, context, entry)
         if (!automatic && attempt && plan.type === 'open') {
-          release = await lockChannels(store, getLockKeys(challengeContext))
+          release = await lockChannel(store, challengeContext.key)
           // Select again: another flow may have opened a channel, possibly in MACH, while this waited.
           resolved = await selectChannelContext({ context, resolved: challengeContext, store })
           const nextEntry = await store.get(resolved.key)
