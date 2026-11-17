@@ -81,6 +81,37 @@ describe('mcp HTTP protocol', () => {
     expect(await getChallengeIds(response)).toEqual([challenge.id, alternate.id])
   })
 
+  test.each(['Authorization', 'X-Payment'])(
+    'skips a challenge that selects the credential header "%s"',
+    async (header) => {
+      const unsupported = { ...challenge, id: 'unsupported', header }
+      const withValid = {
+        ...paymentRequired,
+        error: { ...paymentRequired.error, data: { challenges: [unsupported, challenge] } },
+      }
+      const onlyUnsupported = {
+        ...paymentRequired,
+        error: { ...paymentRequired.error, data: { challenges: [unsupported] } },
+      }
+
+      expect(await getChallengeIds(jsonResponse(withValid))).toEqual([challenge.id])
+      expect(await getChallengeIds(jsonResponse(onlyUnsupported))).toEqual([])
+    },
+  )
+
+  test('rejects a malformed challenge that selects another credential header', async () => {
+    const { id: _, ...malformed } = challenge
+    const response = jsonResponse({
+      ...paymentRequired,
+      error: {
+        ...paymentRequired.error,
+        data: { challenges: [{ ...malformed, header: 'X-Payment' }, challenge] },
+      },
+    })
+
+    expect(await getChallengeIds(response)).toEqual([])
+  })
+
   test('parses JSON content types case-insensitively', async () => {
     const response = jsonResponse(paymentRequired, 'Application/JSON; charset=utf-8')
 

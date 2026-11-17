@@ -2,6 +2,7 @@ import { Cli, Errors, z } from 'incur'
 import { createClient, http } from 'viem'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 
+import * as Challenge from '../../Challenge.js'
 import { normalizeHeaders } from '../../client/internal/Fetch.js'
 import { canSignDescriptor } from '../../tempo/session/client/CredentialState.js'
 import * as Chain from '../../tempo/session/precompile/Chain.js'
@@ -285,6 +286,15 @@ const sessions = Cli.create('sessions', {
               code: 'SESSION_NOT_FOUND',
               message: `Session ${channelId} was not found.`,
               exitCode: 2,
+            })
+          // A session stored by an earlier version may hold a challenge that selects another
+          // credential header. It still lists, but no credential is sent in that header.
+          if (Challenge.hasUnsupportedCredentialHeader(record.challenge))
+            throw new Errors.IncurError({
+              code: 'SESSION_STATE_INVALID',
+              message:
+                'Stored session challenge selects a credential header other than Payment-Authorization.',
+              exitCode: 65,
             })
           const resolvedAccount = await resolveCloseAccount(record, options.account)
           const client = await resolveCloseClient(record.channel.chainId, options)
