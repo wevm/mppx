@@ -295,6 +295,7 @@ export function createPath(config: ResolvedOptions): Path {
           payer: payload.from,
           success: true,
           transaction: options.receipt.reference,
+          ...(options.receipt.extensions ? { extensions: options.receipt.extensions } : {}),
         }),
       )
       return new Response(response.body, {
@@ -320,6 +321,7 @@ export function settleWithFacilitator(parameters: ResolvedOptions): SettleWithFa
       })
 
     return {
+      ...(settled.extensions ? { extensions: settled.extensions } : {}),
       reference: settled.transaction,
     }
   }
@@ -369,6 +371,7 @@ export type SettleWithFacilitator = (parameters: {
   request: Types.ChargeRequest
   source: ReturnType<typeof Types.toSource>
 }) => Promise<{
+  extensions?: Record<string, unknown> | undefined
   reference: string
   timestamp?: string | undefined
 }>

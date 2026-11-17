@@ -205,7 +205,8 @@ export type PaymentPayload = z.infer<typeof PaymentPayloadSchema>
 
 /** Facilitator verification response. */
 export const VerifyResponseSchema = z.object({
-  extensions: z.optional(ExtensionsSchema),
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
   extra: z.optional(z.record(z.string(), z.unknown())),
   invalidMessage: z.optional(z.string()),
   invalidReason: z.optional(z.string()),
@@ -221,7 +222,8 @@ export const SettleResponseSchema = z.object({
   amount: z.optional(atomicAmount),
   errorMessage: z.optional(z.string()),
   errorReason: z.optional(z.string()),
-  extensions: z.optional(ExtensionsSchema),
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
   extra: z.optional(z.record(z.string(), z.unknown())),
   network: nonEmptyString,
   payer: z.optional(z.string()),

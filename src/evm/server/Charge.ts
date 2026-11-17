@@ -130,6 +130,7 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       })
 
       return Receipt.from({
+        ...(settled.extensions ? { extensions: settled.extensions } : {}),
         method: Types.paymentMethod,
         reference: settled.reference,
         status: 'success',
@@ -186,6 +187,11 @@ export declare namespace charge {
     request: Types.ChargeRequest
     source: ReturnType<typeof Types.toSource>
   }) => Promise<{
+    /**
+     * Settlement data to pass through on the Receipt and the x402 `PAYMENT-RESPONSE`, such as
+     * an x402 facilitator's `SettleResponse.extensions`.
+     */
+    extensions?: Record<string, unknown> | undefined
     reference: string
     timestamp?: string | undefined
   }>

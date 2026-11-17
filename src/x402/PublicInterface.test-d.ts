@@ -1,4 +1,6 @@
+import type { Receipt } from 'mppx'
 import { evm, Mppx } from 'mppx/server'
+import type { Types as x402_Types } from 'mppx/x402'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
@@ -36,6 +38,29 @@ describe('x402 public interface', () => {
       },
     })
     expectTypeOf(evm.facilitatorPayTo).returns.resolves.toEqualTypeOf<`0x${string}`>()
+  })
+
+  test('facilitator settle extensions reach the Receipt', () => {
+    expectTypeOf<x402_Types.SettleResponse['extensions']>().toEqualTypeOf<
+      Record<string, unknown> | undefined
+    >()
+    expectTypeOf<Receipt.Receipt['extensions']>().toEqualTypeOf<
+      Record<string, unknown> | undefined
+    >()
+
+    const mppx = Mppx.create({
+      methods: [
+        evm.charge({
+          currency: evm.assets.base.USDC,
+          recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+          x402: { facilitator: 'https://facilitator.example' },
+        }),
+      ],
+      secretKey,
+    })
+    mppx.onPaymentSuccess(({ receipt }) => {
+      expectTypeOf(receipt.extensions?.tempoSettlement).toEqualTypeOf<unknown>()
+    })
   })
 
   test('client evm charge exposes account config and policies', () => {
