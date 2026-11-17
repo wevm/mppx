@@ -4,6 +4,11 @@ import * as Constants from './Constants.js'
 import * as z from './zod.js'
 
 const shape = {
+  /**
+   * Settlement data the settler reported, keyed by extension name, such as an x402
+   * facilitator's `SettleResponse.extensions`. Passed through unchanged.
+   */
+  extensions: z.optional(z.record(z.string(), z.unknown())),
   /** Currency actually debited to fund the payment, when known. */
   fundingCurrency: z.optional(z.string()),
   /** Payment method used (e.g., "tempo", "stripe"). */

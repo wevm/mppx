@@ -1,3 +1,4 @@
+import type { Receipt } from 'mppx'
 import { Types as evm_Types } from 'mppx/evm'
 import { Proxy } from 'mppx/proxy'
 import { evm, Mppx } from 'mppx/server'
@@ -512,7 +513,10 @@ describe('x402 evm charge facilitator extra and payTo', () => {
   const tempoPayout = '0x5555555555555555555555555555555555555555'
 
   /** A facilitator that publishes its own payTo, and records what it was asked to settle. */
-  function createDepositFacilitator(options?: { payTo?: string | undefined }) {
+  function createDepositFacilitator(options?: {
+    extensions?: Record<string, unknown> | undefined
+    payTo?: string | undefined
+  }) {
     const settled: x402_Types.PaymentRequirements[] = []
     let supportedCalls = 0
     return {
@@ -524,7 +528,12 @@ describe('x402 evm charge facilitator extra and payTo', () => {
         },
         async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
           settled.push(requirements)
-          return { network: requirements.network, success: true, transaction }
+          return {
+            network: requirements.network,
+            success: true,
+            transaction,
+            ...(options?.extensions ? { extensions: options.extensions } : {}),
+          }
         },
         async supported() {
           supportedCalls++
@@ -652,6 +661,70 @@ describe('x402 evm charge facilitator extra and payTo', () => {
     expect(settled[0]!.payTo).toBe(depositAddress)
     expect(settled[0]!.extra?.tempoSettlement).toBe(tempoPayout)
     expect(supportedCalls()).toBe(1)
+  })
+
+  test('facilitator settle extensions reach the Receipt and PAYMENT-RESPONSE', async () => {
+    const extensions = {
+      tempoSettlement: {
+        network: 'eip155:4217',
+        payoutId: 'payout_1',
+        status: 'submitted',
+        transaction: '0x' + '9'.repeat(64),
+      },
+    }
+    const { facilitator } = createDepositFacilitator({ extensions })
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: depositAddress,
+          x402: { facilitator, extra: { tempoSettlement: tempoPayout } },
+        }),
+      ],
+      secretKey,
+    })
+    const receipts: Receipt.Receipt[] = []
+    mppx.onPaymentSuccess(({ receipt }) => void receipts.push(receipt as Receipt.Receipt))
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    if (result.status !== 200) throw new Error()
+
+    expect(receipts[0]!.extensions).toEqual(extensions)
+    const response = result.withReceipt(Response.json({ ok: true }))
+    const paymentResponse = x402_Header.decodePaymentResponse(
+      response.headers.get(x402_Types.paymentResponseHeader)!,
+    )
+    expect(paymentResponse.transaction).toBe(transaction)
+    expect(paymentResponse.extensions).toEqual(extensions)
+  })
+
+  test('PAYMENT-RESPONSE omits extensions when the facilitator returns none', async () => {
+    const { facilitator } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, recipient, x402: { facilitator } })],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    if (result.status !== 200) throw new Error()
+
+    const response = result.withReceipt(Response.json({ ok: true }))
+    const paymentResponse = x402_Header.decodePaymentResponse(
+      response.headers.get(x402_Types.paymentResponseHeader)!,
+    )
+    expect(paymentResponse).not.toHaveProperty('extensions')
   })
 
   test('evm.facilitatorPayTo() fails when the facilitator publishes no payTo', async () => {

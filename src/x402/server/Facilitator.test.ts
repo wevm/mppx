@@ -89,6 +89,29 @@ describe('x402 facilitator http client', () => {
     })
   })
 
+  test('returns settle extensions shaped by the facilitator', async () => {
+    const extensions = { tempoSettlement: { payoutId: 'payout_1', status: 'submitted' } }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              extensions,
+              network: paymentRequirements.network,
+              success: true,
+              transaction: '0x' + '1'.repeat(64),
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+      ),
+    )
+
+    const facilitator = Facilitator.http('https://facilitator.example')
+    const settled = await facilitator.settle(paymentPayload, paymentRequirements)
+    expect(settled.extensions).toEqual(extensions)
+  })
+
   test('unwraps mppx fetch wrappers', async () => {
     const rawFetch = vi.fn(async () => {
       return new Response(JSON.stringify({ isValid: true }), {
