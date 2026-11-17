@@ -98,7 +98,10 @@ export type SessionManager = {
 
   /** Runs the HTTP 402 probe, signs/open/top-ups as needed, retries, and returns receipt metadata. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse>
-  /** Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom. */
+  /**
+   * Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom.
+   * Rejects `Fetch.withoutPayment` requests; use `fetch` to read an unpaid stream without session management.
+   */
   sse(input: RequestInfo | URL, init?: SessionManagerSseOptions): Promise<AsyncIterable<string>>
   /** Opens a paid WebSocket session after an HTTP challenge probe and manages in-band voucher frames. */
   ws(input: string | URL, init?: SessionManagerWebSocketOptions): Promise<SessionManagedWebSocket>
@@ -869,10 +872,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (runtime.channel?.opened) await persistChannel(runtime.channel)
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
+  function toPaymentResponse(response: Response, acceptReceipt = true): PaymentResponse {
     const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
-    updateSpentFromReceipt(receipt)
+    if (acceptReceipt) updateSpentFromReceipt(receipt)
     return Object.assign(response, {
       receipt,
       challenge: runtime.lastChallenge,
@@ -882,6 +885,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+    // Opted-out requests must not bootstrap, restore, top up, or retry a session.
+    if (
+      (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+    )
+      return toPaymentResponse(await config.fetch(input, Fetch.withoutPayment(init)), false)
     // The manager drives one shared `runtime` state machine, so requests are
     // single-flight. Reject overlap loudly instead of letting concurrent calls
     // corrupt each other's runtime and channel tracking.
@@ -1064,6 +1072,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
 
     async sse(input, init) {
+      if (
+        (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+      )
+        throw new Error('SessionManager.sse requires payment; use fetch for unpaid streams.')
       return openSseSession(input, init, sseDriver)
     },
 

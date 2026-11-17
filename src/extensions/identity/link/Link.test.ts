@@ -606,3 +606,34 @@ test('throws on an empty claims list', () => {
     }),
   ).toThrow(/at least one claim/)
 })
+
+test('presentation key retrieval never pays through an untagged payment fetch', async () => {
+  const { credential } = await createLink()
+  const sign = vi.fn(clientMethod.createCredential)
+  const server = Mppx.create({ methods: [serverMethod], secretKey })
+  const raw = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const result = await server.charge(charge)(new Request(input, init))
+    return result.status === 402
+      ? result.challenge
+      : result.withReceipt(Response.json({ keys: [] }))
+  })
+  const payment = ClientMppx.create({
+    fetch: raw,
+    methods: [{ ...clientMethod, createCredential: sign }],
+    polyfill: false,
+  })
+  const verifier = Link.Server.presentationVerifier({
+    audience: 'https://api.example',
+    fetch: (input, init) => payment.fetch(input, init),
+  })
+  const presentation = await credential.present({
+    aud: 'https://api.example',
+    disclose: ['email'],
+    nonce: 'n1',
+  })
+  expect(
+    (await verifier.verifyClaims(presentation, { nonce: 'n1', requiredClaims: ['email'] })).valid,
+  ).toBe(false)
+  expect(sign).not.toHaveBeenCalled()
+  expect(raw).toHaveBeenCalledOnce()
+})
