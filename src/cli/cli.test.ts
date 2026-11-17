@@ -2228,6 +2228,118 @@ export default defineConfig({ methods: [alpha] })
     }
   })
 
+  test('resends the previous credential when the server reorders its offers', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential, index) => {
+      if (!credential) return { challenges: [first, second] }
+      if (index === 1) return { challenges: [second, first] }
+      return { paid: 'paid-after-reorder' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-after-reorder')
+      expect(credentialIds(requests)).toEqual([first.id, first.id])
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('starts a new round from challenge headers without reading the 402 body', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge({ amount: '0' })
+    const second = alphaChallenge({ amount: '2' })
+    const authorizations: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      const authorization = req.headers.authorization
+      if (authorization) authorizations.push(authorization)
+      const credential = authorization ? Credential.deserialize(authorization) : undefined
+      if (credential?.challenge.id === second.id) {
+        res.end('paid-without-body')
+        return
+      }
+      res.statusCode = 402
+      res.setHeader(
+        Constants.Headers.wwwAuthenticate,
+        Challenge.serialize(credential ? second : first),
+      )
+      if (!credential) {
+        res.end()
+        return
+      }
+      // A body that never ends: the CLI must not wait for it.
+      res.write('x')
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-without-body')
+      expect(authorizations).toHaveLength(2)
+    } finally {
+      httpServer.closeAllConnections?.()
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('reads at most a bounded 402 body before honoring --fail', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    let sent = 0
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers.authorization) {
+        res.statusCode = 402
+        res.setHeader(Constants.Headers.wwwAuthenticate, Challenge.serialize(challenge))
+        res.end()
+        return
+      }
+      res.statusCode = 402
+      const chunk = Buffer.alloc(64 * 1024, 'x')
+      // An endless body: the CLI stops reading past its limit.
+      const write = () => {
+        while (sent < 64 * 1024 * 1024 && res.write(chunk)) sent += chunk.length
+        if (sent < 64 * 1024 * 1024) res.once('drain', write)
+      }
+      write()
+      req.socket.on('close', () => res.destroy())
+    })
+
+    try {
+      const { exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '--fail',
+        '-s',
+      ])
+
+      expect(exitCode).toBe(22)
+      expect(sent).toBeLessThan(64 * 1024 * 1024)
+    } finally {
+      httpServer.closeAllConnections?.()
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
   test('returns a server error after a credential without another round', async () => {
     const config = writeAlphaConfig()
     const challenge = alphaChallenge()

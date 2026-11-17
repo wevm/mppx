@@ -258,16 +258,57 @@ async function collectChallenges(
   return []
 }
 
-/** Reads a response body once so the response can be inspected and then read again. */
-async function bufferResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer()
+/** Largest 402 body the CLI reads to look for challenges in it. */
+const maxChallengeBodyBytes = 1024 * 1024
+
+/**
+ * Reads up to `maxBytes` of a response body so the response can be inspected and read again. A
+ * longer body is not read further: the returned response streams what was read and then the rest,
+ * and `complete` is false.
+ */
+async function bufferResponse(
+  response: Response,
+  maxBytes: number,
+): Promise<{ complete: boolean; response: Response }> {
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = response.body?.getReader()
+  let complete = true
+  if (reader)
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      size += value.byteLength
+      if (size > maxBytes) {
+        complete = false
+        break
+      }
+    }
+  const body = complete
+    ? reader
+      ? new Blob(chunks as BlobPart[])
+      : null
+    : new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk)
+        },
+        async pull(controller) {
+          const { done, value } = await reader!.read()
+          if (done) controller.close()
+          else controller.enqueue(value)
+        },
+        cancel(reason) {
+          return reader!.cancel(reason)
+        },
+      })
   const buffered = new Response(body, {
     headers: response.headers,
     status: response.status,
     statusText: response.statusText,
   })
   Object.defineProperty(buffered, 'url', { value: response.url })
-  return buffered
+  return { complete, response: buffered }
 }
 
 /**
@@ -733,6 +774,13 @@ const cli = Cli.create('mppx', {
               },
             })
 
+        // The challenge answered in the previous round, when offered again, is resent before any
+        // other offer, so a lower balance after paying it can't make the CLI pay a second offer.
+        const previousIndex = lastSent
+          ? challenges.findIndex((offer) => answeredChallengeKey(offer) === lastSent!.key)
+          : -1
+        if (previousIndex > 0) challenges.unshift(...challenges.splice(previousIndex, 1))
+
         const selected = selectChallenge(challenges, loaded?.config)
         if (!selected) {
           const offers = challenges
@@ -1026,19 +1074,34 @@ const cli = Cli.create('mppx', {
           !(configMethod && isTempoSessionChallenge(challenge)) &&
           round + 1 < maxPaymentRounds
         ) {
-          const nextChallengeResponse = await bufferResponse(credentialResponse)
-          if (
-            await hasPayableChallenge(nextChallengeResponse.clone(), {
+          const payable = (response: Response) =>
+            hasPayableChallenge(response, {
               config: loaded?.config,
               currency: c.options.currency,
               ignoreX402ResponseUrl,
               protocol: c.options.protocol,
             })
-          ) {
-            challengeResponse = nextChallengeResponse
+          // Challenges in headers decide the round without reading the body. Only a body that may
+          // hold x402 challenges is read, and only up to a limit.
+          const headersOnly = new Response(null, {
+            headers: credentialResponse.headers,
+            status: credentialResponse.status,
+            statusText: credentialResponse.statusText,
+          })
+          Object.defineProperty(headersOnly, 'url', { value: credentialResponse.url })
+          if (await payable(headersOnly.clone())) {
+            await credentialResponse.body?.cancel().catch(() => {})
+            challengeResponse = headersOnly
             continue
           }
-          credentialResponse = nextChallengeResponse
+          if (c.options.protocol !== 'mpp' && !ignoreX402ResponseUrl) {
+            const buffered = await bufferResponse(credentialResponse, maxChallengeBodyBytes)
+            if (buffered.complete && (await payable(buffered.response.clone()))) {
+              challengeResponse = buffered.response
+              continue
+            }
+            credentialResponse = buffered.response
+          }
         }
 
         if (c.options.fail && credentialResponse.status >= 400)
