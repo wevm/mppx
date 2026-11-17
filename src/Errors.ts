@@ -354,6 +354,57 @@ export declare namespace BroadcastOutcomeUnknownError {
 }
 
 /**
+ * An x402 facilitator answered with a non-2xx status (such as a 401 for a missing or wrong API
+ * key, or a 5xx outage) or with a body that is not a facilitator result.
+ *
+ * It says nothing about the payment itself, so it is not a `PaymentError`: HTTP handlers answer
+ * with a generic 500 `InternalPaymentError`, whose `cause` is this error, rather than a 402 that
+ * would tell the client its payment was invalid. A `/verify` or `/settle` error response whose
+ * body is a failed result (`isValid: false`, `success: false`) is read as that result instead.
+ */
+export class FacilitatorResponseError extends Error {
+  override readonly name = 'FacilitatorResponseError'
+
+  /** First 200 characters of the response body, for server-side logs. Never sent to clients. */
+  readonly body: string
+  /** Facilitator path that failed. */
+  readonly path: 'settle' | 'supported' | 'verify'
+  /** HTTP status of the facilitator response. */
+  readonly status: number
+
+  constructor(options: FacilitatorResponseError.Options) {
+    const { cause, path, status } = options
+    const body = excerpt(options.body)
+    super(`x402 facilitator /${path} failed (${status}): ${body}`)
+    this.body = body
+    this.path = path
+    this.status = status
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace FacilitatorResponseError {
+  type Options = {
+    /** Response body. Truncated to 200 characters. */
+    body: string
+    /** Parse error, when the body is not a facilitator result. */
+    cause?: unknown
+    /** Facilitator path that failed. */
+    path: 'settle' | 'supported' | 'verify'
+    /** HTTP status of the facilitator response. */
+    status: number
+  }
+}
+
+function excerpt(text: string, limit = 200): string {
+  const compact = text.trim().replace(/\s+/g, ' ')
+  if (!compact) return '<empty response>'
+  return compact.length <= limit ? compact : `${compact.slice(0, limit - 3)}...`
+}
+
+/**
  * A pre-broadcast simulation of a fee-sponsored payment failed, so the payment was not broadcast.
  *
  * `phase` says which simulation failed: `sender` runs the sender's calls before sponsorship, and
