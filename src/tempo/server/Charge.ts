@@ -670,11 +670,10 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(
           'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
         )
-      if (
-        (request.machineTokenEnabled || request.machTokenAccepted) &&
-        !MachineTokenCharge.isSupported(chainId)
-      )
+      if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
+      if (request.machTokenAccepted && !MachineTokenCharge.isSupported(chainId))
+        throw new Error(`MACH is not supported on chainId ${chainId}.`)
 
       // Direct MACH is opt-in: a recipient such as a Stripe deposit address can't take MACH.
       const machTokenAccepted = request.machTokenAccepted === true
@@ -704,8 +703,8 @@ export function charge<const parameters extends charge.Parameters>(
 
       return {
         ...request,
-        // `machineTokenEnabled` keeps legacy swapper clients working during the transition;
-        // `machTokenAccepted` tells current clients they may pay MACH directly.
+        // v1 (`machineTokenEnabled`, legacy swapper) and v2 (`machTokenAccepted`, direct MACH)
+        // are independent; a server may advertise either or both.
         machineTokenEnabled: request.machineTokenEnabled || undefined,
         machTokenAccepted: machTokenAccepted || undefined,
         chainId,

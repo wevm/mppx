@@ -173,19 +173,6 @@ export function matchRoute(parameters: {
   }
 }
 
-/**
- * Returns whether a client's `currencies` allowlist lets it pay in MACH on a chain. No allowlist
- * allows it.
- */
-export function isAllowed(
-  currencies: readonly string[] | undefined,
-  chainId: number | undefined,
-): boolean {
-  if (!currencies) return true
-  const token = getToken(chainId)
-  return token !== undefined && currencies.some((c) => c.toLowerCase() === token.toLowerCase())
-}
-
 /** Returns the canonical machine token on a chain, if one is deployed. */
 export function getToken(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.token

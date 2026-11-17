@@ -226,23 +226,13 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      // The payee accepts MACH 1:1 directly, unless the client's `currencies` allowlist leaves it out.
+      // v2: the payee accepts a direct MACH transfer 1:1, unless the client turned it off.
       const machineToken =
         methodDetails?.machTokenAccepted === true &&
         !isMachineTokenCurrency &&
-        MachineTokenCharge.isAllowed(parameters.currencies, chainId)
+        parameters.machTokenAccepted !== false
           ? MachineTokenCharge.getToken(chainId)
           : undefined
-      const swapperRoute =
-        methodDetails?.machineTokenEnabled === true
-          ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
-          : undefined
-      // MACH routes in order of preference: a direct transfer, then the legacy swapper, which every
-      // `machineTokenEnabled` server still accepts.
-      const machineTokenRoutes = [
-        ...(machineToken ? [{ calls: toTransferCalls(machineToken), token: machineToken }] : []),
-        ...(swapperRoute ? [{ calls: swapperRoute.calls, token: undefined }] : []),
-      ]
 
       const resolveMode = (payer: { type: string }) => {
         const explicitMode = context?.mode ?? parameters.mode
@@ -271,53 +261,61 @@ export function charge(parameters: charge.Parameters = {}) {
         | undefined
       // Whether the account could pay in MACH but lacked the MACH or the payment reverted.
       let machineTokenUnpayable = false
-      for (const route of machineTokenRoutes) {
+      if (machineToken) {
+        const calls = toTransferCalls(machineToken)
         // Paying in MACH is optional. A scoped account that cannot may still pay the currency.
-        const payer = await resolveAccount({ calls: route.calls, kind: 'executeCalls' }).catch(
-          () => undefined,
-        )
-        if (!payer) continue
-        if (!route.token) {
-          // The swapper route behaves exactly as before `machTokenAccepted` existed.
+        const payer = await resolveAccount({ calls, kind: 'executeCalls' }).catch(() => undefined)
+        if (payer) {
+          const payable = await MachineTokenCharge.canPayDirect(client, {
+            account: payer,
+            amount: BigInt(amount),
+            calls,
+            token: machineToken,
+          })
+          // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
+          const feeToken = payable ? await resolveMachineTokenGas(payer) : undefined
+          if (!payable) machineTokenUnpayable = true
+          else if (feeToken !== undefined) {
+            machineTokenPayment = { calls, feeToken }
+            account = payer
+          }
+        }
+      }
+
+      // v1 (`machineTokenEnabled`): the legacy swapper route, unchanged and independent of v2.
+      const swapperRoute =
+        !machineTokenPayment && methodDetails?.machineTokenEnabled === true
+          ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
+          : undefined
+      if (swapperRoute) {
+        // A machine-token route is optional. A scoped account that cannot
+        // execute it may still be able to satisfy the direct payment.
+        const payer = await resolveAccount({
+          calls: swapperRoute.calls,
+          kind: 'executeCalls',
+        }).catch(() => undefined)
+        if (payer) {
           const found = await MachineTokenCharge.findRoute(client, {
             account: payer.address,
             chainId,
             currency,
             transfers,
           })
-          if (!found) {
-            machineTokenUnpayable = true
-            continue
+          if (!found) machineTokenUnpayable = true
+          else {
+            const feeToken =
+              explicitFeeToken ??
+              (await resolveFeeToken({
+                account: payer.address,
+                allowedTokens: defaultFeeTokens(chainId),
+                candidateTokens: defaultFeeTokens(chainId),
+                client,
+                prioritizeCandidates: true,
+              }))
+            machineTokenPayment = { calls: found.calls, feeToken: feeToken ?? null }
+            account = payer
           }
-          const feeToken =
-            explicitFeeToken ??
-            (await resolveFeeToken({
-              account: payer.address,
-              allowedTokens: defaultFeeTokens(chainId),
-              candidateTokens: defaultFeeTokens(chainId),
-              client,
-              prioritizeCandidates: true,
-            }))
-          machineTokenPayment = { calls: route.calls, feeToken: feeToken ?? null }
-          account = payer
-          break
         }
-        const payable = await MachineTokenCharge.canPayDirect(client, {
-          account: payer,
-          amount: BigInt(amount),
-          calls: route.calls,
-          token: route.token,
-        })
-        if (!payable) {
-          machineTokenUnpayable = true
-          continue
-        }
-        const feeToken = await resolveMachineTokenGas(payer)
-        // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
-        if (feeToken === undefined) continue
-        machineTokenPayment = { calls: route.calls, feeToken }
-        account = payer
-        break
       }
 
       let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
@@ -789,6 +787,13 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Whether to pay a `machTokenAccepted` challenge with a direct MACH transfer, 1:1 with the
+     * challenge currency, when the account holds enough MACH. Independent of `currencies`.
+     *
+     * @default true
+     */
+    machTokenAccepted?: boolean | undefined
     /**
      * Token the payer pays its transaction fee in, when the challenge is not fee-sponsored.
      * Set it for an access key whose spending limits do not cover the default fee token,

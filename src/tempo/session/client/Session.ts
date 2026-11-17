@@ -248,9 +248,8 @@ export function session(parameters: session.Parameters = {}) {
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
   /**
-   * Resolves a challenge's context. A `currencies` allowlist without the chain's MACH keeps new
-   * spending in the advertised currency, so MACH funding and a server snapshot of a MACH channel
-   * are ignored. A close only settles what a channel already spent, so it still reaches an
+   * Resolves a challenge's context. With `machTokenAccepted: false`, new spending stays in the
+   * advertised currency, so MACH funding and a server snapshot of a MACH channel are ignored. A close only settles what a channel already spent, so it still reaches an
    * existing MACH channel and its refund.
    */
   const resolveContext = async (
@@ -265,7 +264,7 @@ export function session(parameters: session.Parameters = {}) {
       getClient,
     })
     const { chainId, snapshot } = resolved
-    if (options.close || MachineTokenCharge.isAllowed(policy.currencies, chainId)) return resolved
+    if (options.close || parameters.machTokenAccepted !== false) return resolved
     const machineSnapshot =
       snapshot &&
       MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
@@ -640,6 +639,14 @@ export declare namespace session {
        * channel already bound to another origin is rejected rather than overwritten or reused.
        */
       channelStore?: ChannelStore | undefined
+      /**
+       * Whether to fund a `machTokenAccepted` challenge's channel in MACH, 1:1 with the challenge
+       * currency, when the account holds enough MACH. Independent of `currencies`. Set `false`
+       * for a `channelStore` that holds only the challenge currency's channel.
+       *
+       * @default true
+       */
+      machTokenAccepted?: boolean | undefined
       /**
        * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
        * case-insensitively. Offers in other currencies are skipped during selection and

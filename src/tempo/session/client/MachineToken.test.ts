@@ -218,7 +218,7 @@ describe('session machTokenAccepted', () => {
     expect(calls).toEqual([])
   })
 
-  test('opens in the challenge currency when the currencies allowlist leaves MACH out', async () => {
+  test('opens in MACH even when the currencies allowlist leaves MACH out', async () => {
     const method = session({
       account,
       currencies: [currency],
@@ -230,10 +230,25 @@ describe('session machTokenAccepted', () => {
       await method.createCredential({ challenge: makeChallenge(), context: {} }),
     )
 
+    expect(open.descriptor.token).toBe(mach)
+  })
+
+  test('opens in the challenge currency when machTokenAccepted is off', async () => {
+    const method = session({
+      account,
+      machTokenAccepted: false,
+      decimals: 0,
+      getClient: () => createTestClient({ machBalance: 1_000n }),
+    })
+
+    const open = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+
     expect(open.descriptor.token).toBe(currency)
   })
 
-  test('keeps a single-scope store on the challenge currency when the allowlist leaves MACH out', async () => {
+  test('keeps a single-scope store on the challenge currency when machTokenAccepted is off', async () => {
     const open = async (machBalance: bigint) => {
       const backing = createChannelStore()
       const expected = key(currency)
@@ -259,7 +274,7 @@ describe('session machTokenAccepted', () => {
       const method = session({
         account,
         channelStore,
-        currencies: [currency],
+        machTokenAccepted: false,
         decimals: 0,
         getClient: () => createTestClient({ machBalance }),
       })
@@ -270,10 +285,10 @@ describe('session machTokenAccepted', () => {
     expect((await open(0n)).descriptor.token).toBe(currency)
   })
 
-  test('ignores a MACH channel snapshot when the currencies allowlist leaves MACH out', async () => {
+  test('ignores a MACH channel snapshot when machTokenAccepted is off', async () => {
     const method = session({
       account,
-      currencies: [currency],
+      machTokenAccepted: false,
       decimals: 0,
       getClient: () => createTestClient({ machBalance: 1_000n }),
     })
@@ -308,10 +323,10 @@ describe('session machTokenAccepted', () => {
     expect(open.descriptor.token).toBe(currency)
   })
 
-  test('closes an existing MACH channel even when the currencies allowlist leaves MACH out', async () => {
+  test('closes an existing MACH channel even when machTokenAccepted is off', async () => {
     const method = session({
       account,
-      currencies: [currency],
+      machTokenAccepted: false,
       decimals: 0,
       getClient: () => createTestClient({ machBalance: 1_000n }),
     })
