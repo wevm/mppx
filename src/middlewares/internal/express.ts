@@ -120,7 +120,9 @@ export function wrapResponse(
     if (!response.writableNeedDrain) response.emit('drain')
   })
   body.on('error', () => {})
+  let closed = false
   response.once('close', () => {
+    closed = true
     body.destroy()
     if (!response.writableFinished) {
       const error = failed ?? new Error('Response closed before paid delivery completed.')
@@ -193,7 +195,16 @@ export function wrapResponse(
         acknowledgeWrites()
         for (const name of response.getHeaderNames()) response.removeHeader(name)
         try {
-          if (head) await finished(body, { cleanup: true })
+          if (head) {
+            try {
+              await finished(body, { cleanup: true })
+            } catch (error) {
+              // The client left before the handler ended. The close listener already
+              // completed pending callbacks, so this is not a handler error.
+              if (closed) return
+              throw error
+            }
+          }
           await NodeListener.sendResponse(output, wrapped)
         } finally {
           // A replacement response may finish without consuming the handler's body.

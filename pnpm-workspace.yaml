@@ -117,3 +117,5 @@ auditConfig:
   ignoreGhsas:
     # zod 3 has no patched release; only @x402/core (zod ^3, an optional peer) pulls it in.
     - GHSA-mrhx-c7xc-m3w5
+    # picomatch has no patched release; only dev tooling (changesets, vite, tinyglobby) pulls it in.
+    - GHSA-fc5q-39xc-vjpf

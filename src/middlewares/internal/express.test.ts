@@ -132,6 +132,25 @@ test('HEAD allows callback-driven handlers to finish before native end', async (
   await vi.waitFor(() => expect(ended).toHaveBeenCalledExactlyOnceWith(undefined))
 })
 
+test('HEAD client abort before handler end does not report a handler error', async () => {
+  const onError = vi.fn()
+  const written = vi.fn()
+  const server = await serve(
+    (res) => {
+      res.write('one', written)
+    },
+    (r) => r,
+    onError,
+  )
+  const controller = new AbortController()
+  const request = fetch(server.url, { method: 'HEAD', signal: controller.signal })
+  await vi.waitFor(() => expect(written).toHaveBeenCalled())
+  controller.abort()
+  await expect(request).rejects.toThrow()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(onError).not.toHaveBeenCalled()
+})
+
 test('preserves repeated raw headers and undefined status-message overload', async () => {
   const wrap = vi.fn((response: Response) => response)
   const server = await serve((res) => {
