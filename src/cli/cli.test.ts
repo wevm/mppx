@@ -2137,6 +2137,27 @@ export default defineConfig({ methods: [alpha] })
     }
   })
 
+  test('does not pay again when the answered challenge returns with new display text', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential) => ({
+      challenges: [
+        credential ? { ...challenge, description: 'Payment was not accepted' } : challenge,
+      ],
+    }))
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(2)
+      expect(credentialIds(requests)).toEqual([challenge.id])
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
   test('reports a rejected payment when the new 402 offers no challenge', async () => {
     const config = writeAlphaConfig()
     const challenge = alphaChallenge()

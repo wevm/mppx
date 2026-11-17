@@ -270,6 +270,18 @@ async function bufferResponse(response: Response): Promise<Response> {
   return buffered
 }
 
+/**
+ * Identifies a challenge the CLI has answered. A native MPP challenge is its ID, which binds every
+ * field that can change what is paid, so display text such as `description` can't make an
+ * answered challenge look new. x402 challenges carry synthetic positional IDs, so they are
+ * identified by their payment fields instead.
+ */
+function answeredChallengeKey(challenge: Challenge.Challenge): string {
+  if (!x402_ChallengeBrand.is(challenge)) return `mpp:${challenge.id}`
+  const { description: _, id: __, ...identity } = challenge
+  return `x402:${Challenge.serialize({ ...identity, id: '' } as Challenge.Challenge)}`
+}
+
 /** Most challenge rounds one paid request may take, matching the client's fetch. */
 const maxPaymentRounds = 3
 
@@ -291,7 +303,7 @@ async function hasUnansweredChallenge(
     ignoreX402ResponseUrl: options.ignoreX402ResponseUrl,
   }).catch(() => [])
   const unanswered = filterChallengesByCurrency(offered, options.currency).filter(
-    (challenge) => !options.answered.has(Challenge.serialize(challenge)),
+    (challenge) => !options.answered.has(answeredChallengeKey(challenge)),
   )
   return selectChallenge(unanswered, options.config) !== undefined
 }
@@ -688,7 +700,7 @@ const cli = Cli.create('mppx', {
           await collectChallenges(challengeResponse, c.options.protocol, {
             ignoreX402ResponseUrl,
           })
-        ).filter((challenge) => !answeredChallenges.has(Challenge.serialize(challenge)))
+        ).filter((challenge) => !answeredChallenges.has(answeredChallengeKey(challenge)))
         if (offeredChallenges.length === 0)
           return c.error({
             code: 'UNSUPPORTED_PROTOCOL',
@@ -1000,7 +1012,7 @@ const cli = Cli.create('mppx', {
           credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
         }
 
-        answeredChallenges.add(Challenge.serialize(challenge))
+        answeredChallenges.add(answeredChallengeKey(challenge))
         // A 402 to a credential that offers a payable challenge not answered yet starts a new
         // challenge round, as the client's fetch does. For example, a zero-amount proof for a
         // wallet without credit is answered with a 402 offering only the real charge. A configured
