@@ -6,6 +6,7 @@ import * as path from 'node:path'
 import type { Address, Hex } from 'viem'
 
 import * as Challenge from '../../Challenge.js'
+import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import { resolveEscrow, type ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import {
   deserializeEntry,
@@ -809,7 +810,14 @@ function assertChallengeMatchesChannel(
   const token = normalizeAddress(challenge.request.currency, 'challenge currency', file)
   if (payee !== channel.descriptor.payee.toLowerCase())
     throw stateError(file, 'Session challenge payee does not match the channel.')
-  if (token !== channel.descriptor.token.toLowerCase())
+  // A `machTokenAccepted` challenge also accepts a channel funded in the chain's MACH.
+  const machineToken =
+    isObject(challenge.request.methodDetails) &&
+    challenge.request.methodDetails.machTokenAccepted === true
+      ? MachineTokenCharge.getToken(channel.chainId)?.toLowerCase()
+      : undefined
+  const channelToken = channel.descriptor.token.toLowerCase()
+  if (token !== channelToken && machineToken !== channelToken)
     throw stateError(file, 'Session challenge token does not match the channel.')
   if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw stateError(file, 'Session challenge escrow does not match the channel.')

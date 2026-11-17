@@ -463,7 +463,13 @@ describe('toChannelStore', () => {
       status: 'open',
       account: { address: payer },
       endpoint: 'https://api.example.test/query?chainId=testnet',
-      challenge: challenge(),
+      challenge: {
+        ...challenge(),
+        request: {
+          ...challenge().request,
+          methodDetails: { chainId: 42431, escrowContract: escrow, machTokenAccepted: true },
+        },
+      },
     })
     const machineToken = '0x20c000000000000000000000f37de3740adec032' as Address
     const machineTokenScope = scope({ token: machineToken })
