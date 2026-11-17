@@ -258,6 +258,111 @@ async function collectChallenges(
   return []
 }
 
+/** Largest 402 body the CLI reads to look for challenges in it. */
+const maxChallengeBodyBytes = 1024 * 1024
+
+/**
+ * Reads up to `maxBytes` of a response body so the response can be inspected and read again. A
+ * longer body is not read further: the returned response streams what was read and then the rest,
+ * and `complete` is false.
+ */
+async function bufferResponse(
+  response: Response,
+  maxBytes: number,
+): Promise<{ complete: boolean; response: Response }> {
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = response.body?.getReader()
+  let complete = true
+  if (reader)
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      size += value.byteLength
+      if (size > maxBytes) {
+        complete = false
+        break
+      }
+    }
+  const body = complete
+    ? reader
+      ? new Blob(chunks as BlobPart[])
+      : null
+    : new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk)
+        },
+        async pull(controller) {
+          const { done, value } = await reader!.read()
+          if (done) controller.close()
+          else controller.enqueue(value)
+        },
+        cancel(reason) {
+          return reader!.cancel(reason)
+        },
+      })
+  const buffered = new Response(body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  })
+  Object.defineProperty(buffered, 'url', { value: response.url })
+  return { complete, response: buffered }
+}
+
+/**
+ * Identifies the challenge a sent credential answers. A native MPP challenge is its ID, which binds every
+ * field that can change what is paid, so display text such as `description` can't make an
+ * answered challenge look new. x402 challenges carry synthetic positional IDs, so they are
+ * identified by their payment fields instead.
+ */
+function answeredChallengeKey(challenge: Challenge.Challenge): string {
+  if (!x402_ChallengeBrand.is(challenge)) return `mpp:${challenge.id}`
+  const { description: _, id: __, request, ...identity } = challenge
+  const { description: ___, ...resource } = (request.resource ?? {}) as Record<string, unknown>
+  return `x402:${Challenge.serialize({
+    ...identity,
+    id: '',
+    request: { ...request, ...(request.resource ? { resource } : {}) },
+  } as Challenge.Challenge)}`
+}
+
+/** Returns whether two response URLs share an origin. An unknown URL is treated as the same. */
+function isSameOrigin(a: string, b: string): boolean {
+  if (!a || !b) return true
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
+/** Most challenge rounds one paid request may take, matching the client's fetch. */
+const maxPaymentRounds = 3
+
+/**
+ * Returns whether a 402 answering a credential offers a challenge the CLI can pay, so the request
+ * continues with a new challenge round instead of failing.
+ */
+async function hasPayableChallenge(
+  response: Response,
+  options: {
+    config?: Parameters<typeof selectChallenge>[1]
+    currency?: string | undefined
+    ignoreX402ResponseUrl?: boolean | undefined
+    protocol: ProtocolOption
+  },
+): Promise<boolean> {
+  const offered = await collectChallenges(response, options.protocol, {
+    ignoreX402ResponseUrl: options.ignoreX402ResponseUrl,
+  }).catch(() => [])
+  return (
+    selectChallenge(filterChallengesByCurrency(offered, options.currency), options.config) !==
+    undefined
+  )
+}
+
 /**
  * Presents the CLI-selected challenge to credential creation without serializing it again.
  *
@@ -613,7 +718,7 @@ const cli = Cli.create('mppx', {
         init,
         c.options.location ?? false,
       )
-      const challengeResponse = challengeRequest.response
+      let challengeResponse = challengeRequest.response
       if (insecure && challengeResponse.status === 402)
         return c.error({
           code: 'INSECURE_PAYMENT',
@@ -639,414 +744,475 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const challengeResponseUrl = challengeResponse.url
-        ? new URL(challengeResponse.url)
-        : undefined
-      const ignoreX402ResponseUrl =
-        initialTarget.host !== undefined && challengeResponseUrl?.hostname === '127.0.0.1'
-      const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol, {
-        ignoreX402ResponseUrl,
-      })
-      if (offeredChallenges.length === 0)
-        return c.error({
-          code: 'UNSUPPORTED_PROTOCOL',
-          message:
-            c.options.protocol === 'auto'
-              ? 'Server did not offer a payment challenge.'
-              : `Server did not offer an ${c.options.protocol} payment challenge.`,
-          exitCode: 2,
+      // The credential last sent and the challenge it answers: that challenge offered again gets the
+      // same credential, as the client's fetch does, so it is not paid twice.
+      let lastSent: { credential: string; key: string } | undefined
+      for (let round = 0; ; round++) {
+        const challengeResponseUrl = challengeResponse.url
+          ? new URL(challengeResponse.url)
+          : undefined
+        const ignoreX402ResponseUrl =
+          initialTarget.host !== undefined && challengeResponseUrl?.hostname === '127.0.0.1'
+        const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol, {
+          ignoreX402ResponseUrl,
         })
-      const currencyChallenges = filterChallengesByCurrency(offeredChallenges, c.options.currency)
-      if (c.options.currency && currencyChallenges.length === 0) {
-        const offers = offeredChallenges
-          .map(offeredCurrency)
-          .filter((currency): currency is string => typeof currency === 'string')
-          .join(', ')
-        return c.error({
-          code: 'UNSUPPORTED_CURRENCY',
-          message: `Server did not offer payment currency ${c.options.currency}.${offers ? ` Offered currencies: ${offers}.` : ''}`,
-          exitCode: 2,
-        })
-      }
-      // Configured methods own their payer and preference ordering. The CLI
-      // wallet's balances cannot determine which of their offers are payable.
-      const challenges = flattenConfigMethods(loaded?.config)?.length
-        ? currencyChallenges
-        : await orderTempoChargeChallengesByBalance(currencyChallenges, {
-            options: {
-              account: c.options.account,
-              network: c.options.network,
-              rpcUrl: c.options.rpcUrl,
-            },
-          })
-
-      const selected = selectChallenge(challenges, loaded?.config)
-      if (!selected) {
-        const offers = challenges
-          .map((challenge) => `${challenge.method}/${challenge.intent}`)
-          .join(', ')
-        return c.error({
-          code: 'UNSUPPORTED_METHOD',
-          message: `Unsupported payment method. Server offers: ${offers}. Add it to mppx.config.ts using defineConfig().`,
-          exitCode: 2,
-        })
-      }
-
-      const { challenge, plugin, method: configMethod } = selected
-      const isX402Challenge = x402_ChallengeBrand.is(challenge)
-      const mppCredentialTarget = isX402Challenge
-        ? undefined
-        : resolveMppCredentialTarget(url, initialTarget, challengeRequest.logicalUrl)
-      // A zero-amount Tempo proof authenticates the payer at the challenge realm, so sign one only
-      // for the server that owns that realm.
-      if (!isX402Challenge) {
-        try {
-          ProofRealm.assert(challenge, new URL(challengeRequest.logicalUrl || url), undefined)
-        } catch (error) {
+        if (offeredChallenges.length === 0)
           return c.error({
-            code: 'UNTRUSTED_PROOF_REALM',
-            message: (error as Error).message,
-            exitCode: 1,
+            code: 'UNSUPPORTED_PROTOCOL',
+            message:
+              c.options.protocol === 'auto'
+                ? 'Server did not offer a payment challenge.'
+                : `Server did not offer an ${c.options.protocol} payment challenge.`,
+            exitCode: 2,
+          })
+        const currencyChallenges = filterChallengesByCurrency(offeredChallenges, c.options.currency)
+        if (c.options.currency && currencyChallenges.length === 0) {
+          const offers = offeredChallenges
+            .map(offeredCurrency)
+            .filter((currency): currency is string => typeof currency === 'string')
+            .join(', ')
+          return c.error({
+            code: 'UNSUPPORTED_CURRENCY',
+            message: `Server did not offer payment currency ${c.options.currency}.${offers ? ` Offered currencies: ${offers}.` : ''}`,
+            exitCode: 2,
           })
         }
-      }
-      const selectedChallengeResponse = toSelectedChallengeResponse(challenge, challengeResponse)
+        // Configured methods own their payer and preference ordering. The CLI
+        // wallet's balances cannot determine which of their offers are payable.
+        const challenges = flattenConfigMethods(loaded?.config)?.length
+          ? currencyChallenges
+          : await orderTempoChargeChallengesByBalance(currencyChallenges, {
+              options: {
+                account: c.options.account,
+                network: c.options.network,
+                rpcUrl: c.options.rpcUrl,
+              },
+            })
 
-      let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
-      let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
-      let explorerUrl: string | undefined
-      let pluginResult: Awaited<ReturnType<Plugin['setup']>> | undefined
-      if (plugin) {
-        pluginResult = await plugin.setup({
-          challenge,
-          options: {
-            account: c.options.account,
-            autoSwap: c.options.autoSwap,
-            network: c.options.network,
-            payWith: c.options.payWith,
-            rpcUrl: c.options.rpcUrl,
-            slippage: c.options.slippage,
-          },
-          methodOpts,
-        })
-        tokenSymbol = pluginResult.tokenSymbol
-        tokenDecimals = pluginResult.tokenDecimals
-        explorerUrl = pluginResult.explorerUrl
-      }
+        // The challenge answered in the previous round, when offered again, is resent before any
+        // other offer, so a lower balance after paying it can't make the CLI pay a second offer.
+        const previousIndex = lastSent
+          ? challenges.findIndex((offer) => answeredChallengeKey(offer) === lastSent!.key)
+          : -1
+        if (previousIndex > 0) challenges.unshift(...challenges.splice(previousIndex, 1))
 
-      const confirmEnabled = c.options.silent ? false : c.options.confirm
+        const selected = selectChallenge(challenges, loaded?.config)
+        if (!selected) {
+          const offers = challenges
+            .map((challenge) => `${challenge.method}/${challenge.intent}`)
+            .join(', ')
+          return c.error({
+            code: 'UNSUPPORTED_METHOD',
+            message: `Unsupported payment method. Server offers: ${offers}. Add it to mppx.config.ts using defineConfig().`,
+            exitCode: 2,
+          })
+        }
 
-      // Display challenge
-      const shownKeys = new Set<string>()
-      {
-        printResponseHeaders(
-          challengeResponse,
-          challenge.method === 'tempo' && challenge.intent === 'session' && c.options.include
-            ? { ...headerOpts, include: false, verbose: Math.max(headerOpts.verbose, 2) }
-            : headerOpts,
-        )
-
-        const challengeRows = (() => {
-          const skip = new Set(['id', 'request'])
-          const rows: [string, string][] = []
-          for (const [key, value] of Object.entries(challenge)) {
-            if (skip.has(key) || value === undefined) continue
-            rows.push([key, fmtChallengeValue(key, value)])
+        const { challenge, plugin, method: configMethod } = selected
+        const isX402Challenge = x402_ChallengeBrand.is(challenge)
+        const mppCredentialTarget = isX402Challenge
+          ? undefined
+          : resolveMppCredentialTarget(url, initialTarget, challengeRequest.logicalUrl)
+        // A zero-amount Tempo proof authenticates the payer at the challenge realm, so sign one only
+        // for the server that owns that realm.
+        if (!isX402Challenge) {
+          try {
+            ProofRealm.assert(challenge, new URL(challengeRequest.logicalUrl || url), undefined)
+          } catch (error) {
+            return c.error({
+              code: 'UNTRUSTED_PROOF_REALM',
+              message: (error as Error).message,
+              exitCode: 1,
+            })
           }
-          return rows.sort(([a], [b]) => a.localeCompare(b))
-        })()
+        }
+        const selectedChallengeResponse = toSelectedChallengeResponse(challenge, challengeResponse)
 
-        const fmtCtx = { tokenSymbol, tokenDecimals, explorerUrl }
-        const requestRows = (() => {
-          const skip = new Set(['decimals', 'currency', 'methodDetails'])
-          const rows: [string, string][] = []
-          for (const [key, value] of Object.entries(challenge.request)) {
-            if (skip.has(key) || value === undefined) continue
-            rows.push([key, fmtRequestValue(key, value, fmtCtx)])
-          }
-          return rows.sort(([a], [b]) => a.localeCompare(b))
-        })()
+        let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
+        let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
+        let explorerUrl: string | undefined
+        let pluginResult: Awaited<ReturnType<Plugin['setup']>> | undefined
+        if (plugin) {
+          pluginResult = await plugin.setup({
+            challenge,
+            options: {
+              account: c.options.account,
+              autoSwap: c.options.autoSwap,
+              network: c.options.network,
+              payWith: c.options.payWith,
+              rpcUrl: c.options.rpcUrl,
+              slippage: c.options.slippage,
+            },
+            methodOpts,
+          })
+          tokenSymbol = pluginResult.tokenSymbol
+          tokenDecimals = pluginResult.tokenDecimals
+          explorerUrl = pluginResult.explorerUrl
+        }
 
-        const detailRows = (() => {
-          const methodDetails = challenge.request.methodDetails as
-            | Record<string, unknown>
-            | undefined
-          if (!methodDetails) return []
-          const rows: [string, string][] = []
-          for (const [key, value] of Object.entries(methodDetails)) {
-            if (value === undefined) continue
-            if (key === 'memo' && typeof value === 'string') {
-              const decoded = decodeMemo(value)
-              rows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
-            } else {
+        const confirmEnabled = c.options.silent ? false : c.options.confirm
+
+        // Display challenge
+        const shownKeys = new Set<string>()
+        {
+          printResponseHeaders(
+            challengeResponse,
+            challenge.method === 'tempo' && challenge.intent === 'session' && c.options.include
+              ? { ...headerOpts, include: false, verbose: Math.max(headerOpts.verbose, 2) }
+              : headerOpts,
+          )
+
+          const challengeRows = (() => {
+            const skip = new Set(['id', 'request'])
+            const rows: [string, string][] = []
+            for (const [key, value] of Object.entries(challenge)) {
+              if (skip.has(key) || value === undefined) continue
+              rows.push([key, fmtChallengeValue(key, value)])
+            }
+            return rows.sort(([a], [b]) => a.localeCompare(b))
+          })()
+
+          const fmtCtx = { tokenSymbol, tokenDecimals, explorerUrl }
+          const requestRows = (() => {
+            const skip = new Set(['decimals', 'currency', 'methodDetails'])
+            const rows: [string, string][] = []
+            for (const [key, value] of Object.entries(challenge.request)) {
+              if (skip.has(key) || value === undefined) continue
               rows.push([key, fmtRequestValue(key, value, fmtCtx)])
             }
+            return rows.sort(([a], [b]) => a.localeCompare(b))
+          })()
+
+          const detailRows = (() => {
+            const methodDetails = challenge.request.methodDetails as
+              | Record<string, unknown>
+              | undefined
+            if (!methodDetails) return []
+            const rows: [string, string][] = []
+            for (const [key, value] of Object.entries(methodDetails)) {
+              if (value === undefined) continue
+              if (key === 'memo' && typeof value === 'string') {
+                const decoded = decodeMemo(value)
+                rows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
+              } else {
+                rows.push([key, fmtRequestValue(key, value, fmtCtx)])
+              }
+            }
+            return rows.sort(([a], [b]) => a.localeCompare(b))
+          })()
+
+          const sections: [string, [string, string][]][] = [
+            ['Challenge', challengeRows],
+            ['Request', requestRows],
+            ...(detailRows.length ? [['Details', detailRows] as [string, [string, string][]]] : []),
+          ]
+          for (const [, rows] of sections) for (const [key] of rows) shownKeys.add(key)
+          const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
+          const indent = `  ${''.padEnd(pad)}  `
+
+          if (c.options.verbose >= 1 || confirmEnabled) {
+            info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
+            for (const [title, rows] of sections) {
+              info(`${pc.bold(title)}\n`)
+              for (const [label, value] of rows) {
+                const [first, ...rest] = value.split('\n')
+                info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
+                for (const line of rest) info(`${indent}${line}\n`)
+              }
+            }
           }
-          return rows.sort(([a], [b]) => a.localeCompare(b))
-        })()
-
-        const sections: [string, [string, string][]][] = [
-          ['Challenge', challengeRows],
-          ['Request', requestRows],
-          ...(detailRows.length ? [['Details', detailRows] as [string, [string, string][]]] : []),
-        ]
-        for (const [, rows] of sections) for (const [key] of rows) shownKeys.add(key)
-        const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
-        const indent = `  ${''.padEnd(pad)}  `
-
-        if (c.options.verbose >= 1 || confirmEnabled) {
-          info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
-          for (const [title, rows] of sections) {
-            info(`${pc.bold(title)}\n`)
-            for (const [label, value] of rows) {
-              const [first, ...rest] = value.split('\n')
-              info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
-              for (const line of rest) info(`${indent}${line}\n`)
+          if (confirmEnabled) {
+            info('\n')
+            const ok = await confirm(`Proceed with ${challenge.intent}?`, true)
+            if (!ok) {
+              info('Aborted.\n')
+              return
             }
           }
         }
-        if (confirmEnabled) {
-          info('\n')
-          const ok = await confirm(`Proceed with ${challenge.intent}?`, true)
-          if (!ok) {
-            info('Aborted.\n')
-            return
-          }
-        }
-      }
 
-      const persistentSessionAccount =
-        process.env.MPPX_PRIVATE_KEY?.trim() ||
-        !isTempoAccount(resolveAccountName(c.options.account))
-      // Configured methods own their signing policies and channel storage.
-      // Rebuilding a persistent manager would discard those policies.
-      if (isTempoSessionChallenge(challenge) && persistentSessionAccount && !configMethod) {
-        try {
-          const credentialContext = await preparePayment(
-            challenge,
-            loaded?.config.extensions,
-            pluginResult?.credentialContext,
-          )
-          await runPersistentSessionRequest({
-            challenge,
-            challengeResponse: selectedChallengeResponse,
-            credentialContext,
-            endpoint: challengeRequest.logicalUrl,
-            fetch: targetFetch,
-            fetchInput: mppCredentialTarget!.url,
-            init: { ...challengeRequest.init, redirect: 'manual' },
-            info,
-            methodOptions: methodOpts,
-            options: {
-              account: c.options.account,
-              fail: c.options.fail,
-              include: c.options.include,
-              network: c.options.network,
-              rpcUrl: c.options.rpcUrl,
-              session: c.options.session,
-              silent: c.options.silent,
-              verbose: c.options.verbose,
-            },
-            registry: sessionRegistry,
-          })
-        } catch (error) {
-          return sessionCommandError(error, 'SESSION_REQUEST_FAILED')
-        }
-        return
-      }
-      if (c.options.session !== 'auto')
-        return c.error({
-          code: 'UNSUPPORTED_SESSION',
-          message:
-            configMethod && isTempoSessionChallenge(challenge)
-              ? '--session cannot override a configured session method. Configure its channelStore instead.'
-              : '--session requires a tempo/session payment challenge.',
-          exitCode: 2,
-        })
-
-      const credentialContext =
-        configMethod && isTempoSessionChallenge(challenge)
-          ? undefined
-          : await preparePayment(
+        const persistentSessionAccount =
+          process.env.MPPX_PRIVATE_KEY?.trim() ||
+          !isTempoAccount(resolveAccountName(c.options.account))
+        // Configured methods own their signing policies and channel storage.
+        // Rebuilding a persistent manager would discard those policies.
+        if (isTempoSessionChallenge(challenge) && persistentSessionAccount && !configMethod) {
+          try {
+            const credentialContext = await preparePayment(
               challenge,
               loaded?.config.extensions,
               pluginResult?.credentialContext,
             )
-
-      let credentialResponse: Response
-      let credential: string | undefined
-      if (configMethod && isTempoSessionChallenge(challenge)) {
-        // Reuse the selected challenge, then let the method settle channel state
-        // and handle SSE vouchers through the payment-aware fetch lifecycle.
-        let initialResponse: Response | undefined = selectedChallengeResponse
-        const mppx = Mppx.create({
-          methods: [configMethod],
-          polyfill: false,
-          async onChallenge(retry, { createCredential }) {
-            const context = await preparePayment(
-              retry,
-              loaded?.config.extensions,
-              pluginResult?.credentialContext,
-            )
-            assertSamePaymentRequest(challenge, retry)
-            return createCredential(context as never)
-          },
-          fetch: async (input, requestInit) => {
-            if (initialResponse) {
-              const response = initialResponse
-              initialResponse = undefined
-              return response
-            }
-            return targetFetch(input, requestInit)
-          },
-        })
-        credentialResponse = await mppx.fetch(mppCredentialTarget!.url, {
-          ...challengeRequest.init,
-          context: credentialContext as never,
-          redirect: 'manual',
-        })
-      } else {
-        // Create credential
-        if (pluginResult?.createCredential)
-          credential = await pluginResult.createCredential(
-            selectedChallengeResponse,
-            credentialContext,
-          )
-        else if (pluginResult) {
-          const mppx = Mppx.create({
-            methods: pluginResult.methods,
-            polyfill: false,
-            transport: selectedChallengeTransport(challenge),
+            await runPersistentSessionRequest({
+              challenge,
+              challengeResponse: selectedChallengeResponse,
+              credentialContext,
+              endpoint: challengeRequest.logicalUrl,
+              fetch: targetFetch,
+              fetchInput: mppCredentialTarget!.url,
+              init: { ...challengeRequest.init, redirect: 'manual' },
+              info,
+              methodOptions: methodOpts,
+              options: {
+                account: c.options.account,
+                fail: c.options.fail,
+                include: c.options.include,
+                network: c.options.network,
+                rpcUrl: c.options.rpcUrl,
+                session: c.options.session,
+                silent: c.options.silent,
+                verbose: c.options.verbose,
+              },
+              registry: sessionRegistry,
+            })
+          } catch (error) {
+            return sessionCommandError(error, 'SESSION_REQUEST_FAILED')
+          }
+          return
+        }
+        if (c.options.session !== 'auto')
+          return c.error({
+            code: 'UNSUPPORTED_SESSION',
+            message:
+              configMethod && isTempoSessionChallenge(challenge)
+                ? '--session cannot override a configured session method. Configure its channelStore instead.'
+                : '--session requires a tempo/session payment challenge.',
+            exitCode: 2,
           })
-          credential = await mppx.createCredential(
-            selectedChallengeResponse,
-            credentialContext as undefined,
-          )
-        } else if (configMethod) {
+
+        const credentialContext =
+          configMethod && isTempoSessionChallenge(challenge)
+            ? undefined
+            : await preparePayment(
+                challenge,
+                loaded?.config.extensions,
+                pluginResult?.credentialContext,
+              )
+
+        let credentialResponse: Response
+        let credential: string | undefined
+        if (configMethod && isTempoSessionChallenge(challenge)) {
+          // Reuse the selected challenge, then let the method settle channel state
+          // and handle SSE vouchers through the payment-aware fetch lifecycle.
+          let initialResponse: Response | undefined = selectedChallengeResponse
           const mppx = Mppx.create({
             methods: [configMethod],
             polyfill: false,
-            transport: selectedChallengeTransport(challenge),
+            async onChallenge(retry, { createCredential }) {
+              const context = await preparePayment(
+                retry,
+                loaded?.config.extensions,
+                pluginResult?.credentialContext,
+              )
+              assertSamePaymentRequest(challenge, retry)
+              return createCredential(context as never)
+            },
+            fetch: async (input, requestInit) => {
+              if (initialResponse) {
+                const response = initialResponse
+                initialResponse = undefined
+                return response
+              }
+              return targetFetch(input, requestInit)
+            },
           })
-          credential = await mppx.createCredential(
-            selectedChallengeResponse,
-            credentialContext as never,
-          )
-        } else throw new Error('unreachable')
+          credentialResponse = await mppx.fetch(mppCredentialTarget!.url, {
+            ...challengeRequest.init,
+            context: credentialContext as never,
+            redirect: 'manual',
+          })
+        } else {
+          // Create credential, or resend the one already sent for this challenge
+          if (lastSent?.key === answeredChallengeKey(challenge)) credential = lastSent.credential
+          else if (pluginResult?.createCredential)
+            credential = await pluginResult.createCredential(
+              selectedChallengeResponse,
+              credentialContext,
+            )
+          else if (pluginResult) {
+            const mppx = Mppx.create({
+              methods: pluginResult.methods,
+              polyfill: false,
+              transport: selectedChallengeTransport(challenge),
+            })
+            credential = await mppx.createCredential(
+              selectedChallengeResponse,
+              credentialContext as undefined,
+            )
+          } else if (configMethod) {
+            const mppx = Mppx.create({
+              methods: [configMethod],
+              polyfill: false,
+              transport: selectedChallengeTransport(challenge),
+            })
+            credential = await mppx.createCredential(
+              selectedChallengeResponse,
+              credentialContext as never,
+            )
+          } else throw new Error('unreachable')
 
-        // Send credential and get response
-        const credentialHeader = isX402Challenge
-          ? x402_Types.paymentSignatureHeader
-          : Challenge.credentialHeader(challenge)
-        const credentialHeaders = {
-          ...normalizeHeaders(challengeRequest.init.headers),
-          [credentialHeader]: credential,
-        }
-        const credentialTarget = isX402Challenge
-          ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
-          : mppCredentialTarget!
-        if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
-        plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
-
-        const credentialFetchInit = {
-          ...challengeRequest.init,
-          redirect: 'manual' as const,
-          headers: credentialHeaders,
-        }
-        if (c.options.verbose >= 2)
-          printRequestHeaders(credentialTarget.url, credentialFetchInit, info)
-        credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
-      }
-
-      if (c.options.fail && credentialResponse.status >= 400)
-        return c.error({
-          code: 'HTTP_ERROR',
-          message: `HTTP error ${credentialResponse.status}`,
-          exitCode: 22,
-        })
-
-      if (credentialResponse.status === 402) {
-        const body = await credentialResponse.text()
-        info(`${pc.bold(pc.red('Payment Rejected'))}\n`)
-        try {
-          const problem = JSON.parse(body) as Record<string, unknown>
-          const rows: [string, string][] = []
-          for (const [key, value] of Object.entries(problem)) {
-            if (value === undefined) continue
-            rows.push([key, fmtProblemValue(value)])
+          // Send credential and get response
+          const credentialHeader = isX402Challenge
+            ? x402_Types.paymentSignatureHeader
+            : Challenge.credentialHeader(challenge)
+          const credentialHeaders = {
+            ...normalizeHeaders(challengeRequest.init.headers),
+            [credentialHeader]: credential,
           }
-          rows.sort(([a], [b]) => a.localeCompare(b))
-          const pad = Math.max(...rows.map(([k]) => k.length))
-          for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-        } catch {
-          if (body) info(`  ${body}\n`)
+          const credentialTarget = isX402Challenge
+            ? resolveFetchTarget((x402ResourceUrl(challenge) ?? challengeResponse.url) || url)
+            : mppCredentialTarget!
+          if (isX402Challenge) setTargetHost(credentialHeaders, credentialTarget.host)
+          plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
+
+          const credentialFetchInit = {
+            ...challengeRequest.init,
+            redirect: 'manual' as const,
+            headers: credentialHeaders,
+          }
+          if (c.options.verbose >= 2)
+            printRequestHeaders(credentialTarget.url, credentialFetchInit, info)
+          credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
         }
-        return c.error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
-      }
 
-      printResponseHeaders(credentialResponse, headerOpts)
+        lastSent =
+          credential === undefined
+            ? undefined
+            : { credential, key: answeredChallengeKey(challenge) }
+        // A 402 to a credential that offers a payable challenge starts a new challenge round, as the
+        // client's fetch does: a new challenge gets a new credential, and the challenge just answered
+        // gets the same credential again. For example, a zero-amount proof for a wallet without credit
+        // is answered with a 402 offering only the real charge. A configured session method already
+        // runs its rounds through the payment-aware fetch.
+        // Only a 402 from the server that issued the first challenges starts a new round: its
+        // challenges are checked against the original request's origin and realm.
+        if (
+          credentialResponse.status === 402 &&
+          !(configMethod && isTempoSessionChallenge(challenge)) &&
+          round + 1 < maxPaymentRounds &&
+          isSameOrigin(credentialResponse.url, challengeRequest.response.url)
+        ) {
+          const payable = (response: Response) =>
+            hasPayableChallenge(response, {
+              config: loaded?.config,
+              currency: c.options.currency,
+              ignoreX402ResponseUrl,
+              protocol: c.options.protocol,
+            })
+          // Challenges in headers decide the round without reading the body. Only a body that may
+          // hold x402 challenges is read, and only up to a limit.
+          const headersOnly = new Response(null, {
+            headers: credentialResponse.headers,
+            status: credentialResponse.status,
+            statusText: credentialResponse.statusText,
+          })
+          Object.defineProperty(headersOnly, 'url', { value: credentialResponse.url })
+          if (await payable(headersOnly.clone())) {
+            await credentialResponse.body?.cancel().catch(() => {})
+            challengeResponse = headersOnly
+            continue
+          }
+          if (c.options.protocol !== 'mpp' && !ignoreX402ResponseUrl) {
+            const buffered = await bufferResponse(credentialResponse, maxChallengeBodyBytes)
+            if (buffered.complete && (await payable(buffered.response.clone()))) {
+              challengeResponse = buffered.response
+              continue
+            }
+            credentialResponse = buffered.response
+          }
+        }
 
-      // Let plugin own the response lifecycle if it wants to
-      const handled =
-        credential &&
-        (await plugin?.handleResponse?.({
-          challenge,
-          credential,
-          response: credentialResponse,
-          fetchUrl,
-          fetchInit: init,
-          silent: c.options.silent,
-          verbose: c.options.verbose,
-          confirmEnabled,
-          confirm,
-          tokenSymbol,
-          tokenDecimals,
-          explorerUrl,
-          shownKeys,
-        }))
+        if (c.options.fail && credentialResponse.status >= 400)
+          return c.error({
+            code: 'HTTP_ERROR',
+            message: `HTTP error ${credentialResponse.status}`,
+            exitCode: 22,
+          })
 
-      if (!handled) {
-        // Default: print receipt + body
-        const receiptHeader = credentialResponse.headers.get(Constants.Headers.paymentReceipt)
-        if (receiptHeader && c.options.verbose >= 1) {
+        if (credentialResponse.status === 402) {
+          const body = await credentialResponse.text()
+          info(`${pc.bold(pc.red('Payment Rejected'))}\n`)
           try {
-            const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
-              string,
-              unknown
-            >
-            info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+            const problem = JSON.parse(body) as Record<string, unknown>
             const rows: [string, string][] = []
-            const channelId = receiptJson.channelId
-            const reference = receiptJson.reference
-            const skipReference = channelId && reference && channelId === reference
-            const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
-            for (const [key, value] of Object.entries(receiptJson)) {
-              if (value === undefined || shownKeys.has(key)) continue
-              if (key === 'reference' && skipReference) continue
-              const formatted = plugin?.formatReceiptField?.(key, value)
-              if (formatted !== undefined) {
-                rows.push([key, formatted])
-              } else if (receiptBalanceKeys.has(key) && typeof value === 'string') {
-                rows.push([
-                  key,
-                  `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                ])
-              } else if (
-                (key === 'reference' || key === 'txHash') &&
-                typeof value === 'string' &&
-                explorerUrl
-              ) {
-                rows.push([key, link(`${explorerUrl}/tx/${value}`, value)])
-              } else rows.push([key, String(value)])
+            for (const [key, value] of Object.entries(problem)) {
+              if (value === undefined) continue
+              rows.push([key, fmtProblemValue(value)])
             }
             rows.sort(([a], [b]) => a.localeCompare(b))
             const pad = Math.max(...rows.map(([k]) => k.length))
             for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-            info('\n')
-          } catch {}
+          } catch {
+            if (body) info(`  ${body}\n`)
+          }
+          return c.error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
         }
 
-        await writeResponseBody(credentialResponse)
+        printResponseHeaders(credentialResponse, headerOpts)
+
+        // Let plugin own the response lifecycle if it wants to
+        const handled =
+          credential &&
+          (await plugin?.handleResponse?.({
+            challenge,
+            credential,
+            response: credentialResponse,
+            fetchUrl,
+            fetchInit: init,
+            silent: c.options.silent,
+            verbose: c.options.verbose,
+            confirmEnabled,
+            confirm,
+            tokenSymbol,
+            tokenDecimals,
+            explorerUrl,
+            shownKeys,
+          }))
+
+        if (!handled) {
+          // Default: print receipt + body
+          const receiptHeader = credentialResponse.headers.get(Constants.Headers.paymentReceipt)
+          if (receiptHeader && c.options.verbose >= 1) {
+            try {
+              const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
+                string,
+                unknown
+              >
+              info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+              const rows: [string, string][] = []
+              const channelId = receiptJson.channelId
+              const reference = receiptJson.reference
+              const skipReference = channelId && reference && channelId === reference
+              const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
+              for (const [key, value] of Object.entries(receiptJson)) {
+                if (value === undefined || shownKeys.has(key)) continue
+                if (key === 'reference' && skipReference) continue
+                const formatted = plugin?.formatReceiptField?.(key, value)
+                if (formatted !== undefined) {
+                  rows.push([key, formatted])
+                } else if (receiptBalanceKeys.has(key) && typeof value === 'string') {
+                  rows.push([
+                    key,
+                    `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                  ])
+                } else if (
+                  (key === 'reference' || key === 'txHash') &&
+                  typeof value === 'string' &&
+                  explorerUrl
+                ) {
+                  rows.push([key, link(`${explorerUrl}/tx/${value}`, value)])
+                } else rows.push([key, String(value)])
+              }
+              rows.sort(([a], [b]) => a.localeCompare(b))
+              const pad = Math.max(...rows.map(([k]) => k.length))
+              for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
+              info('\n')
+            } catch {}
+          }
+
+          await writeResponseBody(credentialResponse)
+        }
+        return
       }
     } catch (err) {
       // Re-throw IncurError so incur's error handler formats it properly
