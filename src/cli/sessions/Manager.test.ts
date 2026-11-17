@@ -311,4 +311,39 @@ describe('CLI session manager adapter', () => {
     ).rejects.toThrow('Close challenge changed the session payee.')
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  test('accepts a MACH channel only for a close challenge that accepts MACH', async () => {
+    const mach = '0x20c000000000000000000000f37de3740ADec032'
+    const machDescriptor = { ...descriptor, token: mach } as ChannelDescriptor
+    const entry = {
+      ...channelEntry(),
+      channelId: Channel.computeId({
+        ...machDescriptor,
+        chainId: 4217,
+        escrow: tip20ChannelEscrow,
+      }),
+      descriptor: machDescriptor,
+    }
+    const close = (machTokenAccepted: boolean) => {
+      const { challenge } = challengeResponse('challenge-1', undefined, {
+        methodDetails: {
+          chainId: 4217,
+          escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+          ...(machTokenAccepted && { machTokenAccepted }),
+        },
+      })
+      return closeWithSessionManager({
+        channel: entry,
+        challenge,
+        fetch: vi.fn(async () => new Response(null, { status: 500 })),
+        input: 'https://api.example.test/resource',
+        manager: managerParameters(channelStore(entry).store),
+        spent: 1n,
+      }).catch((error: Error) => error.message)
+    }
+
+    expect(await close(false)).toBe('Close challenge changed the session token.')
+    expect(await close(true)).not.toBe('Close challenge changed the session token.')
+  })
 })

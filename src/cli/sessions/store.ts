@@ -811,13 +811,10 @@ function assertChallengeMatchesChannel(
   if (payee !== channel.descriptor.payee.toLowerCase())
     throw stateError(file, 'Session challenge payee does not match the channel.')
   // A `machTokenAccepted` challenge also accepts a channel funded in the chain's MACH.
-  const machineToken =
-    isObject(challenge.request.methodDetails) &&
-    challenge.request.methodDetails.machTokenAccepted === true
-      ? MachineTokenCharge.getToken(channel.chainId)?.toLowerCase()
-      : undefined
-  const channelToken = channel.descriptor.token.toLowerCase()
-  if (token !== channelToken && machineToken !== channelToken)
+  if (
+    token !== channel.descriptor.token.toLowerCase() &&
+    !MachineTokenCharge.acceptsToken(challenge.request, channel.chainId, channel.descriptor.token)
+  )
     throw stateError(file, 'Session challenge token does not match the channel.')
   if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw stateError(file, 'Session challenge escrow does not match the channel.')

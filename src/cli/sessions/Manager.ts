@@ -1,5 +1,6 @@
 import * as Challenge from '../../Challenge.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
+import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { resolveEscrow } from '../../tempo/session/client/ChannelOps.js'
 import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
@@ -50,9 +51,9 @@ function assertCloseChallengeScope(challenge: TempoSessionChallenge, channel: Ch
     challenge.request.recipient.toLowerCase() !== channel.descriptor.payee.toLowerCase()
   )
     throw new Error('Close challenge changed the session payee.')
+  // A `machTokenAccepted` challenge also accepts a channel funded in the chain's MACH.
   if (
-    typeof challenge.request.currency !== 'string' ||
-    challenge.request.currency.toLowerCase() !== channel.descriptor.token.toLowerCase()
+    !MachineTokenCharge.acceptsToken(challenge.request, channel.chainId, channel.descriptor.token)
   )
     throw new Error('Close challenge changed the session token.')
   if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())

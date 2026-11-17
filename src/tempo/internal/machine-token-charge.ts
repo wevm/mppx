@@ -179,6 +179,24 @@ export function getToken(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.token
 }
 
+/**
+ * Returns whether a request may be paid in `token` on `chainId`: its currency, or the chain's MACH
+ * when the request's method details set `machTokenAccepted`.
+ */
+export function acceptsToken(
+  request: { currency?: unknown; methodDetails?: unknown },
+  chainId: number,
+  token: Address,
+): boolean {
+  const normalized = token.toLowerCase()
+  if (typeof request.currency === 'string' && request.currency.toLowerCase() === normalized)
+    return true
+  const methodDetails = request.methodDetails as { machTokenAccepted?: unknown } | undefined
+  return (
+    methodDetails?.machTokenAccepted === true && getToken(chainId)?.toLowerCase() === normalized
+  )
+}
+
 /** Returns the trusted sender that settles the configured charge route on a chain. */
 export function getSettlementSender(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.swap
