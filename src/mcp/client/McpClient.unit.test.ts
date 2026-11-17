@@ -4,9 +4,44 @@ import { Challenge, Credential, Mcp as core_Mcp, Method } from 'mppx'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
+import { ZoneSettlementPendingError } from '../../Errors.js'
 import * as McpClient from './McpClient.js'
 
 describe('MCP client payment approval', () => {
+  test('stops resuming a pending Zone settlement once the call is aborted', async () => {
+    const challenge = Challenge.from({
+      id: 'abort-test',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: {},
+    })
+    const client = {
+      async callTool() {
+        throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          challenges: [challenge],
+          httpStatus: 402,
+        })
+      },
+    }
+    const controller = new AbortController()
+    const reason = new Error('aborted by caller')
+    const createCredential = vi.fn(async (): Promise<string> => {
+      controller.abort(reason)
+      throw new ZoneSettlementPendingError({ challengeId: challenge.id, zoneId: 3 })
+    })
+    const mcp = McpClient.wrap(client as unknown as Pick<Client, 'callTool'>, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+
+    await expect(
+      mcp.callTool({ name: 'paid_tool', arguments: {} }, undefined, {
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+    expect(createCredential).toHaveBeenCalledOnce()
+  })
+
   test('calls an approval hook before creating a credential', async () => {
     const challenge = Challenge.from({
       id: 'approval-test',

@@ -53,7 +53,8 @@ function expectExpiringNonce(serializedTransaction: Hex.Hex) {
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
   ) as unknown as { nonce: number; nonceKey: bigint; validBefore?: bigint }
-  expect(transaction.nonce).toBe(0)
+  // Expiring nonces carry a random 48-bit discriminator in `nonce`.
+  expect(transaction.nonce).toBeLessThan(2 ** 48)
   expect(transaction.nonceKey).toBe(maxUint256)
   expect(transaction.validBefore).toBeDefined()
 }

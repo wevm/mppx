@@ -115,7 +115,7 @@ export const PaymentRequirementsSchema = z.object({
 export type PaymentRequirements = z.infer<typeof PaymentRequirementsSchema>
 
 /** x402 v2 protocol extension value. */
-export const ExtensionSchema = z.object({
+export const ExtensionSchema = z.looseObject({
   info: z.record(z.string(), z.unknown()),
   schema: z.record(z.string(), z.unknown()),
 })
@@ -232,6 +232,27 @@ export const SettleResponseSchema = z.object({
 /** Facilitator settlement response and x402 `PAYMENT-RESPONSE` body. */
 export type SettleResponse = z.infer<typeof SettleResponseSchema>
 
+/** One payment kind a facilitator supports, from `GET /supported`. */
+export const SupportedKindSchema = z.object({
+  extra: z.optional(z.record(z.string(), z.unknown())),
+  network: nonEmptyString,
+  scheme: nonEmptyString,
+  x402Version: z.number(),
+})
+
+/** One payment kind a facilitator supports, from `GET /supported`. */
+export type SupportedKind = z.infer<typeof SupportedKindSchema>
+
+/** Facilitator `GET /supported` response. */
+export const SupportedResponseSchema = z.object({
+  extensions: z.optional(z.array(z.string())),
+  kinds: z.array(SupportedKindSchema),
+  signers: z.optional(z.record(z.string(), z.array(z.string()))),
+})
+
+/** Facilitator `GET /supported` response. */
+export type SupportedResponse = z.infer<typeof SupportedResponseSchema>
+
 /** x402 facilitator client interface used by server exact config. */
 export type Facilitator = {
   settle: (
@@ -242,6 +263,11 @@ export type Facilitator = {
     paymentPayload: PaymentPayload,
     paymentRequirements: PaymentRequirements,
   ) => Promise<VerifyResponse>
+  /**
+   * Lists the payment kinds the facilitator supports (`GET /supported`). Optional: needed only to
+   * read a `payTo` the facilitator publishes in `kinds[].extra.payTo`.
+   */
+  supported?: (() => Promise<SupportedResponse>) | undefined
 }
 
 /** Extracts x402 `PaymentRequirements` from a canonical exact request. */

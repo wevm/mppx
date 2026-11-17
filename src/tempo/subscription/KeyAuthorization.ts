@@ -183,7 +183,7 @@ export async function signSubscriptionKeyAuthorization(parameters: {
     hash: KeyAuthorization.getSignPayload(authorization),
   })
   const signatureEnvelope = SignatureEnvelope.from(signature)
-  if (signatureEnvelope.type === 'keychain' || signatureEnvelope.type === 'multisig') {
+  if (signatureEnvelope.type === 'keychain' || signatureEnvelope.type === 'configurable') {
     throw new VerificationFailedError({
       reason: 'keyAuthorization must use a primitive signature',
     })

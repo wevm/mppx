@@ -7,7 +7,7 @@ import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Secp256k1 } from 'ox'
-import { TxEnvelopeTempo } from 'ox/tempo'
+import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   createClient,
@@ -320,12 +320,17 @@ async function createOpenPayload(
     args: [payee, operator, token, deposit, salt, authorizedSigner],
   })
   const signingClient = createSigningClient(account)
-  const transaction = (await Transaction.serialize({
+  const envelope = TxEnvelopeTempo.from({
     chainId,
     calls: [{ to: escrow, data }],
     feeToken: parameters.feeToken ?? token,
-    nonce: 0,
-  })) as Hex
+    nonce: 0n,
+  })
+  const transaction = TxEnvelopeTempo.serialize(envelope, {
+    signature: SignatureEnvelope.from(
+      await account.sign({ hash: TxEnvelopeTempo.getSignPayload(envelope) }),
+    ),
+  }) as Hex
   const expiringNonceHash = Channel.computeExpiringNonceHash(
     Transaction.deserialize(
       transaction as Transaction.TransactionSerializedTempo,
@@ -569,6 +574,50 @@ async function persistPrecompileChannel(
 }
 
 describe('precompile server session unit guardrails', () => {
+  test.each([payer.address, wrongPayer.address])(
+    'binds open source to the payer, not its delegated signer (%s)',
+    async (source) => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const payload = await createOpenPayload({ authorizedSigner: wrongPayer.address })
+      payload.signature = await Voucher.signVoucher(
+        createSigningClient(wrongPayer),
+        wrongPayer,
+        { channelId: payload.channelId, cumulativeAmount: 100n },
+        tip20ChannelEscrow,
+        chainId,
+      )
+      const method = session({
+        amount: '100',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () =>
+          createServerClient([], payer, payload.channelId, {
+            descriptor: payload.descriptor,
+            receipt: transactionReceipt([openedLog(payload)]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          }),
+      })
+      const verification = method.verify({
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload,
+          source: `did:pkh:eip155:${chainId}:${source}`,
+        },
+        request: verifyRequest(payload.channelId),
+      })
+      if (source === wrongPayer.address) {
+        await expect(verification).rejects.toThrow(
+          'credential source does not match transaction payer',
+        )
+        expect(await store.getChannel(payload.channelId)).toBeNull()
+      } else await expect(verification).resolves.toMatchObject({ channelId: payload.channelId })
+    },
+  )
   test('request marks TIP-1034 session challenges', async () => {
     const { method } = createServer()
 
@@ -1563,7 +1612,10 @@ describe('precompile server session unit guardrails', () => {
     expect(stored?.highestVoucherAmount).toBe(100n)
     if (!stored || !ChannelStore.isPrecompileState(stored))
       throw new Error('expected precompile state')
-    expect(stored.descriptor).toEqual(openPayload.descriptor)
+    expect(stored.descriptor).toEqual({
+      ...openPayload.descriptor,
+      payer: payer.address.toLowerCase(),
+    })
   })
 
   test('reopening existing precompile channel with higher voucher updates highest voucher only', async () => {
@@ -1731,7 +1783,7 @@ describe('precompile server session unit guardrails', () => {
 
     const stored = await store.getChannel(openPayload.channelId)
     expect(receipt.acceptedCumulative).toBe('100')
-    expect(stored?.authorizedSigner).toBe(payer.address)
+    expect(stored?.authorizedSigner?.toLowerCase()).toBe(payer.address.toLowerCase())
   })
 
   test('accepts precompile top-up and preserves spent accounting', async () => {

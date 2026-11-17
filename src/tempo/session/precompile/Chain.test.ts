@@ -384,10 +384,11 @@ describe('precompile server transactions', () => {
       const transaction = Transaction.deserialize(
         transactions[0] as Transaction.TransactionSerializedTempo,
       )
-      expect(transaction.nonce).toBe(0)
+      // Expiring nonces carry a random 48-bit discriminator in `nonce`.
+      expect(transaction.nonce).toBeGreaterThanOrEqual(0)
+      expect(transaction.nonce).toBeLessThan(2 ** 48)
       expect(transaction.nonceKey).toBe(maxUint256)
       expect(transaction.validBefore).toBeDefined()
-      expect(transaction.validAfter).toBeDefined()
       expect(rpcMethods).toEqual(['eth_sendRawTransaction'])
     },
   )

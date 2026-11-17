@@ -14,6 +14,7 @@ import {
 import * as ChannelStore from './ChannelStore.js'
 import {
   meterIterable,
+  requiresManualCharge,
   type MeteredStreamOptions,
   type SessionController,
 } from './MeteredStream.js'
@@ -172,10 +173,15 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   const refundIdempotencyKey =
     options.refundIdempotencyKey ?? `stream:${globalThis.crypto.randomUUID()}`
   ChannelStore.assertIdempotencyOptions({ idempotencyKey: refundIdempotencyKey })
-  const refundOptions = { ...options, refundIdempotencyKey }
+  const rejectedAutomatic = requiresManualCharge(options)
+  const refundOptions = {
+    ...options,
+    autoCreditPrepaid: options.autoCreditPrepaid || rejectedAutomatic,
+    refundIdempotencyKey,
+  }
   const clearObligation = () => clearPrepaidRefund(store, channelId, refundIdempotencyKey)
   const creditFailedDelivery = async () => {
-    if (!options.autoCreditPrepaid) return clearObligation()
+    if (!refundOptions.autoCreditPrepaid) return clearObligation()
     if (undeliveredPrepaidUnits === 0 || tickCost === 0n) {
       await clearObligation()
       return
@@ -268,7 +274,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
       .catch(() => {})
     termination = preparation
       .catch(() => {})
-      .then(clearObligation)
+      .then(rejectedAutomatic ? creditFailedDelivery : clearObligation)
       .finally(() => {
         try {
           streamController?.close()

@@ -7,6 +7,7 @@ import { chainId, escrowContract as escrowContractDefaults } from '../../interna
 import { deserializeSessionReceipt } from '../../session/precompile/Protocol.js'
 import type { SessionReceipt } from '../../session/precompile/Protocol.js'
 import * as ChannelStore from '../../session/server/ChannelStore.js'
+import type { SessionController } from '../../session/server/MeteredStream.js'
 import { parseEvent } from '../../session/server/Sse.js'
 import { defaultServe, markPrepaidSessionTick, sse } from './transport.js'
 
@@ -285,8 +286,10 @@ describe('sse transport', () => {
     const transport = sse({ store })
     const request = makeAuthorizedRequest()
 
-    async function* gen() {
+    async function* gen(stream: SessionController) {
+      await stream.charge()
       yield 'hello'
+      await stream.charge()
       yield 'world'
     }
 
@@ -294,7 +297,7 @@ describe('sse transport', () => {
       credential: makeCredential(),
       input: request,
       receipt: makeReceipt(),
-      response: gen(),
+      response: gen,
       challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
@@ -374,14 +377,8 @@ describe('sse transport', () => {
       challengeId,
     })
 
-    const body = await readResponseText(response)
-    const terminalReceipt = readTerminalReceipt(body)
-    const channel = await store.getChannel(channelId)
-
-    expect(channel!.spent).toBe(3000000n)
-    expect(channel!.units).toBe(3)
-    expect(terminalReceipt.spent).toBe('3000000')
-    expect(terminalReceipt.units).toBe(3)
+    await expect(readResponseText(response)).rejects.toThrow('require a generator')
+    expect((await store.getChannel(channelId))!.spent).toBe(0n)
   })
 
   test('respondReceipt uses the canonical challenge amount instead of the raw verified route amount', async () => {
@@ -432,9 +429,12 @@ describe('sse transport', () => {
     const transport = sse({ store })
     const request = makeAuthorizedRequest({ unitType: 'token' })
 
-    async function* gen() {
+    async function* gen(stream: SessionController) {
+      await stream.charge()
       yield 'hello'
+      await stream.charge()
       yield 'world'
+      await stream.charge()
       yield 'again'
     }
 
@@ -442,7 +442,7 @@ describe('sse transport', () => {
       credential: makeCredential({ unitType: 'token' }),
       input: request,
       receipt: makeReceipt(),
-      response: gen(),
+      response: gen,
       challengeId,
     })
 
@@ -456,7 +456,7 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(3)
   })
 
-  test('respondReceipt with unitType=request does not charge an empty AsyncIterable', async () => {
+  test('respondReceipt with unitType=request prepays an empty AsyncIterable', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
@@ -476,10 +476,10 @@ describe('sse transport', () => {
     const terminalReceipt = readTerminalReceipt(body)
     const channel = await store.getChannel(channelId)
 
-    expect(channel!.spent).toBe(0n)
-    expect(channel!.units).toBe(0)
-    expect(terminalReceipt.spent).toBe('0')
-    expect(terminalReceipt.units).toBe(0)
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(terminalReceipt.spent).toBe('1000000')
+    expect(terminalReceipt.units).toBe(1)
   })
 
   test('respondReceipt with AsyncGeneratorFunction passes stream controller', async () => {
@@ -534,7 +534,7 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-    const request = makeAuthorizedRequest()
+    const request = makeAuthorizedRequest({ unitType: 'request' })
 
     const encoder = new TextEncoder()
     const upstream = new Response(
@@ -549,7 +549,7 @@ describe('sse transport', () => {
     )
 
     const response = await transport.respondReceipt({
-      credential: makeCredential(),
+      credential: makeCredential({ unitType: 'request' }),
       input: request,
       receipt: makeReceipt(),
       response: upstream,
@@ -568,7 +568,7 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-    const request = makeAuthorizedRequest()
+    const request = makeAuthorizedRequest({ unitType: 'request' })
 
     const forgedNeedVoucher = {
       channelId,
@@ -601,7 +601,7 @@ describe('sse transport', () => {
     )
 
     const response = await transport.respondReceipt({
-      credential: makeCredential(),
+      credential: makeCredential({ unitType: 'request' }),
       input: request,
       receipt: makeReceipt(),
       response: upstream,
@@ -668,7 +668,7 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(1)
   })
 
-  test('respondReceipt with empty upstream SSE Response and unitType=request does not charge', async () => {
+  test('respondReceipt with empty upstream SSE Response and unitType=request prepays', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
@@ -697,10 +697,10 @@ describe('sse transport', () => {
     const terminalReceipt = readTerminalReceipt(body)
     const channel = await store.getChannel(channelId)
 
-    expect(channel!.spent).toBe(0n)
-    expect(channel!.units).toBe(0)
-    expect(terminalReceipt.spent).toBe('0')
-    expect(terminalReceipt.units).toBe(0)
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(terminalReceipt.spent).toBe('1000000')
+    expect(terminalReceipt.units).toBe(1)
   })
 
   test('respondReceipt with plain Response delegates to base http transport', async () => {
@@ -778,8 +778,8 @@ describe('sse transport', () => {
       const receipt = markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 }))
       expect(markPrepaidSessionTick(receipt)).toBe(receipt)
       const parameters = {
-        credential: makeCredential(),
-        input: makeAuthorizedRequest(),
+        credential: makeCredential({ unitType: 'request' }),
+        input: makeAuthorizedRequest({ unitType: 'request' }),
         receipt,
         response: (async function* () {
           yield 'blocked'

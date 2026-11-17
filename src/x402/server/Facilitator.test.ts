@@ -109,3 +109,111 @@ describe('x402 facilitator http client', () => {
     expect(rawFetch).toHaveBeenCalledOnce()
   })
 })
+
+describe('x402 facilitator supported and payTo', () => {
+  test('http() reads GET /supported', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        kinds: [
+          {
+            x402Version: 2,
+            scheme: 'exact',
+            network: 'eip155:8453',
+            extra: { payTo: paymentRequirements.payTo },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const supported = await Facilitator.http('https://facilitator.example/').supported!()
+    expect(fetchMock).toHaveBeenCalledWith('https://facilitator.example/supported', {
+      method: 'GET',
+    })
+    expect(supported.kinds[0]!.extra?.payTo).toBe(paymentRequirements.payTo)
+  })
+
+  test('payTo() picks the v2 kind for the scheme and network', async () => {
+    const supported = vi.fn(async () => ({
+      kinds: [
+        {
+          x402Version: 1,
+          scheme: 'exact',
+          network: 'eip155:8453',
+          extra: { payTo: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          x402Version: 2,
+          scheme: 'upto',
+          network: 'eip155:8453',
+          extra: { payTo: '0x2222222222222222222222222222222222222222' },
+        },
+        {
+          x402Version: 2,
+          scheme: 'exact',
+          network: 'eip155:8453',
+          extra: { payTo: paymentRequirements.payTo.toLowerCase() },
+        },
+      ],
+    }))
+    const facilitator = { ...facilitatorStub, supported }
+    expect(await Facilitator.payTo(facilitator, { network: 'eip155:8453' })).toBe(
+      paymentRequirements.payTo,
+    )
+    expect(await Facilitator.payTo(facilitator, { network: 'eip155:8453', scheme: 'upto' })).toBe(
+      '0x2222222222222222222222222222222222222222',
+    )
+  })
+
+  test('payTo() accepts a facilitator URL', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        kinds: [
+          {
+            x402Version: 2,
+            scheme: 'exact',
+            network: 'eip155:8453',
+            extra: { payTo: paymentRequirements.payTo },
+          },
+        ],
+      }),
+    )
+    expect(
+      await Facilitator.payTo('https://facilitator.example', {
+        fetch: fetchMock as never,
+        network: 'eip155:8453',
+      }),
+    ).toBe(paymentRequirements.payTo)
+    expect(fetchMock).toHaveBeenCalledWith('https://facilitator.example/supported', {
+      method: 'GET',
+    })
+  })
+
+  test('payTo() needs supported()', async () => {
+    await expect(Facilitator.payTo(facilitatorStub, { network: 'eip155:8453' })).rejects.toThrow(
+      /does not implement/,
+    )
+  })
+
+  test('payTo() fails on a missing kind or bad address', async () => {
+    const supported = async () => ({
+      kinds: [
+        { x402Version: 2, scheme: 'exact', network: 'eip155:8453', extra: { payTo: 'nope' } },
+      ],
+    })
+    await expect(
+      Facilitator.payTo({ ...facilitatorStub, supported }, { network: 'eip155:8453' }),
+    ).rejects.toThrow(/publishes no payTo/)
+    await expect(
+      Facilitator.payTo({ ...facilitatorStub, supported }, { network: 'eip155:1' }),
+    ).rejects.toThrow(/publishes no payTo/)
+  })
+})
+
+const facilitatorStub: Types.Facilitator = {
+  async settle() {
+    throw new Error('unused')
+  },
+  async verify() {
+    throw new Error('unused')
+  },
+}

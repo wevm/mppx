@@ -8,7 +8,7 @@ import {
   parseEventLogs,
   type TransactionReceipt,
 } from 'viem'
-import { getBlockNumber, getLogs } from 'viem/actions'
+import { getBlockNumber, getLogs, readContract } from 'viem/actions'
 import { Abis, Addresses } from 'viem/tempo'
 
 import * as TempoAddress from './address.js'
@@ -16,8 +16,21 @@ import * as TempoAddress from './address.js'
 /** Default time a payer waits for a Zone withdrawal to settle on Tempo. */
 export const defaultSettlementTimeoutMs = 60_000
 
+/**
+ * The longest a server accepts a `zone` credential after its challenge expires (its
+ * `zoneCredentialGraceMs`), for a withdrawal that settled before then. A payer keeps resuming
+ * a withdrawal it has not redeemed for as long.
+ */
+export const redemptionGraceMs = 5 * 60_000
+
 /** Number of Tempo blocks searched back for a settled Zone withdrawal. */
 const lookbackBlocks = 7_200n
+
+/**
+ * Most sender tags derived for one withdrawal: the withdrawals its Zone block may hold.
+ * Each candidate is a topic in every settlement poll's `eth_getLogs` filter.
+ */
+const maxSenderTagCandidates = 64n
 
 /** Time between polls for a settled Zone withdrawal. */
 const pollingIntervalMs = 500
@@ -69,6 +82,20 @@ export function isAccepted(zones: Accepted | undefined, zoneId: number): boolean
 /** Returns the Tempo portal address of a Zone. */
 export function portalAddress(zoneId: number): Address {
   return Addresses.zonePortal(zoneId) as Address
+}
+
+/** Prefix of every Zone portal address but the legacy ones: the Zone ID fills the last 8 bytes. */
+const portalAddressPrefix = portalAddress(0).slice(0, -16).toLowerCase()
+
+/** Zone IDs whose portals predate the prefixed addresses. */
+const legacyPortalZoneIds = [6, 7] as const
+
+/** Whether `address` is the Tempo portal of some Zone. */
+export function isPortalAddress(address: Address): boolean {
+  return (
+    address.toLowerCase().startsWith(portalAddressPrefix) ||
+    legacyPortalZoneIds.some((zoneId) => TempoAddress.isEqual(address, portalAddress(zoneId)))
+  )
 }
 
 /**
@@ -153,6 +180,46 @@ export function findWithdrawal(
 }
 
 /**
+ * Derives the sender tags a withdrawal transaction may carry when its receipt
+ * has no `WithdrawalRequested` event, as on a Zone RPC that redacts logs.
+ *
+ * The outbox numbers each withdrawal with the next `lastFallbackNonce`, so the
+ * transaction's withdrawal took one of the nonces its block added. Every
+ * candidate hashes the payer's address and transaction, so only the payer's
+ * withdrawal can match one.
+ */
+export async function senderTagCandidates(
+  client: Client,
+  parameters: { blockNumber: bigint; sender: Address; transactionHash: Hex },
+): Promise<readonly Hex[]> {
+  const { blockNumber, sender, transactionHash } = parameters
+  const lastFallbackNonce = (blockNumber: bigint) =>
+    readContract(client, {
+      abi: Abis.zoneOutbox,
+      address: Addresses.zoneOutbox,
+      blockNumber,
+      functionName: 'lastFallbackNonce',
+    }) as Promise<bigint>
+  const [before, after] = await Promise.all([
+    lastFallbackNonce(blockNumber - 1n),
+    lastFallbackNonce(blockNumber),
+  ])
+  if (after <= before)
+    throw new Error(
+      `Zone withdrawal transaction ${transactionHash} did not request a withdrawal from the outbox.`,
+    )
+  // The nonces come from the Zone RPC, so a range no block could hold is refused rather than hashed.
+  if (after - before > maxSenderTagCandidates)
+    throw new Error(
+      `Zone withdrawal transaction ${transactionHash} has ${after - before} candidate sender tags, more than ${maxSenderTagCandidates}.`,
+    )
+  const tags: Hex[] = []
+  for (let fallbackNonce = before + 1n; fallbackNonce <= after; fallbackNonce++)
+    tags.push(senderTag({ fallbackNonce, sender, transactionHash }))
+  return tags
+}
+
+/**
  * Waits until a portal emits `WithdrawalProcessed` for a sender tag and
  * returns the Tempo transaction hash that settled it.
  */
@@ -165,9 +232,28 @@ export async function waitForSettlement(
     timeoutMs?: number | undefined
   },
 ): Promise<Hex> {
-  const { timeoutMs = defaultSettlementTimeoutMs } = parameters
+  const { senderTag, ...rest } = parameters
+  const { hash } = await waitForSettledWithdrawal(client, { ...rest, senderTags: [senderTag] })
+  return hash
+}
+
+/**
+ * Waits until a portal emits `WithdrawalProcessed` for any of several sender
+ * tags, and returns the tag and the Tempo transaction hash that settled it.
+ */
+export async function waitForSettledWithdrawal(
+  client: Client,
+  parameters: {
+    portal: Address
+    senderTags: readonly Hex[]
+    to?: Address | undefined
+    timeoutMs?: number | undefined
+  },
+): Promise<{ hash: Hex; senderTag: Hex }> {
+  const { senderTags, timeoutMs = defaultSettlementTimeoutMs } = parameters
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
     throw new Error('Zone settlement timeout must be a finite, non-negative number.')
+  if (senderTags.length === 0) throw new Error('Zone settlement needs at least one sender tag.')
   let latest = await getBlockNumber(client, { cacheTime: 0 })
   // Scan the lookback window once, then only blocks added since the previous poll.
   let fromBlock = latest > lookbackBlocks ? latest - lookbackBlocks : 0n
@@ -178,19 +264,20 @@ export async function waitForSettlement(
         address: parameters.portal,
         event: withdrawalProcessed,
         args: {
-          senderTag: parameters.senderTag,
+          senderTag: [...senderTags],
           ...(parameters.to ? { to: parameters.to } : {}),
         },
         fromBlock,
         toBlock: latest,
       })
-      const hash = logs[0]?.transactionHash
-      if (hash) return hash
+      const [log] = logs
+      if (log?.transactionHash && log.args.senderTag)
+        return { hash: log.transactionHash, senderTag: log.args.senderTag }
       fromBlock = latest + 1n
     }
     if (Date.now() + pollingIntervalMs > deadline)
       throw new Error(
-        `Zone withdrawal ${parameters.senderTag} did not settle on Tempo within ${timeoutMs}ms.`,
+        `Zone withdrawal ${senderTags.join(' or ')} did not settle on Tempo within ${timeoutMs}ms.`,
       )
     await new Promise((resolve) => setTimeout(resolve, pollingIntervalMs))
     latest = await getBlockNumber(client, { cacheTime: 0 })
