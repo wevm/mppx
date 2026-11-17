@@ -46,6 +46,31 @@ test.each(['send', 'end', 'write', 'pipe'] as const)(
   },
 )
 
+test.each([
+  { corks: 1, accepted: true },
+  { corks: 2, accepted: true },
+  { corks: 1, accepted: false },
+  { corks: 2, accepted: false },
+])('end uncorks a gated response: %j', async ({ corks, accepted }) => {
+  const payload = 'x'.repeat(256 * 1024)
+  const done = vi.fn()
+  const server = await serve(
+    (res) => {
+      for (let i = 0; i < corks; i++) res.cork()
+      res.write(payload)
+      res.end(payload, done)
+    },
+    async (response) => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return accepted ? response : new Response('denied', { status: 402 })
+    },
+  )
+  const response = await fetch(server.url, { signal: AbortSignal.timeout(2_000) })
+  expect(response.status).toBe(accepted ? 200 : 402)
+  expect(await response.text()).toBe(accepted ? payload + payload : 'denied')
+  await vi.waitFor(() => expect(done).toHaveBeenCalledOnce())
+})
+
 test('preserves repeated raw headers and undefined status-message overload', async () => {
   const wrap = vi.fn((response: Response) => response)
   const server = await serve((res) => {

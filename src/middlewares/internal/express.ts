@@ -239,6 +239,8 @@ export function wrapResponse(
       write(chunk, typeof encoding === 'string' ? encoding : 'utf8')
     start()
     body.end()
+    // Native end uncorks implicitly, but paid delivery must drain before it can run.
+    while (response.writableCorked > 0) response.uncork()
     if (failed) complete(endCallbacks, failed)
     return response
   }) as typeof response.end
