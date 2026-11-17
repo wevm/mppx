@@ -111,7 +111,18 @@ export function wrapResponse(
           })
       if (property === 'writeHead')
         return (...args: Parameters<typeof response.writeHead>) =>
-          emit(() => original.writeHead(...args))
+          emit(() => {
+            // Apply the paid headers to the response instead of passing them to
+            // writeHead, so a hook installed before payment() edits the final header
+            // state and its forwarded arguments cannot replay a stale snapshot.
+            const values = args.find((arg) => typeof arg === 'object' && arg !== null)
+            for (const [name, value] of Object.entries(values ?? {}))
+              response.setHeader(name, value as string | string[])
+            const message = args.find((arg) => typeof arg === 'string')
+            return message === undefined
+              ? original.writeHead(args[0])
+              : original.writeHead(args[0], message)
+          })
       const value = Reflect.get(target, property, target)
       return typeof value === 'function' ? value.bind(target) : value
     },

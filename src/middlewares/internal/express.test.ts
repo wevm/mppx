@@ -234,6 +234,33 @@ test('preserves downstream final-header hooks', async () => {
   expect(await response.text()).toBe('paid')
 })
 
+test('earlier writeHead hooks edit the final paid headers', async () => {
+  const app = express()
+  app.use((_req, res, next) => {
+    const previous = res.writeHead
+    res.writeHead = function (this: express.Response, ...args: Parameters<typeof res.writeHead>) {
+      this.removeHeader('X-Internal')
+      this.setHeader('X-Hook', 'final')
+      return previous.apply(this, args)
+    } as typeof res.writeHead
+    next()
+  })
+  app.use((_req, res) => {
+    wrapResponse(res, (r) => r, vi.fn())
+    res.setHeader('X-Internal', 'secret')
+    res.setHeader('X-Hook', 'stale')
+    res.append('Set-Cookie', ['a=1', 'b=2'])
+    res.end('paid')
+  })
+  const server = await Http.createServer(app)
+  servers.push(server)
+  const response = await fetch(server.url)
+  expect(response.headers.get('x-internal')).toBeNull()
+  expect(response.headers.get('x-hook')).toBe('final')
+  expect(response.headers.getSetCookie()).toEqual(['a=1', 'b=2'])
+  expect(await response.text()).toBe('paid')
+})
+
 test('end callback runs after emission and cannot mutate delivered bytes', async () => {
   let headersSent = false
   const callback = vi.fn()
