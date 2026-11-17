@@ -1,3 +1,5 @@
+import { getAddress } from 'viem'
+
 import * as Types from '../Types.js'
 
 const mppxFetchWrapper = Symbol.for('mppx.fetch.wrapper')
@@ -43,7 +45,52 @@ export function http(url: string, options?: HttpOptions | undefined): Types.Faci
       })
       return Types.SettleResponseSchema.parse(await response.json())
     },
+    async supported() {
+      const response = await fetch(`${base}/supported`, { method: 'GET' })
+      if (!response.ok) throw new Error(`x402 facilitator /supported failed: ${response.status}`)
+      return Types.SupportedResponseSchema.parse(await response.json())
+    },
   }
+}
+
+/**
+ * Reads the `payTo` a facilitator publishes for a scheme and network in `GET /supported`
+ * (`kinds[].extra.payTo`), for facilitators that settle into an address of their own, the way
+ * Solana facilitators publish `extra.feePayer`. Call it once at startup and pass the result as
+ * `recipient`.
+ *
+ * @example
+ * ```ts
+ * evm({
+ *   currency: evm.assets.base.USDC,
+ *   recipient: await x402.Facilitator.payTo(FACILITATOR_URL, { network: 'eip155:8453' }),
+ *   x402: { facilitator: FACILITATOR_URL, extra: { tempoSettlement: '0x…' } },
+ * })
+ * ```
+ */
+export async function payTo(
+  facilitator: string | Types.Facilitator,
+  parameters: {
+    fetch?: typeof globalThis.fetch | undefined
+    network: string
+    scheme?: string | undefined
+  },
+): Promise<`0x${string}`> {
+  const { network, scheme = 'exact' } = parameters
+  const client =
+    typeof facilitator === 'string' ? http(facilitator, { fetch: parameters.fetch }) : facilitator
+  if (!client.supported)
+    throw new Error(
+      'x402 facilitator does not implement `supported()`, so it cannot provide payTo.',
+    )
+  const { kinds } = await client.supported()
+  const kind = kinds.find(
+    (kind) => kind.x402Version === 2 && kind.scheme === scheme && kind.network === network,
+  )
+  const value = kind?.extra?.payTo
+  if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(value))
+    throw new Error(`x402 facilitator publishes no payTo for ${scheme} on ${network}.`)
+  return getAddress(value)
 }
 
 /** Returns the underlying raw fetch implementation when given an mppx wrapper. */
