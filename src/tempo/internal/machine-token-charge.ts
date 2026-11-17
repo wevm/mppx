@@ -17,7 +17,7 @@ import { Abis, Actions } from 'viem/tempo'
 import * as Errors from '../../Errors.js'
 import * as defaults from './defaults.js'
 
-/** ABI for the legacy machine-token settlement swapper, still verified for older clients. */
+/** ABI for the first-party machine-token settlement swapper. */
 export const machineTokenSwapperAbi = parseAbi([
   'function swapTo(address inputToken,uint256 amount,address targetToken,address recipient,bytes32 memo)',
 ])
@@ -68,7 +68,7 @@ export function isMachineToken(parameters: {
   )
 }
 
-/** Resolves the legacy swapper route for a compatible charge, which servers still accept. */
+/** Resolves the canonical first-party settlement route for a compatible charge. */
 export function getRoute(parameters: {
   chainId: number | undefined
   currency: Address
@@ -134,7 +134,7 @@ export async function findRoute(
   }
 }
 
-/** Matches an exact legacy swapper route. */
+/** Matches an exact first-party settlement route. */
 export function matchRoute(parameters: {
   calls: readonly Call[]
   chainId: number | undefined
@@ -341,18 +341,8 @@ export async function canPayDirect(
 ): Promise<boolean> {
   const { account, amount, calls, token } = parameters
   if (!(await canSpend(client, { account, amount, token }))) return false
-  return simulates(client, { account: account.address, calls })
-}
-
-/** Returns whether calls simulate from an account. Any failure returns false. */
-async function simulates(
-  client: Client,
-  parameters: { account: Address; calls: readonly Call[] },
-): Promise<boolean> {
-  try {
-    await call(client, parameters as never)
-    return true
-  } catch {
-    return false
-  }
+  return call(client, { account: account.address, calls } as never).then(
+    () => true,
+    () => false,
+  )
 }

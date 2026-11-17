@@ -290,8 +290,7 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -353,8 +352,7 @@ describe('tempo.charge client', () => {
       signTransaction: vi.fn(),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -543,8 +541,7 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: findMachineTokenRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -626,7 +623,6 @@ describe('tempo.charge client', () => {
 
   test('passes machine-token calls to a scoped account resolver', async () => {
     vi.resetModules()
-    mockMachFeeSelection()
     const chainId = 42431
     const selectedAccount = privateKeyToAccount(
       '0x0000000000000000000000000000000000000000000000000000000000000002',
@@ -644,8 +640,7 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -696,7 +691,6 @@ describe('tempo.charge client', () => {
       )
       expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${selectedAccount.address}`)
     } finally {
-      vi.doUnmock('viem/tempo')
       vi.doUnmock('viem/actions')
       vi.doUnmock('../internal/machine-token-charge.js')
       vi.resetModules()
@@ -778,8 +772,7 @@ describe('tempo.charge client', () => {
       signTransaction,
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute,
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -855,8 +848,7 @@ describe('tempo.charge client', () => {
       signTransaction: vi.fn(),
       signTypedData: vi.fn(),
     }))
-    vi.doMock('../internal/machine-token-charge.js', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('../internal/machine-token-charge.js')>()),
+    vi.doMock('../internal/machine-token-charge.js', () => ({
       findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
       getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
       isMachineToken: vi.fn(() => false),
@@ -1935,18 +1927,11 @@ describe('tempo.charge client: machTokenAccepted', () => {
       ])
       expect(findRoute).toHaveBeenCalledOnce()
 
-      // A `currencies` allowlist does not need to list MACH.
-      canPay = true
-      const allowlisted = mockedCharge({ account, currencies: [currency], getClient: () => client })
-      await allowlisted.createCredential({ challenge: challenge(), context: {} })
-      expect(prepareTransactionRequest.mock.calls[2]?.[1].calls).toEqual([
-        expect.objectContaining({ address: mach, functionName: 'transferWithMemo' }),
-      ])
-
       // MACH cannot pay gas: an unsponsored payer without a stablecoin pays the charge currency.
+      canPay = true
       fees.balances.pathUsd = 0n
       await method.createCredential({ challenge: challenge(), context: {} })
-      expect(prepareTransactionRequest.mock.calls[3]?.[1].calls).toEqual([
+      expect(prepareTransactionRequest.mock.calls[2]?.[1].calls).toEqual([
         expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
       ])
       // A sponsored pull payment still pays MACH.
@@ -1961,7 +1946,7 @@ describe('tempo.charge client: machTokenAccepted', () => {
         }),
         context: {},
       })
-      expect(prepareTransactionRequest.mock.calls[4]?.[1].calls).toEqual([
+      expect(prepareTransactionRequest.mock.calls[3]?.[1].calls).toEqual([
         expect.objectContaining({ address: mach, functionName: 'transferWithMemo' }),
       ])
     } finally {

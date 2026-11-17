@@ -218,21 +218,6 @@ describe('session machTokenAccepted', () => {
     expect(calls).toEqual([])
   })
 
-  test('opens in MACH even when the currencies allowlist leaves MACH out', async () => {
-    const method = session({
-      account,
-      currencies: [currency],
-      decimals: 0,
-      getClient: () => createTestClient({ machBalance: 1_000n }),
-    })
-
-    const open = deserialize(
-      await method.createCredential({ challenge: makeChallenge(), context: {} }),
-    )
-
-    expect(open.descriptor.token).toBe(mach)
-  })
-
   test('keeps using an existing channel in the challenge currency', async () => {
     const channelStore = createChannelStore()
     const poor = session({
@@ -259,22 +244,41 @@ describe('session machTokenAccepted', () => {
     expect(next).toMatchObject({ action: 'voucher', channelId: open.channelId })
   })
 
-  test('never auto-swaps into MACH', async () => {
+  test('tops up a MACH channel from MACH held, never by swapping into it', async () => {
+    const channelStore = createChannelStore()
+    const autoSwap = {
+      slippage: 2,
+      tokenIn: ['0x0000000000000000000000000000000000000007' as const],
+    }
+    const rich = session({
+      account,
+      autoSwap,
+      channelStore,
+      decimals: 0,
+      getClient: () => createTestClient({ machBalance: 1_000n }),
+    })
+    const open = deserialize(
+      await rich.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+    expect(open.descriptor.token).toBe(mach)
+    expect(openTransaction(open).calls).toHaveLength(1)
+
     const findCalls = vi.spyOn(AutoSwap, 'findCalls')
     try {
-      const method = session({
+      const poor = session({
         account,
-        autoSwap: { slippage: 2, tokenIn: ['0x0000000000000000000000000000000000000007'] },
+        autoSwap,
+        channelStore,
         decimals: 0,
-        getClient: () => createTestClient({ machBalance: 1_000n }),
+        getClient: () => createTestClient({ machBalance: 0n }),
       })
 
-      const open = deserialize(
-        await method.createCredential({ challenge: makeChallenge(), context: {} }),
-      )
-
-      expect(open.descriptor.token).toBe(mach)
-      expect(openTransaction(open).calls).toHaveLength(1)
+      await expect(
+        poor.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'topUp', additionalDepositRaw: '100', descriptor: open.descriptor },
+        }),
+      ).rejects.toThrow(/MACH/)
       expect(findCalls).not.toHaveBeenCalled()
     } finally {
       findCalls.mockRestore()

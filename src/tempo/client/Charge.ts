@@ -226,7 +226,8 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      // v2: the payee accepts a direct MACH transfer 1:1.
+      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
+      // The payee accepts a direct MACH transfer 1:1.
       const machineToken =
         methodDetails?.machTokenAccepted === true && !isMachineTokenCurrency
           ? MachineTokenCharge.getToken(chainId)
@@ -254,7 +255,7 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       let account = defaultAccount
-      let machineTokenPayment:
+      let directPayment:
         | { calls: readonly AccountResolution.ResolveAccountCall[]; feeToken: Address | null }
         | undefined
       // Whether the account could pay in MACH but lacked the MACH or the payment reverted.
@@ -270,54 +271,50 @@ export function charge(parameters: charge.Parameters = {}) {
             calls,
             token: machineToken,
           })
-          // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
-          const feeToken = payable ? await resolveMachineTokenGas(payer) : undefined
           if (!payable) machineTokenUnpayable = true
-          else if (feeToken !== undefined) {
-            machineTokenPayment = { calls, feeToken }
-            account = payer
+          else {
+            // Without gas for a direct MACH payment, try the swapper or pay the challenge currency.
+            const feeToken = await resolveMachineTokenGas(payer)
+            if (feeToken !== undefined) {
+              directPayment = { calls, feeToken }
+              account = payer
+            }
           }
         }
       }
 
-      // v1 (`machineTokenEnabled`): the legacy swapper route, unchanged and independent of v2.
-      const swapperRoute =
-        !machineTokenPayment && methodDetails?.machineTokenEnabled === true
+      const machineTokenCandidate =
+        !directPayment && machineTokenEnabled
           ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
           : undefined
-      if (swapperRoute) {
-        // A machine-token route is optional. A scoped account that cannot
-        // execute it may still be able to satisfy the direct payment.
-        const payer = await resolveAccount({
-          calls: swapperRoute.calls,
-          kind: 'executeCalls',
-        }).catch(() => undefined)
-        if (payer) {
-          const found = await MachineTokenCharge.findRoute(client, {
-            account: payer.address,
+      let machineTokenRoute: typeof machineTokenCandidate
+      if (machineTokenCandidate) {
+        const machineTokenAccount = await (async () => {
+          try {
+            return await resolveAccount({
+              calls: machineTokenCandidate.calls,
+              kind: 'executeCalls',
+            })
+          } catch {
+            // A machine-token route is optional. A scoped account that cannot
+            // execute it may still be able to satisfy the direct payment.
+            return undefined
+          }
+        })()
+        if (machineTokenAccount) {
+          machineTokenRoute = await MachineTokenCharge.findRoute(client, {
+            account: machineTokenAccount.address,
             chainId,
             currency,
             transfers,
           })
-          if (!found) machineTokenUnpayable = true
-          else {
-            const feeToken =
-              explicitFeeToken ??
-              (await resolveFeeToken({
-                account: payer.address,
-                allowedTokens: defaultFeeTokens(chainId),
-                candidateTokens: defaultFeeTokens(chainId),
-                client,
-                prioritizeCandidates: true,
-              }))
-            machineTokenPayment = { calls: found.calls, feeToken: feeToken ?? null }
-            account = payer
-          }
+          if (machineTokenRoute) account = machineTokenAccount
+          else machineTokenUnpayable = true
         }
       }
 
       let swapCalls: Awaited<ReturnType<typeof AutoSwap.findCalls>>
-      if (!machineTokenPayment) {
+      if (!directPayment && !machineTokenRoute) {
         account = await resolveAccount({
           kind: 'executeCalls',
           ...(autoSwap ? {} : { calls: transferCalls }),
@@ -345,19 +342,22 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
 
-      const calls = machineTokenPayment?.calls ?? [...(swapCalls ?? []), ...transferCalls]
-      const feeToken = machineTokenPayment
-        ? (machineTokenPayment.feeToken ?? undefined)
-        : (explicitFeeToken ??
-          (isMachineTokenCurrency
+      const calls = directPayment?.calls ??
+        machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
+      const allowedFeeTokens = defaultFeeTokens(chainId)
+      const feeToken = directPayment
+        ? (directPayment.feeToken ?? undefined)
+        : explicitFeeToken
+          ? explicitFeeToken
+          : machineTokenRoute || isMachineTokenCurrency
             ? await resolveFeeToken({
                 account: account.address,
-                allowedTokens: defaultFeeTokens(chainId),
-                candidateTokens: defaultFeeTokens(chainId),
+                allowedTokens: allowedFeeTokens,
+                candidateTokens: allowedFeeTokens,
                 client,
                 prioritizeCandidates: true,
               })
-            : undefined))
+            : undefined
 
       const mode = resolveMode(account)
 

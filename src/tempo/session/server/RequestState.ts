@@ -467,7 +467,7 @@ export async function resolveSessionPaymentRequest(
   })
   // `machTokenAccepted` is set only by the server's direct MACH opt-in.
   const {
-    [Constants.MethodDetailKeys.machTokenAccepted]: _machTokenAccepted,
+    machTokenAccepted: _machTokenAccepted,
     operator: _operator,
     ...requestWithoutOperator
   } = request
@@ -482,7 +482,7 @@ export async function resolveSessionPaymentRequest(
       parameterFeePayer,
       requestFeePayer: request.feePayer,
     }),
-    ...(machineToken ? { [Constants.MethodDetailKeys.machTokenAccepted]: true as const } : {}),
+    ...(machineToken ? { machTokenAccepted: true as const } : {}),
     ...(operator ? { operator } : {}),
     ...(sessionSnapshot ? { sessionSnapshot } : {}),
   }
@@ -505,7 +505,7 @@ export function resolveMachineTokenOffer(parameters: {
 }
 
 /** Credential verification inputs after a MACH channel was matched to a `machTokenAccepted` challenge. */
-export type MachineTokenCredentialResolution = {
+type MachineTokenCredentialResolution = {
   /** Challenge to verify against, priced in MACH when the credential uses a MACH channel. */
   challenge: Challenge.Challenge
   /** Verification context, priced in MACH when the credential uses a MACH channel. */

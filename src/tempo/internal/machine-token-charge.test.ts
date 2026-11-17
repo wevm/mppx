@@ -18,12 +18,12 @@ const deployment = defaults.machineToken[chainId]
 const targetToken = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x2222222222222222222222222222222222222222'
 const payer = '0x1111111111111111111111111111111111111111'
-const accessKey = '0x3333333333333333333333333333333333333333'
 const memo = `0x${'ab'.repeat(32)}` as const
 const client = createClient({
   transport: custom({ request: async () => undefined as never }),
 })
 const transfers = [{ amount: 1_000_000n, memo, recipient }] as const
+const accessKey = '0x3333333333333333333333333333333333333333'
 const calls = [{ data: '0x1234', to: deployment.token }] as const
 
 const chain = { ...tempoModerato, hardfork: 't3' } as const
@@ -87,93 +87,139 @@ function rpc(options: {
 
 describe('Tempo machine-token charges', () => {
   test('builds and validates the exact first-party approve + swapTo calls', async () => {
-    const MachineTokenCharge = await import('./machine-token-charge.js')
-    const route = await MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n }), {
-      account: payer,
-      chainId,
-      currency: targetToken,
-      transfers,
-    })
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async () => 1_000_000n),
+    }))
 
-    expect(route?.calls).toHaveLength(2)
-    expect(
-      MachineTokenCharge.matchRoute({
-        calls: route!.calls,
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const route = await MachineTokenCharge.findRoute(client, {
+        account: payer,
         chainId,
         currency: targetToken,
         transfers,
-      })?.transfers,
-    ).toEqual(transfers)
-    expect(
-      MachineTokenCharge.matchRoute({
-        calls: route!.calls,
-        chainId,
-        currency: targetToken,
-        transfers: [{ amount: transfers[0]!.amount, recipient }],
-      })?.transfers,
-    ).toEqual(transfers)
-    expect(route?.settlementSender).toBe(deployment.swap)
+      })
+
+      expect(route?.calls).toHaveLength(2)
+      expect(
+        MachineTokenCharge.matchRoute({
+          calls: route!.calls,
+          chainId,
+          currency: targetToken,
+          transfers,
+        })?.transfers,
+      ).toEqual(transfers)
+      expect(
+        MachineTokenCharge.matchRoute({
+          calls: route!.calls,
+          chainId,
+          currency: targetToken,
+          transfers: [{ amount: transfers[0]!.amount, recipient }],
+        })?.transfers,
+      ).toEqual(transfers)
+      expect(route?.settlementSender).toBe(deployment.swap)
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 
   test('skips the MACH route when the payer lacks sufficient machine tokens', async () => {
-    const MachineTokenCharge = await import('./machine-token-charge.js')
-    await expect(
-      MachineTokenCharge.findRoute(rpc({ balance: 999_999n }), {
-        account: payer,
-        chainId,
-        currency: targetToken,
-        transfers,
-      }),
-    ).resolves.toBeUndefined()
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async () => 999_999n),
+    }))
+
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      await expect(
+        MachineTokenCharge.findRoute(client, {
+          account: payer,
+          chainId,
+          currency: targetToken,
+          transfers,
+        }),
+      ).resolves.toBeUndefined()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 
   test('skips the MACH route when the swap cannot be simulated', async () => {
-    const MachineTokenCharge = await import('./machine-token-charge.js')
-    await expect(
-      MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n, simulate: 'revert' }), {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(async () => {
+        throw new Error('merchant is not allowlisted')
+      }),
+      readContract: vi.fn(async () => 1_000_000n),
+    }))
+
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      await expect(
+        MachineTokenCharge.findRoute(client, {
+          account: payer,
+          chainId,
+          currency: targetToken,
+          transfers,
+        }),
+      ).resolves.toBeUndefined()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
+  test('rejects extra calls and any mismatch in the owned swap', async () => {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async () => 1_000_000n),
+    }))
+
+    try {
+      const MachineTokenCharge = await import('./machine-token-charge.js')
+      const route = await MachineTokenCharge.findRoute(client, {
         account: payer,
         chainId,
         currency: targetToken,
         transfers,
-      }),
-    ).resolves.toBeUndefined()
-  })
+      })
 
-  test('rejects extra calls and any mismatch in the owned swap', async () => {
-    const MachineTokenCharge = await import('./machine-token-charge.js')
-    const route = await MachineTokenCharge.findRoute(rpc({ balance: 1_000_000n }), {
-      account: payer,
-      chainId,
-      currency: targetToken,
-      transfers,
-    })
-
-    expect(
-      MachineTokenCharge.matchRoute({
-        calls: [...route!.calls, route!.calls[0]!],
-        chainId,
-        currency: targetToken,
-        transfers,
-      }),
-    ).toBeUndefined()
-    expect(
-      MachineTokenCharge.matchRoute({
-        calls: [
-          route!.calls[0]!,
-          {
-            ...route!.calls[1],
-            data: encodeFunctionData({
-              abi: Abis.tip20,
-              functionName: 'transfer',
-              args: [recipient, transfers[0]!.amount],
-            }),
-          },
-        ],
-        chainId,
-        currency: targetToken,
-        transfers,
-      }),
-    ).toBeUndefined()
+      expect(
+        MachineTokenCharge.matchRoute({
+          calls: [...route!.calls, route!.calls[0]!],
+          chainId,
+          currency: targetToken,
+          transfers,
+        }),
+      ).toBeUndefined()
+      expect(
+        MachineTokenCharge.matchRoute({
+          calls: [
+            route!.calls[0]!,
+            {
+              ...route!.calls[1],
+              data: encodeFunctionData({
+                abi: Abis.tip20,
+                functionName: 'transfer',
+                args: [recipient, transfers[0]!.amount],
+              }),
+            },
+          ],
+          chainId,
+          currency: targetToken,
+          transfers,
+        }),
+      ).toBeUndefined()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 
   test('does not use unconfigured chains', async () => {

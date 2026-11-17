@@ -470,7 +470,7 @@ describe('toChannelStore', () => {
     const machineTokenChannel = channel({ descriptor: { ...descriptor, token: machineToken } })
     const store = toChannelStore(registry, {
       scope: scope(),
-      scopes: [scope(), machineTokenScope],
+      scopes: [machineTokenScope],
       selection: 'auto',
       context,
     })
@@ -483,7 +483,7 @@ describe('toChannelStore', () => {
 
     const reopened = toChannelStore(registry, {
       scope: scope(),
-      scopes: [scope(), machineTokenScope],
+      scopes: [machineTokenScope],
       selection: 'auto',
       context,
     })
@@ -492,7 +492,7 @@ describe('toChannelStore', () => {
 
     const explicit = toChannelStore(registry, {
       scope: scope(),
-      scopes: [scope(), machineTokenScope],
+      scopes: [machineTokenScope],
       selection: machineTokenChannel.channelId,
       context,
     })

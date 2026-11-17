@@ -3,12 +3,12 @@ import type { Hex } from 'ox'
 import { createClient, formatUnits, http } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
-import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import {
   canSignDescriptor,
   resolveChallengeContext,
 } from '../../tempo/session/client/CredentialState.js'
 import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
+import { resolveMachineTokenContext } from '../../tempo/session/client/MachineToken.js'
 import { sessionManager } from '../../tempo/session/client/SessionManager.js'
 import type { TempoSessionChallenge } from '../../tempo/session/client/Transports.js'
 import { isEventStream, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
@@ -191,14 +191,7 @@ export async function runPersistentSessionRequest(
   }
   // A `machTokenAccepted` challenge also accepts a channel funded in MACH, which the session
   // manager may open or reuse instead, so the registry serves and locks that scope too.
-  const machineToken =
-    challengeContext.machTokenAccepted &&
-    !MachineTokenCharge.isMachineToken({
-      chainId: challengeContext.chainId,
-      currency: challengeContext.token,
-    })
-      ? MachineTokenCharge.getToken(challengeContext.chainId)
-      : undefined
+  const machineToken = resolveMachineTokenContext(challengeContext)?.token
   const machineTokenScope = machineToken ? { ...scope, token: machineToken } : undefined
   const scopes = machineTokenScope ? [scope, machineTokenScope] : [scope]
   const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
@@ -276,7 +269,7 @@ export async function runPersistentSessionRequest(
     })
     const channelStore = toChannelStore(registry, {
       scope,
-      scopes,
+      scopes: machineTokenScope ? [machineTokenScope] : undefined,
       selection,
       context: persistenceContext,
       onNewChannel() {

@@ -528,6 +528,14 @@ export function toChannelStore(
     return { key: normalized, scope }
   }
 
+  /** Returns a channel's record, which must exist and belong to `scope`. */
+  async function load(channelId: Hex, scope: SessionScope): Promise<ManagedSession> {
+    const record = await registry.get(channelId)
+    if (!record) throw new SessionStateError(`Session ${channelId} does not exist.`)
+    assertChannelScope(record.channel, scope)
+    return record
+  }
+
   /** Returns the explicitly selected channel's record when it belongs to `scope`. */
   async function explicitRecord(scope: SessionScope): Promise<ManagedSession | undefined> {
     if (!explicitChannelId) return undefined
@@ -546,20 +554,11 @@ export function toChannelStore(
   ): Promise<ManagedSession | undefined> {
     const selectedChannelId = selectedChannelIds.get(key)
     const record = await (async () => {
-      if (selectedChannelId) {
-        const record = await registry.get(selectedChannelId)
-        if (!record) throw new SessionStateError(`Session ${selectedChannelId} does not exist.`)
-        assertChannelScope(record.channel, scope)
-        return record
-      }
+      if (selectedChannelId) return load(selectedChannelId, scope)
       if (explicitChannelId) return explicitRecord(scope)
       if (options.selection === 'new') return undefined
       const channelId = await registry.getPreferred(scope)
-      if (!channelId) return undefined
-      const record = await registry.get(channelId)
-      if (!record) throw new SessionStateError(`Session ${channelId} does not exist.`)
-      assertChannelScope(record.channel, scope)
-      return record
+      return channelId ? load(channelId, scope) : undefined
     })()
     if (!record) return undefined
     if (reusableOnly && (record.status !== 'open' || !record.channel.opened)) return undefined

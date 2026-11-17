@@ -92,15 +92,20 @@ export async function resolveMachineTokenFeeToken(parameters: {
   resolved: ChallengeContext
 }): Promise<Address | undefined> {
   const { account, resolved } = parameters
+  if (!isMachineTokenChannel(resolved) || resolved.feePayer) return resolved.feeToken
+  return (await findFeeToken({ account, resolved })) ?? resolved.feeToken
+}
+
+/** Returns whether a context funds a MACH channel for a challenge priced in another currency. */
+export function isMachineTokenChannel(resolved: ChallengeContext): boolean {
   const { chainId } = resolved
-  const currency = resolved.challenge.request.currency as Address
-  if (
-    !MachineTokenCharge.isMachineToken({ chainId, currency: resolved.token }) ||
-    MachineTokenCharge.isMachineToken({ chainId, currency })
+  return (
+    MachineTokenCharge.isMachineToken({ chainId, currency: resolved.token }) &&
+    !MachineTokenCharge.isMachineToken({
+      chainId,
+      currency: resolved.challenge.request.currency as Address,
+    })
   )
-    return resolved.feeToken
-  if (resolved.feePayer) return resolved.feeToken
-  return (await findFeeToken({ account, resolved })) ?? resolved.feeToken ?? currency
 }
 
 /** Returns the server's fee token, or else the challenge currency or a default stablecoin, when the payer holds it. */

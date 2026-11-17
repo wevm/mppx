@@ -37,7 +37,11 @@ import {
   deleteChannel,
   type ChannelSink,
 } from './ChannelStore.js'
-import { resolveMachineTokenFeeToken, resolveMachineTokenOpen } from './MachineToken.js'
+import {
+  isMachineTokenChannel,
+  resolveMachineTokenFeeToken,
+  resolveMachineTokenOpen,
+} from './MachineToken.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -293,7 +297,7 @@ export type ChallengeContext = {
   feePayer?: boolean | undefined
   feeToken?: Address | undefined
   key: string
-  /** Whether the challenge also accepts a channel funded in MACH, and the client allows MACH. */
+  /** Whether the challenge also accepts a channel funded in MACH, 1:1. */
   machTokenAccepted?: boolean | undefined
   operator?: Address | undefined
   payee: Address
@@ -417,9 +421,7 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     feeToken: readOptionalAddress(methodDetails.feeToken),
-    machTokenAccepted:
-      Constants.getMethodDetail(methodDetails, Constants.MethodDetailKeys.machTokenAccepted) ===
-      true,
+    machTokenAccepted: methodDetails.machTokenAccepted === true,
     operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
@@ -715,20 +717,11 @@ async function resolveAutoSwapCalls(
   parameters: {
     account: Address
     amountOut: bigint
-    chainId: number
     client: Client
     tokenOut: Address
   },
 ): Promise<readonly TempoChannelCall[] | undefined> {
-  // MACH is never acquired by swapping: a session funds a MACH channel only from MACH already held.
-  if (
-    !autoSwap ||
-    MachineTokenCharge.isMachineToken({
-      chainId: parameters.chainId,
-      currency: parameters.tokenOut,
-    })
-  )
-    return undefined
+  if (!autoSwap) return undefined
   return (await AutoSwap.findCalls(parameters.client, {
     account: parameters.account,
     amountOut: parameters.amountOut,
@@ -791,7 +784,6 @@ async function open(
     prefixCalls: await resolveAutoSwapCalls(autoSwap, {
       account: account.address,
       amountOut: deposit,
-      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),
@@ -977,7 +969,9 @@ async function manualTopUp(
       additionalDeposit: additionalDeposit.toString(),
     }
   }
-  await assertMachineTokenDeposit(autoSwap, {
+  // A MACH channel accepted for another currency tops up from MACH held, never by swapping into it.
+  const swap = isMachineTokenChannel(resolved) ? false : autoSwap
+  await assertMachineTokenDeposit(swap, {
     account: account.address,
     amount: additionalDeposit,
     chainId: resolved.chainId,
@@ -992,10 +986,9 @@ async function manualTopUp(
     resolved.chainId,
     resolved.feePayer,
     resolved.escrow,
-    await resolveAutoSwapCalls(autoSwap, {
+    await resolveAutoSwapCalls(swap, {
       account: account.address,
       amountOut: additionalDeposit,
-      chainId: resolved.chainId,
       client: resolved.client,
       tokenOut: resolved.token,
     }),

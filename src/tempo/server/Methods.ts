@@ -279,14 +279,19 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     > &
       typeof currency & { store: typeof store }
     const method = session_(configured as NoExtraKeys<typeof configured, session_.Parameters>)
+    settlements.set(key(currency.chainId, currency.currency), method.extensions!.settleScheduled)
+    verifiers.set(key(currency.chainId, currency.currency), (channelId) =>
+      verifyStream_(method, channelId),
+    )
     // `machTokenAccepted` offers also accept MACH channels; the first offer settles them.
     const machineToken = parameters?.machTokenAccepted
       ? MachineTokenCharge.getToken(currency.chainId)
       : undefined
-    for (const token of [currency.currency, ...(machineToken ? [machineToken] : [])]) {
-      if (settlements.has(key(currency.chainId, token))) continue
-      settlements.set(key(currency.chainId, token), method.extensions!.settleScheduled)
-      verifiers.set(key(currency.chainId, token), (channelId) => verifyStream_(method, channelId))
+    if (machineToken && !settlements.has(key(currency.chainId, machineToken))) {
+      settlements.set(key(currency.chainId, machineToken), method.extensions!.settleScheduled)
+      verifiers.set(key(currency.chainId, machineToken), (channelId) =>
+        verifyStream_(method, channelId),
+      )
     }
     return { ...method, extensions }
   }
