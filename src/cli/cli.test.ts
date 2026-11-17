@@ -377,6 +377,81 @@ export default defineConfig({
     }
   })
 
+  test('resends an x402 credential when only the resource description changes', async () => {
+    const signatures: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      const signature = req.headers['payment-signature'] as string | undefined
+      if (signature) signatures.push(signature)
+      if (signatures.length === 1 && signature) {
+        res.writeHead(402, {
+          [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+            accepts: [paymentAccept()],
+            resource: {
+              description: 'Payment was not accepted',
+              mimeType: 'application/json',
+              url: `http://${req.headers.host}${req.url}`,
+            },
+            x402Version: 2,
+          }),
+        })
+        res.end()
+        return
+      }
+      if (!signature) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid-on-resend')
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid-on-resend')
+      expect(signatures).toHaveLength(2)
+      expect(signatures[1]).toBe(signatures[0])
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('does not start a new round from a 402 on another origin', async () => {
+    const otherSignatures: string[] = []
+    const otherServer = await Http.createServer((req, res) => {
+      const signature = req.headers['payment-signature'] as string | undefined
+      if (signature) otherSignatures.push(signature)
+      res.writeHead(402, {
+        [x402_Types.paymentRequiredHeader]: paymentRequired(req, [
+          paymentAccept({ amount: '6000' }),
+        ]),
+      })
+      res.end()
+    })
+    const httpServer = await Http.createServer((req, res) => {
+      res.writeHead(402, {
+        [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+          accepts: [paymentAccept()],
+          resource: { mimeType: 'application/json', url: `${otherServer.url}/paid` },
+          x402Version: 2,
+        }),
+      })
+      res.end()
+    })
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBeDefined()
+      expect(otherSignatures).toHaveLength(1)
+    } finally {
+      httpServer.close()
+      otherServer.close()
+    }
+  })
+
   test('preserves an explicit Host header for an ordinary target', async () => {
     const originalFetch = globalThis.fetch
     let host: string | undefined

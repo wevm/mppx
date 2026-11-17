@@ -319,8 +319,23 @@ async function bufferResponse(
  */
 function answeredChallengeKey(challenge: Challenge.Challenge): string {
   if (!x402_ChallengeBrand.is(challenge)) return `mpp:${challenge.id}`
-  const { description: _, id: __, ...identity } = challenge
-  return `x402:${Challenge.serialize({ ...identity, id: '' } as Challenge.Challenge)}`
+  const { description: _, id: __, request, ...identity } = challenge
+  const { description: ___, ...resource } = (request.resource ?? {}) as Record<string, unknown>
+  return `x402:${Challenge.serialize({
+    ...identity,
+    id: '',
+    request: { ...request, ...(request.resource ? { resource } : {}) },
+  } as Challenge.Challenge)}`
+}
+
+/** Returns whether two response URLs share an origin. An unknown URL is treated as the same. */
+function isSameOrigin(a: string, b: string): boolean {
+  if (!a || !b) return true
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
 }
 
 /** Most challenge rounds one paid request may take, matching the client's fetch. */
@@ -1069,10 +1084,13 @@ const cli = Cli.create('mppx', {
         // gets the same credential again. For example, a zero-amount proof for a wallet without credit
         // is answered with a 402 offering only the real charge. A configured session method already
         // runs its rounds through the payment-aware fetch.
+        // Only a 402 from the server that issued the first challenges starts a new round: its
+        // challenges are checked against the original request's origin and realm.
         if (
           credentialResponse.status === 402 &&
           !(configMethod && isTempoSessionChallenge(challenge)) &&
-          round + 1 < maxPaymentRounds
+          round + 1 < maxPaymentRounds &&
+          isSameOrigin(credentialResponse.url, challengeRequest.response.url)
         ) {
           const payable = (response: Response) =>
             hasPayableChallenge(response, {
