@@ -284,6 +284,44 @@ describe('evm charge server', () => {
     expect(receipt.extensions).toBeUndefined()
   })
 
+  test('drops settle extensions that are too large or too deep', async () => {
+    let nested: Record<string, unknown> = { leaf: true }
+    for (let i = 0; i < 20; i++) nested = { n: nested }
+    for (const extensions of [{ blob: 'x'.repeat(5000) }, nested]) {
+      const mppx = Mppx.create({
+        methods: [
+          evm({
+            currency: evm.assets.baseSepolia.USDC,
+            recipient,
+            settle: async () => ({ extensions, reference: transaction }),
+          }),
+        ],
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const client = ClientMppx.create({
+        methods: [
+          evm_client({
+            account,
+            currencies: [evm_client.assets.baseSepolia.USDC],
+            maxAmount: '0.25',
+          }),
+        ],
+        polyfill: false,
+      })
+      const route = mppx.evm.charge({ amount: '0.25' })
+      const first = await route(new Request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const authorization = await client.createCredential(first.challenge)
+      const result = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+      )
+      if (result.status !== 200) throw new Error()
+      const receipt = Receipt.fromResponse(result.withReceipt(Response.json({ ok: true })))
+      expect(receipt.reference).toBe(transaction)
+      expect(receipt.extensions).toBeUndefined()
+    }
+  })
+
   test('settles native Payment-auth authorization credentials', async () => {
     let facilitated:
       | {
