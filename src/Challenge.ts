@@ -68,6 +68,18 @@ export const Schema = z.object({
 })
 
 /**
+ * Schema for a payment challenge whose `header` may be any string. Use it to read challenges stored
+ * before `header` was limited to `Payment-Authorization`, or to check that a received challenge is
+ * well formed before skipping it for its credential header.
+ *
+ * @internal
+ */
+export const LenientSchema = z.extend(Schema, {
+  /** Optional HTTP field name to carry the payment credential, unchecked. */
+  header: z.optional(z.string()),
+})
+
+/**
  * A parsed payment challenge from a `WWW-Authenticate` header.
  *
  * @example
@@ -689,14 +701,10 @@ export function fromHeadersList<
 export function deserializeList<
   const methods extends readonly Method.Method[] | undefined = undefined,
 >(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
-  const starts = findSchemeStarts(value, Constants.Schemes.payment)
-  if (starts.length === 0) throw new Error('No Payment schemes found.')
+  const chunks = paymentChunks(value)
+  if (chunks.length === 0) throw new Error('No Payment schemes found.')
 
-  // Slice each scheme from its `Payment ` prefix up to the next scheme boundary,
-  // trimming any trailing comma/whitespace between schemes.
-  return starts.flatMap((start, i) => {
-    const end = i + 1 < starts.length ? starts[i + 1]! : value.length
-    const chunk = value.slice(start, end).replace(/,\s*$/, '')
+  return chunks.flatMap((chunk) => {
     try {
       return [deserialize(chunk, options)]
     } catch (error) {
@@ -705,6 +713,48 @@ export function deserializeList<
       if (error instanceof UnsupportedCredentialHeaderError) return []
       throw error
     }
+  })
+}
+
+/**
+ * Counts the Payment challenges in a `WWW-Authenticate` value that list parsing skips because they
+ * select a credential header other than `Payment-Authorization`.
+ *
+ * @internal
+ */
+export function countUnsupportedCredentialHeaders(value: string | null | undefined): number {
+  if (!value) return 0
+  return paymentChunks(value).filter((chunk) => {
+    try {
+      deserialize(chunk)
+      return false
+    } catch (error) {
+      return error instanceof UnsupportedCredentialHeaderError
+    }
+  }).length
+}
+
+/**
+ * Appends a note on skipped challenges to an error that reports no payable challenge. Returns the
+ * message unchanged when none were skipped.
+ *
+ * @internal
+ */
+export function withSkippedChallenges(message: string, count: number): string {
+  if (count <= 0) return message
+  return count === 1
+    ? `${message}. Skipped 1 challenge that selects a credential header other than Payment-Authorization`
+    : `${message}. Skipped ${count} challenges that select a credential header other than Payment-Authorization`
+}
+
+/** Splits a `WWW-Authenticate` value into its `Payment` challenges. */
+function paymentChunks(value: string): string[] {
+  const starts = findSchemeStarts(value, Constants.Schemes.payment)
+  // Slice each scheme from its `Payment ` prefix up to the next scheme boundary,
+  // trimming any trailing comma/whitespace between schemes.
+  return starts.map((start, i) => {
+    const end = i + 1 < starts.length ? starts[i + 1]! : value.length
+    return value.slice(start, end).replace(/,\s*$/, '')
   })
 }
 
@@ -723,7 +773,14 @@ export function deserializeList<
  * ```
  */
 export function verify(challenge: Challenge, options: verify.Options): boolean {
-  const expectedId = computeId(challenge, options)
+  let expectedId: string
+  try {
+    expectedId = computeId(challenge, options)
+  } catch (error) {
+    // A challenge that selects an unsupported credential header was never issued by this server.
+    if (error instanceof UnsupportedCredentialHeaderError) return false
+    throw error
+  }
   return constantTimeEqual(challenge.id, expectedId)
 }
 

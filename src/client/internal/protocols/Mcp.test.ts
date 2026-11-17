@@ -99,6 +99,19 @@ describe('mcp HTTP protocol', () => {
     },
   )
 
+  test('rejects a malformed challenge that selects another credential header', async () => {
+    const { id: _, ...malformed } = challenge
+    const response = jsonResponse({
+      ...paymentRequired,
+      error: {
+        ...paymentRequired.error,
+        data: { challenges: [{ ...malformed, header: 'X-Payment' }, challenge] },
+      },
+    })
+
+    expect(await getChallengeIds(response)).toEqual([])
+  })
+
   test('parses JSON content types case-insensitively', async () => {
     const response = jsonResponse(paymentRequired, 'Application/JSON; charset=utf-8')
 

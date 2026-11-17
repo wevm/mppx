@@ -712,6 +712,25 @@ describe('validate: error handling', () => {
     },
   )
 
+  test(
+    'fails a challenge that selects an unsupported credential header next to a valid one',
+    { timeout: 15_000 },
+    async () => {
+      const valid = Challenge.serialize(makeChallenge())
+      const unsupported = `${Challenge.serialize(makeChallenge({ id: 'unsupported' }))}, header="X-Payment"`
+      const server = await testServer((_req, res) => {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: `${unsupported}, ${valid}`,
+        })
+        res.end()
+      })
+      const { output } = await serve(['validate', server.url, '--endpoint', 'POST:/api/test'])
+      expect(output).toContain(
+        '1 of 2 challenges select a credential header other than Payment-Authorization',
+      )
+    },
+  )
+
   test('names the probed credential header in the hint', { timeout: 15_000 }, async () => {
     const server = await mppServer(makeChallenge({ header: 'Payment-Authorization' }), {
       errorStatus: 500,

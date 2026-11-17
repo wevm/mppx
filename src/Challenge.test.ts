@@ -957,6 +957,20 @@ describe('credential header binding', () => {
     expect(received.header).toBe(Constants.Headers.paymentAuthorization)
     expect(Challenge.verify(received, { secretKey })).toBe(true)
   })
+
+  test.each(['X-Payment', 'Payment-Credential', ''])(
+    'behavior: verify returns false for the credential header "%s"',
+    (header) => {
+      const issued = Challenge.from({
+        secretKey,
+        realm,
+        method: 'tempo',
+        intent: 'charge',
+        request,
+      })
+      expect(Challenge.verify({ ...issued, header }, { secretKey })).toBe(false)
+    },
+  )
 })
 
 describe('deserializeList', () => {
@@ -1034,6 +1048,20 @@ describe('deserializeList', () => {
       expect(Challenge.deserializeList(unsupported)).toEqual([])
     },
   )
+
+  test('behavior: counts challenges skipped for their credential header', () => {
+    const unsupported = `${Challenge.serialize(baseChallenge)}, header="X-Payment"`
+    const supported = `${secondHeader}, header="Payment-Authorization"`
+
+    expect(Challenge.countUnsupportedCredentialHeaders(`${unsupported}, ${supported}`)).toBe(1)
+    expect(Challenge.countUnsupportedCredentialHeaders(`${unsupported}, ${unsupported}`)).toBe(2)
+    expect(Challenge.countUnsupportedCredentialHeaders(supported)).toBe(0)
+    expect(Challenge.countUnsupportedCredentialHeaders(null)).toBe(0)
+    expect(Challenge.withSkippedChallenges('No method found', 0)).toBe('No method found')
+    expect(Challenge.withSkippedChallenges('No method found', 2)).toBe(
+      'No method found. Skipped 2 challenges that select a credential header other than Payment-Authorization',
+    )
+  })
 })
 
 describe('fromHeaders', () => {

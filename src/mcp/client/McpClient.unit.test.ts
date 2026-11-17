@@ -238,10 +238,25 @@ describe('MCP client challenge credential header', () => {
       const { calls, createCredential, mcp } = setup([{ ...challenge('unsupported'), header }])
 
       await expect(mcp.callTool({ name: 'paid_tool', arguments: {} })).rejects.toThrow(
-        'No compatible payment method',
+        'No compatible payment method. Server offers: . Client has: tempo.charge. Skipped 1 challenge that selects a credential header other than Payment-Authorization',
       )
       expect(createCredential).not.toHaveBeenCalled()
       expect(calls).toHaveLength(1)
     },
   )
+
+  test('does not treat a malformed challenge with another credential header as payment required', async () => {
+    const { id: _, ...malformed } = challenge('malformed')
+    const { calls, createCredential, mcp } = setup([
+      { ...malformed, header: 'X-Payment' },
+      challenge('valid'),
+    ])
+
+    const error = await mcp.callTool({ name: 'paid_tool', arguments: {} }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(McpError)
+    expect(error.code).toBe(core_Mcp.paymentRequiredCode)
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(1)
+  })
 })

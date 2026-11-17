@@ -222,7 +222,10 @@ function createPaymentAwareCallTool<methods extends Methods>(
       const available = challenges.map((challenge) => `${challenge.method}.${challenge.intent}`)
       const installed = methods.map((method) => `${method.name}.${method.intent}`)
       throw new Error(
-        `No compatible payment method. Server offers: ${available.join(', ')}. Client has: ${installed.join(', ')}`,
+        Challenge.withSkippedChallenges(
+          `No compatible payment method. Server offers: ${available.join(', ')}. Client has: ${installed.join(', ')}`,
+          paymentRequired.challenges.length - challenges.length,
+        ),
         { cause },
       )
     }
@@ -292,18 +295,15 @@ function getPaymentRequiredMeta(
 }
 
 /**
- * Validates payment-required data: challenges are validated, extra fields pass through. A challenge
- * that selects an unsupported credential header is allowed here and skipped when paying.
+ * Validates payment-required data: challenges are validated, extra fields pass through. A
+ * well-formed challenge that selects an unsupported credential header is allowed here and skipped
+ * when paying.
  */
 function isPaymentRequiredData(value: unknown): value is PaymentRequiredData {
   if (typeof value !== 'object' || value === null) return false
   const { challenges } = value as { challenges?: unknown }
   if (!Array.isArray(challenges) || challenges.length === 0) return false
-  return challenges.every(
-    (challenge) =>
-      Challenge.hasUnsupportedCredentialHeader(challenge) ||
-      Challenge.Schema.safeParse(challenge).success,
-  )
+  return challenges.every((challenge) => Challenge.LenientSchema.safeParse(challenge).success)
 }
 
 /**

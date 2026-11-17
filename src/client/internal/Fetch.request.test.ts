@@ -250,7 +250,9 @@ describe('Fetch.from: challenge credential header', () => {
         `${challenge('unsupported')}, header="${header}"`,
       )
 
-      await fetch(url).catch(() => undefined)
+      await expect(fetch(url)).rejects.toThrow(
+        'Skipped 1 challenge that selects a credential header other than Payment-Authorization',
+      )
       expect(createCredential).not.toHaveBeenCalled()
       expect(requests).toHaveLength(1)
     },

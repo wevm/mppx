@@ -189,6 +189,17 @@ export async function validateChallenge(
       challenges.length === 1 ? methodList : `${challenges.length} methods: ${methodList}`,
     ),
   )
+  // List parsing skips a challenge that selects another credential header; report it even when
+  // another challenge is usable.
+  const skipped = Challenge.countUnsupportedCredentialHeaders(wwwAuth)
+  if (skipped > 0)
+    results.push(
+      fail(
+        'Challenge credential header',
+        `${skipped} of ${challenges.length + skipped} challenges select a credential header other than Payment-Authorization`,
+        'A challenge may only set header="Payment-Authorization"; omit header to use Authorization.',
+      ),
+    )
 
   // Validate common fields across all challenges
   const serverHost = new URL(baseUrl).hostname
