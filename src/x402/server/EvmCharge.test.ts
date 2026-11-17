@@ -579,6 +579,30 @@ describe('x402 evm charge facilitator extra and payTo', () => {
     expect(settled[0]!.extra?.tempoSettlement).toBe(tempoPayout)
   })
 
+  test('x402.extra with undefined values stays payable', async () => {
+    const { facilitator, settled } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: depositAddress,
+          x402: { facilitator, extra: { routingHint: undefined, tempoSettlement: tempoPayout } },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    expect('routingHint' in accepted.extra!).toBe(false)
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(result.status).toBe(200)
+    expect(settled[0]!.extra).not.toHaveProperty('routingHint')
+  })
+
   test('x402.extra cannot override the asset transfer fields', async () => {
     const { facilitator } = createDepositFacilitator()
     const mppx = Mppx.create({

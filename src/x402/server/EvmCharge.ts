@@ -107,7 +107,12 @@ export function resolveOptions(parameters: {
 }): ResolvedOptions {
   return {
     authorization: parameters.authorization,
-    ...(parameters.options?.extra ? { extra: parameters.options.extra } : {}),
+    ...(parameters.options?.extra
+      ? {
+          // Normalize to the JSON the challenge carries, so credentials echoing it match exactly.
+          extra: JSON.parse(JSON.stringify(parameters.options.extra)) as Record<string, unknown>,
+        }
+      : {}),
     ...(parameters.options?.facilitator
       ? {
           facilitator: x402_Facilitator.resolve(
