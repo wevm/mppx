@@ -56,6 +56,8 @@ export function wrapResponse(
   let failed: Error | undefined
   let started = false
   let ready = false
+  let consumed = false
+  let hasBody = true
   let preserveTrailers = false
   let preparingHeaders = false
   let headersPrepared = false
@@ -69,7 +71,7 @@ export function wrapResponse(
   })
 
   function acknowledgeWrites() {
-    if (!ready || failed) return
+    if (!ready || !consumed || failed) return
     for (const callback of readyCallbacks.splice(0)) {
       if (callbacks.delete(callback)) queueMicrotask(() => callback())
     }
@@ -98,6 +100,8 @@ export function wrapResponse(
       if (property === 'end')
         return () =>
           emit(() => {
+            if (hasBody && !consumed)
+              failed = new Error('Payment transport replaced the content response.')
             if (preserveTrailers && trailers) original.addTrailers(trailers)
             return original.end(() => {
               complete(callbacks, failed)
@@ -140,25 +144,30 @@ export function wrapResponse(
       else if (value !== undefined) headers.set(name, String(value))
     }
     const status = response.statusCode
-    const hasBody = ![204, 205, 304].includes(status)
+    hasBody = ![204, 205, 304].includes(status)
     const iterator = body[Symbol.asyncIterator]()
     let canceled = false
-    const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          const next = await iterator.next()
-          if (canceled) return
-          if (next.done) controller.close()
-          else controller.enqueue(next.value)
-        } catch (error) {
-          if (!canceled) controller.error(error)
-        }
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          consumed = true
+          acknowledgeWrites()
+          try {
+            const next = await iterator.next()
+            if (canceled) return
+            if (next.done) controller.close()
+            else controller.enqueue(next.value)
+          } catch (error) {
+            if (!canceled) controller.error(error)
+          }
+        },
+        cancel() {
+          canceled = true
+          body.destroy()
+        },
       },
-      cancel() {
-        canceled = true
-        body.destroy()
-      },
-    })
+      { highWaterMark: 0 },
+    )
     if (!hasBody) body.resume()
     void Promise.resolve()
       .then(() =>

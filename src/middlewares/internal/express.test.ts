@@ -71,6 +71,29 @@ test.each([
   await vi.waitFor(() => expect(done).toHaveBeenCalledOnce())
 })
 
+test.each([200, 402])(
+  'reports replaced output through callbacks for handler status %s',
+  async (status) => {
+    const written = vi.fn()
+    const ended = vi.fn()
+    const server = await serve(
+      (res) => {
+        res.status(status)
+        res.write('protected', written)
+        res.end('body', ended)
+      },
+      () => new Response('denied', { status: 402 }),
+    )
+    const response = await fetch(server.url)
+    expect(response.status).toBe(402)
+    expect(await response.text()).toBe('denied')
+    await vi.waitFor(() => {
+      expect(written).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
+      expect(ended).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
+    })
+  },
+)
+
 test('preserves repeated raw headers and undefined status-message overload', async () => {
   const wrap = vi.fn((response: Response) => response)
   const server = await serve((res) => {
