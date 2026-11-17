@@ -6,6 +6,7 @@ import {
   encodeFunctionResult,
   type Hex,
   numberToHex,
+  zeroAddress,
 } from 'viem'
 import { tempoModerato } from 'viem/chains'
 import { Abis } from 'viem/tempo'
@@ -31,6 +32,7 @@ const chain = { ...tempoModerato, hardfork: 't3' } as const
 // Answers the balance, access-key and simulation reads canPayDirect makes, over a real transport.
 function rpc(options: {
   balance: bigint
+  key?: { expiry?: bigint; isRevoked?: boolean; keyId?: Hex } | undefined
   remaining?: bigint | undefined
   simulate?: 'ok' | 'revert' | undefined
   spendPolicy?: 'limited' | 'unlimited' | undefined
@@ -64,9 +66,9 @@ function rpc(options: {
             case 'getKey':
               return {
                 enforceLimits: (options.spendPolicy ?? 'limited') === 'limited',
-                expiry: 2n ** 64n - 1n,
-                isRevoked: false,
-                keyId: accessKey,
+                expiry: options.key?.expiry ?? 2n ** 64n - 1n,
+                isRevoked: options.key?.isRevoked ?? false,
+                keyId: options.key?.keyId ?? accessKey,
                 signatureType: 0,
               }
             case 'getRemainingLimitWithPeriod':
@@ -381,5 +383,16 @@ describe('canPayDirect', () => {
     expect(await canPay({ balance: 1_000_000n, remaining: 999_999n }, keyAccount)).toBe(false)
     expect(await canPay({ balance: 1_000_000n, remaining: 1_000_000n }, keyAccount)).toBe(true)
     expect(await canPay({ balance: 1_000_000n, spendPolicy: 'unlimited' }, keyAccount)).toBe(true)
+  })
+
+  test('falls back for a revoked, expired or unregistered access key', async () => {
+    const keyAccount = { accessKeyAddress: accessKey, address: payer, type: 'local' }
+    const key = (key: NonNullable<Parameters<typeof rpc>[0]['key']>) =>
+      canPay({ balance: 1_000_000n, key, spendPolicy: 'unlimited' }, keyAccount)
+
+    expect(await key({ isRevoked: true })).toBe(false)
+    expect(await key({ expiry: 1n })).toBe(false)
+    expect(await key({ keyId: zeroAddress })).toBe(false)
+    expect(await key({ expiry: 0n })).toBe(true)
   })
 })

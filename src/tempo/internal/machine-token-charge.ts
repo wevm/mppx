@@ -10,6 +10,7 @@ import {
   type Account,
   type Address,
   type Client,
+  zeroAddress,
 } from 'viem'
 import { call, readContract } from 'viem/actions'
 import { Abis, Actions } from 'viem/tempo'
@@ -294,7 +295,9 @@ export async function getInsufficientBalanceError(
 
 /**
  * Returns whether an account can spend `amount` of a token: its balance covers it and, for an access
- * key that limits spending, so does its remaining limit. Any failed read returns false.
+ * key, the key is registered, unrevoked and unexpired, and any spending limit covers it too. A key
+ * not yet registered on-chain returns false, since its pending limits cannot be read. Any failed
+ * read returns false.
  */
 export async function canSpend(
   client: Client,
@@ -313,6 +316,12 @@ export async function canSpend(
       account: account.address,
       accessKey,
     })
+    if (
+      metadata.isRevoked ||
+      metadata.address === zeroAddress ||
+      (metadata.expiry !== 0n && metadata.expiry <= BigInt(Math.floor(Date.now() / 1000)))
+    )
+      return false
     if (metadata.spendPolicy !== 'limited') return true
     const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
       account: account.address,
