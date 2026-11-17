@@ -55,7 +55,8 @@ export function wrapResponse(
   let emitting = false
   let failed: Error | undefined
   let started = false
-  let accepted = false
+  let ready = false
+  let preserveTrailers = false
   let preparingHeaders = false
   let headersPrepared = false
   const nativeHeadersSent = Object.getOwnPropertyDescriptor(
@@ -68,7 +69,7 @@ export function wrapResponse(
   })
 
   function acknowledgeWrites() {
-    if (!accepted || failed) return
+    if (!ready || failed) return
     for (const callback of readyCallbacks.splice(0)) {
       if (callbacks.delete(callback)) queueMicrotask(() => callback())
     }
@@ -97,7 +98,7 @@ export function wrapResponse(
       if (property === 'end')
         return () =>
           emit(() => {
-            if (accepted && trailers) original.addTrailers(trailers)
+            if (preserveTrailers && trailers) original.addTrailers(trailers)
             return original.end(() => {
               complete(callbacks, failed)
               complete(endCallbacks, failed)
@@ -170,16 +171,17 @@ export function wrapResponse(
         ),
       )
       .then(async (wrapped) => {
-        accepted = wrapped.status === status
+        // Trailers describe the original body, not a replacement or transformed response.
+        preserveTrailers = hasBody && wrapped.body === stream
+        ready = true
         acknowledgeWrites()
-        if (!accepted) {
-          failed = new Error('Payment transport rejected the content response.')
-          body.destroy()
-          complete(callbacks, failed)
-          complete(endCallbacks, failed)
-        }
         for (const name of response.getHeaderNames()) response.removeHeader(name)
-        await NodeListener.sendResponse(output, wrapped)
+        try {
+          await NodeListener.sendResponse(output, wrapped)
+        } finally {
+          // A replacement response may finish without consuming the handler's body.
+          body.destroy()
+        }
       })
       .catch((error: unknown) => {
         failed = error instanceof Error ? error : new Error(String(error))
@@ -201,7 +203,7 @@ export function wrapResponse(
     const handler = typeof encoding === 'function' ? encoding : callback
     // Each write owns a completion, even when a producer reuses its callback.
     const done = handler ? (error?: Error | null) => handler(error) : undefined
-    if (failed || response.destroyed) {
+    if (failed || response.destroyed || response.writableEnded || body.destroyed) {
       if (done) queueMicrotask(() => done(failed ?? new Error('Response closed.')))
       return false
     }

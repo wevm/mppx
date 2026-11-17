@@ -90,30 +90,53 @@ test('preserves repeated raw headers and undefined status-message overload', asy
   expect(await response.text()).toBe('data: paid\n\n')
 })
 
-test.each([true, false])(
-  'withholds hints and only sends accepted trailers: %s',
-  async (accepted) => {
+test.each([
+  { accepted: true, status: 200 },
+  { accepted: false, status: 200 },
+  { accepted: true, status: 402 },
+  { accepted: false, status: 402 },
+])('withholds hints and only sends unchanged-body trailers: %j', async ({ accepted, status }) => {
+  const server = await serve(
+    (res) => {
+      res.status(status)
+      res.writeEarlyHints({ link: '</protected>; rel=preload' })
+      res.setHeader('Trailer', 'X-Protected')
+      res.addTrailers({ 'X-Protected': 'secret' })
+      res.end('paid')
+    },
+    (response) => (accepted ? response : new Response('denied', { status: 402 })),
+  )
+  const information = vi.fn()
+  const result = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    http
+      .get(server.url, (response) => {
+        response.resume()
+        response.on('end', () => resolve(response))
+      })
+      .on('information', information)
+      .on('error', reject)
+  })
+  expect(information).not.toHaveBeenCalled()
+  expect(result.trailers['x-protected']).toBe(accepted ? 'secret' : undefined)
+})
+
+test.each([false, true])(
+  'allows status normalization with transformed body: %s',
+  async (transform) => {
     const server = await serve(
       (res) => {
-        res.writeEarlyHints({ link: '</protected>; rel=preload' })
-        res.setHeader('Trailer', 'X-Protected')
-        res.addTrailers({ 'X-Protected': 'secret' })
-        res.end('paid')
+        res.status(201)
+        res.write('one', () => res.end('two'))
       },
-      (response) => (accepted ? response : new Response('denied', { status: 402 })),
+      (response) =>
+        new Response(
+          transform ? response.body!.pipeThrough(new TransformStream()) : response.body,
+          { status: 200 },
+        ),
     )
-    const information = vi.fn()
-    const result = await new Promise<http.IncomingMessage>((resolve, reject) => {
-      http
-        .get(server.url, (response) => {
-          response.resume()
-          response.on('end', () => resolve(response))
-        })
-        .on('information', information)
-        .on('error', reject)
-    })
-    expect(information).not.toHaveBeenCalled()
-    expect(result.trailers['x-protected']).toBe(accepted ? 'secret' : undefined)
+    const response = await fetch(server.url, { signal: AbortSignal.timeout(2_000) })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('onetwo')
   },
 )
 
