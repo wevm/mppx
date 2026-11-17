@@ -272,6 +272,42 @@ export type Facilitator = {
   supported?: (() => Promise<SupportedResponse>) | undefined
 }
 
+/**
+ * Headers an HTTP facilitator client sends with each request, keyed by facilitator path, the
+ * shape `createAuthHeaders` returns in `@x402/core`'s `FacilitatorConfig`. A path left out
+ * sends no extra headers.
+ */
+export type FacilitatorAuthHeaders = {
+  settle?: Record<string, string> | undefined
+  supported?: Record<string, string> | undefined
+  verify?: Record<string, string> | undefined
+}
+
+/**
+ * An HTTP facilitator that needs authentication, in the shape `@x402/core`'s
+ * `HTTPFacilitatorClient` takes, so one config works with both SDKs.
+ *
+ * @example
+ * ```ts
+ * const facilitator = {
+ *   url: 'https://facilitator.example',
+ *   createAuthHeaders: async () => {
+ *     const headers = { Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }
+ *     return { verify: headers, settle: headers, supported: headers }
+ *   },
+ * }
+ * ```
+ */
+export type FacilitatorConfig = {
+  /** Base URL of the facilitator. */
+  url: string
+  /**
+   * Returns the headers to send, keyed by path. Called before every request, so it can refresh
+   * short-lived tokens.
+   */
+  createAuthHeaders?: (() => FacilitatorAuthHeaders | Promise<FacilitatorAuthHeaders>) | undefined
+}
+
 /** Extracts x402 `PaymentRequirements` from a canonical exact request. */
 export function toPaymentRequirements(request: ExactRequest): PaymentRequirements {
   const { extensions: _extensions, resource: _resource, ...paymentRequirements } = request

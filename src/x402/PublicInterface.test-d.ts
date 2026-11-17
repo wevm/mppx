@@ -1,4 +1,4 @@
-import type { Receipt } from 'mppx'
+import type { Errors, Receipt } from 'mppx'
 import { evm, Mppx } from 'mppx/server'
 import type { Types as x402_Types } from 'mppx/x402'
 import type { Account } from 'viem'
@@ -38,6 +38,48 @@ describe('x402 public interface', () => {
       },
     })
     expectTypeOf(evm.facilitatorPayTo).returns.resolves.toEqualTypeOf<`0x${string}`>()
+  })
+
+  test('server evm charge takes an authenticated facilitator', async () => {
+    const createAuthHeaders = async () => {
+      const headers = { Authorization: 'Bearer key' }
+      return { verify: headers, settle: headers, supported: headers }
+    }
+    const facilitator = { url: 'https://facilitator.example', createAuthHeaders }
+
+    evm.charge({
+      currency: evm.assets.base.USDC,
+      recipient: await evm.facilitatorPayTo(facilitator, { network: 'eip155:8453' }),
+      x402: { facilitator },
+    })
+    evm.charge({
+      currency: evm.assets.base.USDC,
+      recipient: await evm.facilitatorPayTo(facilitator.url, {
+        createAuthHeaders,
+        network: 'eip155:8453',
+      }),
+      x402: { facilitator: facilitator.url, createAuthHeaders },
+    })
+
+    expectTypeOf(facilitator).toExtend<x402_Types.FacilitatorConfig>()
+    expectTypeOf<
+      ReturnType<NonNullable<x402_Types.FacilitatorConfig['createAuthHeaders']>>
+    >().toEqualTypeOf<
+      x402_Types.FacilitatorAuthHeaders | Promise<x402_Types.FacilitatorAuthHeaders>
+    >()
+    expectTypeOf<x402_Types.FacilitatorAuthHeaders>().toEqualTypeOf<{
+      settle?: Record<string, string> | undefined
+      supported?: Record<string, string> | undefined
+      verify?: Record<string, string> | undefined
+    }>()
+    expectTypeOf<Errors.FacilitatorResponseError['status']>().toEqualTypeOf<number>()
+    expectTypeOf<Errors.FacilitatorResponseError['path']>().toEqualTypeOf<
+      'settle' | 'supported' | 'verify'
+    >()
+  })
+
+  test('client evm charge takes maxAmount for a known asset without a currencies allowlist', () => {
+    clientEvm.charge({ account: {} as Account, maxAmount: '1' })
   })
 
   test('facilitator settle extensions reach the Receipt', () => {

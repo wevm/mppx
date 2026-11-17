@@ -43,7 +43,7 @@ describe('evm charge client', () => {
     expect(signTypedData).not.toHaveBeenCalled()
   })
 
-  test('does not use server-supplied decimals for maxAmount policy', async () => {
+  test('uses known asset decimals, not server-supplied decimals, for maxAmount policy', async () => {
     const client = charge({
       account,
       maxAmount: '1',
@@ -61,6 +61,83 @@ describe('evm charge client', () => {
           credentialTypes: ['authorization'],
           decimals: 18,
         },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await expect(client.createCredential({ challenge } as never)).rejects.toThrow(
+      'EVM charge amount exceeds maxAmount.',
+    )
+  })
+
+  test('signs a known asset with maxAmount and no currencies allowlist', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const client = charge({
+      account: { ...account, signTypedData } as unknown as Account,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address.toLowerCase(),
+        methodDetails: { chainId: 84532, credentialTypes: ['authorization'] },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await client.createCredential({ challenge } as never)
+
+    expect(signTypedData).toHaveBeenCalledOnce()
+    expect(signTypedData.mock.calls[0]).toMatchObject([
+      { domain: { chainId: 84532, name: 'USDC', version: '2' } },
+    ])
+  })
+
+  test('still requires decimals for maxAmount on an unknown asset', async () => {
+    const client = charge({
+      account,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: '0x3333333333333333333333333333333333333333',
+        methodDetails: {
+          chainId: 84532,
+          credentialTypes: ['authorization'],
+          decimals: 6,
+        },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await expect(client.createCredential({ challenge } as never)).rejects.toThrow(
+      'EVM charge maxAmount requires currency decimals.',
+    )
+  })
+
+  test('does not use known asset decimals for the same address on another chain', async () => {
+    const client = charge({
+      account,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address,
+        methodDetails: { chainId: 1, credentialTypes: ['authorization'] },
         recipient: '0x2222222222222222222222222222222222222222',
       },
     })
@@ -173,6 +250,31 @@ describe('evm charge client', () => {
     expect(signTypedData).not.toHaveBeenCalled()
   })
 
+  test('uses known asset authorization metadata for viem token currencies', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const client = charge({
+      account: { ...account, signTypedData } as unknown as Account,
+      currencies: tokens.popular,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address,
+        methodDetails: { chainId: 84532, credentialTypes: ['authorization'] },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await client.createCredential({ challenge } as never)
+
+    expect(signTypedData.mock.calls[0]).toMatchObject([{ domain: { name: 'USDC', version: '2' } }])
+  })
+
   test('requires authorization metadata when signing viem token currencies', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
     const client = charge({
@@ -190,9 +292,10 @@ describe('evm charge client', () => {
       realm: 'api.example.com',
       request: {
         amount: '1000000',
-        currency: Assets.baseSepolia.USDC.address,
+        // Mainnet OUSD: a viem token without EIP-3009 metadata that mppx ships no asset for.
+        currency: '0x9f6F3991D525015a6F8CaF062C83b62fD3AC4436',
         methodDetails: {
-          chainId: 84532,
+          chainId: 1,
           credentialTypes: ['authorization'],
           decimals: 18,
         },

@@ -41,8 +41,18 @@ export type Options = {
    * their own keys there. They can't override `assetTransferMethod`, `name` or `version`.
    */
   extra?: Record<string, unknown> | undefined
-  /** Facilitator client or base URL used for x402-compatible settlement. */
-  facilitator?: string | x402_Types.Facilitator | undefined
+  /**
+   * Returns the headers to send with each request to a URL `facilitator`, keyed by path, such as an
+   * API key. Called before every request. A `{ url, createAuthHeaders }` facilitator's own
+   * `createAuthHeaders` takes precedence.
+   */
+  createAuthHeaders?: x402_Types.FacilitatorConfig['createAuthHeaders']
+  /**
+   * Facilitator used for x402-compatible settlement: a base URL, a `{ url, createAuthHeaders }`
+   * config (the shape `@x402/core`'s `HTTPFacilitatorClient` takes) for one that needs
+   * authentication, or a client.
+   */
+  facilitator?: string | x402_Types.FacilitatorConfig | x402_Types.Facilitator | undefined
   /** Fetch implementation used for facilitator RPCs. */
   fetch?: typeof globalThis.fetch | undefined
   /** Maximum time in seconds allowed for x402-compatible payment completion. @default 300 */
@@ -118,7 +128,10 @@ export function resolveOptions(parameters: {
           facilitator: x402_Facilitator.resolve(
             parameters.options.facilitator,
             'EVM authorization x402 requires `facilitator`.',
-            { fetch: parameters.options.fetch },
+            {
+              createAuthHeaders: parameters.options.createAuthHeaders,
+              fetch: parameters.options.fetch,
+            },
           ),
         }
       : {}),

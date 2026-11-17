@@ -191,7 +191,9 @@ function decimalsOfAcceptedCurrency(
   )
   const resolved = currency ? Assets.resolve(currency, accepted.network) : undefined
   if (resolved?.decimals !== undefined) return resolved.decimals
-  return parameters.decimals
+  if (parameters.decimals !== undefined) return parameters.decimals
+  // Never the challenge's own metadata: a server could inflate decimals to raise the cap.
+  return Assets.lookup(acceptedCurrency, accepted.network)?.decimals
 }
 
 function withNonceSalt(extensions: Types.Extensions): Types.Extensions {
