@@ -2198,6 +2198,36 @@ export default defineConfig({ methods: [alpha] })
     }
   })
 
+  test('signs a new credential for an earlier challenge offered again', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential) => {
+      if (!credential) return { challenges: [first] }
+      if (credential.challenge.id === first.id && requests.length === 2)
+        return { challenges: [second] }
+      if (credential.challenge.id === second.id) return { challenges: [first] }
+      return { paid: 'paid-earlier-challenge' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-earlier-challenge')
+      expect(credentialIds(requests)).toEqual([first.id, second.id, first.id])
+      expect(requests[3]!.authorization).not.toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
   test('returns a server error after a credential without another round', async () => {
     const config = writeAlphaConfig()
     const challenge = alphaChallenge()

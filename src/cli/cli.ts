@@ -688,9 +688,9 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      // Credentials already sent, by the challenge they answer: a challenge offered again gets the
-      // same credential, as the client's fetch does, so it is never paid twice.
-      const sentCredentials = new Map<string, string>()
+      // The credential last sent and the challenge it answers: that challenge offered again gets the
+      // same credential, as the client's fetch does, so it is not paid twice.
+      let lastSent: { credential: string; key: string } | undefined
       for (let round = 0; ; round++) {
         const challengeResponseUrl = challengeResponse.url
           ? new URL(challengeResponse.url)
@@ -960,8 +960,7 @@ const cli = Cli.create('mppx', {
           })
         } else {
           // Create credential, or resend the one already sent for this challenge
-          const sentCredential = sentCredentials.get(answeredChallengeKey(challenge))
-          if (sentCredential !== undefined) credential = sentCredential
+          if (lastSent?.key === answeredChallengeKey(challenge)) credential = lastSent.credential
           else if (pluginResult?.createCredential)
             credential = await pluginResult.createCredential(
               selectedChallengeResponse,
@@ -1013,8 +1012,10 @@ const cli = Cli.create('mppx', {
           credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
         }
 
-        if (credential !== undefined)
-          sentCredentials.set(answeredChallengeKey(challenge), credential)
+        lastSent =
+          credential === undefined
+            ? undefined
+            : { credential, key: answeredChallengeKey(challenge) }
         // A 402 to a credential that offers a payable challenge starts a new challenge round, as the
         // client's fetch does: a new challenge gets a new credential, and the challenge just answered
         // gets the same credential again. For example, a zero-amount proof for a wallet without credit
