@@ -101,7 +101,7 @@ describe('expiry at authorization commit', () => {
         const keys = await keyPair()
         const signed = await HttpMessageSignature.sign(new Request('https://example.test'), {
           components: ['@authority'],
-          key: keys.privateKey,
+          key: keys,
           keyId: 'test',
           label: 'sig',
           tag: 'test',

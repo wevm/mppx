@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import * as Challenge from '../../Challenge.js'
+import * as PendingSettlement from '../../client/internal/PendingSettlement.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as Credential from '../../Credential.js'
@@ -176,16 +177,25 @@ async function createCredential(
   config: {
     context?: unknown
     method: Method.AnyClient
+    /** Stops resuming a pending Zone settlement once the call is aborted. */
+    signal?: AbortSignal | undefined
   },
 ): Promise<string> {
-  const { context, method } = config
+  const { context, method, signal } = config
 
   if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
   const parsedContext =
     method.context && context !== undefined ? method.context.parse(context) : undefined
-  return method.createCredential(
-    parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
+  // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+  return PendingSettlement.resume(
+    () =>
+      method.createCredential(
+        parsedContext !== undefined
+          ? { challenge, context: parsedContext }
+          : ({ challenge } as never),
+      ),
+    { attempts: maxPaymentAttempts, signal },
   )
 }
 
@@ -244,6 +254,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
     const credential = await createCredential(selected.challenge, {
       context: call.context,
       method: selected.method,
+      signal: call.requestOptions?.signal,
     })
     const parsed = Credential.deserialize(credential)
 

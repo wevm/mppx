@@ -10,6 +10,7 @@ import * as IdentityRequirements from '../identity/internal/Requirements.js'
 import * as IdentityServer from '../identity/Server.js'
 import type * as Identity from '../identity/Types.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
+import * as CredentialExpiry from '../internal/CredentialExpiry.js'
 import * as Env from '../internal/env.js'
 import type { DeepReadonly, MaybePromise } from '../internal/types.js'
 import { warnOnce } from '../internal/warnOnce.js'
@@ -18,6 +19,7 @@ import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import * as x402_Header from '../x402/Header.js'
+import * as x402_Siwx from '../x402/Siwx.js'
 import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
 import * as ChallengeMeta from './internal/challengeMeta.js'
@@ -765,13 +767,6 @@ export function create<
       )
     }
 
-    try {
-      Expires.assert(credential.challenge.expires, credential.challenge.id)
-    } catch (e) {
-      if (e instanceof Errors.PaymentError) await fail(e)
-      throw e
-    }
-
     if (methodCandidates.length > 1) {
       const matches = [
         ...new Set(
@@ -791,6 +786,15 @@ export function create<
           }),
         )
       mi = matches[0]!
+    }
+
+    // Checked against the method that matched: only it knows how long after expiry it accepts
+    // the credential.
+    try {
+      CredentialExpiry.assertFor(mi, credential)
+    } catch (e) {
+      if (e instanceof Errors.PaymentError) await fail(e)
+      throw e
     }
 
     if (parameters.requireValidate && !mi.validate)
@@ -1145,7 +1149,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     const hasIdentity = identityRoute.request.length > 0 || paymentCheck !== undefined
     // A verifier that reads Authorization would lose its credential to the Payment Credential.
     if (
-      identityRoute.request.some((verifier) => verifier.authorization) &&
+      (identityRoute.request.some((verifier) => verifier.authorization) ||
+        paymentCheck?.authorization) &&
       credentialHeader !== Constants.Headers.paymentAuthorization
     )
       throw new TypeError(
@@ -1409,7 +1414,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
       if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
       const { challenge, parsedRequest, request } = routeChallenge
-      internal._canonicalRequest = parsedRequest
 
       // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
       // no Challenge) leaves nothing the client proved a payment check against.
@@ -1645,7 +1649,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
       // Reject credentials without expires (fail-closed) or with expired timestamp
       try {
-        Expires.assert(credential.challenge.expires, credential.challenge.id)
+        CredentialExpiry.assertFor(method, credential)
       } catch (error) {
         await emitPaymentFailed({
           challenge,
@@ -2320,7 +2324,9 @@ async function resolveRouteChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(
+      CredentialExpiry.issuanceMeta(parameters.method, parameters.meta),
+    ),
     realm: effectiveRealm,
     request: request as never,
     secretKey: parameters.secretKey,
@@ -2349,7 +2355,9 @@ function createFallbackChallenge(parameters: {
     description: parameters.description,
     expires: parameters.expires,
     header: parameters.header,
-    meta: ChallengeMeta.withNonce(parameters.meta),
+    meta: ChallengeMeta.withNonce(
+      CredentialExpiry.issuanceMeta(parameters.method, parameters.meta),
+    ),
     realm:
       parameters.realm ??
       (parameters.capturedRequest
@@ -2696,7 +2704,7 @@ declare namespace MethodFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601) or Date. */
     expires?: z.DatetimeInput | undefined
-    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce; clients MUST echo opaque unchanged. */
+    /** Optional server-defined correlation data serialized as `opaque`. `_mppx_nonce` is reserved for a fresh server-generated issuance nonce, and `_mppx_expiry_grace` marks a challenge whose method accepts some credentials after it expires; clients MUST echo opaque unchanged. */
     meta?: Record<string, string> | undefined
     /** Optional route/resource scope bound via reserved challenge metadata. */
     scope?: string | undefined
@@ -3347,7 +3355,7 @@ function hasCheckedTwin(offers: readonly ConfiguredHandler['_internal'][]): bool
   const unchecked = offers.filter((offer) => offer._paymentCheck === undefined)
   return checked.some((a) =>
     unchecked.some(
-      (b) => a.name === b.name && a.intent === b.intent && sameTerms(a, b) && sameTerms(b, a),
+      (b) => a.name === b.name && a.intent === b.intent && (sameTerms(a, b) || sameTerms(b, a)),
     ),
   )
 }
@@ -3580,7 +3588,10 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   const incompatible = rest.some(
     (value) =>
       !isDeepStrictEqual(value.resource, first.resource) ||
-      !isDeepStrictEqual(value.extensions, first.extensions),
+      !isDeepStrictEqual(
+        withoutSiwx(value.extensions as Record<string, unknown> | undefined),
+        withoutSiwx(first.extensions as Record<string, unknown> | undefined),
+      ),
   )
   if (incompatible)
     return [
@@ -3594,13 +3605,41 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   const error = [first.error, ...rest.map((value) => value.error)]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join('; ')
+  const siwx = mergeSiwx([first, ...rest])
   return [
     x402_Header.encodePaymentRequired({
       ...first,
       accepts: [first.accepts, ...rest.map((value) => value.accepts)].flat(),
+      ...(siwx ? { extensions: { ...first.extensions, [x402_Siwx.extensionKey]: siwx } } : {}),
       ...(error ? { error } : {}),
     }),
   ]
+}
+
+/**
+ * Each SIWX offer carries its own nonce, so offers differ only in that and their chains.
+ * Nonces aren't tied to the offer that issued them, so one challenge listing every
+ * offer's chains serves all of them.
+ */
+function mergeSiwx(
+  values: readonly { extensions?: Record<string, unknown> | undefined }[],
+): x402_Siwx.Extension | undefined {
+  const extensions = values
+    .map((value) => x402_Siwx.fromPaymentRequired(value))
+    .filter((value): value is x402_Siwx.Extension => value !== undefined)
+  const [first] = extensions
+  if (!first) return undefined
+  const chains = new Map<string, x402_Siwx.Chain>()
+  for (const extension of extensions)
+    for (const chain of extension.supportedChains)
+      chains.set(`${chain.chainId}:${chain.type}`, chain)
+  return { ...first, supportedChains: [...chains.values()] }
+}
+
+function withoutSiwx(extensions: Record<string, unknown> | undefined) {
+  if (!extensions) return extensions
+  const { [x402_Siwx.extensionKey]: _, ...rest } = extensions
+  return rest
 }
 
 /**

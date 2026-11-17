@@ -14,6 +14,7 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
+import * as IdentityClient from '../../identity/Client.js'
 import * as Fetch from './Fetch.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
@@ -1924,6 +1925,57 @@ describe('Fetch.from: 402 retry path', () => {
     await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)
     expect(createCredential).not.toHaveBeenCalled()
     expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
+  })
+
+  test('proves a paid retry for the Challenge its credential pays', async () => {
+    const challenge = (id: string) =>
+      Challenge.from({
+        id,
+        intent: 'charge',
+        method: 'test',
+        realm: 'api.example.com',
+        request: { amount: '1' },
+      })
+    // A method that resumes an earlier payment pays that payment's Challenge.
+    const earlier = challenge('earlier')
+    const proved: (string | undefined)[] = []
+    let calls = 0
+    const fetch = Fetch.from({
+      fetch: async () =>
+        ++calls === 1
+          ? new Response(null, {
+              headers: { 'WWW-Authenticate': Challenge.serialize(challenge('selected')) },
+              status: 402,
+            })
+          : new Response('ok'),
+      identity: IdentityClient.from([
+        {
+          scope: '*',
+          prove(request, context) {
+            proved.push(context.challenge?.id)
+            return request
+          },
+        },
+      ]),
+      methods: [
+        Method.toClient(
+          Method.from({
+            intent: 'charge',
+            name: 'test',
+            schema: {
+              credential: { payload: z.object({}) },
+              request: z.object({ amount: z.string() }),
+            },
+          }),
+          {
+            createCredential: async () => Credential.serialize({ challenge: earlier, payload: {} }),
+          },
+        ),
+      ],
+    })
+
+    expect(await (await fetch('https://api.example.com/resource')).text()).toBe('ok')
+    expect(proved).toEqual([undefined, 'earlier'])
   })
 
   test('retries a relative request whose 402 has no URL', async () => {

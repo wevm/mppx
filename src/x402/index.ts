@@ -1,6 +1,7 @@
 /** @deprecated Use `assets` instead. */
 export * as Assets from './Assets.js'
 export * as Header from './Header.js'
+export * as Siwx from './Siwx.js'
 export * as Types from './Types.js'
 export * as assets from './Assets.js'
 export * from './Types.js'

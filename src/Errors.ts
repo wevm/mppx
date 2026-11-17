@@ -406,29 +406,83 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * The access key that signs a Tempo payment has less spending limit left than the payment needs,
+ * so the client did not sign it.
+ *
+ * The client simulates a payment before it signs. On chain the transaction would revert with the
+ * account keychain's `SpendingLimitExceeded()` error, and a fee payer would still pay for it.
+ * Raise the key's limit, wait for its period to reset, or pay with another key. The simulation
+ * error is the `cause`.
+ */
+export class SpendingLimitExceededError extends Error {
+  override readonly name = 'SpendingLimitExceededError'
+
+  /** Access key that signs the payment, when the account is an access key. */
+  readonly accessKey: `0x${string}` | undefined
+  /** Account that pays. */
+  readonly account: `0x${string}`
+
+  constructor(options: SpendingLimitExceededError.Options) {
+    const { accessKey, account, cause } = options
+    super(
+      `Access key spending limit exceeded: ${accessKey ? `key ${accessKey} of ` : ''}account ${account} cannot pay this amount, so the payment was not signed.`,
+    )
+    this.accessKey = accessKey
+    this.account = account
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace SpendingLimitExceededError {
+  type Options = {
+    /** Access key that signs the payment. */
+    accessKey?: `0x${string}` | undefined
+    /** Account that pays. */
+    account: `0x${string}`
+    /** The simulation error. */
+    cause?: unknown
+  }
+}
+
+/**
  * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *
  * Retry the same challenge with the same `tempo.charge` client to resume waiting without
- * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ * withdrawing again, or find the settlement with `senderTag` (or one of `senderTags`) on the Zone's portal.
+ * A new challenge for the same payment never starts a second withdrawal: from the origin that
+ * issued `challengeId`, it resumes this withdrawal and returns a credential for that challenge;
+ * otherwise it throws this error again.
  */
 export class ZoneSettlementPendingError extends Error {
   override readonly name = 'ZoneSettlementPendingError'
 
   /** ID of the challenge the withdrawal pays. */
   readonly challengeId: string
-  /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
-  readonly senderTag: `0x${string}`
+  /**
+   * Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it.
+   * `undefined` when a Zone RPC hid it and more than one candidate remains: see `senderTags`.
+   */
+  readonly senderTag: `0x${string}` | undefined
+  /** Sender tags the withdrawal may carry: its tag alone when known, else every candidate. Empty when not yet read. */
+  readonly senderTags: readonly `0x${string}`[]
   /** ID of the Zone the withdrawal left. */
   readonly zoneId: number
 
   constructor(options: ZoneSettlementPendingError.Options) {
-    const { cause, challengeId, senderTag, zoneId } = options
+    const { cause, challengeId, zoneId } = options
+    const senderTags = options.senderTags ?? (options.senderTag ? [options.senderTag] : [])
+    const senderTag = senderTags.length === 1 ? senderTags[0] : undefined
+    const withdrawal =
+      senderTag ?? (senderTags.length ? `with sender tag ${senderTags.join(' or ')}` : undefined)
     super(
-      `Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+      `Zone ${zoneId} withdrawal ${withdrawal ? `${withdrawal} ` : ''}for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
     )
     this.challengeId = challengeId
     this.senderTag = senderTag
+    this.senderTags = senderTags
     this.zoneId = zoneId
     // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
     if (cause !== undefined)
@@ -443,7 +497,9 @@ export declare namespace ZoneSettlementPendingError {
     /** ID of the challenge the withdrawal pays. */
     challengeId: string
     /** Sender tag of the withdrawal. */
-    senderTag: `0x${string}`
+    senderTag?: `0x${string}` | undefined
+    /** Sender tags the withdrawal may carry, when a Zone RPC hid its tag. */
+    senderTags?: readonly `0x${string}`[] | undefined
     /** ID of the Zone the withdrawal left. */
     zoneId: number
   }
@@ -572,19 +628,21 @@ export class InsufficientBalanceError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/session/insufficient-balance'
 
   constructor(options: InsufficientBalanceError.Options = {}) {
-    const { fundingUrl, reason } = options
+    const { cause, fundingUrl, reason } = options
     super(
       withFundingUrl(
         reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.',
         fundingUrl,
       ),
-      { fundingUrl },
+      { cause, fundingUrl },
     )
   }
 }
 
 export declare namespace InsufficientBalanceError {
   type Options = {
+    /** Underlying error, such as the failed simulation. Never serialized into Problem Details. */
+    cause?: unknown
     /** Page where the payer can get the funds, such as the MACH onramp. */
     fundingUrl?: string | undefined
     /** Reason for insufficient balance. */

@@ -15,6 +15,7 @@ import { Transaction } from 'viem/tempo'
 
 import type { Challenge } from '../../../Challenge.js'
 import * as Credential from '../../../Credential.js'
+import * as Simulation from '../../internal/simulation.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
@@ -100,14 +101,18 @@ async function prepareTempoChannelTransaction(
   // viem's stable transaction request type does not yet expose Tempo's
   // `calls`, `feePayer`, and `feeToken` fields together. Keep the cast at
   // this boundary so session credential builders stay typed.
-  return prepareTransactionRequest(client, {
-    account,
-    calls,
-    nonceKey: 'expiring',
-    ...(feePayer ? { feePayer: true } : {}),
-    feeToken,
-    ...(validAfter !== undefined ? { validAfter } : {}),
-  } as never)
+  // Preparation estimates gas, which simulates the calls as the signing key, so a deposit the
+  // key's spending limit or the account's balance cannot cover fails here, before signing.
+  return Simulation.run({ account }, () =>
+    prepareTransactionRequest(client, {
+      account,
+      calls,
+      nonceKey: 'expiring',
+      ...(feePayer ? { feePayer: true } : {}),
+      feeToken,
+      ...(validAfter !== undefined ? { validAfter } : {}),
+    } as never),
+  )
 }
 
 async function signPreparedTempoTransaction(client: Client, prepared: unknown): Promise<Hex.Hex> {

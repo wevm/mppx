@@ -1,13 +1,23 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx } from 'mppx/client'
 import { TxEnvelopeTempo } from 'ox/tempo'
-import { type Address, createClient, http, isAddressEqual, keccak256 } from 'viem'
+import {
+  type Address,
+  createClient,
+  custom,
+  encodeErrorResult,
+  http,
+  isAddressEqual,
+  keccak256,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
-import { Account, Addresses, Secp256k1 } from 'viem/tempo'
+import { Abis, Account, Addresses, Secp256k1 } from 'viem/tempo'
+import { defineToken } from 'viem/tokens'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
+import * as Errors from '../../Errors.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 import { charge } from './Charge.js'
@@ -1644,6 +1654,38 @@ describe('amount cap', () => {
       options: { currencies: [otherCurrency] },
       error: `Tempo charge currency is not allowed: ${currency}.`,
     },
+    {
+      name: 'token currency with its own decimals',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: currency }, decimals: 7 })],
+        maxAmount: '0.1',
+      },
+      error: undefined,
+    },
+    {
+      name: 'token currency above its decimals cap',
+      options: {
+        currencies: [defineToken({ addresses: { 42431: currency }, decimals: 7 })],
+        maxAmount: '0.0999999',
+      },
+      error: displayError,
+    },
+    {
+      name: 'token currency without the challenge currency',
+      options: { currencies: [defineToken({ addresses: { 42431: otherCurrency }, decimals: 6 })] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
+    // The challenge names no chain, so the client signs on its own chain, 42431.
+    {
+      name: 'token currency only on another chain than the signing chain',
+      options: { currencies: [defineToken({ addresses: { 4217: currency }, decimals: 6 })] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
+    {
+      name: 'resolved token currency bound to another chain than the signing chain',
+      options: { currencies: [defineToken({ addresses: { 4217: currency }, decimals: 6 })(4217)] },
+      error: `Tempo charge currency is not allowed: ${currency}.`,
+    },
   ])('$name', async ({ options, error }) => {
     vi.resetModules()
     const prepareTransactionRequest = vi.fn(async () => ({}))
@@ -1836,6 +1878,48 @@ describe('challenge selection policy', () => {
       await expect(prepared).rejects.toThrow('No method found for challenges')
     else expect((await prepared).challenge.id).toBe(`offer-${selected}`)
   })
+
+  describe('an offer with an oversized amount', () => {
+    const amount = '9'.repeat(100_000)
+
+    test.each([
+      {
+        name: 'is skipped for its currency without parsing the amount',
+        options: { currencies: [otherCurrency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: false,
+      },
+      {
+        name: 'is skipped for its recipient without parsing the amount',
+        options: { currencies: [currency], expectedRecipients: [currency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: false,
+      },
+      {
+        name: 'is accepted without a cap and without parsing the amount',
+        options: { currencies: [currency] },
+        accepted: true,
+        parsed: false,
+      },
+      {
+        name: 'is skipped when it exceeds a cap',
+        options: { currencies: [currency], maxAtomicAmount: '1' },
+        accepted: false,
+        parsed: true,
+      },
+    ])('$name', ({ accepted, options, parsed }) => {
+      const method = charge({ account, ...(options as charge.Parameters) })
+      const challenge = createChallenge()
+      const offer = { ...challenge, request: { ...challenge.request, amount } }
+      const bigInt = vi.spyOn(globalThis, 'BigInt')
+      try {
+        expect(method.canHandleChallenge!({ challenge: offer } as never)).toBe(accepted)
+        expect(bigInt.mock.calls.some(([value]) => value === amount)).toBe(parsed)
+      } finally {
+        bigInt.mockRestore()
+      }
+    })
+  })
 })
 
 describe('zero-amount recipient policy', () => {
@@ -1955,5 +2039,61 @@ describe('tempo.charge client: machTokenAccepted', () => {
       vi.doUnmock('../internal/machine-token-charge.js')
       vi.resetModules()
     }
+  })
+})
+
+describe('pre-signing simulation', () => {
+  function createRevertingClient(data: `0x${string}`) {
+    return createClient({
+      account,
+      chain: { ...tempoLocalnet, id: 42431 },
+      transport: custom(
+        {
+          async request(args) {
+            if (args.method === 'eth_chainId') return '0xa5bf'
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (args.method === 'eth_estimateGas')
+              throw Object.assign(new Error('execution reverted'), { code: 3, data })
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+  }
+
+  async function createCredential(data: `0x${string}`) {
+    const client = createRevertingClient(data)
+    return charge({ account, getClient: () => client }).createCredential({
+      challenge: createChallenge({
+        amount: '1',
+        chainId: 42431,
+        feePayer: true,
+        supportedModes: ['pull'],
+      }),
+      context: {},
+    })
+  }
+
+  test('throws SpendingLimitExceededError instead of signing a sponsored charge', async () => {
+    await expect(
+      createCredential(
+        encodeErrorResult({ abi: Abis.accountKeychain, errorName: 'SpendingLimitExceeded' }),
+      ),
+    ).rejects.toBeInstanceOf(Errors.SpendingLimitExceededError)
+  })
+
+  test('throws InsufficientBalanceError instead of signing a sponsored charge', async () => {
+    await expect(
+      createCredential(
+        encodeErrorResult({
+          abi: Abis.tip20,
+          args: [0n, 1n, currency],
+          errorName: 'InsufficientBalance',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(Errors.InsufficientBalanceError)
   })
 })

@@ -495,9 +495,10 @@ describe('superviseCloses', () => {
           tickCost: 100n,
           prepaidUnits: 1,
           refundIdempotencyKey: key,
-          generate: (async function* () {
+          generate: async function* (stream) {
+            await stream.charge()
             yield 'delivered'
-          })(),
+          },
           beforeCharge: async () => {
             expect((await store.getChannel(channelId))?.closeRequestedAt).toBe(0n)
           },
@@ -535,11 +536,11 @@ describe('superviseCloses', () => {
           prepaidUnits: 1,
           refundIdempotencyKey: key,
           autoCreditPrepaid: true,
-          generate: (async function* () {
+          generate: async function* () {
             await superviseCloses(parameters)
             expect(close).not.toHaveBeenCalled()
             yield await Promise.reject(new Error('generation failed'))
-          })(),
+          },
         }),
       ).text(),
     ).rejects.toThrow('generation failed')

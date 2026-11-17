@@ -1,5 +1,6 @@
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
+import * as Credential from '../../Credential.js'
 import { PaymentOutcomeUnknownError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import * as IdentityClient from '../../identity/Client.js'
@@ -10,6 +11,7 @@ import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
+import * as PendingSettlement from './PendingSettlement.js'
 import * as ProofRealm from './ProofRealm.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
 
@@ -21,6 +23,14 @@ const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
 const MPPX_FETCH_IDENTITY = Symbol.for('mppx.fetch.identity')
 /** Per-request payment opt-out preserved by forwarding fetch layers. @internal */
 export const skipPayment = Symbol.for('mppx.fetch.skipPayment')
+/**
+ * Disables automatic payments for a request, including through identity wrappers.
+ * Custom forwarding layers must preserve the returned init's symbol properties.
+ */
+export function withoutPayment(init: RequestInit = {}): RequestInit {
+  return { ...init, [skipPayment]: true } as RequestInit
+}
+
 const defaultMaxPaymentRetries = 3
 const maxErrorBodyBytes = 64 * 1024
 const errorBodyTimeoutMs = 2_000
@@ -399,7 +409,17 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
             if (!MethodChallenge.has(selected.method))
-              return resolveCredential(selectedChallenge, selected.method, credentialContext)
+              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+              return PendingSettlement.resume(
+                () =>
+                  resolveCredential(
+                    selectedChallenge,
+                    selected.method,
+                    credentialContext,
+                    requestOrigin(paymentInput),
+                  ),
+                { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+              )
             const attempt: MethodResponse.Attempt = {
               origin: resolveRequestUrl(paymentInput).origin,
               prepare: () =>
@@ -458,6 +478,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         }
         const effectiveContext = preparedCredential ? preparedCredential.context : context
         validateCredentialHeaderValue(credential)
+        // Identity proofs bind to the Challenge the credential pays, which can be an earlier one
+        // (a resumed Zone withdrawal) rather than the one just selected.
+        const paidChallenge = credentialChallenge(credential, selectedChallenge)
         await events.emit(
           'credential.created',
           createCredentialCreatedPayload({
@@ -492,7 +515,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               // Runtimes do not strip custom payment headers on cross-origin redirects.
               redirect: 'manual',
             },
-            { challenge: selectedChallenge, headers: identityHeaders },
+            { challenge: paidChallenge, headers: identityHeaders },
           ))
         } catch (cause) {
           outcomeUnknown = unknownOutcome(cause)
@@ -1161,6 +1184,23 @@ function isWrappedFetch(fetch: typeof globalThis.fetch): fetch is WrappedFetch {
 }
 
 /** @internal */
+/**
+ * Returns the Challenge a serialized credential pays: the selected one, or the earlier
+ * Challenge a method resumed a payment for (keeping the selected one's credential header).
+ */
+function credentialChallenge(
+  credential: string,
+  selected: Challenge.Challenge,
+): Challenge.Challenge {
+  try {
+    const { challenge } = Credential.deserialize(credential)
+    if (challenge.id === selected.id) return selected
+    return { ...challenge, ...(selected.header !== undefined && { header: selected.header }) }
+  } catch {
+    return selected
+  }
+}
+
 export function validateCredentialHeaderValue(credential: string): void {
   if (!credential.trim()) throw new Error('Credential header value must be non-empty')
   if (credential.includes('\r') || credential.includes('\n')) {
@@ -1173,13 +1213,13 @@ async function resolveCredential(
   challenge: Challenge.Challenge,
   mi: Method.AnyClient,
   context: unknown,
-  attempt?: MethodResponse.Attempt | undefined,
+  attempt?: MethodResponse.Attempt | { origin: string } | undefined,
 ): Promise<string> {
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
   if (attempt?.origin) MethodResponse.attachOrigin(parameters, attempt.origin)
-  if (attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
+  if (attempt && 'prepare' in attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
   return mi.createCredential(parameters as never)
 }
 
@@ -1249,6 +1289,15 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   if (input instanceof URL) return input
   if (input instanceof Request) return new URL(input.url)
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
+}
+
+/** The request's origin, or `undefined` for a relative URL outside a browser. */
+function requestOrigin(input: RequestInfo | URL): { origin: string } | undefined {
+  try {
+    return { origin: resolveRequestUrl(input).origin }
+  } catch {
+    return undefined
+  }
 }
 
 /** Rejects Request modes whose paid retry cannot carry a credential to the server. */
