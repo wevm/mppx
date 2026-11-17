@@ -1,5 +1,6 @@
 import { OutgoingMessage } from 'node:http'
 import { PassThrough } from 'node:stream'
+import { finished } from 'node:stream/promises'
 
 import type { Request as ExpressRequest, Response as ExpressResponse } from 'express'
 
@@ -182,10 +183,17 @@ export function wrapResponse(
       .then(async (wrapped) => {
         // Trailers describe the original body, not a replacement or transformed response.
         preserveTrailers = hasBody && wrapped.body === stream
+        // HEAD deliberately omits an unchanged body without making delivery a failure.
+        const head = response.req.method === 'HEAD' && preserveTrailers
+        if (head) {
+          consumed = true
+          body.resume()
+        }
         ready = true
         acknowledgeWrites()
         for (const name of response.getHeaderNames()) response.removeHeader(name)
         try {
+          if (head) await finished(body, { cleanup: true })
           await NodeListener.sendResponse(output, wrapped)
         } finally {
           // A replacement response may finish without consuming the handler's body.

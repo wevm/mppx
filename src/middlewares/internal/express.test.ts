@@ -94,6 +94,44 @@ test.each([200, 402])(
   },
 )
 
+test.each([true, false])(
+  'HEAD completion distinguishes unchanged and replaced bodies: %s',
+  async (accepted) => {
+    const written = vi.fn()
+    const ended = vi.fn()
+    const server = await serve(
+      (res) => {
+        res.write('protected', written)
+        res.end('body', ended)
+      },
+      (response) =>
+        accepted ? new Response(response.body, response) : new Response('denied', { status: 402 }),
+    )
+    const response = await fetch(server.url, { method: 'HEAD' })
+    expect(response.status).toBe(accepted ? 200 : 402)
+    expect(await response.text()).toBe('')
+    await vi.waitFor(() => {
+      expect(written).toHaveBeenCalledOnce()
+      expect(ended).toHaveBeenCalledOnce()
+    })
+    for (const callback of [written, ended]) {
+      if (accepted) expect(callback.mock.calls[0]?.[0]).toBeUndefined()
+      else expect(callback.mock.calls[0]?.[0]).toBeInstanceOf(Error)
+    }
+  },
+)
+
+test('HEAD allows callback-driven handlers to finish before native end', async () => {
+  const ended = vi.fn()
+  const server = await serve((res) => {
+    res.write('one', () => setTimeout(() => res.end('two', ended), 10))
+  })
+  const response = await fetch(server.url, { method: 'HEAD' })
+  expect(response.status).toBe(200)
+  expect(await response.text()).toBe('')
+  await vi.waitFor(() => expect(ended).toHaveBeenCalledExactlyOnceWith(undefined))
+})
+
 test('preserves repeated raw headers and undefined status-message overload', async () => {
   const wrap = vi.fn((response: Response) => response)
   const server = await serve((res) => {
