@@ -271,7 +271,7 @@ async function bufferResponse(response: Response): Promise<Response> {
 }
 
 /**
- * Identifies a challenge the CLI has answered. A native MPP challenge is its ID, which binds every
+ * Identifies the challenge a sent credential answers. A native MPP challenge is its ID, which binds every
  * field that can change what is paid, so display text such as `description` can't make an
  * answered challenge look new. x402 challenges carry synthetic positional IDs, so they are
  * identified by their payment fields instead.
@@ -286,13 +286,12 @@ function answeredChallengeKey(challenge: Challenge.Challenge): string {
 const maxPaymentRounds = 3
 
 /**
- * Returns whether a 402 answering a credential offers a challenge the CLI can pay and has not
- * answered yet, so the request continues with a new challenge round instead of failing.
+ * Returns whether a 402 answering a credential offers a challenge the CLI can pay, so the request
+ * continues with a new challenge round instead of failing.
  */
-async function hasUnansweredChallenge(
+async function hasPayableChallenge(
   response: Response,
   options: {
-    answered: ReadonlySet<string>
     config?: Parameters<typeof selectChallenge>[1]
     currency?: string | undefined
     ignoreX402ResponseUrl?: boolean | undefined
@@ -302,10 +301,10 @@ async function hasUnansweredChallenge(
   const offered = await collectChallenges(response, options.protocol, {
     ignoreX402ResponseUrl: options.ignoreX402ResponseUrl,
   }).catch(() => [])
-  const unanswered = filterChallengesByCurrency(offered, options.currency).filter(
-    (challenge) => !options.answered.has(answeredChallengeKey(challenge)),
+  return (
+    selectChallenge(filterChallengesByCurrency(offered, options.currency), options.config) !==
+    undefined
   )
-  return selectChallenge(unanswered, options.config) !== undefined
 }
 
 /**
@@ -689,18 +688,18 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const answeredChallenges = new Set<string>()
+      // Credentials already sent, by the challenge they answer: a challenge offered again gets the
+      // same credential, as the client's fetch does, so it is never paid twice.
+      const sentCredentials = new Map<string, string>()
       for (let round = 0; ; round++) {
         const challengeResponseUrl = challengeResponse.url
           ? new URL(challengeResponse.url)
           : undefined
         const ignoreX402ResponseUrl =
           initialTarget.host !== undefined && challengeResponseUrl?.hostname === '127.0.0.1'
-        const offeredChallenges = (
-          await collectChallenges(challengeResponse, c.options.protocol, {
-            ignoreX402ResponseUrl,
-          })
-        ).filter((challenge) => !answeredChallenges.has(answeredChallengeKey(challenge)))
+        const offeredChallenges = await collectChallenges(challengeResponse, c.options.protocol, {
+          ignoreX402ResponseUrl,
+        })
         if (offeredChallenges.length === 0)
           return c.error({
             code: 'UNSUPPORTED_PROTOCOL',
@@ -960,8 +959,10 @@ const cli = Cli.create('mppx', {
             redirect: 'manual',
           })
         } else {
-          // Create credential
-          if (pluginResult?.createCredential)
+          // Create credential, or resend the one already sent for this challenge
+          const sentCredential = sentCredentials.get(answeredChallengeKey(challenge))
+          if (sentCredential !== undefined) credential = sentCredential
+          else if (pluginResult?.createCredential)
             credential = await pluginResult.createCredential(
               selectedChallengeResponse,
               credentialContext,
@@ -1012,11 +1013,13 @@ const cli = Cli.create('mppx', {
           credentialResponse = await targetFetch(credentialTarget.url, credentialFetchInit)
         }
 
-        answeredChallenges.add(answeredChallengeKey(challenge))
-        // A 402 to a credential that offers a payable challenge not answered yet starts a new
-        // challenge round, as the client's fetch does. For example, a zero-amount proof for a
-        // wallet without credit is answered with a 402 offering only the real charge. A configured
-        // session method already runs its rounds through the payment-aware fetch.
+        if (credential !== undefined)
+          sentCredentials.set(answeredChallengeKey(challenge), credential)
+        // A 402 to a credential that offers a payable challenge starts a new challenge round, as the
+        // client's fetch does: a new challenge gets a new credential, and the challenge just answered
+        // gets the same credential again. For example, a zero-amount proof for a wallet without credit
+        // is answered with a 402 offering only the real charge. A configured session method already
+        // runs its rounds through the payment-aware fetch.
         if (
           credentialResponse.status === 402 &&
           !(configMethod && isTempoSessionChallenge(challenge)) &&
@@ -1024,8 +1027,7 @@ const cli = Cli.create('mppx', {
         ) {
           const nextChallengeResponse = await bufferResponse(credentialResponse)
           if (
-            await hasUnansweredChallenge(nextChallengeResponse.clone(), {
-              answered: answeredChallenges,
+            await hasPayableChallenge(nextChallengeResponse.clone(), {
               config: loaded?.config,
               currency: c.options.currency,
               ignoreX402ResponseUrl,

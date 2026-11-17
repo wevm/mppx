@@ -1913,6 +1913,8 @@ describe('challenge rounds', () => {
 import { Credential, Method, z } from '${mppxModuleUrl}'
 import { defineConfig } from '${cliModuleUrl}'
 
+let signed = 0
+
 const alpha = Method.toClient(Method.from({
   name: 'alpha',
   intent: 'charge',
@@ -1922,7 +1924,8 @@ const alpha = Method.toClient(Method.from({
   },
 }), {
   async createCredential({ challenge }) {
-    return Credential.serialize({ challenge, payload: { token: 'alpha-' + challenge.id } })
+    signed += 1
+    return Credential.serialize({ challenge, payload: { token: 'alpha-' + challenge.id + '-' + signed } })
   },
 })
 
@@ -2112,7 +2115,7 @@ export default defineConfig({ methods: [alpha] })
         expect(request.header).toBe('kept')
       }
       expect(Credential.deserialize(requests[2]!.authorization!).payload).toEqual({
-        token: `alpha-${second.id}`,
+        token: `alpha-${second.id}-2`,
       })
     } finally {
       httpServer.close()
@@ -2120,7 +2123,7 @@ export default defineConfig({ methods: [alpha] })
     }
   })
 
-  test('does not pay again when the answered challenge is offered again', async () => {
+  test('resends the same credential when the answered challenge is offered again', async () => {
     const config = writeAlphaConfig()
     const challenge = alphaChallenge()
     const { httpServer, requests } = await roundsServer(() => ({ challenges: [challenge] }))
@@ -2129,29 +2132,97 @@ export default defineConfig({ methods: [alpha] })
       const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
 
       expect(exitCode).toBe(75)
-      expect(requests).toHaveLength(2)
-      expect(credentialIds(requests)).toEqual([challenge.id])
+      expect(requests).toHaveLength(4)
+      expect(credentialIds(requests)).toEqual([challenge.id, challenge.id, challenge.id])
+      expect(new Set(requests.slice(1).map((request) => request.authorization)).size).toBe(1)
     } finally {
       httpServer.close()
       config.cleanup()
     }
   })
 
-  test('does not pay again when the answered challenge returns with new display text', async () => {
+  test('resends the same credential when the answered challenge returns with new display text', async () => {
     const config = writeAlphaConfig()
     const challenge = alphaChallenge()
-    const { httpServer, requests } = await roundsServer((credential) => ({
-      challenges: [
-        credential ? { ...challenge, description: 'Payment was not accepted' } : challenge,
-      ],
-    }))
+    const { httpServer, requests } = await roundsServer((credential, index) =>
+      index === 1
+        ? { challenges: [{ ...challenge, description: 'Payment was not accepted' }] }
+        : credential
+          ? { paid: 'paid-on-resend' }
+          : { challenges: [challenge] },
+    )
 
     try {
-      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
 
-      expect(exitCode).toBe(75)
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-on-resend')
+      expect(requests).toHaveLength(3)
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('pays a new challenge after resending the answered one', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential, index) => {
+      if (!credential || index === 1) return { challenges: [first] }
+      if (credential.challenge.id === first.id) return { challenges: [second] }
+      return { paid: 'paid-new-challenge' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-new-challenge')
+      expect(credentialIds(requests)).toEqual([first.id, first.id, second.id])
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('returns a server error after a credential without another round', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const requests: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      requests.push(req.headers.authorization ?? '')
+      if (req.headers.authorization) {
+        res.statusCode = 500
+        res.setHeader(
+          Constants.Headers.wwwAuthenticate,
+          Challenge.serialize(alphaChallenge({ amount: '3' })),
+        )
+        res.end('settlement failed')
+        return
+      }
+      res.statusCode = 402
+      res.setHeader(Constants.Headers.wwwAuthenticate, Challenge.serialize(challenge))
+      res.end()
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(output).toContain('settlement failed')
       expect(requests).toHaveLength(2)
-      expect(credentialIds(requests)).toEqual([challenge.id])
     } finally {
       httpServer.close()
       config.cleanup()
