@@ -1,5 +1,6 @@
 import * as Currency from '../../Currency.js'
 import type { NoExtraKeys } from '../../internal/types.js'
+import * as Facilitator from '../../x402/server/Facilitator.js'
 import * as Assets from '../Assets.js'
 import * as Chains from '../Chains.js'
 import { charge as charge_ } from './Charge.js'
@@ -80,4 +81,9 @@ export namespace evm {
   export const assets = Assets
   /** Common EVM chain IDs for public config. */
   export const chains = Chains
+  /**
+   * Reads the `payTo` an x402 facilitator publishes in `GET /supported` (`kinds[].extra.payTo`),
+   * for facilitators that settle into an address of their own. Use it once at startup as `recipient`.
+   */
+  export const facilitatorPayTo = Facilitator.payTo
 }

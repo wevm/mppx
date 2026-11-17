@@ -36,6 +36,11 @@ const mppxRouteBindingSchema = {
 }
 
 export type Options = {
+  /**
+   * Extra fields added to every x402 payment requirement's `extra`, for facilitators that read
+   * their own keys there. They can't override `assetTransferMethod`, `name` or `version`.
+   */
+  extra?: Record<string, unknown> | undefined
   /** Facilitator client or base URL used for x402-compatible settlement. */
   facilitator?: string | x402_Types.Facilitator | undefined
   /** Fetch implementation used for facilitator RPCs. */
@@ -73,6 +78,7 @@ export type RouteBindingMode = 'required' | 'resource'
 
 export type ResolvedOptions = {
   authorization: Types.AuthorizationConfig
+  extra?: Record<string, unknown> | undefined
   facilitator?: x402_Types.Facilitator | undefined
   maxTimeoutSeconds: number
   routeBinding: RouteBindingMode
@@ -101,6 +107,12 @@ export function resolveOptions(parameters: {
 }): ResolvedOptions {
   return {
     authorization: parameters.authorization,
+    ...(parameters.options?.extra
+      ? {
+          // Normalize to the JSON the challenge carries, so credentials echoing it match exactly.
+          extra: JSON.parse(JSON.stringify(parameters.options.extra)) as Record<string, unknown>,
+        }
+      : {}),
     ...(parameters.options?.facilitator
       ? {
           facilitator: x402_Facilitator.resolve(
@@ -374,12 +386,13 @@ export function isPendingCredential(credential: Credential.Credential): boolean 
 /** Converts a native EVM charge request to x402 exact payment requirements. */
 export function toPaymentRequirements(
   request: Types.ChargeRequest,
-  config: Pick<ResolvedOptions, 'authorization' | 'maxTimeoutSeconds'>,
+  config: Pick<ResolvedOptions, 'authorization' | 'extra' | 'maxTimeoutSeconds'>,
 ): x402_Types.PaymentRequirements {
   return {
     amount: request.amount,
     asset: request.currency,
     extra: {
+      ...config.extra,
       assetTransferMethod: Types.eip3009,
       name: config.authorization.name,
       version: config.authorization.version,

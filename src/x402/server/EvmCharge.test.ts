@@ -506,3 +506,158 @@ describe('x402 evm charge behind Proxy', () => {
     expect(response.headers.get(x402_Types.paymentResponseHeader)).toBeTruthy()
   })
 })
+
+describe('x402 evm charge facilitator extra and payTo', () => {
+  const depositAddress = privateKeyToAccount(`0x${'77'.repeat(32)}`).address
+  const tempoPayout = '0x5555555555555555555555555555555555555555'
+
+  /** A facilitator that publishes its own payTo, and records what it was asked to settle. */
+  function createDepositFacilitator(options?: { payTo?: string | undefined }) {
+    const settled: x402_Types.PaymentRequirements[] = []
+    let supportedCalls = 0
+    return {
+      settled,
+      supportedCalls: () => supportedCalls,
+      facilitator: {
+        async verify() {
+          return { isValid: true }
+        },
+        async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+          settled.push(requirements)
+          return { network: requirements.network, success: true, transaction }
+        },
+        async supported() {
+          supportedCalls++
+          return {
+            kinds: [
+              { network: 'eip155:1', scheme: 'exact', x402Version: 2, extra: { payTo: recipient } },
+              {
+                network: 'eip155:84532',
+                scheme: 'exact',
+                x402Version: 2,
+                extra:
+                  options?.payTo === undefined
+                    ? { payTo: depositAddress }
+                    : { payTo: options.payTo },
+              },
+            ],
+          }
+        },
+      } satisfies x402_Types.Facilitator,
+    }
+  }
+
+  test('x402.extra reaches the payment requirements and settlement', async () => {
+    const { facilitator, settled } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: depositAddress,
+          x402: { facilitator, extra: { tempoSettlement: tempoPayout } },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    expect(accepted.payTo).toBe(depositAddress)
+    expect(accepted.extra).toEqual({
+      assetTransferMethod: 'eip3009',
+      name: 'USDC',
+      tempoSettlement: tempoPayout,
+      version: '2',
+    })
+
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(result.status).toBe(200)
+    expect(settled[0]!.extra?.tempoSettlement).toBe(tempoPayout)
+  })
+
+  test('x402.extra with undefined values stays payable', async () => {
+    const { facilitator, settled } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: depositAddress,
+          x402: { facilitator, extra: { routingHint: undefined, tempoSettlement: tempoPayout } },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    expect('routingHint' in accepted.extra!).toBe(false)
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(result.status).toBe(200)
+    expect(settled[0]!.extra).not.toHaveProperty('routingHint')
+  })
+
+  test('x402.extra cannot override the asset transfer fields', async () => {
+    const { facilitator } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: { facilitator, extra: { name: 'Fake', version: '9', assetTransferMethod: 'x' } },
+        }),
+      ],
+      secretKey,
+    })
+    const challenged = await mppx.evm.charge({ amount: '0.25' })(
+      request('https://example.com/paid'),
+    )
+    if (challenged.status !== 402) throw new Error()
+    expect(readChallenge(challenged.challenge).accepts[0]!.extra).toEqual({
+      assetTransferMethod: 'eip3009',
+      name: 'USDC',
+      version: '2',
+    })
+  })
+
+  test('evm.facilitatorPayTo() reads the recipient from the facilitator', async () => {
+    const { facilitator, settled, supportedCalls } = createDepositFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: await evm.facilitatorPayTo(facilitator, { network: 'eip155:84532' }),
+          x402: { facilitator, extra: { tempoSettlement: tempoPayout } },
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts[0]!
+    expect(accepted.payTo).toBe(depositAddress)
+
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(result.status).toBe(200)
+    expect(settled[0]!.payTo).toBe(depositAddress)
+    expect(settled[0]!.extra?.tempoSettlement).toBe(tempoPayout)
+    expect(supportedCalls()).toBe(1)
+  })
+
+  test('evm.facilitatorPayTo() fails when the facilitator publishes no payTo', async () => {
+    const { facilitator } = createDepositFacilitator({ payTo: 'nope' })
+    await expect(evm.facilitatorPayTo(facilitator, { network: 'eip155:84532' })).rejects.toThrow(
+      /publishes no payTo/,
+    )
+  })
+})
