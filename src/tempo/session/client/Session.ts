@@ -16,7 +16,6 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
-import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
@@ -247,33 +246,15 @@ export function session(parameters: session.Parameters = {}) {
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
-  /**
-   * Resolves a challenge's context. With `machTokenAccepted: false`, new spending stays in the
-   * advertised currency, so MACH funding and a server snapshot of a MACH channel are ignored. A close only settles what a channel already spent, so it still reaches an
-   * existing MACH channel and its refund.
-   */
-  const resolveContext = async (
-    challenge: Challenge.Challenge,
-    options: { close?: boolean | undefined } = {},
-  ): Promise<ChallengeContext> => {
-    const resolved = await resolveChallengeContext({
+  /** Resolves a challenge's context. */
+  const resolveContext = (challenge: Challenge.Challenge): Promise<ChallengeContext> =>
+    resolveChallengeContext({
       allowCustomEscrow,
       challenge,
       escrowOverride,
       allowedChainIds,
       getClient,
     })
-    const { chainId, snapshot } = resolved
-    if (options.close || parameters.machTokenAccepted !== false) return resolved
-    const machineSnapshot =
-      snapshot &&
-      MachineTokenCharge.isMachineToken({ chainId, currency: snapshot.descriptor.token })
-    return {
-      ...resolved,
-      machTokenAccepted: false,
-      snapshot: machineSnapshot ? undefined : snapshot,
-    }
-  }
 
   const resolveCredentialAccount = async (
     resolved: ChallengeContext,
@@ -325,9 +306,7 @@ export function session(parameters: session.Parameters = {}) {
       const { challenge, context } = parameters
       // Closing settles what the channel already spent, so it stays available for any offer.
       if (context?.action !== 'close') assertSpendingPolicy(policy, challenge.request)
-      const challengeContext = await resolveContext(challenge, {
-        close: context?.action === 'close',
-      })
+      const challengeContext = await resolveContext(challenge)
       const attempt = MethodResponse.getAttempt(parameters)
       const origin = MethodResponse.getOrigin(parameters) ?? configuredOrigin?.origin
       if (
@@ -639,14 +618,6 @@ export declare namespace session {
        * channel already bound to another origin is rejected rather than overwritten or reused.
        */
       channelStore?: ChannelStore | undefined
-      /**
-       * Whether to fund a `machTokenAccepted` challenge's channel in MACH, 1:1 with the challenge
-       * currency, when the account holds enough MACH. Independent of `currencies`. Set `false`
-       * for a `channelStore` that holds only the challenge currency's channel.
-       *
-       * @default true
-       */
-      machTokenAccepted?: boolean | undefined
       /**
        * Allowlist of TIP-20 currency addresses this client will pay sessions in, compared
        * case-insensitively. Offers in other currencies are skipped during selection and

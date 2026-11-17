@@ -226,11 +226,9 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      // v2: the payee accepts a direct MACH transfer 1:1, unless the client turned it off.
+      // v2: the payee accepts a direct MACH transfer 1:1.
       const machineToken =
-        methodDetails?.machTokenAccepted === true &&
-        !isMachineTokenCurrency &&
-        parameters.machTokenAccepted !== false
+        methodDetails?.machTokenAccepted === true && !isMachineTokenCurrency
           ? MachineTokenCharge.getToken(chainId)
           : undefined
 
@@ -787,13 +785,6 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
-    /**
-     * Whether to pay a `machTokenAccepted` challenge with a direct MACH transfer, 1:1 with the
-     * challenge currency, when the account holds enough MACH. Independent of `currencies`.
-     *
-     * @default true
-     */
-    machTokenAccepted?: boolean | undefined
     /**
      * Token the payer pays its transaction fee in, when the challenge is not fee-sponsored.
      * Set it for an access key whose spending limits do not cover the default fee token,

@@ -1935,12 +1935,12 @@ describe('tempo.charge client: machTokenAccepted', () => {
       ])
       expect(findRoute).toHaveBeenCalledOnce()
 
-      // `machTokenAccepted: false` keeps the charge currency.
+      // A `currencies` allowlist does not need to list MACH.
       canPay = true
-      const optedOut = mockedCharge({ account, getClient: () => client, machTokenAccepted: false })
-      await optedOut.createCredential({ challenge: challenge(), context: {} })
+      const allowlisted = mockedCharge({ account, currencies: [currency], getClient: () => client })
+      await allowlisted.createCredential({ challenge: challenge(), context: {} })
       expect(prepareTransactionRequest.mock.calls[2]?.[1].calls).toEqual([
-        expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+        expect.objectContaining({ address: mach, functionName: 'transferWithMemo' }),
       ])
 
       // MACH cannot pay gas: an unsponsored payer without a stablecoin pays the charge currency.

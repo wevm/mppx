@@ -427,7 +427,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     maxDeposit: parameters.maxDeposit,
     topUpAmount: parameters.topUpAmount,
     channelStore: store,
-    machTokenAccepted: parameters.machTokenAccepted,
     onChannelUpdate(entry) {
       if (entry.channelId !== runtime.channel?.channelId) runtime.spent = 0n
       runtime.channel = entry
@@ -1232,13 +1231,6 @@ export namespace sessionManager {
       trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined
-      /**
-       * Whether to fund a `machTokenAccepted` challenge's channel in MACH. Set `false` for a
-       * `channelStore` that holds only the challenge currency's channel.
-       *
-       * @default true
-       */
-      machTokenAccepted?: boolean | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */

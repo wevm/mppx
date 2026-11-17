@@ -20,7 +20,7 @@ import * as defaults from '../../internal/defaults.js'
 import type * as Methods from '../../Methods.js'
 import type * as Types from '../precompile/Protocol.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
-import { channelKey, createChannelStore, entryKey } from './ChannelStore.js'
+import { channelKey, createChannelStore } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
@@ -231,124 +231,6 @@ describe('session machTokenAccepted', () => {
     )
 
     expect(open.descriptor.token).toBe(mach)
-  })
-
-  test('opens in the challenge currency when machTokenAccepted is off', async () => {
-    const method = session({
-      account,
-      machTokenAccepted: false,
-      decimals: 0,
-      getClient: () => createTestClient({ machBalance: 1_000n }),
-    })
-
-    const open = deserialize(
-      await method.createCredential({ challenge: makeChallenge(), context: {} }),
-    )
-
-    expect(open.descriptor.token).toBe(currency)
-  })
-
-  test('keeps a single-scope store on the challenge currency when machTokenAccepted is off', async () => {
-    const open = async (machBalance: bigint) => {
-      const backing = createChannelStore()
-      const expected = key(currency)
-      // Mirrors the CLI's persistent store, which rejects any scope other than its own.
-      const assertKey = (k: string) => {
-        if (k !== expected) throw new Error(`unexpected payment scope: ${k}`)
-      }
-      const channelStore: typeof backing = {
-        ...backing,
-        async get(k) {
-          assertKey(k)
-          return backing.get(k)
-        },
-        async set(entry) {
-          assertKey(entryKey(entry))
-          return backing.set(entry)
-        },
-        async delete(k) {
-          assertKey(k)
-          return backing.delete(k)
-        },
-      }
-      const method = session({
-        account,
-        channelStore,
-        machTokenAccepted: false,
-        decimals: 0,
-        getClient: () => createTestClient({ machBalance }),
-      })
-      return deserialize(await method.createCredential({ challenge: makeChallenge(), context: {} }))
-    }
-
-    expect((await open(1_000n)).descriptor.token).toBe(currency)
-    expect((await open(0n)).descriptor.token).toBe(currency)
-  })
-
-  test('ignores a MACH channel snapshot when machTokenAccepted is off', async () => {
-    const method = session({
-      account,
-      machTokenAccepted: false,
-      decimals: 0,
-      getClient: () => createTestClient({ machBalance: 1_000n }),
-    })
-    const sessionSnapshot = {
-      acceptedCumulative: '100',
-      chainId,
-      channelId: `0x${'33'.repeat(32)}`,
-      deposit: '1000',
-      descriptor: {
-        authorizedSigner: account.address,
-        expiringNonceHash: `0x${'11'.repeat(32)}`,
-        operator: '0x0000000000000000000000000000000000000000',
-        payee,
-        payer: account.address,
-        salt: `0x${'22'.repeat(32)}`,
-        token: mach,
-      },
-      escrow: tip20ChannelEscrow,
-      requiredCumulative: '200',
-      settled: '0',
-      spent: '100',
-    }
-
-    const open = deserialize(
-      await method.createCredential({
-        challenge: makeChallenge({ machTokenAccepted: true, sessionSnapshot }),
-        context: {},
-      }),
-    )
-
-    expect(open.action).toBe('open')
-    expect(open.descriptor.token).toBe(currency)
-  })
-
-  test('closes an existing MACH channel even when machTokenAccepted is off', async () => {
-    const method = session({
-      account,
-      machTokenAccepted: false,
-      decimals: 0,
-      getClient: () => createTestClient({ machBalance: 1_000n }),
-    })
-    const descriptor = {
-      authorizedSigner: account.address,
-      expiringNonceHash: `0x${'11'.repeat(32)}`,
-      operator: '0x0000000000000000000000000000000000000000',
-      payee,
-      payer: account.address,
-      salt: `0x${'22'.repeat(32)}`,
-      token: mach,
-    } as const
-
-    const close = deserialize(
-      await method.createCredential({
-        challenge: makeChallenge({ machTokenAccepted: true }),
-        context: { action: 'close', cumulativeAmountRaw: '100', descriptor },
-      }),
-    )
-
-    expect(close.action).toBe('close')
-    expect(close.descriptor.token).toBe(mach)
   })
 
   test('keeps using an existing channel in the challenge currency', async () => {

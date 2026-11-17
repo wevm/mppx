@@ -3,6 +3,7 @@ import type { Hex } from 'ox'
 import { createClient, formatUnits, http } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
+import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import {
   canSignDescriptor,
   resolveChallengeContext,
@@ -188,9 +189,30 @@ export async function runPersistentSessionRequest(
     escrow: challengeContext.escrow,
     chainId: challengeContext.chainId,
   }
+  // A `machTokenAccepted` challenge also accepts a channel funded in MACH, which the session
+  // manager may open or reuse instead, so the registry serves and locks that scope too.
+  const machineToken =
+    challengeContext.machTokenAccepted &&
+    !MachineTokenCharge.isMachineToken({
+      chainId: challengeContext.chainId,
+      currency: challengeContext.token,
+    })
+      ? MachineTokenCharge.getToken(challengeContext.chainId)
+      : undefined
+  const machineTokenScope = machineToken ? { ...scope, token: machineToken } : undefined
+  const scopes = machineTokenScope ? [scope, machineTokenScope] : [scope]
   const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
   const registry = parameters.registry ?? createSessionRegistry()
-  const lock = await registry.acquire(scope).catch((cause: unknown) => {
+  const locks: Awaited<ReturnType<typeof registry.acquire>>[] = []
+  const lock = {
+    async release() {
+      for (const lock of locks.splice(0).reverse()) await lock.release()
+    },
+  }
+  try {
+    for (const scope of scopes) locks.push(await registry.acquire(scope))
+  } catch (cause) {
+    await lock.release()
     if (cause instanceof SessionBusyError)
       throw new Errors.IncurError({
         code: cause.code,
@@ -199,12 +221,13 @@ export async function runPersistentSessionRequest(
         cause,
       })
     throw cause
-  })
+  }
 
   try {
     const selectedId =
       selection === 'auto'
-        ? await registry.getPreferred(scope)
+        ? ((await registry.getPreferred(scope)) ??
+          (machineTokenScope ? await registry.getPreferred(machineTokenScope) : undefined))
         : selection === 'new'
           ? undefined
           : selection
@@ -219,7 +242,9 @@ export async function runPersistentSessionRequest(
       if (
         selected.status !== 'open' ||
         !selected.channel.opened ||
-        sessionScopeKey(sessionScope(selected.channel)) !== sessionScopeKey(scope) ||
+        !scopes.some(
+          (scope) => sessionScopeKey(sessionScope(selected.channel)) === sessionScopeKey(scope),
+        ) ||
         !canSignDescriptor(resolvedAccount.account, selected.channel.descriptor)
       )
         throw new Errors.IncurError({
@@ -251,6 +276,7 @@ export async function runPersistentSessionRequest(
     })
     const channelStore = toChannelStore(registry, {
       scope,
+      scopes,
       selection,
       context: persistenceContext,
       onNewChannel() {
@@ -280,8 +306,6 @@ export async function runPersistentSessionRequest(
       client,
       channelStore,
       credentialContext: parameters.credentialContext,
-      // The registry scope is fixed to the advertised currency, so MACH funding stays off.
-      machTokenAccepted: false,
       decimals,
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,

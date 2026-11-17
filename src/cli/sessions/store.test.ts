@@ -457,6 +457,54 @@ describe('toChannelStore', () => {
     expect(await automatic.get(entryKey(channel()))).toEqual(channel())
   })
 
+  test('serves additional payment scopes, such as a MACH channel', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    const context = (): SessionPersistenceContext => ({
+      status: 'open',
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+    })
+    const machineToken = '0x20c000000000000000000000f37de3740adec032' as Address
+    const machineTokenScope = scope({ token: machineToken })
+    const machineTokenChannel = channel({ descriptor: { ...descriptor, token: machineToken } })
+    const store = toChannelStore(registry, {
+      scope: scope(),
+      scopes: [scope(), machineTokenScope],
+      selection: 'auto',
+      context,
+    })
+
+    expect(await store.get(entryKey(channel()))).toBeUndefined()
+    expect(await store.get(entryKey(machineTokenChannel))).toBeUndefined()
+    await store.set(machineTokenChannel)
+    expect(await registry.getPreferred(machineTokenScope)).toBe(machineTokenChannel.channelId)
+    expect(await registry.getPreferred(scope())).toBeUndefined()
+
+    const reopened = toChannelStore(registry, {
+      scope: scope(),
+      scopes: [scope(), machineTokenScope],
+      selection: 'auto',
+      context,
+    })
+    expect(await reopened.get(entryKey(channel()))).toBeUndefined()
+    expect(await reopened.get(entryKey(machineTokenChannel))).toEqual(machineTokenChannel)
+
+    const explicit = toChannelStore(registry, {
+      scope: scope(),
+      scopes: [scope(), machineTokenScope],
+      selection: machineTokenChannel.channelId,
+      context,
+    })
+    expect(await explicit.get(entryKey(channel()))).toBeUndefined()
+    expect(await explicit.get(entryKey(machineTokenChannel))).toEqual(machineTokenChannel)
+
+    const single = toChannelStore(registry, { scope: scope(), selection: 'auto', context })
+    await expect(single.get(entryKey(machineTokenChannel))).rejects.toThrow(
+      'unexpected payment scope',
+    )
+  })
+
   test('retains closing state when the manager deletes after creating a close credential', async () => {
     const registry = createSessionRegistry(registryOptions())
     let status: SessionPersistenceContext['status'] = 'open'
