@@ -42,13 +42,13 @@ export type Options = {
    */
   extra?: Record<string, unknown> | undefined
   /**
-   * Returns the headers to send with each request to a URL `facilitator`, keyed by path, such as an
-   * API key. Called before every request. A `{ url, createAuthHeaders }` facilitator's own
-   * `createAuthHeaders` takes precedence.
+   * Headers to send with each request to a URL `facilitator`, such as an API key: a flat record,
+   * or an object keyed by `verify`, `settle` and `supported`; a function is called before every
+   * request. A `{ url, headers }` facilitator's own `headers` win.
    */
-  createAuthHeaders?: x402_Types.FacilitatorConfig['createAuthHeaders']
+  headers?: x402_Types.FacilitatorConfig['headers']
   /**
-   * Facilitator used for x402-compatible settlement: a base URL, a `{ url, createAuthHeaders }`
+   * Facilitator used for x402-compatible settlement: a base URL, a `{ url, headers }`
    * config (the shape `@x402/core`'s `HTTPFacilitatorClient` takes) for one that needs
    * authentication, or a client.
    */
@@ -129,7 +129,7 @@ export function resolveOptions(parameters: {
             parameters.options.facilitator,
             'EVM authorization x402 requires `facilitator`.',
             {
-              createAuthHeaders: parameters.options.createAuthHeaders,
+              headers: parameters.options.headers,
               fetch: parameters.options.fetch,
             },
           ),

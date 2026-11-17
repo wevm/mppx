@@ -41,11 +41,8 @@ describe('x402 public interface', () => {
   })
 
   test('server evm charge takes an authenticated facilitator', async () => {
-    const createAuthHeaders = async () => {
-      const headers = { Authorization: 'Bearer key' }
-      return { verify: headers, settle: headers, supported: headers }
-    }
-    const facilitator = { url: 'https://facilitator.example', createAuthHeaders }
+    const headers = async () => ({ Authorization: 'Bearer key' })
+    const facilitator = { url: 'https://facilitator.example', headers }
 
     evm.charge({
       currency: evm.assets.base.USDC,
@@ -55,19 +52,33 @@ describe('x402 public interface', () => {
     evm.charge({
       currency: evm.assets.base.USDC,
       recipient: await evm.facilitatorPayTo(facilitator.url, {
-        createAuthHeaders,
+        headers,
         network: 'eip155:8453',
       }),
-      x402: { facilitator: facilitator.url, createAuthHeaders },
+      x402: { facilitator: facilitator.url, headers },
     })
 
     expectTypeOf(facilitator).toExtend<x402_Types.FacilitatorConfig>()
-    expectTypeOf<
-      ReturnType<NonNullable<x402_Types.FacilitatorConfig['createAuthHeaders']>>
-    >().toEqualTypeOf<
-      x402_Types.FacilitatorAuthHeaders | Promise<x402_Types.FacilitatorAuthHeaders>
+    evm.charge({
+      currency: evm.assets.base.USDC,
+      recipient: '0x1111111111111111111111111111111111111111',
+      x402: {
+        facilitator: {
+          url: 'https://facilitator.example',
+          headers: { Authorization: 'Bearer key' },
+        },
+        headers: () => ({ verify: { Authorization: 'Bearer key' } }),
+      },
+    })
+    expectTypeOf<x402_Types.FacilitatorHeaders>().toEqualTypeOf<
+      Record<string, string> | x402_Types.FacilitatorPathHeaders
     >()
-    expectTypeOf<x402_Types.FacilitatorAuthHeaders>().toEqualTypeOf<{
+    expectTypeOf<x402_Types.FacilitatorConfig['headers']>().toEqualTypeOf<
+      | x402_Types.FacilitatorHeaders
+      | (() => x402_Types.FacilitatorHeaders | Promise<x402_Types.FacilitatorHeaders>)
+      | undefined
+    >()
+    expectTypeOf<x402_Types.FacilitatorPathHeaders>().toEqualTypeOf<{
       settle?: Record<string, string> | undefined
       supported?: Record<string, string> | undefined
       verify?: Record<string, string> | undefined

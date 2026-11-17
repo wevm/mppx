@@ -10,22 +10,23 @@ type WrappedFetch = typeof globalThis.fetch & {
   [mppxFetchWrapper]?: typeof globalThis.fetch
 }
 
-/** Headers to send with each facilitator request, keyed by path. */
-export type AuthHeaders = Types.FacilitatorAuthHeaders
+/** Headers to send with facilitator requests: a flat record, or one keyed by path. */
+export type FacilitatorHeaders = Types.FacilitatorHeaders
 
 export type HttpOptions = {
   /**
-   * Returns the headers to send with each facilitator request, keyed by path, such as an API key.
-   * Called before every request. Same shape as `createAuthHeaders` in `@x402/core`.
+   * Headers to send with facilitator requests, such as an API key: a flat record for every
+   * request, or an object keyed by `verify`, `settle` and `supported`. A function is called before
+   * every request.
    */
-  createAuthHeaders?: Types.FacilitatorConfig['createAuthHeaders']
+  headers?: Types.FacilitatorConfig['headers']
   /** Fetch implementation used for facilitator RPCs. */
   fetch?: typeof globalThis.fetch | undefined
 }
 
 /**
- * Resolves an x402 facilitator URL, `{ url, createAuthHeaders }` config or client into a
- * facilitator client. A config's `createAuthHeaders` takes precedence over `options`.
+ * Resolves an x402 facilitator URL, `{ url, headers }` config or client into a
+ * facilitator client. A config's `headers` take precedence over `options`.
  */
 export function resolve(
   facilitator: string | Types.FacilitatorConfig | Types.Facilitator,
@@ -37,13 +38,34 @@ export function resolve(
     if (isConfig(facilitator))
       return http(facilitator.url, {
         ...options,
-        ...(facilitator.createAuthHeaders
-          ? { createAuthHeaders: facilitator.createAuthHeaders }
-          : {}),
+        ...(facilitator.headers ? { headers: facilitator.headers } : {}),
       })
     return facilitator
   }
   throw new Error(errorMessage)
+}
+
+const paths = ['settle', 'supported', 'verify']
+
+/**
+ * Picks the headers for one facilitator path. `headers` is per-path only when it has at least one
+ * key, every key is `verify`, `settle` or `supported` and every value is an object; otherwise it
+ * is a flat record sent on every path.
+ */
+function pathHeaders(
+  headers: Types.FacilitatorHeaders | undefined,
+  path: 'settle' | 'supported' | 'verify',
+): Record<string, string> | undefined {
+  if (!headers) return undefined
+  const entries = Object.entries(headers)
+  const perPath =
+    entries.length > 0 &&
+    entries.every(
+      ([key, value]) => paths.includes(key) && typeof value === 'object' && value !== null,
+    )
+  return perPath
+    ? (headers as Types.FacilitatorPathHeaders)[path]
+    : (headers as Record<string, string>)
 }
 
 /**
@@ -56,8 +78,10 @@ export function resolve(
 export function http(url: string, options?: HttpOptions | undefined): Types.Facilitator {
   const base = url.replace(/\/$/, '')
   const fetch = unwrapFetch(options?.fetch ?? globalThis.fetch)
-  const authHeaders = async (path: keyof AuthHeaders) =>
-    (await options?.createAuthHeaders?.())?.[path]
+  const authHeaders = async (path: 'settle' | 'supported' | 'verify') => {
+    const headers = options?.headers
+    return pathHeaders(typeof headers === 'function' ? await headers() : headers, path)
+  }
 
   async function post(path: 'settle' | 'verify', body: unknown) {
     return fetch(`${base}/${path}`, {
@@ -120,15 +144,15 @@ export async function payTo(
   facilitator: string | Types.FacilitatorConfig | Types.Facilitator,
   parameters: {
     /** Headers to send with `GET /supported` when `facilitator` is a URL. */
-    createAuthHeaders?: HttpOptions['createAuthHeaders']
+    headers?: HttpOptions['headers']
     fetch?: typeof globalThis.fetch | undefined
     network: string
     scheme?: string | undefined
   },
 ): Promise<`0x${string}`> {
-  const { createAuthHeaders, fetch, network, scheme = 'exact' } = parameters
+  const { headers, fetch, network, scheme = 'exact' } = parameters
   const client = resolve(facilitator, 'x402 payTo requires `facilitator`.', {
-    createAuthHeaders,
+    headers,
     fetch,
   })
   if (!client.supported)

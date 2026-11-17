@@ -322,7 +322,7 @@ describe('evm charge server', () => {
     }
   })
 
-  test('authenticates to a { url, createAuthHeaders } facilitator', async () => {
+  test('authenticates to a { url, headers } facilitator', async () => {
     const seen: { authorization: string | null; url: string }[] = []
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -338,7 +338,7 @@ describe('evm charge server', () => {
           x402: {
             facilitator: {
               url: 'https://facilitator.example',
-              createAuthHeaders: async () => ({
+              headers: async () => ({
                 settle: { Authorization: 'Bearer settle-key' },
                 verify: { Authorization: 'Bearer verify-key' },
               }),

@@ -41,19 +41,19 @@ No-key facilitators that currently advertise Base Sepolia v2 exact support:
 
 ### Facilitators that need an API key
 
-Pass the facilitator as `{ url, createAuthHeaders }`, the same shape `@x402/core`'s
-`HTTPFacilitatorClient` takes, so one config works with both SDKs. `createAuthHeaders` runs before
-every request and returns headers per path; a path it leaves out gets none.
+Pass the facilitator as `{ url, headers }`. `headers` is a flat record sent on every facilitator
+request, an object keyed by `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns
+in `@x402/core`), or a function returning either, called before every request so it can refresh
+short-lived tokens. An object counts as per-path only when every key is `verify`, `settle` or
+`supported` and every value is an object; anything else is a flat record. A path a per-path object
+leaves out gets no extra headers.
 
 ```ts
 import { evm, Mppx } from 'mppx/server'
 
 const facilitator = {
   url: 'https://facilitator.example',
-  createAuthHeaders: async () => {
-    const headers = { Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }
-    return { verify: headers, settle: headers, supported: headers }
-  },
+  headers: async () => ({ Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }),
 }
 
 const mppx = Mppx.create({
@@ -68,8 +68,9 @@ const mppx = Mppx.create({
 })
 ```
 
-`x402: { facilitator: url, createAuthHeaders }` and
-`evm.facilitatorPayTo(url, { network, createAuthHeaders })` also work.
+`x402: { facilitator: url, headers }` and
+`evm.facilitatorPayTo(url, { network, headers })` also work; a config's own `headers` win over the
+top-level ones.
 
 A facilitator that answers `/verify` or `/settle` with a non-2xx status (a wrong API key, an
 outage) throws `Errors.FacilitatorResponseError` with its `status` and the first 200 characters of

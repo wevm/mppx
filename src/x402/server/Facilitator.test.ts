@@ -261,10 +261,10 @@ describe('x402 facilitator auth headers', () => {
     return { calls, fetch: fetch as unknown as typeof globalThis.fetch }
   }
 
-  test('http() sends each path its own headers, calling createAuthHeaders per request', async () => {
+  test('http() sends each path its own headers, calling headers per request', async () => {
     const { calls, fetch } = recordingFetch()
     let n = 0
-    const createAuthHeaders = vi.fn(async () => {
+    const headers = vi.fn(async () => {
       n++
       return {
         settle: { Authorization: `Bearer settle-${n}` },
@@ -273,7 +273,7 @@ describe('x402 facilitator auth headers', () => {
       }
     })
     const facilitator = Facilitator.http('https://facilitator.example', {
-      createAuthHeaders,
+      headers,
       fetch,
     })
 
@@ -281,7 +281,7 @@ describe('x402 facilitator auth headers', () => {
     await facilitator.settle(paymentPayload, paymentRequirements)
     await facilitator.supported!()
 
-    expect(createAuthHeaders).toHaveBeenCalledTimes(3)
+    expect(headers).toHaveBeenCalledTimes(3)
     expect(calls.map((call) => Object.fromEntries(call.headers))).toEqual([
       { authorization: 'Bearer verify-1', 'content-type': 'application/json' },
       { authorization: 'Bearer settle-2', 'content-type': 'application/json' },
@@ -289,10 +289,10 @@ describe('x402 facilitator auth headers', () => {
     ])
   })
 
-  test('http() sends no extra headers for a path createAuthHeaders leaves out', async () => {
+  test('http() sends no extra headers for a path headers leaves out', async () => {
     const { calls, fetch } = recordingFetch()
     const facilitator = Facilitator.http('https://facilitator.example', {
-      createAuthHeaders: () => ({ settle: { Authorization: 'Bearer key' } }),
+      headers: () => ({ settle: { Authorization: 'Bearer key' } }),
       fetch,
     })
 
@@ -301,12 +301,80 @@ describe('x402 facilitator auth headers', () => {
     expect(Object.fromEntries(calls[0]!.headers)).toEqual({ 'content-type': 'application/json' })
   })
 
-  test('resolve() accepts a { url, createAuthHeaders } config', async () => {
+  test('http() sends a flat headers record on every path', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: { Authorization: 'Bearer key' },
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.settle(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => call.headers.get('authorization'))).toEqual([
+      'Bearer key',
+      'Bearer key',
+      'Bearer key',
+    ])
+  })
+
+  test('http() accepts a function returning a flat record', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: async () => ({ 'X-Api-Key': 'key' }),
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => call.headers.get('x-api-key'))).toEqual(['key', 'key'])
+  })
+
+  test('http() accepts a per-path object, not a function', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: { verify: { Authorization: 'Bearer verify' }, supported: { 'X-Api-Key': 'k' } },
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.settle(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => Object.fromEntries(call.headers))).toEqual([
+      { authorization: 'Bearer verify', 'content-type': 'application/json' },
+      { 'content-type': 'application/json' },
+      { 'x-api-key': 'k' },
+    ])
+  })
+
+  test('http() treats a record with a non-path key or a string value as flat', async () => {
+    const { calls, fetch } = recordingFetch()
+    const mixed = Facilitator.http('https://facilitator.example', {
+      headers: { verify: 'x', Authorization: 'Bearer key' },
+      fetch,
+    })
+    const named = Facilitator.http('https://facilitator.example', {
+      headers: { verify: 'Bearer verify-as-header' },
+      fetch,
+    })
+
+    await mixed.settle(paymentPayload, paymentRequirements)
+    await named.settle(paymentPayload, paymentRequirements)
+
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
+    expect(calls[0]!.headers.get('verify')).toBe('x')
+    expect(calls[1]!.headers.get('verify')).toBe('Bearer verify-as-header')
+  })
+
+  test('resolve() accepts a { url, headers } config', async () => {
     const { calls, fetch } = recordingFetch()
     const facilitator = Facilitator.resolve(
       {
         url: 'https://facilitator.example/',
-        createAuthHeaders: () => ({ verify: { Authorization: 'Bearer key' } }),
+        headers: () => ({ verify: { Authorization: 'Bearer key' } }),
       },
       undefined,
       { fetch },
@@ -318,15 +386,15 @@ describe('x402 facilitator auth headers', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
   })
 
-  test("resolve() prefers a config's createAuthHeaders over options", async () => {
+  test("resolve() prefers a config's headers over options", async () => {
     const { calls, fetch } = recordingFetch()
     const facilitator = Facilitator.resolve(
       {
         url: 'https://facilitator.example',
-        createAuthHeaders: () => ({ verify: { Authorization: 'Bearer config' } }),
+        headers: () => ({ verify: { Authorization: 'Bearer config' } }),
       },
       undefined,
-      { createAuthHeaders: () => ({ verify: { Authorization: 'Bearer options' } }), fetch },
+      { headers: () => ({ verify: { Authorization: 'Bearer options' } }), fetch },
     )
 
     await facilitator.verify(paymentPayload, paymentRequirements)
@@ -334,10 +402,10 @@ describe('x402 facilitator auth headers', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer config')
   })
 
-  test('resolve() applies options.createAuthHeaders to a URL', async () => {
+  test('resolve() applies options.headers to a URL', async () => {
     const { calls, fetch } = recordingFetch()
     const facilitator = Facilitator.resolve('https://facilitator.example', undefined, {
-      createAuthHeaders: () => ({ verify: { Authorization: 'Bearer options' } }),
+      headers: () => ({ verify: { Authorization: 'Bearer options' } }),
       fetch,
     })
 
@@ -351,12 +419,12 @@ describe('x402 facilitator auth headers', () => {
     expect(Facilitator.resolve(client)).toBe(client)
   })
 
-  test('payTo() sends createAuthHeaders with GET /supported', async () => {
+  test('payTo() sends headers with GET /supported', async () => {
     const { calls, fetch } = recordingFetch()
 
     expect(
       await Facilitator.payTo('https://facilitator.example', {
-        createAuthHeaders: () => ({ supported: { Authorization: 'Bearer key' } }),
+        headers: () => ({ supported: { Authorization: 'Bearer key' } }),
         fetch,
         network: 'eip155:8453',
       }),
@@ -364,13 +432,13 @@ describe('x402 facilitator auth headers', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
   })
 
-  test('payTo() accepts a { url, createAuthHeaders } config', async () => {
+  test('payTo() accepts a { url, headers } config', async () => {
     const { calls, fetch } = recordingFetch()
 
     await Facilitator.payTo(
       {
         url: 'https://facilitator.example',
-        createAuthHeaders: () => ({ supported: { Authorization: 'Bearer key' } }),
+        headers: () => ({ supported: { Authorization: 'Bearer key' } }),
       },
       { fetch, network: 'eip155:8453' },
     )
