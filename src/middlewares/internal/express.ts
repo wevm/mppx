@@ -62,6 +62,9 @@ export function wrapResponse(
   let preserveTrailers = false
   let preparingHeaders = false
   let headersPrepared = false
+  let outputHeadersWritten = false
+  let flushRequested = false
+  let completed = false
   const nativeHeadersSent = Object.getOwnPropertyDescriptor(
     OutgoingMessage.prototype,
     'headersSent',
@@ -101,10 +104,10 @@ export function wrapResponse(
       if (property === 'end')
         return () =>
           emit(() => {
-            if (hasBody && !consumed)
-              failed = new Error('Payment transport replaced the content response.')
+            if (!consumed) failed = new Error('Payment transport replaced the content response.')
             if (preserveTrailers && trailers) original.addTrailers(trailers)
             return original.end(() => {
+              completed = true
               complete(callbacks, failed)
               complete(endCallbacks, failed)
             })
@@ -112,6 +115,7 @@ export function wrapResponse(
       if (property === 'writeHead')
         return (...args: Parameters<typeof response.writeHead>) =>
           emit(() => {
+            if (outputHeadersWritten) return response
             // Apply the paid headers to the response instead of passing them to
             // writeHead, so a hook installed before payment() edits the final header
             // state and its forwarded arguments cannot replay a stale snapshot.
@@ -119,9 +123,13 @@ export function wrapResponse(
             for (const [name, value] of Object.entries(values ?? {}))
               response.setHeader(name, value as string | string[])
             const message = args.find((arg) => typeof arg === 'string')
-            return message === undefined
-              ? original.writeHead(args[0])
-              : original.writeHead(args[0], message)
+            const result =
+              message === undefined
+                ? original.writeHead(args[0])
+                : original.writeHead(args[0], message)
+            outputHeadersWritten = true
+            if (flushRequested) original.flushHeaders()
+            return result
           })
       const value = Reflect.get(target, property, target)
       return typeof value === 'function' ? value.bind(target) : value
@@ -198,7 +206,8 @@ export function wrapResponse(
         preserveTrailers = hasBody && wrapped.body === stream
         // HEAD deliberately omits an unchanged body without making delivery a failure.
         const head = response.req.method === 'HEAD' && preserveTrailers
-        if (head) {
+        const bodyless = !hasBody && wrapped.body === null && wrapped.status === status
+        if (head || bodyless) {
           consumed = true
           body.resume()
         }
@@ -206,7 +215,12 @@ export function wrapResponse(
         acknowledgeWrites()
         for (const name of response.getHeaderNames()) response.removeHeader(name)
         try {
-          if (head) {
+          if (head || bodyless) {
+            output.writeHead(
+              wrapped.status,
+              wrapped.statusText,
+              Object.fromEntries(wrapped.headers),
+            )
             try {
               await finished(body, { cleanup: true })
             } catch (error) {
@@ -275,7 +289,13 @@ export function wrapResponse(
     if (emitting) return original.end(chunk as string, encoding as BufferEncoding, callback)
     const done =
       typeof chunk === 'function' ? chunk : typeof encoding === 'function' ? encoding : callback
-    if (done) endCallbacks.push(done)
+    if (done) {
+      if (completed || failed || response.destroyed)
+        queueMicrotask(() =>
+          done(failed ?? (completed ? undefined : new Error('Response closed.'))),
+        )
+      else endCallbacks.push(done)
+    }
     if (typeof chunk === 'string' || chunk instanceof Uint8Array)
       write(chunk, typeof encoding === 'string' ? encoding : 'utf8')
     start()
@@ -309,8 +329,11 @@ export function wrapResponse(
   // Node exposes writeHeader as a separate alias, so override it too.
   Object.assign(response, { writeHeader: response.writeHead })
   response.flushHeaders = () => {
-    if (emitting) original.flushHeaders()
-    else start()
+    if (emitting || outputHeadersWritten) original.flushHeaders()
+    else {
+      flushRequested = true
+      start()
+    }
   }
   response.addTrailers = (values) => {
     if (emitting) original.addTrailers(values)

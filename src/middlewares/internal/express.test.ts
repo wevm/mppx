@@ -482,3 +482,55 @@ test('completes every queued write when the producer reuses one callback', async
   await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(count))
   expect(callback.mock.calls.every(([error]) => error == null)).toBe(true)
 })
+
+test.each([204, 205, 304])(
+  'bodyless %s waits for handler completion after header flush',
+  async (status) => {
+    const done = vi.fn()
+    let end!: () => void
+    const server = await serve((res) => {
+      res.writeHead(status)
+      res.flushHeaders()
+      end = () => res.end(done)
+    })
+    const response = await fetch(server.url)
+    expect(response.status).toBe(status)
+    expect(done).not.toHaveBeenCalled()
+    end()
+    await vi.waitFor(() => expect(done).toHaveBeenCalledWith(undefined))
+    await response.body?.cancel()
+  },
+)
+
+test.each([204, 205, 304])(
+  'bodyless %s replacement fails late handler completion',
+  async (status) => {
+    const done = vi.fn()
+    let end!: () => void
+    const server = await serve(
+      (res) => {
+        res.writeHead(status)
+        end = () => res.end(done)
+      },
+      () => new Response('payment required', { status: 402 }),
+    )
+    const response = await fetch(server.url)
+    expect(response.status).toBe(402)
+    await response.text()
+    end()
+    await vi.waitFor(() => expect(done).toHaveBeenCalledWith(expect.any(Error)))
+  },
+)
+
+test('flushes approved streaming headers before the producer writes', async () => {
+  let write!: () => void
+  const server = await serve((res) => {
+    res.setHeader('content-type', 'text/event-stream')
+    res.flushHeaders()
+    write = () => res.end('data: paid\n\n')
+  })
+  const response = await fetch(server.url)
+  expect(response.headers.get('content-type')).toBe('text/event-stream')
+  write()
+  expect(await response.text()).toBe('data: paid\n\n')
+})
