@@ -103,7 +103,12 @@ export function fromNodeListener(
   res: ServerResponse,
   options?: NodeConversionOptions | undefined,
 ): Request {
-  if (!Host.isAllowed(req, options?.allowedHosts))
+  const headers = createHeaders(req)
+  const incomingHost =
+    headers.get('Host') ?? (req.headers as Record<string, string>)[':authority'] ?? 'localhost'
+  const fixedHost = options?.host !== undefined
+  const checkedHost = fixedHost ? (req.headers.host ?? incomingHost) : incomingHost
+  if (!Host.isAllowed(req, options?.allowedHosts, checkedHost, fixedHost))
     throw new UntrustedHostError('Incoming host is not allowed.')
   let controller: AbortController | null = new AbortController()
   res.once('close', () => controller?.abort())
@@ -112,17 +117,12 @@ export function fromNodeListener(
   })
 
   const method = req.method ?? 'GET'
-  const headers = createHeaders(req)
   const protocol =
     options?.protocol ??
     ('encrypted' in req.socket && (req.socket as { encrypted?: boolean }).encrypted
       ? 'https:'
       : 'http:')
-  const host =
-    options?.host ??
-    headers.get('Host') ??
-    (req.headers as Record<string, string>)[':authority'] ??
-    'localhost'
+  const host = options?.host ?? incomingHost
   const url = createRequestUrl(req.url, `${protocol}//${host}`)
 
   const init: RequestInit & { duplex?: string } = {

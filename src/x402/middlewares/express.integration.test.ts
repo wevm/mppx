@@ -1,3 +1,5 @@
+import { request as httpRequest } from 'node:http'
+
 import { x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import express from 'express'
@@ -84,6 +86,29 @@ const method = evm.charge({
 })
 
 describe('x402 Express compatibility', () => {
+  test('rejects malformed absolute targets before negotiation', async () => {
+    const { server, calls, getHandlerCalls } = await createServer()
+    try {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const req = httpRequest(
+          server.url,
+          { path: 'http://trusted.example:99999/api/data' },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolve(res.statusCode))
+          },
+        )
+        req.on('error', reject)
+        req.end()
+      })
+      expect(status).toBe(400)
+      expect(calls).toEqual([])
+      expect(getHandlerCalls()).toBe(0)
+    } finally {
+      await server.close()
+    }
+  })
+
   test('rejects combined MPP and legacy x402 credentials', async () => {
     const { server } = await createServer()
     try {

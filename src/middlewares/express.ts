@@ -76,7 +76,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
     const protocol = req.protocol.toLowerCase()
     if (
-      !Host.isAllowed(req, adapterOptions.allowedHosts) ||
+      !Host.isAllowed(req, adapterOptions.allowedHosts, req.get('host')) ||
       (adapterOptions.allowedHosts !== undefined && protocol !== 'http' && protocol !== 'https')
     ) {
       res.status(421).send('Misdirected Request')

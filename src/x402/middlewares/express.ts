@@ -43,7 +43,14 @@ export function mpp(
   )
 
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const request = ExpressAdapter_.toRequest(req)
+    let request: Request
+    try {
+      request = ExpressAdapter_.toRequest(req)
+    } catch (error) {
+      if (!(error instanceof ExpressAdapter_.InvalidRequestTargetError)) return next(error)
+      res.status(400).send('Bad Request')
+      return
+    }
     const paymentHeader = Negotiator.getX402Credential(request)
     const context = {
       adapter: new ExpressAdapter(req),

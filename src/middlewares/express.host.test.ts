@@ -205,3 +205,29 @@ test.each([undefined, ['trusted.example']])(
     expect(intent).not.toHaveBeenCalled()
   },
 )
+
+test.each(['unapproved', 'raw-only'] as const)(
+  'Express rejects %s host before dispatching payment',
+  async (mode) => {
+    const intent = vi.fn(() =>
+      vi.fn(async () => ({ status: 402 as const, challenge: new Response(null, { status: 402 }) })),
+    )
+    const app = express()
+    if (mode === 'raw-only')
+      app.use((req, _res, next) => {
+        delete req.headers.host
+        next()
+      })
+    app.use(payment(intent, {}, { allowedHosts: ['trusted.example'] }))
+    const server = app.listen(0, '127.0.0.1')
+    servers.push(server)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('No listener address')
+    const response = await send(`http://127.0.0.1:${address.port}/paid`, {
+      headers: { Host: mode === 'raw-only' ? 'trusted.example' : 'denied.example' },
+    })
+    expect(response.status).toBe(421)
+    expect(intent).not.toHaveBeenCalled()
+  },
+)

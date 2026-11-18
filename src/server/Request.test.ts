@@ -72,6 +72,36 @@ describe('fromNodeListener', () => {
     ).toThrow(Request.UntrustedHostError)
   })
 
+  test('rejects hostless requests even when localhost is allowlisted', () => {
+    const [req, res] = createMockRequest({ rawHeaders: [] })
+    expect(() => Request.fromNodeListener(req, res, { allowedHosts: ['localhost'] })).toThrow(
+      Request.UntrustedHostError,
+    )
+  })
+
+  test.each(['trusted.example', undefined])(
+    'fixed host preserves normalized-only input while rejecting hostless input: %s',
+    (host) => {
+      const [req, res] = createMockRequest({ rawHeaders: [] })
+      if (host !== undefined) req.headers.host = host
+      const convert = () =>
+        Request.fromNodeListener(req, res, {
+          allowedHosts: ['trusted.example', 'localhost'],
+          host: 'fixed.example',
+        })
+      if (host) expect(convert().url).toBe('http://fixed.example/')
+      else expect(convert).toThrow(Request.UntrustedHostError)
+    },
+  )
+
+  test('rejects normalized-only Host when the URL would fall back to localhost', () => {
+    const [req, res] = createMockRequest({ rawHeaders: [] })
+    req.headers.host = 'trusted.example'
+    expect(() => Request.fromNodeListener(req, res, { allowedHosts: ['trusted.example'] })).toThrow(
+      Request.UntrustedHostError,
+    )
+  })
+
   test('converts IncomingMessage to Fetch Request', () => {
     const [req, res] = createMockRequest({
       method: 'POST',
