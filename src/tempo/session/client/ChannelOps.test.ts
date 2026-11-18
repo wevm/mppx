@@ -1,3 +1,4 @@
+import { Challenge, Credential } from 'mppx'
 import { Hex } from 'ox'
 import { type Address, createClient, custom, zeroAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -46,6 +47,30 @@ const descriptor = {
 const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
+  test('names the funding payer when a delegated signer serializes a voucher', () => {
+    const payer = '0x0000000000000000000000000000000000000099'
+    const challenge = Challenge.from({
+      id: 'payer',
+      intent: 'session',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: {},
+    })
+    const credential = ChannelOps.serializeCredential(
+      challenge,
+      {
+        action: 'voucher',
+        channelId,
+        cumulativeAmount: '1',
+        descriptor: { ...descriptor, payer },
+        signature: '0x1234',
+      },
+      chainId,
+      account,
+    )
+    expect(Credential.deserialize(credential).source).toBe(`did:pkh:eip155:42431:${payer}`)
+  })
+
   test('requires custom challenge escrows to be allowed or explicitly pinned', () => {
     const override = '0x0000000000000000000000000000000000000005' as Address
     const hinted = '0x0000000000000000000000000000000000000006' as Address

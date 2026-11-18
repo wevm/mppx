@@ -244,70 +244,73 @@ describe('SessionCredentialGuards', () => {
       }))
     }
 
-    test.each([
-      { label: 'payer', sourceAddress: descriptor.payer },
-      { label: 'authorized signer', sourceAddress: descriptor.authorizedSigner },
-    ])('accepts voucher credentials from the channel $label', async ({ sourceAddress }) => {
-      const store = channelStore()
-      await seedChannel(store)
-      const getChannelState = vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
-        closeRequestedAt: 0,
-        deposit: 100n,
-        settled: 0n,
-      })
-      const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
+    test.each([{ label: 'payer', sourceAddress: descriptor.payer }])(
+      'accepts voucher credentials from the channel $label',
+      async ({ sourceAddress }) => {
+        const store = channelStore()
+        await seedChannel(store)
+        const getChannelState = vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+          closeRequestedAt: 0,
+          deposit: 100n,
+          settled: 0n,
+        })
+        const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
 
-      await expect(
-        broadcastCredentialPayload({
-          challenge,
-          channelStateTtl: 60_000,
-          chainId: testChainId,
-          client: {} as never,
-          credentialSource: `did:pkh:eip155:${testChainId}:${sourceAddress}`,
-          escrow,
-          lastOnChainVerified: new Map([[computedChannelId, Date.now()]]),
-          minVoucherDelta: 1n,
-          payload: {
-            action: 'voucher',
-            channelId: computedChannelId,
-            cumulativeAmount: '60',
-            descriptor,
-            signature,
-          },
-          store,
-        }),
-      ).resolves.toMatchObject({ acceptedCumulative: '60' })
-      expect(getChannelState).toHaveBeenCalledOnce()
-      expect(verifyVoucher).toHaveBeenCalledOnce()
-    })
+        await expect(
+          broadcastCredentialPayload({
+            challenge,
+            channelStateTtl: 60_000,
+            chainId: testChainId,
+            client: {} as never,
+            credentialSource: `did:pkh:eip155:${testChainId}:${sourceAddress}`,
+            escrow,
+            lastOnChainVerified: new Map([[computedChannelId, Date.now()]]),
+            minVoucherDelta: 1n,
+            payload: {
+              action: 'voucher',
+              channelId: computedChannelId,
+              cumulativeAmount: '60',
+              descriptor,
+              signature,
+            },
+            store,
+          }),
+        ).resolves.toMatchObject({ acceptedCumulative: '60' })
+        expect(getChannelState).toHaveBeenCalledOnce()
+        expect(verifyVoucher).toHaveBeenCalledOnce()
+      },
+    )
 
-    test('rejects voucher credentials from a different source', async () => {
-      const store = channelStore()
-      await seedChannel(store)
-      const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
+    test.each([descriptor.authorizedSigner, '0x0000000000000000000000000000000000000099'])(
+      'rejects voucher credentials naming non-payer %s',
+      async (sourceAddress) => {
+        const store = channelStore()
+        await seedChannel(store)
+        const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
 
-      await expect(
-        broadcastCredentialPayload({
-          challenge,
-          channelStateTtl: 60_000,
-          chainId: testChainId,
-          client: {} as never,
-          credentialSource: `did:pkh:eip155:${testChainId}:0x0000000000000000000000000000000000000099`,
-          escrow,
-          lastOnChainVerified: new Map([[computedChannelId, Date.now()]]),
-          minVoucherDelta: 1n,
-          payload: {
-            action: 'voucher',
-            channelId: computedChannelId,
-            cumulativeAmount: '60',
-            descriptor,
-            signature,
-          },
-          store,
-        }),
-      ).rejects.toThrow('credential source does not match channel payer or authorized signer')
-      expect(verifyVoucher).not.toHaveBeenCalled()
-    })
+        await expect(
+          broadcastCredentialPayload({
+            challenge,
+            channelStateTtl: 60_000,
+            chainId: testChainId,
+            client: {} as never,
+            credentialSource: `did:pkh:eip155:${testChainId}:${sourceAddress}`,
+            escrow,
+            lastOnChainVerified: new Map([[computedChannelId, Date.now()]]),
+            minVoucherDelta: 1n,
+            payload: {
+              action: 'voucher',
+              channelId: computedChannelId,
+              cumulativeAmount: '60',
+              descriptor,
+              signature,
+            },
+            store,
+          }),
+        ).rejects.toThrow('credential source does not match channel payer')
+        expect(verifyVoucher).not.toHaveBeenCalled()
+      },
+    )
   })
 })
 

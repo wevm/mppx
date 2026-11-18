@@ -1890,6 +1890,36 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/descriptor does not match/)
   })
 
+  test.each([payer.address, wrongPayer.address])(
+    'verifies delegated vouchers only with payer source %s',
+    async (source) => {
+      const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
+      const openPayload = await createOpenPayload({ authorizedSigner: wrongPayer.address })
+      await persistPrecompileChannel(store, openPayload, { highestVoucherAmount: 100n })
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(wrongPayer),
+        wrongPayer,
+        openPayload.descriptor,
+        Types.uint96(250n),
+        chainId,
+      )
+      const verification = method.verify({
+        credential: {
+          ...voucherCredential(voucher, openPayload.channelId),
+          source: `did:pkh:eip155:${chainId}:${source}`,
+        },
+        request: verifyRequest(openPayload.channelId),
+      })
+      if (source === payer.address) {
+        await expect(verification).resolves.toMatchObject({ acceptedCumulative: '250' })
+        expect((await store.getChannel(openPayload.channelId))?.highestVoucherAmount).toBe(250n)
+      } else {
+        await expect(verification).rejects.toThrow('credential source does not match channel payer')
+        expect((await store.getChannel(openPayload.channelId))?.highestVoucherAmount).toBe(100n)
+      }
+    },
+  )
+
   test('accepts increasing precompile voucher and stores accounting state', async () => {
     const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
     const openPayload = await createOpenPayload({ initialAmount: 100n })
