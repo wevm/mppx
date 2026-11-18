@@ -1,3 +1,4 @@
+import { Secp256k1 } from 'ox'
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   type Address,
@@ -841,7 +842,7 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          const owner = crypto.randomUUID()
+          const owner = Secp256k1.randomPrivateKey()
           if (!(await tryClaimHash(store, hash, replayExpires, owner))) {
             throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
@@ -1140,10 +1141,7 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]:
-      | number
-      | SponsorBudget.State
-      | (Store.ReplayMarker & { owner?: string })
+    [key: `mppx:charge:${string}`]: number | SponsorBudget.State | Store.ReplayMarker
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -1759,19 +1757,7 @@ async function tryClaimHash(
   expires: number,
   owner?: string,
 ): Promise<boolean> {
-  if (owner === undefined) return Store.tryClaim(store, getHashStoreKey(hash), expires)
-  return store.update(getHashStoreKey(hash), (current) => {
-    if (!Number.isFinite(expires) || expires <= Date.now()) return { op: 'noop', result: false }
-    if (
-      current !== null &&
-      (typeof current !== 'object' ||
-        !('type' in current) ||
-        current.type !== 'mppx:replay' ||
-        current.expires > Date.now())
-    )
-      return { op: 'noop', result: false }
-    return { op: 'set', value: { expires, owner, type: 'mppx:replay' }, result: true }
-  })
+  return Store.tryClaim(store, getHashStoreKey(hash), expires, owner)
 }
 
 /** Whether a live replay marker holds `hash`, read without claiming it. */
@@ -1791,16 +1777,7 @@ async function releaseHashUse(
   hash: `0x${string}`,
   owner: string,
 ): Promise<void> {
-  await store.update(getHashStoreKey(hash), (current) => ({
-    op:
-      typeof current === 'object' &&
-      current !== null &&
-      'owner' in current &&
-      current.owner === owner
-        ? 'delete'
-        : 'noop',
-    result: undefined,
-  }))
+  await Store.releaseClaim(store, getHashStoreKey(hash), owner)
 }
 
 function parseHashCredentialSource(parameters: {

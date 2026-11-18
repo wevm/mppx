@@ -481,17 +481,39 @@ test.each([
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
 
-test('stale settlement cleanup preserves a replacement replay claim', async () => {
-  const { broadcast, sends, signatureHashKey, state, store } = await setup({ sponsored: false })
-  let open!: () => void
-  state.gate = new Promise((resolve) => (open = resolve))
-  state.outcome = 'lookup-error'
-  const inFlight = broadcast()
-  await vi.waitFor(() => expect(sends()).toBe(1))
-  const replacement = { expires: Date.now() + 60_000, type: 'mppx:replay' as const }
-  await store.update(signatureHashKey, () => ({ op: 'set', value: replacement, result: undefined }))
-  open()
-  await expect(inFlight).rejects.toBeInstanceOf(Error)
-  expect(await store.get(signatureHashKey)).toEqual(replacement)
-  await expectReplayed(broadcast())
+test.each([undefined, 'another-attempt'])(
+  'stale settlement cleanup preserves replacement owner %s',
+  async (owner) => {
+    const { broadcast, sends, signatureHashKey, state, store } = await setup({ sponsored: false })
+    let open!: () => void
+    state.gate = new Promise((resolve) => (open = resolve))
+    state.outcome = 'lookup-error'
+    const inFlight = broadcast()
+    await vi.waitFor(() => expect(sends()).toBe(1))
+    const replacement = {
+      expires: Date.now() + 60_000,
+      ...(owner ? { owner } : {}),
+      type: 'mppx:replay' as const,
+    }
+    await store.update(signatureHashKey, () => ({
+      op: 'set',
+      value: replacement,
+      result: undefined,
+    }))
+    open()
+    await expect(inFlight).rejects.toBeInstanceOf(Error)
+    expect(await store.get(signatureHashKey)).toEqual(replacement)
+    await expectReplayed(broadcast())
+  },
+)
+
+test('settles unsponsored transactions without global Web Crypto', async () => {
+  const { broadcast, state } = await setup({ sponsored: false })
+  state.outcome = 'included'
+  vi.stubGlobal('crypto', undefined)
+  try {
+    await expect(broadcast()).resolves.toMatchObject({ status: 'success' })
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })

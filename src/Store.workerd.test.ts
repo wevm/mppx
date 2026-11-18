@@ -163,6 +163,23 @@ describe.each([
     expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(true)
   })
 
+  test('owned and unowned claims share a namespace and stale cleanup preserves the winner', async () => {
+    const key = `${backend}:owned`
+    const expires = Date.now() + 60_000
+    expect(await run({ op: 'claim', key, expires, owner: 'first' })).toBe(true)
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
+    await run({ op: 'releaseClaim', key, owner: 'other' })
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
+    await run({ op: 'releaseClaim', key, owner: 'first' })
+    expect(await run({ op: 'claim', key, expires, owner: 'second' })).toBe(true)
+    await run({ op: 'releaseClaim', key, owner: 'first' })
+    expect(await run({ op: 'claim', key, expires })).toBe(false)
+    await run({ op: 'releaseClaim', key, owner: 'second' })
+    expect(await run({ op: 'claim', key, expires })).toBe(true)
+    await run({ op: 'releaseClaim', key, owner: 'second' })
+    expect(await run({ op: 'claim', key, expires, owner: 'third' })).toBe(false)
+  })
+
   test('claims a key again once delete releases it', async () => {
     const key = `${backend}:released`
     expect(await run({ op: 'claim', key, expires: Date.now() + 60_000 })).toBe(true)
@@ -175,6 +192,29 @@ describe.each([
 describe('Store.durableObject replay shards in workerd', () => {
   const run = <result>(command: Record<string, unknown>) =>
     request<result>({ ...command, backend: 'rpc', options: { replayShards: 4 } })
+
+  test('migrates old shard tables without forgetting live unowned claims', async () => {
+    const key = 'legacy-owner-migration'
+    const expires = Date.now() + 60_000
+    await request({ backend: 'rpc', op: 'legacyReplay', key, expires })
+    expect(
+      await request({
+        backend: 'rpc',
+        op: 'raw',
+        key,
+        body: { op: 'claimReplay', key, expires, owner: 'new' },
+      }),
+    ).toBe(false)
+    await request({
+      backend: 'rpc',
+      op: 'raw',
+      key,
+      body: { op: 'releaseReplay', key, owner: 'new' },
+    })
+    expect(
+      await request({ backend: 'rpc', op: 'raw', key, body: { op: 'claimReplay', key, expires } }),
+    ).toBe(false)
+  })
 
   test('spreads claims across the shards, outside the per-key objects', async () => {
     const keys = Array.from({ length: 40 }, (_, i) => `spread:${i}`)
