@@ -3688,11 +3688,19 @@ export function toNodeListener(
       await Request.waitForBody(request)
       result = await handler(request)
     } catch (error) {
-      if (!(error instanceof Request.RequestBodyTooLargeError)) throw error
-      const response = new globalThis.Response('Payload Too Large', {
-        status: 413,
-        headers: { 'Content-Type': 'text/plain' },
-      })
+      if (
+        !(error instanceof Request.RequestBodyTooLargeError) &&
+        !(error instanceof Request.UntrustedHostError)
+      )
+        throw error
+      const untrusted = error instanceof Request.UntrustedHostError
+      const response = new globalThis.Response(
+        untrusted ? 'Misdirected Request' : 'Payload Too Large',
+        {
+          status: untrusted ? 421 : 413,
+          headers: { 'Content-Type': 'text/plain' },
+        },
+      )
       await NodeListener.sendResponse(res, response)
       return { challenge: response, status: 402 }
     }

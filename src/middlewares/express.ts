@@ -7,6 +7,7 @@ import type {
 } from 'express'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Host from '../server/internal/host.js'
 import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as ExpressAdapter from './internal/express.js'
@@ -33,10 +34,18 @@ export namespace Mppx {
    * ```
    */
   export function create<const methods extends Mppx_core.Methods>(
-    config: Mppx_core.create.Config<methods>,
+    config: Mppx_core.create.Config<methods> & AdapterOptions,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, RequestHandler> {
-    return Mppx_internal.wrap(Mppx_core.create(config), payment)
+    return Mppx_internal.wrap(Mppx_core.create(config), (method, options) =>
+      payment(method, options, config),
+    )
   }
+}
+
+/** Optional ingress validation shared by Express payment handlers. */
+export type AdapterOptions = {
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Omitted preserves existing behavior; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
+  allowedHosts?: readonly string[] | undefined
 }
 
 /**
@@ -62,9 +71,25 @@ export namespace Mppx {
 export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
+  adapterOptions: AdapterOptions = {},
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const rawRequest = ExpressAdapter.toRequest(req)
+    const protocol = req.protocol.toLowerCase()
+    if (
+      !Host.isAllowed(req, adapterOptions.allowedHosts) ||
+      (adapterOptions.allowedHosts !== undefined && protocol !== 'http' && protocol !== 'https')
+    ) {
+      res.status(421).send('Misdirected Request')
+      return
+    }
+    let rawRequest: Request
+    try {
+      rawRequest = ExpressAdapter.toRequest(req, protocol)
+    } catch (error) {
+      if (!(error instanceof ExpressAdapter.InvalidRequestTargetError)) throw error
+      res.status(400).send('Bad Request')
+      return
+    }
     const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
     const request =
       options.scope === undefined && Scope.read(options.meta) === undefined

@@ -20,13 +20,31 @@ export async function sendResponse(response: ExpressResponse, fetchResponse: Res
   return response.send(Buffer.from(await fetchResponse.arrayBuffer()))
 }
 
+export class InvalidRequestTargetError extends Error {}
+
 /** Converts an Express parsed request into the Fetch request consumed by mppx core. */
-export function toRequest(request: ExpressRequest): Request {
+export function toRequest(request: ExpressRequest, protocol = request.protocol): Request {
+  const url = new URL(`${protocol}://${request.get('host')}`)
+  let target: URL
+  try {
+    target = new URL(
+      request.originalUrl.startsWith('/')
+        ? `http://mppx.invalid${request.originalUrl}`
+        : request.originalUrl,
+      'http://mppx.invalid',
+    )
+  } catch {
+    throw new InvalidRequestTargetError('Invalid request target')
+  }
+  if (target.protocol !== 'http:' && target.protocol !== 'https:')
+    throw new InvalidRequestTargetError('Unsupported request target protocol')
+  url.pathname = target.pathname
+  url.search = target.search
   return NodeRequest.toRequest({
     body: request.body,
     headers: request.headers,
     method: request.method,
-    url: `${request.protocol}://${request.get('host')}${request.originalUrl}`,
+    url: url.href,
   })
 }
 
