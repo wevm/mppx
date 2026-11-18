@@ -1008,7 +1008,8 @@ export class DurableObjectStore {
   /** Releases `key`'s claim in this replay shard, if it has one. */
   async releaseReplay(key: string, owner?: string): Promise<void> {
     const sql = this.replayClaims()
-    if (owner === undefined) sql.exec('DELETE FROM mppx_replay_claims WHERE key = ?', key)
+    if (owner === undefined)
+      sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner IS NULL', key)
     else sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner = ?', key, owner)
   }
 

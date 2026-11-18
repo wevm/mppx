@@ -216,6 +216,19 @@ describe('Store.durableObject replay shards in workerd', () => {
     ).toBe(false)
   })
 
+  test('legacy shard cleanup cannot delete an owned claim', async () => {
+    const key = 'legacy-release-owned'
+    const expires = Date.now() + 60_000
+    const raw = (body: Record<string, unknown>) => request({ backend: 'rpc', op: 'raw', key, body })
+    expect(await raw({ op: 'claimReplayOwned', key, expires, owner: 'new' })).toBe(true)
+    await raw({ op: 'releaseReplay', key })
+    expect(await raw({ op: 'claimReplay', key, expires })).toBe(false)
+    await raw({ op: 'releaseReplay', key, owner: 'new' })
+    expect(await raw({ op: 'claimReplay', key, expires })).toBe(true)
+    await raw({ op: 'releaseReplay', key })
+    expect(await raw({ op: 'claimReplay', key, expires })).toBe(true)
+  })
+
   test('spreads claims across the shards, outside the per-key objects', async () => {
     const keys = Array.from({ length: 40 }, (_, i) => `spread:${i}`)
     const expires = Date.now() + 60_000
