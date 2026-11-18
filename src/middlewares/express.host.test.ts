@@ -3,7 +3,9 @@ import { request } from 'node:http'
 import express from 'express'
 import { Mppx, payment } from 'mppx/express'
 import { Mppx as Core, Store, tempo } from 'mppx/server'
-import { afterEach, expect, test } from 'vp/test'
+import { afterEach, expect, test, vi } from 'vp/test'
+
+import { toRequest } from './internal/express.js'
 
 const servers: ReturnType<ReturnType<typeof express>['listen']>[] = []
 afterEach(() => {
@@ -34,6 +36,11 @@ test.each(['factory', 'payment'] as const)(
             { amount: '1' },
             { allowedHosts: ['trusted.example'] },
           )
+    const urls: string[] = []
+    app.use((req, _res, next) => {
+      urls.push(toRequest(req).url)
+      next()
+    })
     app.get('/paid', handler, (_req, res) => res.send('protected'))
     const server = app.listen(0)
     servers.push(server)
@@ -53,10 +60,19 @@ test.each(['factory', 'payment'] as const)(
       headers: ['Host', 'trusted.example', 'Host', 'denied.example'],
     })
     expect(duplicate.status).toBe(421)
+    const absolute = await send(`http://localhost:${address.port}/paid`, {
+      headers: { Host: 'trusted.example' },
+      path: 'http://denied.example/paid',
+    })
+    expect(absolute.status).toBe(402)
+    expect(urls.at(-1)).toBe('http://trusted.example/paid')
   },
 )
 
-function send(url: string, options: { headers: { Host: string } | string[] }): Promise<Response> {
+function send(
+  url: string,
+  options: { headers: { Host: string } | string[]; path?: string },
+): Promise<Response> {
   return new Promise((resolve, reject) => {
     const req = request(url, options, (res) => {
       let body = ''
@@ -71,3 +87,22 @@ function send(url: string, options: { headers: { Host: string } | string[] }): P
     req.end()
   })
 }
+
+test('Mppx Node listener returns 421 without running the payment handler', async () => {
+  const handler = vi.fn(async () => ({
+    status: 402 as const,
+    challenge: new Response(null, { status: 402 }),
+  }))
+  const app = express()
+  app.use(Core.toNodeListener(handler, { allowedHosts: ['trusted.example'] }))
+  const server = app.listen(0)
+  servers.push(server)
+  await new Promise<void>((resolve) => server.once('listening', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('No listener address')
+  const response = await send(`http://localhost:${address.port}/paid`, {
+    headers: { Host: 'denied.example' },
+  })
+  expect(response.status).toBe(421)
+  expect(handler).not.toHaveBeenCalled()
+})

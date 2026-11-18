@@ -17,10 +17,16 @@ export async function sendResponse(response: ExpressResponse, fetchResponse: Res
 
 /** Converts an Express parsed request into the Fetch request consumed by mppx core. */
 export function toRequest(request: ExpressRequest): Request {
+  const url = new URL(`${request.protocol}://${request.get('host')}`)
+  const target = new URL(request.originalUrl, 'http://mppx.invalid')
+  if (target.protocol !== 'http:' && target.protocol !== 'https:')
+    throw new TypeError('Unsupported request target protocol')
+  url.pathname = target.pathname
+  url.search = target.search
   return NodeRequest.toRequest({
     body: request.body,
     headers: request.headers,
     method: request.method,
-    url: `${request.protocol}://${request.get('host')}${request.originalUrl}`,
+    url: url.href,
   })
 }
