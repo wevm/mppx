@@ -151,13 +151,9 @@ export function assertCredentialSourceCanSpend(parameters: {
   source?: string | undefined
 }): void {
   const sourceAddress = readCredentialSourceAddress(parameters.source, parameters.chainId)
-  if (
-    isAddressEqual(sourceAddress, parameters.channel.payer) ||
-    isAddressEqual(sourceAddress, parameters.channel.authorizedSigner)
-  )
-    return
+  if (isAddressEqual(sourceAddress, parameters.channel.payer)) return
   throw new VerificationFailedError({
-    reason: 'credential source does not match channel payer or authorized signer',
+    reason: 'credential source does not match channel payer',
   })
 }
 

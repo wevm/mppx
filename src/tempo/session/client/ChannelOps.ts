@@ -157,7 +157,7 @@ export function serializeCredential(
   return Credential.serialize({
     challenge,
     payload,
-    source: `did:pkh:eip155:${chainId}:${account.address}`,
+    source: `did:pkh:eip155:${chainId}:${payload.descriptor?.payer ?? account.address}`,
   })
 }
 
