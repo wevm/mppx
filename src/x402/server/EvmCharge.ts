@@ -41,8 +41,18 @@ export type Options = {
    * their own keys there. They can't override `assetTransferMethod`, `name` or `version`.
    */
   extra?: Record<string, unknown> | undefined
-  /** Facilitator client or base URL used for x402-compatible settlement. */
-  facilitator?: string | x402_Types.Facilitator | undefined
+  /**
+   * Headers to send with each request to a URL `facilitator`, such as an API key: a flat record,
+   * or an object keyed by `verify`, `settle` and `supported`; a function is called before every
+   * request. A `{ url, headers }` facilitator's own `headers` win.
+   */
+  headers?: x402_Types.FacilitatorConfig['headers']
+  /**
+   * Facilitator used for x402-compatible settlement: a base URL, a `{ url, headers }`
+   * config (the shape `@x402/core`'s `HTTPFacilitatorClient` takes) for one that needs
+   * authentication, or a client.
+   */
+  facilitator?: string | x402_Types.FacilitatorConfig | x402_Types.Facilitator | undefined
   /** Fetch implementation used for facilitator RPCs. */
   fetch?: typeof globalThis.fetch | undefined
   /** Maximum time in seconds allowed for x402-compatible payment completion. @default 300 */
@@ -118,7 +128,10 @@ export function resolveOptions(parameters: {
           facilitator: x402_Facilitator.resolve(
             parameters.options.facilitator,
             'EVM authorization x402 requires `facilitator`.',
-            { fetch: parameters.options.fetch },
+            {
+              headers: parameters.options.headers,
+              fetch: parameters.options.fetch,
+            },
           ),
         }
       : {}),
@@ -295,6 +308,7 @@ export function createPath(config: ResolvedOptions): Path {
           payer: payload.from,
           success: true,
           transaction: options.receipt.reference,
+          ...(options.receipt.extensions ? { extensions: options.receipt.extensions } : {}),
         }),
       )
       return new Response(response.body, {
@@ -320,6 +334,7 @@ export function settleWithFacilitator(parameters: ResolvedOptions): SettleWithFa
       })
 
     return {
+      ...(settled.extensions ? { extensions: settled.extensions } : {}),
       reference: settled.transaction,
     }
   }
@@ -369,6 +384,7 @@ export type SettleWithFacilitator = (parameters: {
   request: Types.ChargeRequest
   source: ReturnType<typeof Types.toSource>
 }) => Promise<{
+  extensions?: Record<string, unknown> | undefined
   reference: string
   timestamp?: string | undefined
 }>

@@ -141,6 +141,22 @@ export const celoSepolia = {
   }),
 } as const
 
+const knownAssets: readonly KnownAsset[] = [base, baseSepolia, celo, celoSepolia].flatMap(
+  (assets) => Object.values(assets),
+)
+
+/**
+ * Returns the known asset mppx ships for `address` on `network` (such as `base.USDC`), compared
+ * case-insensitively. Clients use it for trusted decimals when no currency allowlist names the
+ * asset.
+ */
+export function lookup(address: string, network: EvmNetwork): KnownAsset | undefined {
+  const normalized = address.toLowerCase()
+  return knownAssets.find(
+    (asset) => asset.network === network && asset.address.toLowerCase() === normalized,
+  )
+}
+
 /** Returns true when a value is known x402 asset metadata. */
 export function isAsset(value: unknown): value is KnownAsset {
   if (typeof value !== 'object' || value === null) return false

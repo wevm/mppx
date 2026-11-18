@@ -1,5 +1,7 @@
 import { Challenge, Credential, Method, Receipt, Store, z } from 'mppx'
+import { Mppx as ClientMppx } from 'mppx/client'
 import * as Persona from 'mppx/extensions/identity/persona'
+import * as Identity from 'mppx/identity'
 import { Mppx } from 'mppx/server'
 import { privateKeyToAccount } from 'viem/accounts'
 import { expect, test } from 'vp/test'
@@ -422,4 +424,43 @@ test('validates its config', () => {
   expect(() => Persona.Server.create({ apiKey: '' })).toThrow('needs an apiKey')
   for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31])
     expect(() => Persona.Server.create({ apiKey: 'k', timeout })).toThrow('timeout')
+})
+
+test('Persona issuer calls never pay through an untagged identity wrapper', async () => {
+  let payments = 0
+  const offer = Challenge.from({
+    id: 'persona-payment',
+    realm: 'api.withpersona.com',
+    method: 'test',
+    intent: 'charge',
+    request: charge,
+  })
+  const payment = ClientMppx.create({
+    methods: [
+      Method.toClient(method, {
+        async createCredential({ challenge }) {
+          payments++
+          return Credential.serialize({ challenge, payload: { token: 'paid' } })
+        },
+      }),
+    ],
+    fetch: async () =>
+      new Response(null, {
+        status: 402,
+        headers: {
+          'WWW-Authenticate': Challenge.serialize(offer),
+        },
+      }),
+  })
+  const fetch = Identity.Client.wrapFetch(
+    payment.fetch,
+    Identity.Client.from([
+      { scope: ['https://api.withpersona.com'], prove: async (request) => request },
+    ]),
+  )
+  await pay(
+    Persona.Server.create({ apiKey: 'test-key', fetch }).paymentCheck({ referenceId: fromSource }),
+    payer,
+  )
+  expect(payments).toBe(0)
 })

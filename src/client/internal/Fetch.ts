@@ -284,7 +284,17 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     context?: IdentityClient.SendContext,
   ): Promise<{ response: Response; headers: IdentityClient.ResendHeaders }> =>
     identity
-      ? identity.send(baseFetch, new Request(input, init), context)
+      ? identity.send(
+          (request, nextInit) =>
+            baseFetch(
+              request,
+              (init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment]
+                ? withoutPayment(nextInit)
+                : nextInit,
+            ),
+          new Request(input, init),
+          context,
+        )
       : { response: await baseFetch(input, init), headers: [] }
 
   const request = async (
@@ -356,7 +366,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           // is the server's final answer, not a new challenge round.
           if (retry > 0) return response
           throw new Error(
-            `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+            Challenge.withSkippedChallenges(
+              `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+              skippedChallengeCount(response),
+            ),
           )
         }
 
@@ -1378,4 +1391,12 @@ async function resolvePaymentRetryInput(
   }
 
   return response.url
+}
+
+/** Counts the challenges in a 402's `WWW-Authenticate` header that list parsing skipped. */
+export function skippedChallengeCount(response: unknown): number {
+  if (!(response instanceof Response) || response.status !== 402) return 0
+  return Challenge.countUnsupportedCredentialHeaders(
+    response.headers.get(Constants.Headers.wwwAuthenticate),
+  )
 }

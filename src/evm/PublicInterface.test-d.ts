@@ -101,6 +101,11 @@ describe('evm public interface', () => {
       recipient,
       settle,
     })
+    serverCharge({
+      currency: serverAssets.base.USDC,
+      recipient,
+      settle: async () => ({ extensions: { payout: { id: 'payout_1' } }, reference: '0x1' }),
+    })
     expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
     expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
   })

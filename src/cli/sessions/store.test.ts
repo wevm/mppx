@@ -595,6 +595,38 @@ describe('session commands', () => {
     expect(JSON.parse(mismatch.output)).toEqual({ sessions: [] })
   })
 
+  test('list and view load a session stored with another credential header', async () => {
+    const registry = commandRegistry()
+    await seedCommandSessions(registry)
+    // Rewrite one stored challenge as an earlier version could have saved it.
+    const files = await fs.readdir(path.join(stateRoot, 'channels'))
+    let rewritten = 0
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      const full = path.join(stateRoot, 'channels', file)
+      const stored = JSON.parse(await fs.readFile(full, 'utf8'))
+      if (stored.challenge?.id !== 'testnet-challenge') continue
+      stored.challenge.header = 'X-Payment'
+      await fs.writeFile(full, JSON.stringify(stored))
+      rewritten++
+    }
+    expect(rewritten).toBe(1)
+
+    const listed = JSON.parse((await serveSessions(['list', '--json'])).output)
+    expect(listed.sessions.map((session: { channelId: string }) => session.channelId)).toEqual([
+      channelId,
+      mainnetChannelId,
+    ])
+    const viewed = await serveSessions(['view', channelId, '--json'])
+    expect(JSON.parse(viewed.output)).toEqual(listed.sessions[0])
+
+    // Closing sends no credential in the stored header.
+    const closed = await serveSessions(['close', channelId, '--json'])
+    expect(closed.output).toContain(
+      'Stored session challenge selects a credential header other than Payment-Authorization.',
+    )
+  })
+
   test('view rejects a missing channel', async () => {
     const missing = `0x${'cc'.repeat(32)}`
     const result = await serveSessions(['view', missing, '--json'])

@@ -129,7 +129,9 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
         }),
       })
 
+      const extensions = toJsonExtensions(settled.extensions)
       return Receipt.from({
+        ...(extensions ? { extensions } : {}),
         method: Types.paymentMethod,
         reference: settled.reference,
         status: 'success',
@@ -186,6 +188,11 @@ export declare namespace charge {
     request: Types.ChargeRequest
     source: ReturnType<typeof Types.toSource>
   }) => Promise<{
+    /**
+     * Settlement data to pass through on the Receipt and the x402 `PAYMENT-RESPONSE`, such as
+     * an x402 facilitator's `SettleResponse.extensions`.
+     */
+    extensions?: Record<string, unknown> | undefined
     reference: string
     timestamp?: string | undefined
   }>
@@ -435,4 +442,41 @@ function releaseGrantInput(copy: Request): void {
 function assertAddressEqual(actual: string, expected: string, reason: string) {
   if (getAddress(actual) === getAddress(expected)) return
   throw new VerificationFailedError({ reason })
+}
+
+/** Largest serialized settle extensions a receipt carries; larger ones are dropped. */
+const maxExtensionsBytes = 4096
+/** Deepest nesting settle extensions may have; deeper ones are dropped. */
+const maxExtensionsDepth = 8
+
+/**
+ * Normalizes settler extensions to the JSON the receipt header carries. A value that isn't a
+ * plain JSON object, nests deeper than 8 levels or serializes past 4 KiB is dropped, so a settled
+ * payment never fails on its receipt or overflows a client's header limit.
+ */
+function toJsonExtensions(extensions: unknown): Record<string, unknown> | undefined {
+  if (!extensions || typeof extensions !== 'object' || Array.isArray(extensions)) return undefined
+  if (!withinDepth(extensions, maxExtensionsDepth)) return undefined
+  try {
+    const serialized = JSON.stringify(extensions)
+    if (new TextEncoder().encode(serialized).byteLength > maxExtensionsBytes) return undefined
+    const json = JSON.parse(serialized) as unknown
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined
+    return Object.keys(json).length ? (json as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Checks nesting without recursion, so hostile depth can't overflow the stack. */
+function withinDepth(value: unknown, limit: number): boolean {
+  const stack: [unknown, number][] = [[value, 1]]
+  let visited = 0
+  while (stack.length) {
+    const [node, depth] = stack.pop()!
+    if (!node || typeof node !== 'object') continue
+    if (depth > limit || ++visited > 10_000) return false
+    for (const child of Object.values(node)) stack.push([child, depth + 1])
+  }
+  return true
 }

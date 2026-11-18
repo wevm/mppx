@@ -1,4 +1,4 @@
-import type * as Challenge from '../Challenge.js'
+import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Expires from '../Expires.js'
 import * as IdentityClient from '../identity/Client.js'
@@ -330,7 +330,10 @@ export function create<
       const selected = orderedCandidates[0]
       if (!selected)
         throw new Error(
-          `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+          Challenge.withSkippedChallenges(
+            `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+            Fetch.skippedChallengeCount(response),
+          ),
         )
 
       // Signing must use what the caller inspects, while attachment needs the adapter's original

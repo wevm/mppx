@@ -84,6 +84,8 @@ export namespace evm {
   /**
    * Reads the `payTo` an x402 facilitator publishes in `GET /supported` (`kinds[].extra.payTo`),
    * for facilitators that settle into an address of their own. Use it once at startup as `recipient`.
+   * Takes a URL, a `{ url, headers }` config or a client; pass `headers` in
+   * the parameters to authenticate a URL facilitator.
    */
   export const facilitatorPayTo = Facilitator.payTo
 }

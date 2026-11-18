@@ -189,7 +189,8 @@ const storedSessionSchema = z.object({
   channel: storedChannelSchema,
   account: accountSchema,
   endpoint: z.string(),
-  challenge: Challenge.Schema,
+  // Sessions stored before `header` was limited to Payment-Authorization must still load.
+  challenge: Challenge.LenientSchema,
   receipt: z.optional(receiptSchema),
   spent: z.string(),
   units: z.number(),
@@ -650,7 +651,7 @@ function sanitizeStoredChannel(value: unknown, file?: string | undefined): Store
 }
 
 function parseSessionChallenge(value: unknown, file?: string | undefined): TempoSessionChallenge {
-  const parsed = Challenge.Schema.safeParse(value)
+  const parsed = Challenge.LenientSchema.safeParse(value)
   if (!parsed.success || !isTempoSessionChallenge(parsed.data))
     throw stateError(file, 'Stored session challenge is invalid.')
   return parsed.data

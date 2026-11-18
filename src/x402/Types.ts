@@ -205,7 +205,8 @@ export type PaymentPayload = z.infer<typeof PaymentPayloadSchema>
 
 /** Facilitator verification response. */
 export const VerifyResponseSchema = z.object({
-  extensions: z.optional(ExtensionsSchema),
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
   extra: z.optional(z.record(z.string(), z.unknown())),
   invalidMessage: z.optional(z.string()),
   invalidReason: z.optional(z.string()),
@@ -221,7 +222,8 @@ export const SettleResponseSchema = z.object({
   amount: z.optional(atomicAmount),
   errorMessage: z.optional(z.string()),
   errorReason: z.optional(z.string()),
-  extensions: z.optional(ExtensionsSchema),
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
   extra: z.optional(z.record(z.string(), z.unknown())),
   network: nonEmptyString,
   payer: z.optional(z.string()),
@@ -268,6 +270,51 @@ export type Facilitator = {
    * read a `payTo` the facilitator publishes in `kinds[].extra.payTo`.
    */
   supported?: (() => Promise<SupportedResponse>) | undefined
+}
+
+/**
+ * Headers an HTTP facilitator client sends with each request, keyed by facilitator path, the
+ * shape `createAuthHeaders` returns in `@x402/core`'s `FacilitatorConfig`. A path left out
+ * sends no extra headers.
+ */
+export type FacilitatorPathHeaders = {
+  settle?: Record<string, string> | undefined
+  supported?: Record<string, string> | undefined
+  verify?: Record<string, string> | undefined
+}
+
+/**
+ * Headers an HTTP facilitator client sends: either a flat record sent on every request, or a
+ * {@link FacilitatorPathHeaders} object keyed by path. A value counts as per-path only when it has
+ * at least one key, every key is `verify`, `settle` or `supported`, and every value is an object;
+ * anything else is a flat record.
+ */
+export type FacilitatorHeaders = Record<string, string> | FacilitatorPathHeaders
+
+/**
+ * An HTTP facilitator that needs authentication, in the shape `@x402/core`'s
+ * `HTTPFacilitatorClient` takes, so one config works with both SDKs.
+ *
+ * @example
+ * ```ts
+ * const facilitator = {
+ *   url: 'https://facilitator.example',
+ *   headers: async () => ({ Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }),
+ * }
+ * ```
+ */
+export type FacilitatorConfig = {
+  /** Base URL of the facilitator. */
+  url: string
+  /**
+   * Headers to send, such as an API key: a flat record for every request, or an object keyed by
+   * `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns in `@x402/core`). A
+   * function is called before every request, so it can refresh short-lived tokens.
+   */
+  headers?:
+    | FacilitatorHeaders
+    | (() => FacilitatorHeaders | Promise<FacilitatorHeaders>)
+    | undefined
 }
 
 /** Extracts x402 `PaymentRequirements` from a canonical exact request. */
