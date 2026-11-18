@@ -9,7 +9,7 @@ export function isAllowed(
   urlAuthority: string | undefined,
 ): boolean {
   if (allowedHosts === undefined) return true
-  if (typeof urlAuthority !== 'string') return false
+  if (typeof urlAuthority !== 'string' || urlAuthority.length === 0) return false
   const authorities: string[] = [urlAuthority]
   const names = new Set<string>()
   for (let i = 0; i < request.rawHeaders.length; i += 2) {
@@ -19,6 +19,7 @@ export function isAllowed(
     names.add(name)
     authorities.push(request.rawHeaders[i + 1] ?? '')
   }
+  if (names.size === 0) return false
   const host = request.headers.host
   const authority = request.headers[':authority']
   if (host !== undefined) authorities.push(host)
