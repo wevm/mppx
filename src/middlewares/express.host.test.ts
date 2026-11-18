@@ -142,3 +142,39 @@ test('Node listener keeps 421 when a custom error observer returns void', async 
   expect(onError).toHaveBeenCalledOnce()
   expect(handler).not.toHaveBeenCalled()
 })
+
+test.each([true, false])(
+  'Node listener logs handler errors only without a custom observer: %s',
+  async (observed) => {
+    const error = new Error('private upstream detail')
+    const onError = vi.fn()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const app = express()
+      app.use(
+        NodeRequest.toNodeListener(
+          () => {
+            throw error
+          },
+          observed ? { onError } : undefined,
+        ),
+      )
+      const server = app.listen(0)
+      servers.push(server)
+      await new Promise<void>((resolve) => server.once('listening', resolve))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('No listener address')
+      const response = await send(`http://localhost:${address.port}/paid`, {
+        headers: { Host: 'trusted.example' },
+      })
+      expect(response.status).toBe(500)
+      expect(await response.text()).toBe('Internal Server Error')
+      if (observed) {
+        expect(onError).toHaveBeenCalledWith(error)
+        expect(log).not.toHaveBeenCalled()
+      } else expect(log).toHaveBeenCalledWith(error)
+    } finally {
+      log.mockRestore()
+    }
+  },
+)

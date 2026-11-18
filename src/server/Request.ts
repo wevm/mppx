@@ -50,7 +50,7 @@ export function toNodeListener(
         status: 413,
         headers: { 'Content-Type': 'text/plain' },
       })
-    console.error(error)
+    if (!options?.onError) console.error(error)
     return new Response('Internal Server Error', {
       status: 500,
       headers: { 'Content-Type': 'text/plain' },
