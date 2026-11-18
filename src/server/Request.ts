@@ -106,7 +106,9 @@ export function fromNodeListener(
   const headers = createHeaders(req)
   const incomingHost =
     headers.get('Host') ?? (req.headers as Record<string, string>)[':authority'] ?? 'localhost'
-  if (!Host.isAllowed(req, options?.allowedHosts, incomingHost))
+  const fixedHost = options?.host !== undefined
+  const checkedHost = fixedHost ? (req.headers.host ?? incomingHost) : incomingHost
+  if (!Host.isAllowed(req, options?.allowedHosts, checkedHost, fixedHost))
     throw new UntrustedHostError('Incoming host is not allowed.')
   let controller: AbortController | null = new AbortController()
   res.once('close', () => controller?.abort())
