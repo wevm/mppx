@@ -239,6 +239,21 @@ describe('Store.durableObject replay shards in workerd', () => {
     expect(await raw({ op: 'claimReplay', key, expires: expires + 120_000 })).toBe(false)
   })
 
+  test.each([false, true])(
+    'owner-only schema migration keeps ambiguous claims until expiry: expired=%s',
+    async (expired) => {
+      const key = `owner-only-migration-${expired}`
+      const expires = Date.now() + (expired ? -60_000 : 60_000)
+      await request({ backend: 'rpc', op: 'legacyReplay', key, expires, owner: 'old' })
+      const raw = (body: Record<string, unknown>) =>
+        request({ backend: 'rpc', op: 'raw', key, body })
+      await raw({ op: 'releaseReplay', key, owner: 'old' })
+      expect(
+        await raw({ op: 'claimReplayOwned', key, expires: Date.now() + 120_000, owner: 'new' }),
+      ).toBe(expired)
+    },
+  )
+
   test('spreads claims across the shards, outside the per-key objects', async () => {
     const keys = Array.from({ length: 40 }, (_, i) => `spread:${i}`)
     const expires = Date.now() + 60_000
