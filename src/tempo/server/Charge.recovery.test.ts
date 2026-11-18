@@ -480,3 +480,18 @@ test.each([
   expect(lookupHashes).toHaveLength(0)
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
+
+test('stale settlement cleanup preserves a replacement replay claim', async () => {
+  const { broadcast, sends, signatureHashKey, state, store } = await setup({ sponsored: false })
+  let open!: () => void
+  state.gate = new Promise((resolve) => (open = resolve))
+  state.outcome = 'lookup-error'
+  const inFlight = broadcast()
+  await vi.waitFor(() => expect(sends()).toBe(1))
+  const replacement = { expires: Date.now() + 60_000, type: 'mppx:replay' as const }
+  await store.update(signatureHashKey, () => ({ op: 'set', value: replacement, result: undefined }))
+  open()
+  await expect(inFlight).rejects.toBeInstanceOf(Error)
+  expect(await store.get(signatureHashKey)).toEqual(replacement)
+  await expectReplayed(broadcast())
+})

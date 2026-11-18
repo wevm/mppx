@@ -841,7 +841,8 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          if (!(await tryClaimHash(store, hash, replayExpires))) {
+          const owner = crypto.randomUUID()
+          if (!(await tryClaimHash(store, hash, replayExpires, owner))) {
             throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
             })
@@ -937,7 +938,7 @@ export function charge<const parameters extends charge.Parameters>(
             finalHash = keccak256(serializedTransaction_final)
 
             if (finalHash.toLowerCase() !== hash.toLowerCase()) {
-              if (!(await tryClaimHash(store, finalHash, replayExpires)))
+              if (!(await tryClaimHash(store, finalHash, replayExpires, owner)))
                 throw new CredentialReplayedError({
                   reason: 'Transaction hash has already been used',
                 })
@@ -1118,8 +1119,8 @@ export function charge<const parameters extends charge.Parameters>(
             // Only a successful settlement consumes the credential. A signed
             // transaction can be mined at most once, so a retry re-broadcasts it
             // and recovers the receipt instead of being rejected as a replay.
-            if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
-            await releaseHashUse(store, hash)
+            if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash, owner)
+            await releaseHashUse(store, hash, owner)
             if (broadcastAttempted) throw error
             throw await explainMachineTokenFailure(error, {
               amount,
@@ -1139,7 +1140,10 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]: number | SponsorBudget.State | Store.ReplayMarker
+    [key: `mppx:charge:${string}`]:
+      | number
+      | SponsorBudget.State
+      | (Store.ReplayMarker & { owner?: string })
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -1753,8 +1757,21 @@ async function tryClaimHash(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
   expires: number,
+  owner?: string,
 ): Promise<boolean> {
-  return Store.tryClaim(store, getHashStoreKey(hash), expires)
+  if (owner === undefined) return Store.tryClaim(store, getHashStoreKey(hash), expires)
+  return store.update(getHashStoreKey(hash), (current) => {
+    if (!Number.isFinite(expires) || expires <= Date.now()) return { op: 'noop', result: false }
+    if (
+      current !== null &&
+      (typeof current !== 'object' ||
+        !('type' in current) ||
+        current.type !== 'mppx:replay' ||
+        current.expires > Date.now())
+    )
+      return { op: 'noop', result: false }
+    return { op: 'set', value: { expires, owner, type: 'mppx:replay' }, result: true }
+  })
 }
 
 /** Whether a live replay marker holds `hash`, read without claiming it. */
@@ -1772,8 +1789,18 @@ async function isHashUsed(
 async function releaseHashUse(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
+  owner: string,
 ): Promise<void> {
-  await store.delete(getHashStoreKey(hash))
+  await store.update(getHashStoreKey(hash), (current) => ({
+    op:
+      typeof current === 'object' &&
+      current !== null &&
+      'owner' in current &&
+      current.owner === owner
+        ? 'delete'
+        : 'noop',
+    result: undefined,
+  }))
 }
 
 function parseHashCredentialSource(parameters: {
