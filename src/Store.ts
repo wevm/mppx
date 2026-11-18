@@ -117,7 +117,8 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
  * An optional owner permits conditional release through {@link releaseClaim}.
  * Custom optimized stores must implement owner-aware `tryClaim` and atomic `releaseClaim`
  * before using owned claims. Unsupported stores are rejected before recording a claim. Deploy upgraded Durable Object classes
- * before clients that use owned claims.
+ * before clients that use owned claims. Drain owner-unaware verifier workers before enabling
+ * owned claims; do not run them against stores with live owned claims.
  * Uses the adapter's optimized primitive when available and otherwise falls
  * back to {@link AtomicStore.update}.
  */
