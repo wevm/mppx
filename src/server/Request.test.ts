@@ -72,6 +72,14 @@ describe('fromNodeListener', () => {
     ).toThrow(Request.UntrustedHostError)
   })
 
+  test('rejects normalized-only Host when the URL would fall back to localhost', () => {
+    const [req, res] = createMockRequest({ rawHeaders: [] })
+    req.headers.host = 'trusted.example'
+    expect(() => Request.fromNodeListener(req, res, { allowedHosts: ['trusted.example'] })).toThrow(
+      Request.UntrustedHostError,
+    )
+  })
+
   test('converts IncomingMessage to Fetch Request', () => {
     const [req, res] = createMockRequest({
       method: 'POST',

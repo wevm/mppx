@@ -6,9 +6,11 @@ const normalizedHosts = new WeakMap<readonly string[], ReadonlySet<string>>()
 export function isAllowed(
   request: Pick<IncomingMessage, 'headers' | 'rawHeaders'>,
   allowedHosts: readonly string[] | undefined,
+  urlAuthority: string | undefined,
 ): boolean {
   if (allowedHosts === undefined) return true
-  const authorities: string[] = []
+  if (typeof urlAuthority !== 'string') return false
+  const authorities: string[] = [urlAuthority]
   const names = new Set<string>()
   for (let i = 0; i < request.rawHeaders.length; i += 2) {
     const name = request.rawHeaders[i]?.toLowerCase()
