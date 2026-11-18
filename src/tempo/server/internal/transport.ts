@@ -219,6 +219,7 @@ export function sse(
       await options.settleCharged?.(result.channel)
       const chargedReceipt: SessionReceipt = {
         ...currentReceipt,
+        acceptedCumulative: result.channel.highestVoucherAmount.toString(),
         spent: result.channel.spent.toString(),
         units: result.channel.units,
       }

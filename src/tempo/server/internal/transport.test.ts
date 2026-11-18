@@ -808,6 +808,32 @@ describe('sse transport', () => {
     },
   )
 
+  test('plain receipt uses one live channel snapshot after a concurrent voucher increase', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 2_000_000n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1_000_000n,
+      units: 1,
+    }))
+    const response = await sse({ store }).respondReceipt({
+      credential: makeCredential({ unitType: 'token' }),
+      input: new Request(makeAuthorizedRequest({ unitType: 'token' }), {
+        method: 'POST',
+        body: '{}',
+      }),
+      receipt: makeReceipt({ acceptedCumulative: '1000000', spent: '0' }),
+      response: new Response('paid'),
+      challengeId,
+    })
+    expect(deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)).toMatchObject({
+      acceptedCumulative: '2000000',
+      spent: '2000000',
+      units: 2,
+    })
+    expect(await response.text()).toBe('paid')
+  })
+
   test('respondReceipt with prepaid plain Response does not deduct again', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
