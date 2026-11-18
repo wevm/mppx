@@ -49,10 +49,14 @@ test.each(['factory', 'payment'] as const)(
       headers: { Host: 'trusted.example' },
     })
     expect(allowed.status).toBe(402)
+    const duplicate = await send(`http://localhost:${address.port}/paid`, {
+      headers: ['Host', 'trusted.example', 'Host', 'denied.example'],
+    })
+    expect(duplicate.status).toBe(421)
   },
 )
 
-function send(url: string, options: { headers: { Host: string } }): Promise<Response> {
+function send(url: string, options: { headers: { Host: string } | string[] }): Promise<Response> {
   return new Promise((resolve, reject) => {
     const req = request(url, options, (res) => {
       let body = ''

@@ -74,7 +74,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   adapterOptions: AdapterOptions = {},
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    if (!Host.isAllowed(req.get('host'), adapterOptions.allowedHosts)) {
+    if (!Host.isAllowed(req, adapterOptions.allowedHosts)) {
       res.status(421).send('Misdirected Request')
       return
     }

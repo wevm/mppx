@@ -97,8 +97,7 @@ export function fromNodeListener(
   res: ServerResponse,
   options?: NodeConversionOptions | undefined,
 ): Request {
-  const incomingHost = req.headers.host ?? (req.headers as Record<string, string>)[':authority']
-  if (!Host.isAllowed(incomingHost, options?.allowedHosts))
+  if (!Host.isAllowed(req, options?.allowedHosts))
     throw new UntrustedHostError('Incoming host is not allowed.')
   let controller: AbortController | null = new AbortController()
   res.once('close', () => controller?.abort())

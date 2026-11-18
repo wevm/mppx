@@ -56,6 +56,22 @@ describe('fromNodeListener', () => {
     },
   )
 
+  test.each([
+    ['Host', 'trusted.example', 'Host', ''],
+    ['Host', 'trusted.example', 'Host', 'denied.example'],
+    ['Host', 'trusted.example', 'Host', 'trusted.example'],
+    [':authority', 'denied.example', 'Host', 'trusted.example'],
+    [':authority', 'trusted.example', 'Host', 'denied.example'],
+  ])('rejects ambiguous raw authorities %j', (...rawHeaders) => {
+    const [req, res] = createMockRequest({ rawHeaders })
+    expect(() =>
+      Request.fromNodeListener(req, res, {
+        allowedHosts: ['trusted.example'],
+        host: 'fixed.example',
+      }),
+    ).toThrow(Request.UntrustedHostError)
+  })
+
   test('converts IncomingMessage to Fetch Request', () => {
     const [req, res] = createMockRequest({
       method: 'POST',
