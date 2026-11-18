@@ -42,6 +42,40 @@ describe('MCP client payment approval', () => {
     expect(createCredential).toHaveBeenCalledOnce()
   })
 
+  test('does not create a credential after cancellation during approval', async () => {
+    const challenge = Challenge.from({
+      id: 'cancel-approval',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: {},
+    })
+    const callTool = vi.fn(async () => {
+      throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+        challenges: [challenge],
+        httpStatus: 402,
+      })
+    })
+    const controller = new AbortController()
+    const reason = new Error('cancelled during approval')
+    const createCredential = vi.fn(async () => 'unexpected credential')
+    const mcp = McpClient.wrap({ callTool } as unknown as Pick<Client, 'callTool'>, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+    await expect(
+      mcp.callTool({ name: 'paid_tool' }, undefined, {
+        signal: controller.signal,
+        onPaymentRequired: async () => {
+          await Promise.resolve()
+          controller.abort(reason)
+          return true
+        },
+      }),
+    ).rejects.toBe(reason)
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(callTool).toHaveBeenCalledOnce()
+  })
+
   test('calls an approval hook before creating a credential', async () => {
     const challenge = Challenge.from({
       id: 'approval-test',
