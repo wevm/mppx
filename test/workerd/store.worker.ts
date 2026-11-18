@@ -58,6 +58,12 @@ export class RpcStore extends Store.DurableObjectStore.rpc(DurableObject) {
     sql.exec('INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?)', key, expires)
   }
 
+  /** Replays an old deployment's expiry-only upsert against migrated storage. */
+  async legacyReplaceReplay(key: string, expires: number) {
+    const sql = this.state.storage.sql!
+    sql.exec('UPDATE mppx_replay_claims SET expires = ? WHERE key = ?', expires, key)
+  }
+
   /** The keys this object holds replay claims for, as a replay shard. */
   async replayClaimKeys() {
     const sql = this.state.storage.sql!
@@ -147,7 +153,7 @@ type Command = {
   | { op: 'increment'; key: string }
   | { op: 'bigint'; key: string; amount: string }
   | { op: 'claim'; key: string; expires: number; owner?: string }
-  | { op: 'legacyReplay'; key: string; expires: number }
+  | { op: 'legacyReplay' | 'legacyReplaceReplay'; key: string; expires: number }
   | { op: 'releaseClaim'; key: string; owner: string }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
   | { op: 'log' | 'shard'; key: string }
@@ -208,6 +214,11 @@ export default {
         await store.put(command.key, { amount: BigInt(command.amount) })
         const stored = (await store.get(command.key)) as { amount: bigint }
         return Response.json({ type: typeof stored.amount, amount: stored.amount.toString() })
+      }
+      case 'legacyReplaceReplay': {
+        const object = namespace.get(namespace.idFromName(command.key)) as unknown as RpcStore
+        await object.legacyReplaceReplay(command.key, command.expires)
+        return Response.json(null)
       }
       case 'legacyReplay': {
         const object = namespace.get(namespace.idFromName(command.key)) as unknown as RpcStore

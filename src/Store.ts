@@ -115,8 +115,8 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
  * Returns `true` when this call recorded the key and `false` when it was already
  * recorded and unexpired, or the proposed expiry has passed. `expires` is a Unix timestamp in milliseconds.
  * An optional owner permits conditional release through {@link releaseClaim}.
- * Custom optimized stores opt into ownership by implementing `releaseClaim`; otherwise
- * their claims remain consumed until expiry. Deploy upgraded Durable Object classes
+ * Custom optimized stores must implement owner-aware `tryClaim` and atomic `releaseClaim`
+ * before using owned claims. Unsupported stores are rejected before recording a claim. Deploy upgraded Durable Object classes
  * before clients that use owned claims.
  * Uses the adapter's optimized primitive when available and otherwise falls
  * back to {@link AtomicStore.update}.
@@ -127,9 +127,13 @@ export function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap
   expires: number,
   owner?: string,
 ): MaybePromise<boolean> {
+  if (owner !== undefined && store.tryClaim && !store.releaseClaim)
+    throw new Error(
+      'Owned replay claims require a custom store with atomic releaseClaim support. Migrate the store before use.',
+    )
   if (!Number.isFinite(expires) || expires <= Date.now()) return false
   if (store.tryClaim) {
-    const result = store.tryClaim(key, expires, store.releaseClaim ? owner : undefined)
+    const result = store.tryClaim(key, expires, owner)
     return typeof result === 'boolean'
       ? result && expires > Date.now()
       : result.then((claimed) => claimed && expires > Date.now())
@@ -154,14 +158,17 @@ export function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap
 
 /**
  * Releases a replay claim only while it belongs to `owner`.
- * Custom optimized stores without ownership support retain claims until expiry.
+ * Custom optimized stores without ownership support are rejected.
  */
 export async function releaseClaim<
   itemMap extends StoreItemMap,
   key extends keyof itemMap & string,
 >(store: AtomicStore<itemMap>, key: key, owner: string): Promise<void> {
   if (store.releaseClaim) return store.releaseClaim(key, owner)
-  if (store.tryClaim) return
+  if (store.tryClaim)
+    throw new Error(
+      'Owned replay claims require a custom store with atomic releaseClaim support. Migrate the store before use.',
+    )
   await store.update(key, (current) => ({
     op: isReplayMarker(current) && current.owner === owner ? 'delete' : 'noop',
     result: undefined,
@@ -973,10 +980,11 @@ export class DurableObjectStore {
     const claimed =
       sql
         .exec(
-          'INSERT INTO mppx_replay_claims (key, expires, owner) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires, owner = excluded.owner WHERE mppx_replay_claims.expires <= ? RETURNING key',
+          'INSERT INTO mppx_replay_claims (key, expires, owner, owner_expires) VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires, owner = excluded.owner, owner_expires = excluded.owner_expires WHERE mppx_replay_claims.expires <= ? RETURNING key',
           key,
           expires,
           owner ?? null,
+          owner === undefined ? null : expires,
           now,
         )
         .toArray().length === 1
@@ -1010,7 +1018,12 @@ export class DurableObjectStore {
     const sql = this.replayClaims()
     if (owner === undefined)
       sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner IS NULL', key)
-    else sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner = ?', key, owner)
+    else
+      sql.exec(
+        'DELETE FROM mppx_replay_claims WHERE key = ? AND owner = ? AND owner_expires = expires',
+        key,
+        owner,
+      )
   }
 
   // The store's operations are named `store*`, not `get`, `put` and `delete`: on a Worker
@@ -1149,6 +1162,13 @@ export class DurableObjectStore {
         .some((column) => column.name === 'owner')
     )
       sql.exec('ALTER TABLE mppx_replay_claims ADD COLUMN owner TEXT')
+    if (
+      !sql
+        .exec('PRAGMA table_info(mppx_replay_claims)')
+        .toArray()
+        .some((column) => column.name === 'owner_expires')
+    )
+      sql.exec('ALTER TABLE mppx_replay_claims ADD COLUMN owner_expires INTEGER')
     sql.exec(
       'CREATE INDEX IF NOT EXISTS mppx_replay_claims_by_expiry ON mppx_replay_claims (expires)',
     )

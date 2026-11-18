@@ -229,6 +229,16 @@ describe('Store.durableObject replay shards in workerd', () => {
     expect(await raw({ op: 'claimReplay', key, expires })).toBe(true)
   })
 
+  test('rollback replacement cannot inherit the previous claim cleanup authority', async () => {
+    const key = 'rollback-expiry-only'
+    const expires = Date.now() + 60_000
+    const raw = (body: Record<string, unknown>) => request({ backend: 'rpc', op: 'raw', key, body })
+    expect(await raw({ op: 'claimReplayOwned', key, expires, owner: 'old' })).toBe(true)
+    await request({ backend: 'rpc', op: 'legacyReplaceReplay', key, expires: expires + 60_000 })
+    await raw({ op: 'releaseReplay', key, owner: 'old' })
+    expect(await raw({ op: 'claimReplay', key, expires: expires + 120_000 })).toBe(false)
+  })
+
   test('spreads claims across the shards, outside the per-key objects', async () => {
     const keys = Array.from({ length: 40 }, (_, i) => `spread:${i}`)
     const expires = Date.now() + 60_000
