@@ -71,7 +71,18 @@ export function toNodeListener(
         })
       }
     }
-    await NodeListener.sendResponse(res, response)
+    try {
+      await NodeListener.sendResponse(res, response)
+    } catch (error) {
+      try {
+        await onError(error)
+      } catch (innerError) {
+        console.error(`There was an error in the error handler: ${innerError}`)
+      } finally {
+        // Transmission may already have sent headers; never send a second response.
+        if (!res.destroyed) res.destroy()
+      }
+    }
   }) as RequestListener
 }
 

@@ -417,7 +417,7 @@ export default defineConfig({
     }
   })
 
-  test('does not start a new round from a 402 on another origin', async () => {
+  test('rejects a cross-origin x402 destination before sending a credential', async () => {
     const otherSignatures: string[] = []
     const otherServer = await Http.createServer((req, res) => {
       const signature = req.headers['payment-signature'] as string | undefined
@@ -445,7 +445,7 @@ export default defineConfig({
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
       expect(exitCode).toBeDefined()
-      expect(otherSignatures).toHaveLength(1)
+      expect(otherSignatures).toHaveLength(0)
     } finally {
       httpServer.close()
       otherServer.close()

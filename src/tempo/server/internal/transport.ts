@@ -211,67 +211,25 @@ export function sse(
       const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
       if (available < tickCost) return paymentRequired(available)
 
+      // Plain content authorizes its headers as well as its body. Commit before
+      // returning the response so adapters can safely honor an explicit flush.
+      const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
+      if (!result.ok)
+        return paymentRequired(result.channel.highestVoucherAmount - result.channel.spent)
+      await options.settleCharged?.(result.channel)
       const chargedReceipt: SessionReceipt = {
         ...currentReceipt,
-        spent: (BigInt(currentReceipt.spent) + tickCost).toString(),
-        units: (currentReceipt.units ?? 0) + 1,
+        acceptedCumulative: result.channel.highestVoucherAmount.toString(),
+        spent: result.channel.spent.toString(),
+        units: result.channel.units,
       }
-      const chargedResponse = base.respondReceipt({
+      return base.respondReceipt({
         credential: verifiedCredential,
         envelope,
         input,
         receipt: chargedReceipt,
         response: response as Response,
         challengeId: verifiedChallengeId,
-      })
-      const chargePlainResponse = async () => {
-        const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
-        if (result.ok) await options.settleCharged?.(result.channel)
-        return result
-      }
-
-      // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
-      // Need to deduct tickCost so request isn't free.
-      // For null-body statuses, the request shape determines whether the
-      // response is management (no charge) or plain content (charge one tick).
-      if (isNullBodyStatus(chargedResponse.status)) {
-        const result = await chargePlainResponse()
-        if (!result.ok)
-          return paymentRequired(result.channel.highestVoucherAmount - result.channel.spent)
-        return chargedResponse
-      }
-
-      const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          // deduction completes before consumer reads
-          const result = await chargePlainResponse()
-          if (!result.ok) {
-            controller.error(
-              insufficientBalance(result.channel.highestVoucherAmount - result.channel.spent),
-            )
-            return
-          }
-          if (!chargedResponse.body) {
-            controller.close()
-            return
-          }
-          const reader = chargedResponse.body.getReader()
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              controller.enqueue(value)
-            }
-          } finally {
-            reader.releaseLock()
-            controller.close()
-          }
-        },
-      })
-      return new Response(stream, {
-        status: chargedResponse.status,
-        statusText: chargedResponse.statusText,
-        headers: chargedResponse.headers,
       })
     },
   })
@@ -352,8 +310,4 @@ function isAsyncGeneratorFunction(
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
   return value !== null && typeof value === 'object' && Symbol.asyncIterator in (value as object)
-}
-
-function isNullBodyStatus(status: number): boolean {
-  return [101, 204, 205, 304].includes(status)
 }

@@ -1,6 +1,6 @@
 import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
@@ -703,8 +703,9 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(1)
   })
 
-  test('respondReceipt with plain Response delegates to base http transport', async () => {
+  test('respondReceipt with plain Response debits before returning paid headers', async () => {
     const store = memoryStore()
+    await seedChannel(store, 10_000_000n)
     const transport = sse({ store })
     const receipt = makeReceipt()
 
@@ -721,6 +722,8 @@ describe('sse transport', () => {
     })
     expect(response).toBeInstanceOf(Response)
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+    expect((await store.getChannel(channelId))?.spent).toBe(1_000_000n)
+    expect(await response.text()).toBe('ok')
   })
 
   test('credits automatic request-priced prepaid delivery after its second escrow check fails', async () => {
@@ -804,6 +807,32 @@ describe('sse transport', () => {
       })
     },
   )
+
+  test('plain receipt uses one live channel snapshot after a concurrent voucher increase', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 2_000_000n)
+    await store.updateChannel(channelId, (current) => ({
+      ...current!,
+      spent: 1_000_000n,
+      units: 1,
+    }))
+    const response = await sse({ store }).respondReceipt({
+      credential: makeCredential({ unitType: 'token' }),
+      input: new Request(makeAuthorizedRequest({ unitType: 'token' }), {
+        method: 'POST',
+        body: '{}',
+      }),
+      receipt: makeReceipt({ acceptedCumulative: '1000000', spent: '0' }),
+      response: new Response('paid'),
+      challengeId,
+    })
+    expect(deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)).toMatchObject({
+      acceptedCumulative: '2000000',
+      spent: '2000000',
+      units: 2,
+    })
+    expect(await response.text()).toBe('paid')
+  })
 
   test('respondReceipt with prepaid plain Response does not deduct again', async () => {
     const store = memoryStore()
@@ -1007,40 +1036,50 @@ describe('sse transport', () => {
     expect(receipt.units).toBe(1)
   })
 
-  test('respondReceipt returns 402 when a concurrent bodyless deduction loses', async () => {
-    const store = memoryStore()
-    await seedChannel(store, 1000000n)
-    const atomicUpdate = store.updateChannelResult!.bind(store)
-    let raced = false
-    store.updateChannelResult = async (id, update) => {
-      if (!raced) {
-        raced = true
-        await store.updateChannel(id, (current) =>
-          current
-            ? {
-                ...current,
-                spent: current.highestVoucherAmount,
-                units: current.units + 1,
-              }
-            : current,
-        )
+  test.each([200, 204])(
+    'respondReceipt returns 402 before exposing headers when a concurrent deduction loses (%s)',
+    async (status) => {
+      const store = memoryStore()
+      await seedChannel(store, 1000000n)
+      const atomicUpdate = store.updateChannelResult!.bind(store)
+      let raced = false
+      store.updateChannelResult = async (id, update) => {
+        if (!raced) {
+          raced = true
+          await store.updateChannel(id, (current) =>
+            current
+              ? {
+                  ...current,
+                  spent: current.highestVoucherAmount,
+                  units: current.units + 1,
+                }
+              : current,
+          )
+        }
+        return atomicUpdate(id, update)
       }
-      return atomicUpdate(id, update)
-    }
-    const transport = sse({ store })
+      const transport = sse({ store })
 
-    const response = await transport.respondReceipt({
-      credential: makeCredential(),
-      input: makeAuthorizedRequest(),
-      receipt: makeReceipt({ acceptedCumulative: '1000000' }),
-      response: new Response(null, { status: 204 }),
-      challengeId,
-    })
+      const response = await transport.respondReceipt({
+        credential: makeCredential({ unitType: 'token' }),
+        input: new Request(makeAuthorizedRequest({ unitType: 'token' }), {
+          method: 'POST',
+          body: '{}',
+        }),
+        receipt: makeReceipt({ acceptedCumulative: '1000000' }),
+        response: new Response(status === 200 ? 'protected' : null, {
+          status,
+          headers: { 'X-Protected': 'secret' },
+        }),
+        challengeId,
+      })
 
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-    expect(await response.json()).toMatchObject({ status: 402, title: 'Insufficient Balance' })
-  })
+      expect(response.status).toBe(402)
+      expect(response.headers.has('X-Protected')).toBe(false)
+      expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+      expect(await response.json()).toMatchObject({ status: 402, title: 'Insufficient Balance' })
+    },
+  )
 
   test('respondReceipt with management response keeps null body and does not deduct', async () => {
     const store = memoryStore()
@@ -1106,4 +1145,31 @@ describe('sse transport', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
     expect(transport.name).toBe('sse')
   })
+})
+
+test('plain session responses preserve backpressure and propagate cancellation', async () => {
+  const store = memoryStore()
+  await seedChannel(store, 10000000n)
+  let pulls = 0
+  const cancel = vi.fn()
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (++pulls > 128) controller.close()
+      else controller.enqueue(new Uint8Array(16384))
+    },
+    cancel,
+  })
+  const response = await sse({ store }).respondReceipt({
+    credential: makeCredential({ unitType: 'token' }),
+    input: new Request('https://test.example.com/session', { method: 'POST', body: '{}' }),
+    receipt: makeReceipt(),
+    response: new Response(source),
+    challengeId,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(pulls).toBeLessThanOrEqual(3)
+  const reader = response.body!.getReader()
+  await reader.read()
+  await reader.cancel('downstream closed')
+  expect(cancel).toHaveBeenCalledWith('downstream closed')
 })
