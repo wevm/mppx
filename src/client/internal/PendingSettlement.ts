@@ -12,6 +12,7 @@ export async function resume(
 ): Promise<string> {
   const { attempts, signal } = options
   for (let attempt = 1; ; attempt++) {
+    signal?.throwIfAborted()
     try {
       return await create()
     } catch (error) {
