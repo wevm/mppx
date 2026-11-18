@@ -37,6 +37,25 @@ function createMockRequest(options: {
 }
 
 describe('fromNodeListener', () => {
+  test.each([
+    { host: 'api.example.com', allowedHosts: ['api.example.com'], accepted: true },
+    { host: 'API.EXAMPLE.COM', allowedHosts: ['api.example.com'], accepted: true },
+    { host: 'api.example.com:443', allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'attacker.example', allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'api.example.com', allowedHosts: [], accepted: false },
+    { host: undefined, allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'legacy.example', allowedHosts: undefined, accepted: true },
+  ])(
+    'validates incoming hosts before applying a fixed host: $host',
+    ({ host, allowedHosts, accepted }) => {
+      const [req, res] = createMockRequest({ rawHeaders: host ? ['Host', host] : [] })
+      const convert = () =>
+        Request.fromNodeListener(req, res, { allowedHosts, host: 'fixed.example' })
+      if (accepted) expect(convert().url).toBe('http://fixed.example/')
+      else expect(convert).toThrow('Incoming host is not allowed')
+    },
+  )
+
   test('converts IncomingMessage to Fetch Request', () => {
     const [req, res] = createMockRequest({
       method: 'POST',
