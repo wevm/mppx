@@ -18,7 +18,12 @@ export async function sendResponse(response: ExpressResponse, fetchResponse: Res
 /** Converts an Express parsed request into the Fetch request consumed by mppx core. */
 export function toRequest(request: ExpressRequest): Request {
   const url = new URL(`${request.protocol}://${request.get('host')}`)
-  const target = new URL(request.originalUrl, 'http://mppx.invalid')
+  const target = new URL(
+    request.originalUrl.startsWith('/')
+      ? `http://mppx.invalid${request.originalUrl}`
+      : request.originalUrl,
+    'http://mppx.invalid',
+  )
   if (target.protocol !== 'http:' && target.protocol !== 'https:')
     throw new TypeError('Unsupported request target protocol')
   url.pathname = target.pathname

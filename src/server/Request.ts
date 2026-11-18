@@ -42,22 +42,21 @@ export function toNodeListener(
   handler: FetchHandler,
   options?: RequestListenerOptions | undefined,
 ): RequestListener {
-  const onError =
-    options?.onError ??
-    ((error: unknown) => {
-      if (error instanceof UntrustedHostError)
-        return new Response('Misdirected Request', { status: 421 })
-      if (error instanceof RequestBodyTooLargeError)
-        return new Response('Payload Too Large', {
-          status: 413,
-          headers: { 'Content-Type': 'text/plain' },
-        })
-      console.error(error)
-      return new Response('Internal Server Error', {
-        status: 500,
+  const defaultError = (error: unknown) => {
+    if (error instanceof UntrustedHostError)
+      return new Response('Misdirected Request', { status: 421 })
+    if (error instanceof RequestBodyTooLargeError)
+      return new Response('Payload Too Large', {
+        status: 413,
         headers: { 'Content-Type': 'text/plain' },
       })
+    console.error(error)
+    return new Response('Internal Server Error', {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' },
     })
+  }
+  const onError = options?.onError ?? defaultError
 
   return (async (req: IncomingMessage, res: ServerResponse) => {
     let response: Response
@@ -67,12 +66,7 @@ export function toNodeListener(
       await waitForBody(request)
     } catch (error) {
       try {
-        response =
-          (await onError(error)) ??
-          new Response('Internal Server Error', {
-            status: 500,
-            headers: { 'Content-Type': 'text/plain' },
-          })
+        response = (await onError(error)) ?? defaultError(error)
       } catch (innerError) {
         console.error(`There was an error in the error handler: ${innerError}`)
         response = new Response('Internal Server Error', {

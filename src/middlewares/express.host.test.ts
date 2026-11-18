@@ -2,7 +2,7 @@ import { request } from 'node:http'
 
 import express from 'express'
 import { Mppx, payment } from 'mppx/express'
-import { Mppx as Core, Store, tempo } from 'mppx/server'
+import { Mppx as Core, Request as NodeRequest, Store, tempo } from 'mppx/server'
 import { afterEach, expect, test, vi } from 'vp/test'
 
 import { toRequest } from './internal/express.js'
@@ -42,7 +42,7 @@ test.each(['factory', 'payment'] as const)(
       urls.push(toRequest(req).url)
       next()
     })
-    app.get('/paid', handler, (_req, res) => res.send('protected'))
+    app.get(['/paid', '//private/paid', '//%/paid'], handler, (_req, res) => res.send('protected'))
     const server = app.listen(0)
     servers.push(server)
     await new Promise<void>((resolve) => server.once('listening', resolve))
@@ -76,6 +76,14 @@ test.each(['factory', 'payment'] as const)(
     })
     expect(https.status).toBe(402)
     expect(urls.at(-1)).toBe('https://trusted.example/paid')
+    for (const path of ['//private/paid', '//%/paid']) {
+      const preserved = await send(`http://localhost:${address.port}/paid`, {
+        headers: { Host: 'trusted.example' },
+        path,
+      })
+      expect(preserved.status).toBe(402)
+      expect(urls.at(-1)).toBe(`http://trusted.example${path}`)
+    }
   },
 )
 
@@ -114,5 +122,23 @@ test('Mppx Node listener returns 421 without running the payment handler', async
     headers: { Host: 'denied.example' },
   })
   expect(response.status).toBe(421)
+  expect(handler).not.toHaveBeenCalled()
+})
+
+test('Node listener keeps 421 when a custom error observer returns void', async () => {
+  const handler = vi.fn(() => new Response('unexpected'))
+  const onError = vi.fn()
+  const app = express()
+  app.use(NodeRequest.toNodeListener(handler, { allowedHosts: ['trusted.example'], onError }))
+  const server = app.listen(0)
+  servers.push(server)
+  await new Promise<void>((resolve) => server.once('listening', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('No listener address')
+  const response = await send(`http://localhost:${address.port}/paid`, {
+    headers: { Host: 'denied.example' },
+  })
+  expect(response.status).toBe(421)
+  expect(onError).toHaveBeenCalledOnce()
   expect(handler).not.toHaveBeenCalled()
 })
