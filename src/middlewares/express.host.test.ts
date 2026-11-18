@@ -182,3 +182,26 @@ test.each([true, false])(
     }
   },
 )
+
+test.each([undefined, ['trusted.example']])(
+  'Express rejects malformed targets before payment with allowedHosts %s',
+  async (allowedHosts) => {
+    const intent = vi.fn(() =>
+      vi.fn(async () => ({ status: 402 as const, challenge: new Response(null, { status: 402 }) })),
+    )
+    const app = express()
+    app.use(payment(intent, {}, { allowedHosts }))
+    const server = app.listen(0, '127.0.0.1')
+    servers.push(server)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('No listener address')
+    const response = await send(`http://127.0.0.1:${address.port}/paid`, {
+      headers: { Host: 'trusted.example' },
+      path: 'http://trusted.example:99999/paid',
+    })
+    expect(response.status).toBe(400)
+    expect(await response.text()).toBe('Bad Request')
+    expect(intent).not.toHaveBeenCalled()
+  },
+)

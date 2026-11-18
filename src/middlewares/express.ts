@@ -82,7 +82,14 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       res.status(421).send('Misdirected Request')
       return
     }
-    const rawRequest = ExpressAdapter.toRequest(req, protocol)
+    let rawRequest: Request
+    try {
+      rawRequest = ExpressAdapter.toRequest(req, protocol)
+    } catch (error) {
+      if (!(error instanceof ExpressAdapter.InvalidRequestTargetError)) throw error
+      res.status(400).send('Bad Request')
+      return
+    }
     const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
     const request =
       options.scope === undefined && Scope.read(options.meta) === undefined
