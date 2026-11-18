@@ -1120,8 +1120,14 @@ export function charge<const parameters extends charge.Parameters>(
             // Only a successful settlement consumes the credential. A signed
             // transaction can be mined at most once, so a retry re-broadcasts it
             // and recovers the receipt instead of being rejected as a replay.
-            if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash, owner)
-            await releaseHashUse(store, hash, owner)
+            const cleanup = await Promise.allSettled([
+              ...(claimedFinalHash ? [releaseHashUse(store, claimedFinalHash, owner)] : []),
+              releaseHashUse(store, hash, owner),
+            ])
+            if (cleanup.some((result) => result.status === 'rejected'))
+              console.error(
+                'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+              )
             if (broadcastAttempted) throw error
             throw await explainMachineTokenFailure(error, {
               amount,

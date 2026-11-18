@@ -116,7 +116,8 @@ function fakeDurableObjectNamespace() {
             | 'storeDelete'
             | 'storeSwap'
             | 'storeClaim'
-            | 'storeReleaseClaim',
+            | 'storeReleaseClaim'
+            | 'storeClaimOwned',
         ) =>
         (...args: unknown[]) =>
           queue(async () =>
@@ -133,6 +134,7 @@ function fakeDurableObjectNamespace() {
         storeDelete: rpc('storeDelete'),
         storeSwap: rpc('storeSwap'),
         storeClaim: rpc('storeClaim'),
+        storeClaimOwned: rpc('storeClaimOwned'),
         storeReleaseClaim: rpc('storeReleaseClaim'),
       }
     },
@@ -309,6 +311,26 @@ describe('tryClaim', () => {
     expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
     await Store.releaseClaim(store, 'k', 'first')
     expect(await Store.tryClaim(store, 'k', expires, 'second')).toBe(true)
+  })
+
+  test('old Durable Object endpoints fail before recording an owned claim', async () => {
+    const backing = fakeDurableObjectNamespace()
+    const store = Store.durableObject({
+      ...backing,
+      get(id) {
+        const target = backing.get(id)
+        return {
+          async fetch(input, init) {
+            const body = JSON.parse(init.body as string)
+            if (body.op === 'claimOwned') return new Response('Unknown operation', { status: 400 })
+            return target.fetch(input, init)
+          },
+        }
+      },
+    })
+    await expect(Store.tryClaim(store, 'k', Date.now() + 60_000, 'attempt')).rejects.toThrow('400')
+    expect(await store.get('k')).toBeNull()
+    expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(true)
   })
 
   test('uses an adapter fast path when available', async () => {

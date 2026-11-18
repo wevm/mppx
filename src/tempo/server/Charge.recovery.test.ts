@@ -565,3 +565,22 @@ test.each(['signature', 'final'] as const)(
     }
   },
 )
+
+test('failed replay cleanup preserves the settlement error and its claim', async () => {
+  const { broadcast, signatureHashKey, state, store } = await setup({ sponsored: false })
+  state.outcome = 'lookup-error'
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const originalRelease = store.releaseClaim
+  store.releaseClaim = vi.fn().mockRejectedValue(new Error('store unavailable'))
+  try {
+    const error = await broadcast().catch((error: unknown) => error)
+    expect(causedBy(error, gateway)).toBe(true)
+    expect(await store.get(signatureHashKey)).toMatchObject({ type: 'mppx:replay' })
+    expect(log).toHaveBeenCalledWith(
+      'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+    )
+  } finally {
+    store.releaseClaim = originalRelease
+    log.mockRestore()
+  }
+})

@@ -624,7 +624,10 @@ export function durableObject(
           put: (key, value) => stub(key).storePut(key, value, encoding),
           delete: (key) => stub(key).storeDelete(key, encoding),
           swap: (key, expected, value) => stub(key).storeSwap(key, expected, value, encoding),
-          claim: (key, expires, owner) => stub(key).storeClaim(key, expires, encoding, owner),
+          claim: (key, expires, owner) =>
+            owner === undefined
+              ? stub(key).storeClaim(key, expires, encoding)
+              : stub(key).storeClaimOwned(key, expires, owner, encoding),
           release: (key, owner) => stub(key).storeReleaseClaim(key, owner, encoding),
         }
       : {
@@ -639,7 +642,12 @@ export function durableObject(
               value: value as string | null,
             }),
           claim: (key, expires, owner) =>
-            call(keyObject(key), { op: 'claim', key, expires, owner }),
+            call(keyObject(key), {
+              op: owner === undefined ? 'claim' : 'claimOwned',
+              key,
+              expires,
+              owner,
+            }),
           release: (key, owner) => call(keyObject(key), { op: 'releaseClaim', key, owner }),
         }
   type Remote = {
@@ -670,12 +678,19 @@ export function durableObject(
           return transport === 'rpc'
             ? {
                 claim: (key: string, expires: number, owner?: string) =>
-                  shard(key).claimReplay(key, expires, owner),
+                  owner === undefined
+                    ? shard(key).claimReplay(key, expires)
+                    : shard(key).claimReplayOwned(key, expires, owner),
                 release: (key: string, owner?: string) => shard(key).releaseReplay(key, owner),
               }
             : {
                 claim: (key: string, expires: number, owner?: string) =>
-                  call<boolean>(shardOf(key), { op: 'claimReplay', key, expires, owner }),
+                  call<boolean>(shardOf(key), {
+                    op: owner === undefined ? 'claimReplay' : 'claimReplayOwned',
+                    key,
+                    expires,
+                    owner,
+                  }),
                 release: (key: string, owner?: string) =>
                   call(shardOf(key), { op: 'releaseReplay', key, owner }),
               }
@@ -985,6 +1000,11 @@ export class DurableObjectStore {
     return claimed
   }
 
+  /** Ownership-capable entrypoint: older shard deployments reject it before recording a claim. */
+  async claimReplayOwned(key: string, expires: number, owner: string): Promise<boolean> {
+    return this.claimReplay(key, expires, owner)
+  }
+
   /** Releases `key`'s claim in this replay shard, if it has one. */
   async releaseReplay(key: string, owner?: string): Promise<void> {
     const sql = this.replayClaims()
@@ -1055,6 +1075,16 @@ export class DurableObjectStore {
     return true
   }
 
+  /** Ownership-capable entrypoint: older object deployments reject it before recording a claim. */
+  async storeClaimOwned(
+    key: string,
+    expires: number,
+    owner: string,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<boolean> {
+    return this.storeClaim(key, expires, encoding, owner)
+  }
+
   /** Releases a matching owned claim atomically through the object's input gate. */
   async storeReleaseClaim(
     key: string,
@@ -1082,11 +1112,15 @@ export class DurableObjectStore {
         return Response.json(true)
       case 'swap':
         return Response.json(await this.storeSwap(body.key, body.expected, body.value))
+      case 'claimOwned':
+        return Response.json(await this.storeClaimOwned(body.key, body.expires, body.owner!))
       case 'claim':
         return Response.json(await this.storeClaim(body.key, body.expires, 'json', body.owner))
       case 'releaseClaim':
         await this.storeReleaseClaim(body.key, body.owner)
         return Response.json(true)
+      case 'claimReplayOwned':
+        return Response.json(await this.claimReplayOwned(body.key, body.expires, body.owner!))
       case 'claimReplay':
         return Response.json(await this.claimReplay(body.key, body.expires, body.owner))
       case 'releaseReplay':
@@ -1183,6 +1217,7 @@ export declare namespace DurableObjectStore {
 
   /** A replay shard's methods that {@link durableObject} calls over Workers RPC. */
   export type ReplayShard = {
+    claimReplayOwned: (key: string, expires: number, owner: string) => Promise<boolean>
     claimReplay: (key: string, expires: number, owner?: string) => Promise<boolean>
     releaseReplay: (key: string, owner?: string) => Promise<unknown>
   }
@@ -1203,6 +1238,12 @@ export declare namespace DurableObjectStore {
       value: unknown,
       encoding?: durableObject.Encoding,
     ) => Promise<SwapResult<unknown>>
+    storeClaimOwned: (
+      key: string,
+      expires: number,
+      owner: string,
+      encoding?: durableObject.Encoding,
+    ) => Promise<boolean>
     storeClaim: (
       key: string,
       expires: number,
@@ -1222,8 +1263,13 @@ export declare namespace DurableObjectStore {
     | { op: 'put'; key: string; value: string }
     | { op: 'delete'; key: string }
     | { op: 'swap'; key: string; expected: string | null; value: string | null }
-    | { op: 'claim'; key: string; expires: number; owner?: string | undefined }
-    | { op: 'claimReplay'; key: string; expires: number; owner?: string | undefined }
+    | { op: 'claim' | 'claimOwned'; key: string; expires: number; owner?: string | undefined }
+    | {
+        op: 'claimReplay' | 'claimReplayOwned'
+        key: string
+        expires: number
+        owner?: string | undefined
+      }
     | { op: 'releaseReplay'; key: string; owner?: string | undefined }
     | { op: 'releaseClaim'; key: string; owner: string }
 }
