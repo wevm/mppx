@@ -42,6 +42,7 @@ export function toNodeListener(
   handler: FetchHandler,
   options?: RequestListenerOptions | undefined,
 ): RequestListener {
+  const customOnError = options?.onError
   const defaultError = (error: unknown) => {
     if (error instanceof UntrustedHostError)
       return new Response('Misdirected Request', { status: 421 })
@@ -50,13 +51,13 @@ export function toNodeListener(
         status: 413,
         headers: { 'Content-Type': 'text/plain' },
       })
-    if (!options?.onError) console.error(error)
+    if (!customOnError) console.error(error)
     return new Response('Internal Server Error', {
       status: 500,
       headers: { 'Content-Type': 'text/plain' },
     })
   }
-  const onError = options?.onError ?? defaultError
+  const onError = customOnError ?? defaultError
 
   return (async (req: IncomingMessage, res: ServerResponse) => {
     let response: Response

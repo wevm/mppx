@@ -43,46 +43,46 @@ test.each(['factory', 'payment'] as const)(
       next()
     })
     app.get(['/paid', '//private/paid', '//%/paid'], handler, (_req, res) => res.send('protected'))
-    const server = app.listen(0)
+    const server = app.listen(0, '127.0.0.1')
     servers.push(server)
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('No listener address')
-    const response = await send(`http://localhost:${address.port}/paid`, {
+    const response = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: { Host: 'attacker.example' },
     })
     expect(response.status).toBe(421)
     expect(await response.text()).toBe('Misdirected Request')
-    const allowed = await send(`http://localhost:${address.port}/paid`, {
+    const allowed = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: { Host: 'trusted.example' },
     })
     expect(allowed.status).toBe(402)
-    const duplicate = await send(`http://localhost:${address.port}/paid`, {
+    const duplicate = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: ['Host', 'trusted.example', 'Host', 'denied.example'],
     })
     expect(duplicate.status).toBe(421)
-    const absolute = await send(`http://localhost:${address.port}/paid`, {
+    const absolute = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: { Host: 'trusted.example' },
       path: 'http://denied.example/paid',
     })
     expect(absolute.status).toBe(402)
     expect(urls.at(-1)).toBe('http://trusted.example/paid')
-    const protocol = await send(`http://localhost:${address.port}/paid`, {
+    const protocol = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https://denied.example/#'],
     })
     expect(protocol.status).toBe(421)
-    const mixedCase = await send(`http://localhost:${address.port}/paid`, {
+    const mixedCase = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'hTtPs'],
     })
     expect(mixedCase.status).toBe(402)
     expect(urls.at(-1)).toBe('https://trusted.example/paid')
-    const https = await send(`http://localhost:${address.port}/paid`, {
+    const https = await send(`http://127.0.0.1:${address.port}/paid`, {
       headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https'],
     })
     expect(https.status).toBe(402)
     expect(urls.at(-1)).toBe('https://trusted.example/paid')
     for (const path of ['//private/paid', '//%/paid']) {
-      const preserved = await send(`http://localhost:${address.port}/paid`, {
+      const preserved = await send(`http://127.0.0.1:${address.port}/paid`, {
         headers: { Host: 'trusted.example' },
         path,
       })
@@ -118,12 +118,12 @@ test('Mppx Node listener returns 421 without running the payment handler', async
   }))
   const app = express()
   app.use(Core.toNodeListener(handler, { allowedHosts: ['trusted.example'] }))
-  const server = app.listen(0)
+  const server = app.listen(0, '127.0.0.1')
   servers.push(server)
   await new Promise<void>((resolve) => server.once('listening', resolve))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('No listener address')
-  const response = await send(`http://localhost:${address.port}/paid`, {
+  const response = await send(`http://127.0.0.1:${address.port}/paid`, {
     headers: { Host: 'denied.example' },
   })
   expect(response.status).toBe(421)
@@ -135,12 +135,12 @@ test('Node listener keeps 421 when a custom error observer returns void', async 
   const onError = vi.fn()
   const app = express()
   app.use(NodeRequest.toNodeListener(handler, { allowedHosts: ['trusted.example'], onError }))
-  const server = app.listen(0)
+  const server = app.listen(0, '127.0.0.1')
   servers.push(server)
   await new Promise<void>((resolve) => server.once('listening', resolve))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('No listener address')
-  const response = await send(`http://localhost:${address.port}/paid`, {
+  const response = await send(`http://127.0.0.1:${address.port}/paid`, {
     headers: { Host: 'denied.example' },
   })
   expect(response.status).toBe(421)
@@ -153,23 +153,22 @@ test.each([true, false])(
   async (observed) => {
     const error = new Error('private upstream detail')
     const onError = vi.fn()
+    const options = { onError: observed ? onError : undefined }
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const app = express()
       app.use(
-        NodeRequest.toNodeListener(
-          () => {
-            throw error
-          },
-          observed ? { onError } : undefined,
-        ),
+        NodeRequest.toNodeListener(() => {
+          throw error
+        }, options),
       )
-      const server = app.listen(0)
+      options.onError = undefined
+      const server = app.listen(0, '127.0.0.1')
       servers.push(server)
       await new Promise<void>((resolve) => server.once('listening', resolve))
       const address = server.address()
       if (!address || typeof address === 'string') throw new Error('No listener address')
-      const response = await send(`http://localhost:${address.port}/paid`, {
+      const response = await send(`http://127.0.0.1:${address.port}/paid`, {
         headers: { Host: 'trusted.example' },
       })
       expect(response.status).toBe(500)
