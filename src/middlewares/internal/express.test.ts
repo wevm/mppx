@@ -534,3 +534,15 @@ test('flushes approved streaming headers before the producer writes', async () =
   write()
   expect(await response.text()).toBe('data: paid\n\n')
 })
+
+test.each([
+  { method: 'HEAD', status: 200 },
+  { method: 'GET', status: 204 },
+])('preserves multiple cookies on $method $status', async ({ method, status }) => {
+  const server = await serve((res) => {
+    res.setHeader('Set-Cookie', ['session=abc; HttpOnly', 'csrf=def; Secure'])
+    res.status(status).end()
+  })
+  const response = await fetch(server.url, { method })
+  expect(response.headers.getSetCookie()).toEqual(['session=abc; HttpOnly', 'csrf=def; Secure'])
+})

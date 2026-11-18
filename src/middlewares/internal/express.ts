@@ -216,11 +216,12 @@ export function wrapResponse(
         for (const name of response.getHeaderNames()) response.removeHeader(name)
         try {
           if (head || bodyless) {
-            output.writeHead(
-              wrapped.status,
-              wrapped.statusText,
-              Object.fromEntries(wrapped.headers),
-            )
+            output.writeHead(wrapped.status, wrapped.statusText, {
+              ...Object.fromEntries(wrapped.headers),
+              ...(wrapped.headers.getSetCookie().length
+                ? { 'set-cookie': wrapped.headers.getSetCookie() }
+                : {}),
+            })
             try {
               await finished(body, { cleanup: true })
             } catch (error) {

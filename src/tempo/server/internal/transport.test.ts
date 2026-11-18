@@ -703,8 +703,9 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(1)
   })
 
-  test('respondReceipt with plain Response delegates to base http transport', async () => {
+  test('respondReceipt with plain Response debits before returning paid headers', async () => {
     const store = memoryStore()
+    await seedChannel(store, 10_000_000n)
     const transport = sse({ store })
     const receipt = makeReceipt()
 
@@ -721,6 +722,8 @@ describe('sse transport', () => {
     })
     expect(response).toBeInstanceOf(Response)
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+    expect((await store.getChannel(channelId))?.spent).toBe(1_000_000n)
+    expect(await response.text()).toBe('ok')
   })
 
   test('credits automatic request-priced prepaid delivery after its second escrow check fails', async () => {
@@ -1007,40 +1010,50 @@ describe('sse transport', () => {
     expect(receipt.units).toBe(1)
   })
 
-  test('respondReceipt returns 402 when a concurrent bodyless deduction loses', async () => {
-    const store = memoryStore()
-    await seedChannel(store, 1000000n)
-    const atomicUpdate = store.updateChannelResult!.bind(store)
-    let raced = false
-    store.updateChannelResult = async (id, update) => {
-      if (!raced) {
-        raced = true
-        await store.updateChannel(id, (current) =>
-          current
-            ? {
-                ...current,
-                spent: current.highestVoucherAmount,
-                units: current.units + 1,
-              }
-            : current,
-        )
+  test.each([200, 204])(
+    'respondReceipt returns 402 before exposing headers when a concurrent deduction loses (%s)',
+    async (status) => {
+      const store = memoryStore()
+      await seedChannel(store, 1000000n)
+      const atomicUpdate = store.updateChannelResult!.bind(store)
+      let raced = false
+      store.updateChannelResult = async (id, update) => {
+        if (!raced) {
+          raced = true
+          await store.updateChannel(id, (current) =>
+            current
+              ? {
+                  ...current,
+                  spent: current.highestVoucherAmount,
+                  units: current.units + 1,
+                }
+              : current,
+          )
+        }
+        return atomicUpdate(id, update)
       }
-      return atomicUpdate(id, update)
-    }
-    const transport = sse({ store })
+      const transport = sse({ store })
 
-    const response = await transport.respondReceipt({
-      credential: makeCredential(),
-      input: makeAuthorizedRequest(),
-      receipt: makeReceipt({ acceptedCumulative: '1000000' }),
-      response: new Response(null, { status: 204 }),
-      challengeId,
-    })
+      const response = await transport.respondReceipt({
+        credential: makeCredential({ unitType: 'token' }),
+        input: new Request(makeAuthorizedRequest({ unitType: 'token' }), {
+          method: 'POST',
+          body: '{}',
+        }),
+        receipt: makeReceipt({ acceptedCumulative: '1000000' }),
+        response: new Response(status === 200 ? 'protected' : null, {
+          status,
+          headers: { 'X-Protected': 'secret' },
+        }),
+        challengeId,
+      })
 
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-    expect(await response.json()).toMatchObject({ status: 402, title: 'Insufficient Balance' })
-  })
+      expect(response.status).toBe(402)
+      expect(response.headers.has('X-Protected')).toBe(false)
+      expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+      expect(await response.json()).toMatchObject({ status: 402, title: 'Insufficient Balance' })
+    },
+  )
 
   test('respondReceipt with management response keeps null body and does not deduct', async () => {
     const store = memoryStore()
