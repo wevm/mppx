@@ -109,7 +109,16 @@ function fakeDurableObjectNamespace() {
       }
       // RPC arguments and results are structured clones.
       const rpc =
-        (method: 'storeGet' | 'storePut' | 'storeDelete' | 'storeSwap' | 'storeClaim') =>
+        (
+          method:
+            | 'storeGet'
+            | 'storePut'
+            | 'storeDelete'
+            | 'storeSwap'
+            | 'storeClaim'
+            | 'storeReleaseClaim'
+            | 'storeClaimOwned',
+        ) =>
         (...args: unknown[]) =>
           queue(async () =>
             structuredClone(
@@ -125,6 +134,8 @@ function fakeDurableObjectNamespace() {
         storeDelete: rpc('storeDelete'),
         storeSwap: rpc('storeSwap'),
         storeClaim: rpc('storeClaim'),
+        storeClaimOwned: rpc('storeClaimOwned'),
+        storeReleaseClaim: rpc('storeReleaseClaim'),
       }
     },
   }
@@ -283,6 +294,45 @@ describe('keyPrefix', () => {
 })
 
 describe('tryClaim', () => {
+  test('retains custom optimized claims without ownership support', async () => {
+    const backing = Store.memory()
+    const { releaseClaim: _, ...store } = backing
+    const expires = Date.now() + 60_000
+    expect(await Store.tryClaim(store, 'k', expires, 'attempt')).toBe(true)
+    await Store.releaseClaim(store, 'k', 'attempt')
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+  })
+
+  test('fallback releases only matching owners', async () => {
+    const store = Store.cloudflare(fakeStringKv())
+    const expires = Date.now() + 60_000
+    expect(await Store.tryClaim(store, 'k', expires, 'first')).toBe(true)
+    await Store.releaseClaim(store, 'k', 'other')
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    await Store.releaseClaim(store, 'k', 'first')
+    expect(await Store.tryClaim(store, 'k', expires, 'second')).toBe(true)
+  })
+
+  test('old Durable Object endpoints fail before recording an owned claim', async () => {
+    const backing = fakeDurableObjectNamespace()
+    const store = Store.durableObject({
+      ...backing,
+      get(id) {
+        const target = backing.get(id)
+        return {
+          async fetch(input, init) {
+            const body = JSON.parse(init.body as string)
+            if (body.op === 'claimOwned') return new Response('Unknown operation', { status: 400 })
+            return target.fetch(input, init)
+          },
+        }
+      },
+    })
+    await expect(Store.tryClaim(store, 'k', Date.now() + 60_000, 'attempt')).rejects.toThrow('400')
+    expect(await store.get('k')).toBeNull()
+    expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(true)
+  })
+
   test('uses an adapter fast path when available', async () => {
     const backing = Store.memory()
     const optimized = backing.tryClaim!
@@ -624,6 +674,22 @@ describe.each([
     expect(await store.update('k', () => ({ op: 'delete', result: 'gone' }))).toBe('gone')
     expect(await store.get('k')).toBeNull()
     expect(await store.update('k', () => ({ op: 'delete', result: 'absent' }))).toBe('absent')
+  })
+
+  test('releases only the owned claim through a key prefix', async () => {
+    const store = create({ keyPrefix: 'owned:' })
+    const expires = Date.now() + 60_000
+    expect(await Store.tryClaim(store, 'key', expires, 'first')).toBe(true)
+    await Store.releaseClaim(store, 'key', 'second')
+    expect(await Store.tryClaim(store, 'key', expires)).toBe(false)
+    await Store.releaseClaim(store, 'key', 'first')
+    expect(await Store.tryClaim(store, 'key', expires, 'second')).toBe(true)
+    await Store.releaseClaim(store, 'key', 'first')
+    expect(await Store.tryClaim(store, 'key', expires)).toBe(false)
+    await Store.releaseClaim(store, 'key', 'second')
+    expect(await Store.tryClaim(store, 'key', expires)).toBe(true)
+    await Store.releaseClaim(store, 'key', 'second')
+    expect(await Store.tryClaim(store, 'key', expires, 'third')).toBe(false)
   })
 
   test('tryClaim records a key once across concurrent claims', async () => {
@@ -1033,6 +1099,36 @@ describe('durableObject', () => {
 })
 
 describe('sql', () => {
+  test('cleanup cannot delete a claim replaced after its read', async () => {
+    const db = new DatabaseSync(':memory:')
+    let replaceOnRead = false
+    const replacement = JSON.stringify({
+      expires: Date.now() + 60_000,
+      owner: 'second',
+      type: 'mppx:replay',
+    })
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text, params) {
+        const rows = db.prepare(text).all(...(params as never[])) as Store.sql.Row[]
+        if (replaceOnRead && text.startsWith('SELECT')) {
+          replaceOnRead = false
+          db.prepare('UPDATE mppx_store SET value = ? WHERE key = ?').run(replacement, 'k')
+        }
+        return rows
+      },
+    })
+    try {
+      expect(await Store.tryClaim(store, 'k', Date.now() + 60_000, 'first')).toBe(true)
+      replaceOnRead = true
+      await Store.releaseClaim(store, 'k', 'first')
+      expect(await store.get('k')).toEqual(JSON.parse(replacement))
+      expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(false)
+    } finally {
+      db.close()
+    }
+  })
+
   test('direct tryClaim rejects a claim whose expiry passed while the statement ran', async () => {
     const db = new DatabaseSync(':memory:')
     let now = 1_000

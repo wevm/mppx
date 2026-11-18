@@ -1,3 +1,5 @@
+import { DatabaseSync } from 'node:sqlite'
+
 import { Challenge, Credential, Errors } from 'mppx'
 import { Mppx, tempo } from 'mppx/server'
 import {
@@ -73,6 +75,7 @@ async function setup(parameters: {
   error?: unknown
   sponsorBudgetStore?: Store.AtomicStore | undefined
   sponsored: boolean
+  store?: Store.AtomicStore | undefined
   /** Seconds from now until the transaction's `validBefore`. */
   validFor?: number | undefined
   waitForConfirmation?: boolean | undefined
@@ -82,6 +85,7 @@ async function setup(parameters: {
     error = gateway,
     sponsorBudgetStore,
     sponsored,
+    store = Store.memory(),
     validFor = 25,
     waitForConfirmation,
   } = parameters
@@ -95,7 +99,6 @@ async function setup(parameters: {
   let blockNumber = 0
   let syncParams: unknown[] = []
   const onPaymentSuccess = vi.fn()
-  const store = Store.memory()
   // `gate` holds broadcasts in flight until it resolves.
   const state: { gate?: Promise<void> | undefined; outcome: Outcome } = { outcome: 'normal' }
   let finalHash: `0x${string}` | undefined
@@ -479,4 +482,105 @@ test.each([
   // The optimistic path never polls for a receipt.
   expect(lookupHashes).toHaveLength(0)
   expect(onPaymentSuccess).not.toHaveBeenCalled()
+})
+
+test.each([undefined, 'another-attempt'])(
+  'stale settlement cleanup preserves replacement owner %s',
+  async (owner) => {
+    const { broadcast, sends, signatureHashKey, state, store } = await setup({ sponsored: false })
+    let open!: () => void
+    state.gate = new Promise((resolve) => (open = resolve))
+    state.outcome = 'lookup-error'
+    const inFlight = broadcast()
+    await vi.waitFor(() => expect(sends()).toBe(1))
+    const replacement = {
+      expires: Date.now() + 60_000,
+      ...(owner ? { owner } : {}),
+      type: 'mppx:replay' as const,
+    }
+    await store.update(signatureHashKey, () => ({
+      op: 'set',
+      value: replacement,
+      result: undefined,
+    }))
+    open()
+    await expect(inFlight).rejects.toBeInstanceOf(Error)
+    expect(await store.get(signatureHashKey)).toEqual(replacement)
+    await expectReplayed(broadcast())
+  },
+)
+
+test('settles unsponsored transactions without global Web Crypto', async () => {
+  const { broadcast, state } = await setup({ sponsored: false })
+  state.outcome = 'included'
+  vi.stubGlobal('crypto', undefined)
+  try {
+    await expect(broadcast()).resolves.toMatchObject({ status: 'success' })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test.each(['signature', 'final'] as const)(
+  'preserves a sponsored %s claim replaced during cleanup',
+  async (target) => {
+    const db = new DatabaseSync(':memory:')
+    let key: string | undefined
+    let replaced = false
+    const replacement = { expires: Date.now() + 60_000, owner: 'new-attempt', type: 'mppx:replay' }
+    const store = Store.sql({
+      dialect: 'sqlite',
+      async query(text, params) {
+        const rows = db.prepare(text).all(...(params as never[])) as Store.sql.Row[]
+        if (key && params[0] === key && text.startsWith('SELECT') && !replaced) {
+          replaced = true
+          db.prepare('UPDATE mppx_store SET value = ?, expires = ? WHERE key = ?').run(
+            JSON.stringify(replacement),
+            replacement.expires,
+            key,
+          )
+        }
+        return rows
+      },
+    })
+    try {
+      const { broadcast, finalHash, sends, signatureHashKey, state } = await setup({
+        sponsored: true,
+        store,
+      })
+      let open!: () => void
+      state.gate = new Promise((resolve) => (open = resolve))
+      state.outcome = 'lookup-error'
+      const inFlight = broadcast()
+      await vi.waitFor(() => expect(sends()).toBe(1))
+      key = target === 'signature' ? signatureHashKey : `mppx:charge:${finalHash()}`
+      expect(`mppx:charge:${finalHash()}`).not.toBe(signatureHashKey)
+      open()
+      await expect(inFlight).rejects.toBeInstanceOf(Error)
+      expect(replaced).toBe(true)
+      expect(await store.get(key)).toEqual(replacement)
+      expect(await Store.tryClaim(store, key, replacement.expires)).toBe(false)
+    } finally {
+      db.close()
+    }
+  },
+)
+
+test('failed replay cleanup preserves the settlement error and its claim', async () => {
+  const { broadcast, signatureHashKey, state, store } = await setup({ sponsored: false })
+  state.outcome = 'lookup-error'
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const originalRelease = store.releaseClaim
+  store.releaseClaim = vi.fn().mockRejectedValue(new Error('store unavailable'))
+  try {
+    const error = await broadcast().catch((error: unknown) => error)
+    expect(causedBy(error, gateway)).toBe(true)
+    expect(await store.get(signatureHashKey)).toMatchObject({ type: 'mppx:replay' })
+    expect(log).toHaveBeenCalledWith(
+      'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+    )
+  } finally {
+    store.releaseClaim = originalRelease
+    log.mockRestore()
+  }
 })

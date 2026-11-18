@@ -55,12 +55,15 @@ export type TryClaim<itemMap extends StoreItemMap = StoreItemMap> = <
 >(
   key: key,
   expires: number,
+  owner?: string,
 ) => MaybePromise<boolean>
 
 /** Persisted marker used by the {@link tryClaim} fallback. */
 export type ReplayMarker = {
   expires: number
   type: 'mppx:replay'
+  /** Identifies the attempt permitted to release this claim. */
+  owner?: string | undefined
 }
 
 /** Base key-value actions available on every {@link Store}. */
@@ -75,6 +78,10 @@ export type AtomicActions<itemMap extends StoreItemMap = StoreItemMap> = {
   update: Update<itemMap>
   /** Optional single-operation fast path for recording expiring replay keys. */
   tryClaim?: TryClaim<itemMap> | undefined
+  /** Atomically releases only a matching owner; providing this also opts tryClaim into ownership support. */
+  releaseClaim?:
+    | (<key extends keyof itemMap & string>(key: key, owner: string) => Promise<void>)
+    | undefined
 }
 
 /**
@@ -107,6 +114,10 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
  *
  * Returns `true` when this call recorded the key and `false` when it was already
  * recorded and unexpired, or the proposed expiry has passed. `expires` is a Unix timestamp in milliseconds.
+ * An optional owner permits conditional release through {@link releaseClaim}.
+ * Custom optimized stores opt into ownership by implementing `releaseClaim`; otherwise
+ * their claims remain consumed until expiry. Deploy upgraded Durable Object classes
+ * before clients that use owned claims.
  * Uses the adapter's optimized primitive when available and otherwise falls
  * back to {@link AtomicStore.update}.
  */
@@ -114,24 +125,47 @@ export function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap
   store: AtomicStore<itemMap>,
   key: key,
   expires: number,
+  owner?: string,
 ): MaybePromise<boolean> {
   if (!Number.isFinite(expires) || expires <= Date.now()) return false
   if (store.tryClaim) {
-    const result = store.tryClaim(key, expires)
+    const result = store.tryClaim(key, expires, store.releaseClaim ? owner : undefined)
     return typeof result === 'boolean'
       ? result && expires > Date.now()
       : result.then((claimed) => claimed && expires > Date.now())
   }
-  return store.update(key, (current) => {
-    if (!Number.isFinite(expires) || expires <= Date.now()) return { op: 'noop', result: false }
-    if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
-      return { op: 'noop', result: false }
-    return {
-      op: 'set',
-      value: { expires, type: 'mppx:replay' } as itemMap[key],
-      result: true,
-    }
-  })
+  return store
+    .update(key, (current) => {
+      if (!Number.isFinite(expires) || expires <= Date.now()) return { op: 'noop', result: false }
+      if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
+        return { op: 'noop', result: false }
+      return {
+        op: 'set',
+        value: {
+          expires,
+          ...(owner === undefined ? {} : { owner }),
+          type: 'mppx:replay',
+        } as itemMap[key],
+        result: true,
+      }
+    })
+    .then((claimed) => claimed && expires > Date.now())
+}
+
+/**
+ * Releases a replay claim only while it belongs to `owner`.
+ * Custom optimized stores without ownership support retain claims until expiry.
+ */
+export async function releaseClaim<
+  itemMap extends StoreItemMap,
+  key extends keyof itemMap & string,
+>(store: AtomicStore<itemMap>, key: key, owner: string): Promise<void> {
+  if (store.releaseClaim) return store.releaseClaim(key, owner)
+  if (store.tryClaim) return
+  await store.update(key, (current) => ({
+    op: isReplayMarker(current) && current.owner === owner ? 'delete' : 'noop',
+    result: undefined,
+  }))
 }
 
 function isReplayMarker(value: unknown): value is ReplayMarker {
@@ -401,9 +435,15 @@ function withKeyPrefix(store: Store | AtomicStore, keyPrefix = ''): Store | Atom
       : {}),
     ...('tryClaim' in store && typeof store.tryClaim === 'function'
       ? {
-          tryClaim(key: string, expires: number) {
-            return store.tryClaim!(prefixedKey(key), expires)
+          tryClaim(key: string, expires: number, owner?: string) {
+            return store.tryClaim!(prefixedKey(key), expires, owner)
           },
+        }
+      : {}),
+    ...('releaseClaim' in store && typeof store.releaseClaim === 'function'
+      ? {
+          releaseClaim: (key: string, owner: string) =>
+            store.releaseClaim!(prefixedKey(key), owner),
         }
       : {}),
   } satisfies Store | AtomicStore)
@@ -584,7 +624,11 @@ export function durableObject(
           put: (key, value) => stub(key).storePut(key, value, encoding),
           delete: (key) => stub(key).storeDelete(key, encoding),
           swap: (key, expected, value) => stub(key).storeSwap(key, expected, value, encoding),
-          claim: (key, expires) => stub(key).storeClaim(key, expires, encoding),
+          claim: (key, expires, owner) =>
+            owner === undefined
+              ? stub(key).storeClaim(key, expires, encoding)
+              : stub(key).storeClaimOwned(key, expires, owner, encoding),
+          release: (key, owner) => stub(key).storeReleaseClaim(key, owner, encoding),
         }
       : {
           get: (key) => call(keyObject(key), { op: 'get', key }),
@@ -597,7 +641,14 @@ export function durableObject(
               expected: expected as string | null,
               value: value as string | null,
             }),
-          claim: (key, expires) => call(keyObject(key), { op: 'claim', key, expires }),
+          claim: (key, expires, owner) =>
+            call(keyObject(key), {
+              op: owner === undefined ? 'claim' : 'claimOwned',
+              key,
+              expires,
+              owner,
+            }),
+          release: (key, owner) => call(keyObject(key), { op: 'releaseClaim', key, owner }),
         }
   type Remote = {
     get: (key: string) => Promise<unknown>
@@ -608,7 +659,8 @@ export function durableObject(
       expected: unknown,
       value: unknown,
     ) => Promise<DurableObjectStore.SwapResult<unknown>>
-    claim: (key: string, expires: number) => Promise<boolean>
+    claim: (key: string, expires: number, owner?: string) => Promise<boolean>
+    release: (key: string, owner: string) => Promise<unknown>
   }
   function stub(key: string) {
     return object(keyObject(key)) as unknown as DurableObjectStore.Stub
@@ -625,13 +677,22 @@ export function durableObject(
             object(shardOf(key)) as unknown as DurableObjectStore.ReplayShard
           return transport === 'rpc'
             ? {
-                claim: (key: string, expires: number) => shard(key).claimReplay(key, expires),
-                release: (key: string) => shard(key).releaseReplay(key),
+                claim: (key: string, expires: number, owner?: string) =>
+                  owner === undefined
+                    ? shard(key).claimReplay(key, expires)
+                    : shard(key).claimReplayOwned(key, expires, owner),
+                release: (key: string, owner?: string) => shard(key).releaseReplay(key, owner),
               }
             : {
-                claim: (key: string, expires: number) =>
-                  call<boolean>(shardOf(key), { op: 'claimReplay', key, expires }),
-                release: (key: string) => call(shardOf(key), { op: 'releaseReplay', key }),
+                claim: (key: string, expires: number, owner?: string) =>
+                  call<boolean>(shardOf(key), {
+                    op: owner === undefined ? 'claimReplay' : 'claimReplayOwned',
+                    key,
+                    expires,
+                    owner,
+                  }),
+                release: (key: string, owner?: string) =>
+                  call(shardOf(key), { op: 'releaseReplay', key, owner }),
               }
         })()
 
@@ -670,9 +731,13 @@ export function durableObject(
           swap: (expected, value) => remote.swap(key, expected, value),
         })
       },
-      async tryClaim(key: string, expires: number) {
+      async tryClaim(key: string, expires: number, owner?: string) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
-        return replay ? replay.claim(key, expires) : remote.claim(key, expires)
+        return replay ? replay.claim(key, expires, owner) : remote.claim(key, expires, owner)
+      },
+      async releaseClaim(key: string, owner: string) {
+        if (replay) await replay.release(key, owner)
+        else await remote.release(key, owner)
       },
     },
     options,
@@ -901,16 +966,17 @@ export class DurableObjectStore {
    * unexpired claim: one `INSERT … ON CONFLICT DO UPDATE … WHERE` statement, so
    * concurrent claims have exactly one winner. Schedules the alarm that clears it.
    */
-  async claimReplay(key: string, expires: number): Promise<boolean> {
+  async claimReplay(key: string, expires: number, owner?: string): Promise<boolean> {
     const sql = this.replayClaims()
     const now = Date.now()
     if (!Number.isFinite(expires) || expires <= now) return false
     const claimed =
       sql
         .exec(
-          'INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires WHERE mppx_replay_claims.expires <= ? RETURNING key',
+          'INSERT INTO mppx_replay_claims (key, expires, owner) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET expires = excluded.expires, owner = excluded.owner WHERE mppx_replay_claims.expires <= ? RETURNING key',
           key,
           expires,
+          owner ?? null,
           now,
         )
         .toArray().length === 1
@@ -922,16 +988,29 @@ export class DurableObjectStore {
           await storage.setAlarm?.(Math.max(expires, Date.now() + 1))
       } catch (error) {
         // Without the alarm that clears it the claim must not stay: release it so a retry can claim.
-        sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND expires = ?', key, expires)
+        sql.exec(
+          'DELETE FROM mppx_replay_claims WHERE key = ? AND expires = ? AND owner IS ?',
+          key,
+          expires,
+          owner ?? null,
+        )
         throw error
       }
     }
     return claimed
   }
 
+  /** Ownership-capable entrypoint: older shard deployments reject it before recording a claim. */
+  async claimReplayOwned(key: string, expires: number, owner: string): Promise<boolean> {
+    return this.claimReplay(key, expires, owner)
+  }
+
   /** Releases `key`'s claim in this replay shard, if it has one. */
-  async releaseReplay(key: string): Promise<void> {
-    this.replayClaims().exec('DELETE FROM mppx_replay_claims WHERE key = ?', key)
+  async releaseReplay(key: string, owner?: string): Promise<void> {
+    const sql = this.replayClaims()
+    if (owner === undefined)
+      sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner IS NULL', key)
+    else sql.exec('DELETE FROM mppx_replay_claims WHERE key = ? AND owner = ?', key, owner)
   }
 
   // The store's operations are named `store*`, not `get`, `put` and `delete`: on a Worker
@@ -982,14 +1061,41 @@ export class DurableObjectStore {
     key: string,
     expires: number,
     encoding: durableObject.Encoding = 'json',
+    owner?: string,
   ): Promise<boolean> {
     if (!Number.isFinite(expires) || expires <= Date.now()) return false
     const raw = await this.storeGet(key)
     const current = decode(raw, encoding)
     if (current !== null && (!isReplayMarker(current) || current.expires > Date.now())) return false
-    const marker = { expires, type: 'mppx:replay' } satisfies ReplayMarker
+    const marker = {
+      expires,
+      ...(owner === undefined ? {} : { owner }),
+      type: 'mppx:replay',
+    } satisfies ReplayMarker
     await this.commit(key, encoding === 'native' ? marker : Json.stringify(marker), encoding, raw)
     return true
+  }
+
+  /** Ownership-capable entrypoint: older object deployments reject it before recording a claim. */
+  async storeClaimOwned(
+    key: string,
+    expires: number,
+    owner: string,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<boolean> {
+    return this.storeClaim(key, expires, encoding, owner)
+  }
+
+  /** Releases a matching owned claim atomically through the object's input gate. */
+  async storeReleaseClaim(
+    key: string,
+    owner: string,
+    encoding: durableObject.Encoding = 'json',
+  ): Promise<void> {
+    const raw = await this.storeGet(key)
+    const current = decode(raw, encoding)
+    if (isReplayMarker(current) && current.owner === owner)
+      await this.commit(key, null, encoding, raw)
   }
 
   /** Handles one store operation sent by `fetch`, as JSON text. */
@@ -1007,12 +1113,19 @@ export class DurableObjectStore {
         return Response.json(true)
       case 'swap':
         return Response.json(await this.storeSwap(body.key, body.expected, body.value))
+      case 'claimOwned':
+        return Response.json(await this.storeClaimOwned(body.key, body.expires, body.owner!))
       case 'claim':
-        return Response.json(await this.storeClaim(body.key, body.expires))
+        return Response.json(await this.storeClaim(body.key, body.expires, 'json', body.owner))
+      case 'releaseClaim':
+        await this.storeReleaseClaim(body.key, body.owner)
+        return Response.json(true)
+      case 'claimReplayOwned':
+        return Response.json(await this.claimReplayOwned(body.key, body.expires, body.owner!))
       case 'claimReplay':
-        return Response.json(await this.claimReplay(body.key, body.expires))
+        return Response.json(await this.claimReplay(body.key, body.expires, body.owner))
       case 'releaseReplay':
-        await this.releaseReplay(body.key)
+        await this.releaseReplay(body.key, body.owner)
         return Response.json(true)
       default:
         return new Response('Unknown operation', { status: 400 })
@@ -1029,6 +1142,13 @@ export class DurableObjectStore {
     sql.exec(
       'CREATE TABLE IF NOT EXISTS mppx_replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)',
     )
+    if (
+      !sql
+        .exec('PRAGMA table_info(mppx_replay_claims)')
+        .toArray()
+        .some((column) => column.name === 'owner')
+    )
+      sql.exec('ALTER TABLE mppx_replay_claims ADD COLUMN owner TEXT')
     sql.exec(
       'CREATE INDEX IF NOT EXISTS mppx_replay_claims_by_expiry ON mppx_replay_claims (expires)',
     )
@@ -1098,8 +1218,9 @@ export declare namespace DurableObjectStore {
 
   /** A replay shard's methods that {@link durableObject} calls over Workers RPC. */
   export type ReplayShard = {
-    claimReplay: (key: string, expires: number) => Promise<boolean>
-    releaseReplay: (key: string) => Promise<unknown>
+    claimReplayOwned: (key: string, expires: number, owner: string) => Promise<boolean>
+    claimReplay: (key: string, expires: number, owner?: string) => Promise<boolean>
+    releaseReplay: (key: string, owner?: string) => Promise<unknown>
   }
 
   /** Result of a compare-and-swap: on a conflict, the stored value, so a retry needs no read. */
@@ -1118,11 +1239,23 @@ export declare namespace DurableObjectStore {
       value: unknown,
       encoding?: durableObject.Encoding,
     ) => Promise<SwapResult<unknown>>
+    storeClaimOwned: (
+      key: string,
+      expires: number,
+      owner: string,
+      encoding?: durableObject.Encoding,
+    ) => Promise<boolean>
     storeClaim: (
       key: string,
       expires: number,
       encoding?: durableObject.Encoding,
+      owner?: string,
     ) => Promise<boolean>
+    storeReleaseClaim: (
+      key: string,
+      owner: string,
+      encoding?: durableObject.Encoding,
+    ) => Promise<void>
   }
 
   /** An operation sent from {@link durableObject} to the object. */
@@ -1131,9 +1264,15 @@ export declare namespace DurableObjectStore {
     | { op: 'put'; key: string; value: string }
     | { op: 'delete'; key: string }
     | { op: 'swap'; key: string; expected: string | null; value: string | null }
-    | { op: 'claim'; key: string; expires: number }
-    | { op: 'claimReplay'; key: string; expires: number }
-    | { op: 'releaseReplay'; key: string }
+    | { op: 'claim' | 'claimOwned'; key: string; expires: number; owner?: string | undefined }
+    | {
+        op: 'claimReplay' | 'claimReplayOwned'
+        key: string
+        expires: number
+        owner?: string | undefined
+      }
+    | { op: 'releaseReplay'; key: string; owner?: string | undefined }
+    | { op: 'releaseClaim'; key: string; owner: string }
 }
 
 /**
@@ -1267,19 +1406,30 @@ export function sql(driver: sql.Driver, options?: sql.Options): AtomicStore {
         })
       },
       // One statement: insert the marker, or replace one whose expiry has passed.
-      async tryClaim(key: string, expires: number) {
+      async tryClaim(key: string, expires: number, owner?: string) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
         const rows = await query(
           `INSERT INTO ${table} AS existing (key, value, expires) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires = excluded.expires WHERE existing.expires IS NOT NULL AND existing.expires <= ? RETURNING key`,
           [
             key,
-            Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker),
+            Json.stringify({
+              expires,
+              ...(owner === undefined ? {} : { owner }),
+              type: 'mppx:replay',
+            } satisfies ReplayMarker),
             expires,
             Date.now(),
           ],
         )
         // The claim's own expiry may have passed while the statement ran.
         return rows.length > 0 && expires > Date.now()
+      },
+      async releaseClaim(key: string, owner: string) {
+        const raw = await read(key)
+        if (raw === null) return
+        const current = Json.parse(raw)
+        if (isReplayMarker(current) && current.owner === owner)
+          await query(`DELETE FROM ${table} WHERE key = ? AND value = ?`, [key, raw])
       },
     },
     options,
@@ -1449,13 +1599,24 @@ export function memory(options?: memory.Options): AtomicStore {
         if (change.op === 'delete') store.delete(key)
         return change.result
       },
-      tryClaim(key: string, expires: number) {
+      tryClaim(key: string, expires: number, owner?: string) {
         if (!Number.isFinite(expires) || expires <= Date.now()) return false
         const current = store.has(key) ? Json.parse(store.get(key)!) : null
         if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
           return false
-        store.set(key, Json.stringify({ expires, type: 'mppx:replay' }))
+        store.set(
+          key,
+          Json.stringify({
+            expires,
+            ...(owner === undefined ? {} : { owner }),
+            type: 'mppx:replay',
+          }),
+        )
         return true
+      },
+      async releaseClaim(key: string, owner: string) {
+        const current = store.has(key) ? Json.parse(store.get(key)!) : null
+        if (isReplayMarker(current) && current.owner === owner) store.delete(key)
       },
     },
     options,

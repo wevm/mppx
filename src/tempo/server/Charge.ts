@@ -1,3 +1,4 @@
+import { Secp256k1 } from 'ox'
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   type Address,
@@ -841,7 +842,8 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          if (!(await tryClaimHash(store, hash, replayExpires))) {
+          const owner = Secp256k1.randomPrivateKey()
+          if (!(await tryClaimHash(store, hash, replayExpires, owner))) {
             throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
             })
@@ -937,7 +939,7 @@ export function charge<const parameters extends charge.Parameters>(
             finalHash = keccak256(serializedTransaction_final)
 
             if (finalHash.toLowerCase() !== hash.toLowerCase()) {
-              if (!(await tryClaimHash(store, finalHash, replayExpires)))
+              if (!(await tryClaimHash(store, finalHash, replayExpires, owner)))
                 throw new CredentialReplayedError({
                   reason: 'Transaction hash has already been used',
                 })
@@ -1118,8 +1120,14 @@ export function charge<const parameters extends charge.Parameters>(
             // Only a successful settlement consumes the credential. A signed
             // transaction can be mined at most once, so a retry re-broadcasts it
             // and recovers the receipt instead of being rejected as a replay.
-            if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
-            await releaseHashUse(store, hash)
+            const cleanup = await Promise.allSettled([
+              ...(claimedFinalHash ? [releaseHashUse(store, claimedFinalHash, owner)] : []),
+              releaseHashUse(store, hash, owner),
+            ])
+            if (cleanup.some((result) => result.status === 'rejected'))
+              console.error(
+                'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+              )
             if (broadcastAttempted) throw error
             throw await explainMachineTokenFailure(error, {
               amount,
@@ -1753,8 +1761,9 @@ async function tryClaimHash(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
   expires: number,
+  owner?: string,
 ): Promise<boolean> {
-  return Store.tryClaim(store, getHashStoreKey(hash), expires)
+  return Store.tryClaim(store, getHashStoreKey(hash), expires, owner)
 }
 
 /** Whether a live replay marker holds `hash`, read without claiming it. */
@@ -1772,8 +1781,9 @@ async function isHashUsed(
 async function releaseHashUse(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
+  owner: string,
 ): Promise<void> {
-  await store.delete(getHashStoreKey(hash))
+  await Store.releaseClaim(store, getHashStoreKey(hash), owner)
 }
 
 function parseHashCredentialSource(parameters: {
