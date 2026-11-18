@@ -16,6 +16,7 @@ test.each(['factory', 'payment'] as const)(
   'rejects an unapproved Host before verification through %s',
   async (mode) => {
     const app = express()
+    app.set('trust proxy', true)
     const config = {
       methods: [
         tempo.charge({
@@ -66,6 +67,15 @@ test.each(['factory', 'payment'] as const)(
     })
     expect(absolute.status).toBe(402)
     expect(urls.at(-1)).toBe('http://trusted.example/paid')
+    const protocol = await send(`http://localhost:${address.port}/paid`, {
+      headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https://denied.example/#'],
+    })
+    expect(protocol.status).toBe(421)
+    const https = await send(`http://localhost:${address.port}/paid`, {
+      headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https'],
+    })
+    expect(https.status).toBe(402)
+    expect(urls.at(-1)).toBe('https://trusted.example/paid')
   },
 )
 
