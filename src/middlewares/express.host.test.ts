@@ -71,6 +71,11 @@ test.each(['factory', 'payment'] as const)(
       headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https://denied.example/#'],
     })
     expect(protocol.status).toBe(421)
+    const mixedCase = await send(`http://localhost:${address.port}/paid`, {
+      headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'hTtPs'],
+    })
+    expect(mixedCase.status).toBe(402)
+    expect(urls.at(-1)).toBe('https://trusted.example/paid')
     const https = await send(`http://localhost:${address.port}/paid`, {
       headers: ['Host', 'trusted.example', 'X-Forwarded-Proto', 'https'],
     })

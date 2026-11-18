@@ -44,7 +44,7 @@ export namespace Mppx {
 
 /** Optional ingress validation shared by Express payment handlers. */
 export type AdapterOptions = {
-  /** Exact incoming hosts, including ports. Omitted preserves existing behavior; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Omitted preserves existing behavior; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
   allowedHosts?: readonly string[] | undefined
 }
 
@@ -74,16 +74,15 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   adapterOptions: AdapterOptions = {},
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
+    const protocol = req.protocol.toLowerCase()
     if (
       !Host.isAllowed(req, adapterOptions.allowedHosts) ||
-      (adapterOptions.allowedHosts !== undefined &&
-        req.protocol !== 'http' &&
-        req.protocol !== 'https')
+      (adapterOptions.allowedHosts !== undefined && protocol !== 'http' && protocol !== 'https')
     ) {
       res.status(421).send('Misdirected Request')
       return
     }
-    const rawRequest = ExpressAdapter.toRequest(req)
+    const rawRequest = ExpressAdapter.toRequest(req, protocol)
     const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
     const request =
       options.scope === undefined && Scope.read(options.meta) === undefined

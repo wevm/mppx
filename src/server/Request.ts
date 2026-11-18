@@ -6,7 +6,7 @@ import * as NodeListener from './NodeListener.js'
 export type FetchHandler = (request: Request) => Promise<Response> | Response
 
 export type RequestListenerOptions = {
-  /** Exact incoming hosts, including ports. Omitted preserves existing behavior; an empty list rejects all hosts. Validate at trusted ingress too; forwarded hosts are not trusted. */
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Omitted preserves existing behavior; an empty list rejects all hosts. Validate at trusted ingress too; forwarded hosts are not trusted. */
   allowedHosts?: readonly string[] | undefined
   host?: string | undefined
   /** Maximum accepted request body size in bytes. @default 10485760 (10 MiB) */

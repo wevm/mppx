@@ -1,5 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 
+const normalizedHosts = new WeakMap<readonly string[], ReadonlySet<string>>()
+
 /** Validates every incoming authority before Node or Express normalizes duplicate headers. */
 export function isAllowed(
   request: Pick<IncomingMessage, 'headers' | 'rawHeaders'>,
@@ -22,12 +24,13 @@ export function isAllowed(
     if (typeof authority !== 'string') return false
     authorities.push(authority)
   }
-  return (
-    authorities.length > 0 &&
-    authorities.every(
-      (value) =>
-        value.toLowerCase() === authorities[0]!.toLowerCase() &&
-        allowedHosts.some((allowed) => allowed.toLowerCase() === value.toLowerCase()),
-    )
-  )
+  const expected = authorities[0]?.toLowerCase()
+  if (expected === undefined || !authorities.every((value) => value.toLowerCase() === expected))
+    return false
+  let allowed = normalizedHosts.get(allowedHosts)
+  if (!allowed) {
+    allowed = new Set(allowedHosts.map((value) => value.toLowerCase()))
+    normalizedHosts.set(allowedHosts, allowed)
+  }
+  return allowed.has(expected)
 }
