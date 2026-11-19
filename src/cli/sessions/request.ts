@@ -199,7 +199,10 @@ export async function runPersistentSessionRequest(
   const locks: Awaited<ReturnType<typeof registry.acquire>>[] = []
   const lock = {
     async release() {
-      for (const lock of locks.splice(0).reverse()) await lock.release()
+      // Release every lock even when one fails, then report the first failure.
+      const results = await Promise.allSettled(locks.splice(0).map((lock) => lock.release()))
+      const failed = results.find((result) => result.status === 'rejected')
+      if (failed) throw failed.reason
     },
   }
   try {

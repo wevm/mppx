@@ -354,6 +354,30 @@ describe('MACH channel funding', () => {
     ).toBe(advertised)
   })
 
+  test('skips a stored MACH channel bound to another origin', async () => {
+    const { resolveMachineTokenContext, selectChannelContext } = await import('./MachineToken.js')
+    const resolved = await resolvedFor({})
+    const machine = resolveMachineTokenContext(resolved)!
+    const store = createChannelStore()
+    await store.set({
+      chainId,
+      channelId: '0xabababababababababababababababababababababababababababababababab',
+      cumulativeAmount: 0n,
+      deposit: 100n,
+      descriptor: { payee, token: machine.token },
+      escrow: tip20ChannelEscrow,
+      opened: true,
+      origin: 'https://a.example',
+    } as never)
+
+    const select = (origin?: string) =>
+      selectChannelContext({ resolved, store, ...(origin !== undefined && { origin }) })
+
+    expect((await select('https://a.example')).key).toBe(machine.key)
+    expect((await select('https://b.example')).key).toBe(resolved.key)
+    expect((await select()).key).toBe(machine.key)
+  })
+
   test('locks the MACH channel scope for machTokenAccepted challenges', async () => {
     const { getLockKeys, resolveMachineTokenContext } = await import('./MachineToken.js')
     const resolved = await resolvedFor({})
