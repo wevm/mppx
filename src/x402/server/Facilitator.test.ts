@@ -838,3 +838,49 @@ describe('x402 facilitator payToResolver withdrawal and refresh', () => {
     }
   })
 })
+
+describe('payToResolver round 4', () => {
+  test('keeps at most 16 replaced addresses', async () => {
+    let n = 0
+    const resolve = Facilitator.createPayToResolver(
+      async () => `0x${(++n).toString(16).padStart(40, '0')}`,
+      { ttl: 0 },
+    )
+    for (let i = 0; i < 40; i++) await resolve()
+    expect(resolve.issued(`0x${(1).toString(16).padStart(40, '0')}`)).toBeUndefined()
+    expect(resolve.issued(`0x${(30).toString(16).padStart(40, '0')}`)).toBeDefined()
+  })
+
+  test('an explicit facilitator resolver carries its network', () => {
+    const resolve = Facilitator.payToResolver('https://f.example', { network: 'eip155:8453' })
+    expect(resolve.network).toBe('eip155:8453')
+  })
+})
+
+describe('payToResolver stale replacement', () => {
+  test('an address that expired during an outage gets no new grace when replaced', async () => {
+    vi.useFakeTimers()
+    try {
+      const a = '0x1111111111111111111111111111111111111111'
+      const b = '0x2222222222222222222222222222222222222222'
+      let next: string | undefined = a
+      const resolve = Facilitator.createPayToResolver(
+        async () => {
+          if (!next) throw new Error('down')
+          return next
+        },
+        { grace: 1_000, ttl: 1_000 },
+      )
+      await resolve()
+      next = undefined
+      vi.advanceTimersByTime(2_001)
+      await expect(resolve()).rejects.toThrow()
+      next = b
+      vi.advanceTimersByTime(30_001)
+      expect(await resolve()).toBe(b)
+      expect(resolve.issued(a)).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

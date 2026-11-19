@@ -1226,3 +1226,51 @@ describe('evm charge lazy recipient codex round', () => {
     expect(settled).toEqual([])
   })
 })
+
+describe('compose fallback round 4', () => {
+  test('a credential for an unavailable checked lazy offer is not run on a sibling', async () => {
+    const down = {
+      async supported(): Promise<never> {
+        throw new Error('down')
+      },
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(): Promise<never> {
+        throw new Error('unreachable')
+      },
+    } as unknown as x402_Types.Facilitator
+    const settled: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator: down } }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: '0x2222222222222222222222222222222222222222',
+          settle: async ({ request }) => {
+            settled.push(request.recipient)
+            return { reference: transaction }
+          },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const [lazy, fixed] = mppx.methods
+    const route = mppx.compose([lazy!, { amount: '0.25' }], [fixed!, { amount: '0.50' }])
+    const challenged = await route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const offer = Challenge.fromResponseList(challenged.challenge)[0]!
+    const forged = Credential.serialize({
+      challenge: {
+        ...offer,
+        request: { ...offer.request, recipient: '0x1111111111111111111111111111111111111111' },
+      },
+      payload: { signature: '0x', type: 'authorization' },
+    } as never)
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: forged } }),
+    )
+    expect(result.status).toBe(402)
+    expect(settled).toEqual([])
+  })
+})

@@ -3045,6 +3045,16 @@ function composeHandlers(
   const hasOfferPolicy =
     offerSelector !== undefined || offerEntries.some(({ method }) => method?.canOffer !== undefined)
 
+  // The same request without the headers that carry a payment: answered with a fresh 402.
+  const withoutPaymentHeaders = (input: Request) => {
+    const headers = new Headers(input.headers)
+    for (const handler of handlers)
+      for (const internal of getConfiguredOffers(handler as ConfiguredHandler))
+        for (const header of internal.credentialHeaders ?? []) headers.delete(header)
+    headers.delete(Constants.Headers.authorization)
+    return new globalThis.Request(input, { headers })
+  }
+
   const composed: ComposedHandler = async (input: Request, context?: unknown) => {
     // One identity context for every offer called with this request, so each verifier runs at
     // most once. Offers are called through `call`, which passes it on.
@@ -3137,8 +3147,14 @@ function composeHandlers(
           try {
             return await call(match)
           } catch (error) {
-            // The credential's offer can't be made right now: advertise the ones that can.
             if (!(error instanceof Errors.OfferUnavailableError)) throw error
+            // The credential's offer can't be made right now: answer with a 402 for the offers
+            // that can, never by running this credential on a sibling (it may skip the
+            // matched offer's payment check).
+            return (composed as (i: Request, c?: unknown) => ReturnType<typeof call>)(
+              withoutPaymentHeaders(input),
+              context,
+            )
           }
         }
       }
@@ -3205,7 +3221,18 @@ function composeHandlers(
         }),
       ),
     )
-    if (transportCredentialHandler) return call(transportCredentialHandler)
+    if (transportCredentialHandler) {
+      try {
+        return await call(transportCredentialHandler)
+      } catch (error) {
+        if (!(error instanceof Errors.OfferUnavailableError)) throw error
+        // Advertise the healthy offers, without settling the rejected payment through them.
+        return (composed as (i: Request, c?: unknown) => ReturnType<typeof call>)(
+          withoutPaymentHeaders(input),
+          context,
+        )
+      }
+    }
 
     // No credential — evaluate handlers sequentially so authorize()/renewal hooks
     // can safely claim the request without racing each other.

@@ -49,10 +49,7 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       } as charge.Defaults,
       ...(typeof config.recipient === 'function'
         ? {
-            request: recipientHook(
-              config.recipient,
-              facilitatorChains.has(config.recipient) ? config.chainId : undefined,
-            ),
+            request: recipientHook(config.recipient, chainOf(config.recipient.network)),
             stableBinding: chargeBinding(config.recipient),
           }
         : {}),
@@ -468,12 +465,14 @@ function resolveRecipient(parameters: {
     headers: x402.headers,
     network: Types.networkOf(chainId),
   })
-  facilitatorChains.add(resolver)
   return resolver
 }
 
-/** Resolvers this module built from a facilitator's per-network payTo. */
-const facilitatorChains = new WeakSet<object>()
+/** The chain ID of an `eip155:<id>` network, if any. */
+function chainOf(network: string | undefined): number | undefined {
+  const match = network?.match(/^eip155:(\d+)$/)
+  return match ? Number(match[1]) : undefined
+}
 
 function createPaths(config: ResolvedConfig): HttpPaths {
   return {

@@ -194,6 +194,8 @@ export type PayToResolver = (() => Promise<`0x${string}`>) & {
    * facilitator just published.
    */
   refresh(): Promise<`0x${string}`>
+  /** For a resolver read from a facilitator: the network (`eip155:<chainId>`) the address is for. */
+  readonly network?: string | undefined
 }
 
 /** Options for {@link createPayToResolver} and {@link payToResolver}. */
@@ -222,6 +224,7 @@ export function createPayToResolver(
 ): PayToResolver {
   const { grace = 600_000, timeout = 10_000, ttl = 300_000 } = options
   const retryAfterFailure = Math.min(ttl, 30_000)
+  const maxRetired = 16
   let current: `0x${string}` | undefined
   let freshUntil = 0
   let readAt = 0
@@ -250,8 +253,11 @@ export function createPayToResolver(
     retired = retired.filter(
       (entry) => entry.address.toLowerCase() !== address.toLowerCase() && now - entry.at < grace,
     )
-    if (current && current.toLowerCase() !== address.toLowerCase())
+    // An address that already went stale (no successful read for ttl + grace) gets no new grace.
+    if (current && current.toLowerCase() !== address.toLowerCase() && now - readAt <= ttl + grace)
       retired.push({ address: current, at: now })
+    // Bounded: a function that returns a new address per call must not grow this without limit.
+    if (retired.length > maxRetired) retired = retired.slice(-maxRetired)
     current = address
   }
 
@@ -270,8 +276,9 @@ export function createPayToResolver(
         // Measured after the read, so a slow read doesn't shorten the windows.
         const now = Date.now()
         failure = undefined
-        readAt = now
+        // Replace first: it judges the old address by the previous read's time.
         replace(address, now)
+        readAt = now
         freshUntil = now + ttl
         return address
       })
@@ -346,7 +353,7 @@ export function payToResolver(
   parameters: Parameters<typeof payTo>[1] & PayToResolverOptions,
 ): PayToResolver {
   const { grace, timeout, ttl, fetch: fetch_, ...options } = parameters
-  return createPayToResolver(
+  const resolver = createPayToResolver(
     ({ signal }) =>
       payTo(facilitator, {
         ...options,
@@ -359,6 +366,8 @@ export function payToResolver(
       }),
     { grace, timeout, ttl },
   )
+  Object.defineProperty(resolver, 'network', { value: options.network })
+  return resolver
 }
 
 /** Returns the underlying raw fetch implementation when given an mppx wrapper. */
