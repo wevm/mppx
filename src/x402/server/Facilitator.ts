@@ -169,6 +169,49 @@ export async function payTo(
   return getAddress(value)
 }
 
+/**
+ * Returns a function that reads a facilitator's published `payTo` (see {@link payTo}) and caches it
+ * for `ttl` milliseconds, so a facilitator that rotates its deposit address is picked up without a
+ * restart. Concurrent calls share one `GET /supported`. When a refresh fails, the last address is
+ * kept and the read is retried after 30 seconds; only the first read throws.
+ *
+ * @example
+ * ```ts
+ * const payTo = x402.Facilitator.payToResolver(FACILITATOR_URL, { network: 'eip155:8453' })
+ * await payTo() // fetched on first use, then cached
+ * ```
+ */
+export function payToResolver(
+  facilitator: string | Types.FacilitatorConfig | Types.Facilitator,
+  parameters: Parameters<typeof payTo>[1] & {
+    /** How long a read stays fresh, in milliseconds. @default 300_000 (5 minutes) */
+    ttl?: number | undefined
+  },
+): () => Promise<`0x${string}`> {
+  const { ttl = 300_000, ...options } = parameters
+  const retryAfterFailure = Math.min(ttl, 30_000)
+  let cached: { address: `0x${string}`; expiresAt: number } | undefined
+  let pending: Promise<`0x${string}`> | undefined
+
+  return async () => {
+    if (cached && Date.now() < cached.expiresAt) return cached.address
+    pending ??= payTo(facilitator, options)
+      .then((address) => {
+        cached = { address, expiresAt: Date.now() + ttl }
+        return address
+      })
+      .catch((error) => {
+        if (!cached) throw error
+        cached = { ...cached, expiresAt: Date.now() + retryAfterFailure }
+        return cached.address
+      })
+      .finally(() => {
+        pending = undefined
+      })
+    return pending
+  }
+}
+
 /** Returns the underlying raw fetch implementation when given an mppx wrapper. */
 export function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   let current = fetch as WrappedFetch

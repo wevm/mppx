@@ -88,4 +88,11 @@ export namespace evm {
    * the parameters to authenticate a URL facilitator.
    */
   export const facilitatorPayTo = Facilitator.payTo
+
+  /**
+   * Like {@link facilitatorPayTo}, but returns a function that caches the address for `ttl`
+   * milliseconds (default 5 minutes) and refreshes it after, for `recipient`. A charge that leaves
+   * out `recipient` uses one for you; call this only to change `ttl`.
+   */
+  export const facilitatorPayToResolver = Facilitator.payToResolver
 }

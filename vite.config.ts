@@ -70,6 +70,7 @@ const alias = {
   'mppx/validation': path.resolve(import.meta.dirname, 'src/validation'),
   'mppx/x402/express': path.resolve(import.meta.dirname, 'src/x402/middlewares/express'),
   'mppx/x402/hono': path.resolve(import.meta.dirname, 'src/x402/middlewares/hono'),
+  'mppx/x402/tempo': path.resolve(import.meta.dirname, 'src/x402/tempo'),
   'mppx/x402/mcp': path.resolve(import.meta.dirname, 'src/x402/mcp.ts'),
   'mppx/x402/next': path.resolve(import.meta.dirname, 'src/x402/middlewares/next'),
   'mppx/x402': path.resolve(import.meta.dirname, 'src/x402'),

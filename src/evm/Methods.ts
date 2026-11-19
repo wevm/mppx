@@ -36,7 +36,8 @@ export const charge = Method.from({
             ...(permit2Address ? { permit2Address: getAddress(permit2Address) } : {}),
             ...(splits ? { splits } : {}),
           },
-          recipient: getAddress(recipient),
+          // Every issued challenge has one; only a lazily resolved route's static form leaves it out.
+          recipient: (recipient ? getAddress(recipient) : undefined) as `0x${string}`,
         }),
       ),
     ),

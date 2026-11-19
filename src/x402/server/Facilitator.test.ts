@@ -554,3 +554,56 @@ const facilitatorStub: Types.Facilitator = {
     throw new Error('unused')
   },
 }
+
+describe('x402 facilitator payToResolver', () => {
+  const kinds = (payTo: string) => ({
+    extensions: [],
+    kinds: [{ extra: { payTo }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }],
+    signers: {},
+  })
+
+  test('caches payTo for ttl, then refreshes it', async () => {
+    vi.useFakeTimers()
+    try {
+      let current = '0x1111111111111111111111111111111111111111'
+      const supported = vi.fn(async () => kinds(current))
+      const resolve = Facilitator.payToResolver(
+        { ...facilitatorStub, supported } as Types.Facilitator,
+        { network: 'eip155:8453', ttl: 1_000 },
+      )
+      const [a, b] = await Promise.all([resolve(), resolve()])
+      expect(a).toBe(current)
+      expect(b).toBe(current)
+      expect(supported).toHaveBeenCalledTimes(1)
+
+      current = '0x2222222222222222222222222222222222222222'
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe(current)
+      expect(supported).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('keeps the last payTo when a refresh fails, but throws on the first read', async () => {
+    vi.useFakeTimers()
+    try {
+      const supported = vi
+        .fn<() => Promise<ReturnType<typeof kinds>>>()
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValueOnce(kinds('0x1111111111111111111111111111111111111111'))
+        .mockRejectedValue(new Error('down'))
+      const resolve = Facilitator.payToResolver(
+        { ...facilitatorStub, supported } as Types.Facilitator,
+        { network: 'eip155:8453', ttl: 1_000 },
+      )
+      await expect(resolve()).rejects.toThrow('down')
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

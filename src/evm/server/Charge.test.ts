@@ -599,3 +599,117 @@ describe('evm charge server', () => {
     expect(x402InAuthorizationResult.status).toBe(402)
   })
 })
+
+describe('evm charge recipient from the facilitator', () => {
+  const rotated = '0x1111111111111111111111111111111111111111'
+
+  function facilitatorWith(payTo: { current: string }) {
+    const supported = vi.fn(async () => ({
+      extensions: [],
+      kinds: [
+        {
+          extra: { payTo: payTo.current },
+          network: evm_Types.networkOf(84532),
+          scheme: 'exact',
+          x402Version: 2,
+        },
+      ],
+      signers: {},
+    }))
+    const settled: string[] = []
+    return {
+      settled,
+      supported,
+      facilitator: {
+        supported,
+        async verify() {
+          return { isValid: true }
+        },
+        async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+          settled.push(requirements.payTo)
+          return { network: evm_Types.networkOf(84532), success: true, transaction }
+        },
+      } as x402_Types.Facilitator,
+    }
+  }
+
+  test('reads payTo from GET /supported when recipient is left out, and caches it', async () => {
+    const payTo = { current: recipient }
+    const { facilitator, settled, supported } = facilitatorWith(payTo)
+    const mppx = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator } })],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '1' })],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(first.challenge).request.recipient).toBe(recipient)
+    await route(new Request('https://example.com/paid'))
+    expect(supported).toHaveBeenCalledTimes(1)
+
+    const authorization = await client.createCredential(first.challenge)
+    const paid = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    expect(paid.status).toBe(200)
+    expect(settled).toEqual([recipient])
+  })
+
+  test('picks up a rotated payTo after the cache expires, and still accepts the old one', async () => {
+    vi.useFakeTimers()
+    try {
+      const payTo = { current: recipient }
+      const { facilitator, settled } = facilitatorWith(payTo)
+      const mppx = Mppx.create({
+        methods: [
+          evm({
+            currency: evm.assets.baseSepolia.USDC,
+            recipient: evm.facilitatorPayToResolver(facilitator, {
+              network: evm_Types.networkOf(84532),
+              ttl: 1_000,
+            }),
+            x402: { facilitator },
+          }),
+        ],
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const client = ClientMppx.create({
+        methods: [evm_client({ account, maxAmount: '1' })],
+        polyfill: false,
+      })
+      const route = mppx.evm.charge({ amount: '0.25' })
+
+      const before = await route(new Request('https://example.com/paid'))
+      if (before.status !== 402) throw new Error()
+      const oldCredential = await client.createCredential(before.challenge)
+
+      payTo.current = rotated
+      vi.advanceTimersByTime(1_001)
+      const after = await route(new Request('https://example.com/paid'))
+      if (after.status !== 402) throw new Error()
+      expect(Challenge.fromResponse(after.challenge).request.recipient).toBe(rotated)
+
+      const paidOld = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: oldCredential } }),
+      )
+      expect(paidOld.status).toBe(200)
+      expect(settled).toEqual([recipient])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('requires recipient without a facilitator', () => {
+    expect(() =>
+      evm({
+        currency: evm.assets.baseSepolia.USDC,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow(/requires `recipient` or an `x402.facilitator`/)
+  })
+})

@@ -8,7 +8,9 @@ import * as Receipt from '../../Receipt.js'
 import * as ServerTransport from '../../server/Transport.js'
 import type * as Store from '../../Store.js'
 import * as X402 from '../../x402/server/EvmCharge.js'
+import * as X402Facilitator from '../../x402/server/Facilitator.js'
 import * as Siwx from '../../x402/Siwx.js'
+import type * as z from '../../zod.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
@@ -39,8 +41,12 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       currency: config.currency,
       credentialTypes: ['authorization'],
       decimals: config.decimals,
-      recipient: config.recipient,
-    },
+      // A resolved recipient is filled in per challenge by the request hook below.
+      ...(typeof config.recipient === 'string' ? { recipient: config.recipient } : {}),
+    } as charge.Defaults,
+    ...(typeof config.recipient === 'function'
+      ? { request: recipientHook(config.recipient), stableBinding: chargeBinding }
+      : {}),
     transport,
     async validate({ credential }) {
       const payload = credential.payload as Types.AuthorizationPayload
@@ -169,8 +175,14 @@ export declare namespace charge {
   }
 
   type RecipientConfig = {
-    /** Recipient wallet address. */
-    recipient: `0x${string}`
+    /**
+     * Recipient wallet address, or a function that returns it for each challenge.
+     *
+     * Leave it out when `x402.facilitator` settles into an address of its own and publishes it as
+     * `payTo` in `GET /supported` (such as the Tempo x402 facilitator): the address is read on the
+     * first challenge, cached and refreshed every 5 minutes.
+     */
+    recipient?: `0x${string}` | (() => `0x${string}` | Promise<`0x${string}`>) | undefined
   }
 
   type RouteOptions = {
@@ -211,7 +223,7 @@ type ResolvedConfig = {
   chainId: number
   currency: `0x${string}`
   decimals: number
-  recipient: `0x${string}`
+  recipient: `0x${string}` | (() => Promise<`0x${string}`>)
   settle: charge.SettleAuthorization
   validate?: ((parameters: Parameters<charge.SettleAuthorization>[0]) => Promise<void>) | undefined
   x402: X402.ResolvedOptions
@@ -280,7 +292,7 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
     chainId,
     currency: getAddress(address),
     decimals,
-    recipient: getAddress(recipient),
+    recipient: resolveRecipient({ chainId, recipient, x402: config.x402 }),
     settle,
     validate:
       !config.settle && x402.facilitator
@@ -288,6 +300,69 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
         : undefined,
     x402,
   }
+}
+
+/**
+ * Fills a route's `recipient` from a resolver on each challenge. A credential for a challenge
+ * issued with the previous address (before the resolver picked up a rotation) keeps that address,
+ * so in-flight payments still verify.
+ */
+function recipientHook(resolve: () => Promise<`0x${string}`>) {
+  const issued: `0x${string}`[] = []
+  return async ({
+    credential,
+    request,
+  }: {
+    credential?: Credential.Credential | null | undefined
+    request: Record<string, unknown>
+  }) => {
+    if (request.recipient) return request as never
+    const recipient = await resolve()
+    if (!issued.includes(recipient)) issued.splice(0, issued.push(recipient) - 2)
+    const offered = (credential?.challenge.request as { recipient?: unknown } | undefined)
+      ?.recipient
+    if (
+      typeof offered === 'string' &&
+      issued.some((address) => address.toLowerCase() === offered.toLowerCase())
+    )
+      return { ...request, recipient: getAddress(offered) } as never
+    return { ...request, recipient } as never
+  }
+}
+
+/**
+ * The fields a credential must match. Same as the default binding, but a route whose recipient is
+ * read per challenge has none in its static form, so matching a credential to the route skips it;
+ * the challenge rebuilt at verification still pins it.
+ */
+function chargeBinding(request: z.output<typeof Methods.charge.schema.request>) {
+  const { amount, currency, methodDetails, recipient } = request
+  return {
+    amount,
+    chainId: methodDetails.chainId,
+    currency,
+    recipient,
+    splits: methodDetails.splits,
+  }
+}
+
+function resolveRecipient(parameters: {
+  chainId: number
+  recipient: charge.RecipientConfig['recipient']
+  x402: X402.Options | undefined
+}): ResolvedConfig['recipient'] {
+  const { chainId, recipient, x402 } = parameters
+  if (typeof recipient === 'string') return getAddress(recipient)
+  if (typeof recipient === 'function') return async () => getAddress(await recipient())
+  if (!x402?.facilitator)
+    throw new Error(
+      'EVM authorization requires `recipient` or an `x402.facilitator` that publishes `payTo`.',
+    )
+  return X402Facilitator.payToResolver(x402.facilitator, {
+    fetch: x402.fetch,
+    headers: x402.headers,
+    network: Types.networkOf(chainId),
+  })
 }
 
 function createPaths(config: ResolvedConfig): HttpPaths {
