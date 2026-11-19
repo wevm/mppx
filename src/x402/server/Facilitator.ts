@@ -182,6 +182,12 @@ export type PayToResolver = (() => Promise<`0x${string}`>) & {
    * only through this, so a caller can never pick an address the server didn't issue.
    */
   issued(address: string): `0x${string}` | undefined
+  /**
+   * Reads again now, ignoring `ttl`, at most once per 30 seconds; otherwise returns the cached
+   * address. For a payment naming an address this server hasn't seen, which may be one the
+   * facilitator just published.
+   */
+  refresh(): Promise<`0x${string}`>
 }
 
 /** Options for {@link createPayToResolver} and {@link payToResolver}. */
@@ -290,6 +296,15 @@ export function createPayToResolver(
       if (entry.address.toLowerCase() === wanted && now - entry.at < grace) return entry.address
     }
     return undefined
+  }
+  let lastForced = Number.NEGATIVE_INFINITY
+  ;(resolve as { refresh: PayToResolver['refresh'] }).refresh = async () => {
+    const now = Date.now()
+    if (!pending && now - lastForced >= retryAfterFailure) {
+      lastForced = now
+      freshUntil = 0
+    }
+    return resolve()
   }
   return resolve
 }

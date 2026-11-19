@@ -1,4 +1,4 @@
-import type { Receipt } from 'mppx'
+import { Challenge, type Receipt } from 'mppx'
 import { Types as evm_Types } from 'mppx/evm'
 import { Proxy } from 'mppx/proxy'
 import { evm, Mppx } from 'mppx/server'
@@ -920,5 +920,93 @@ describe('x402 lazy offer with siblings', () => {
     )
     expect(again.status).toBe(200)
     expect(settled).toEqual([fixedPayTo, fixedPayTo])
+  })
+})
+
+describe('x402 lazy offer after a rotation', () => {
+  const oldPayTo = privateKeyToAccount(`0x${'81'.repeat(32)}`).address
+  const newPayTo = privateKeyToAccount(`0x${'82'.repeat(32)}`).address
+
+  function setup() {
+    const state = { payTo: oldPayTo as string }
+    const settled: string[] = []
+    const facilitator = {
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+        settled.push(requirements.payTo)
+        return { network: requirements.network, success: true, transaction }
+      },
+      async supported() {
+        return {
+          kinds: [
+            {
+              network: 'eip155:84532',
+              scheme: 'exact',
+              x402Version: 2,
+              extra: { payTo: state.payTo },
+            },
+          ],
+        }
+      },
+    } satisfies x402_Types.Facilitator
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: evm.facilitatorPayToResolver(facilitator, { network: 'eip155:84532' }),
+          x402: { facilitator, routeBinding: 'resource' },
+        }),
+      ],
+      secretKey,
+    })
+    return { route: mppx.evm.charge({ amount: '0.25' }), settled, state }
+  }
+
+  test('a stale worker re-reads payTo for a payment to the newly published address', async () => {
+    const { route, settled, state } = setup()
+    const first = await route(request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    const accepted = readChallenge(first.challenge).accepts[0]!
+    // Another worker already picked up the rotation and quoted the new address.
+    state.payTo = newPayTo
+    const paid = await route(
+      request(
+        'https://example.com/paid',
+        await thirdPartyCredential({ accepted: { ...accepted, payTo: newPayTo } }),
+      ),
+    )
+    expect(paid.status).toBe(200)
+    expect(settled).toEqual([newPayTo])
+  })
+
+  test('a rejected x402 payment naming a retired address gets terms for the current one', async () => {
+    vi.useFakeTimers()
+    try {
+      const { route, settled, state } = setup()
+      const first = await route(request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const accepted = readChallenge(first.challenge).accepts[0]!
+      state.payTo = newPayTo
+      vi.advanceTimersByTime(300_001)
+      await route(request('https://example.com/paid'))
+      // Retired address within grace, but the amount doesn't match: rejected.
+      const result = await route(
+        request(
+          'https://example.com/paid',
+          await thirdPartyCredential({ accepted: { ...accepted, amount: '1' } }),
+        ),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      expect(readChallenge(result.challenge).accepts.map((a) => a.payTo)).toEqual([newPayTo])
+      expect(
+        Challenge.fromResponseList(result.challenge).map((c) => c.request.recipient as string),
+      ).toEqual([newPayTo])
+      expect(settled).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

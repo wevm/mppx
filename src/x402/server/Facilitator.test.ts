@@ -755,3 +755,26 @@ describe('x402 facilitator payToResolver hardening', () => {
     expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
   })
 })
+
+describe('x402 facilitator payToResolver refresh', () => {
+  test('forces a read at most once per 30 seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(async () => {
+        reads++
+        return '0x1111111111111111111111111111111111111111'
+      })
+      await resolve()
+      await resolve.refresh()
+      expect(reads).toBe(2)
+      await resolve.refresh()
+      expect(reads).toBe(2)
+      vi.advanceTimersByTime(30_001)
+      await resolve.refresh()
+      expect(reads).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

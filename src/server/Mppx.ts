@@ -1347,10 +1347,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // A method whose request is resolved from the credential (a lazy EVM recipient) answers a
       // rejected credential with the Challenge a request without it gets, never one rebuilt from
       // what the credential named.
+      // Set once the route's Challenge is resolved with a credential in view; kept even when the
+      // credential is later dropped as malformed (credential = null), which still needs a fresh
+      // retry Challenge.
       let credentialChallenge: Challenge.Challenge | undefined
       let freshChallenge: Promise<Challenge.Challenge | undefined> | undefined
       const retryChallengeFor = async (challenge: Challenge.Challenge) => {
-        if (!credential || challenge !== credentialChallenge) return challenge
+        if (credentialChallenge === undefined || challenge !== credentialChallenge) return challenge
         if (!(method as { _freshRetryChallenge?: boolean })._freshRetryChallenge) return challenge
         freshChallenge ??= resolveRouteChallenge({
           capturedRequest,
@@ -1448,7 +1451,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
       if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
       const { challenge, parsedRequest, request } = routeChallenge
-      credentialChallenge = challenge
+      if (credential) credentialChallenge = challenge
 
       // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
       // no Challenge) leaves nothing the client proved a payment check against.

@@ -354,7 +354,11 @@ function recipientHook(resolver: X402Facilitator.PayToResolver) {
         ? echoed?.payTo
         : echoed?.recipient
       : undefined
-    if (typeof named === 'string') recipient = resolver.issued(named) ?? recipient
+    if (typeof named === 'string') {
+      // Not seen yet: maybe just published. Re-read (rate-limited) before falling back.
+      if (!resolver.issued(named)) recipient = await resolver.refresh().catch(() => recipient)
+      recipient = resolver.issued(named) ?? recipient
+    }
     return { ...request, recipient } as never
   }
 }

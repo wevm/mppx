@@ -177,7 +177,11 @@ export function createPath(
           if (recipient) {
             // A server that hasn't read its address yet (a fresh worker) reads it first.
             if (!recipient.current) await recipient().catch(() => {})
-            if (typeof payTo !== 'string' || !recipient.issued(payTo)) return false
+            if (typeof payTo !== 'string') return false
+            // An address this server hasn't seen may be one the facilitator just published:
+            // re-read (rate-limited) before leaving the payment to another offer.
+            if (!recipient.issued(payTo)) await recipient.refresh().catch(() => {})
+            if (!recipient.issued(payTo)) return false
           }
           return isDeepStrictEqual(accepted, rest)
         }
