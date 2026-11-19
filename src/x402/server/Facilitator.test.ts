@@ -554,3 +554,266 @@ const facilitatorStub: Types.Facilitator = {
     throw new Error('unused')
   },
 }
+
+describe('x402 facilitator payToResolver', () => {
+  const kinds = (payTo: string) => ({
+    extensions: [],
+    kinds: [{ extra: { payTo }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }],
+    signers: {},
+  })
+
+  test('caches payTo for ttl, then refreshes it', async () => {
+    vi.useFakeTimers()
+    try {
+      let current = '0x1111111111111111111111111111111111111111'
+      const supported = vi.fn(async () => kinds(current))
+      const resolve = Facilitator.payToResolver(
+        { ...facilitatorStub, supported } as Types.Facilitator,
+        { network: 'eip155:8453', ttl: 1_000 },
+      )
+      const [a, b] = await Promise.all([resolve(), resolve()])
+      expect(a).toBe(current)
+      expect(b).toBe(current)
+      expect(supported).toHaveBeenCalledTimes(1)
+
+      current = '0x2222222222222222222222222222222222222222'
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe(current)
+      expect(supported).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('keeps the last payTo when a refresh fails, but throws on the first read', async () => {
+    vi.useFakeTimers()
+    try {
+      const supported = vi
+        .fn<() => Promise<ReturnType<typeof kinds>>>()
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValueOnce(kinds('0x1111111111111111111111111111111111111111'))
+        .mockRejectedValue(new Error('down'))
+      const resolve = Facilitator.payToResolver(
+        { ...facilitatorStub, supported } as Types.Facilitator,
+        { network: 'eip155:8453', ttl: 1_000 },
+      )
+      await expect(resolve()).rejects.toThrow('down')
+      // A first-read failure is shared until the retry, instead of every caller reading again.
+      await expect(resolve()).rejects.toThrow('down')
+      expect(supported).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('fails a stalled read after timeout and keeps serving the last address', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(
+        () => {
+          reads++
+          return reads === 1
+            ? Promise.resolve('0x1111111111111111111111111111111111111111')
+            : new Promise<string>(() => {})
+        },
+        { timeout: 500, ttl: 1_000 },
+      )
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      const stalled = resolve()
+      await vi.advanceTimersByTimeAsync(501)
+      expect(await stalled).toBe('0x1111111111111111111111111111111111111111')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('issued() covers the current address and replaced ones within grace only', async () => {
+    vi.useFakeTimers()
+    try {
+      let next = '0x1111111111111111111111111111111111111111'
+      const resolve = Facilitator.createPayToResolver(async () => next, { grace: 1_000, ttl: 0 })
+      await resolve()
+      next = '0x2222222222222222222222222222222222222222'
+      await resolve()
+      expect(resolve.current).toBe(next)
+      expect(resolve.issued('0x1111111111111111111111111111111111111111')).toBe(
+        '0x1111111111111111111111111111111111111111',
+      )
+      expect(resolve.issued('0x3333333333333333333333333333333333333333')).toBeUndefined()
+      vi.advanceTimersByTime(1_001)
+      expect(resolve.issued('0x1111111111111111111111111111111111111111')).toBeUndefined()
+      expect(resolve.issued(next.toLowerCase())).toBe(next)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('x402 facilitator payToResolver hardening', () => {
+  const a = '0x1111111111111111111111111111111111111111'
+
+  test('stops serving the last address after ttl + grace without a successful read', async () => {
+    vi.useFakeTimers()
+    try {
+      let up = true
+      const resolve = Facilitator.createPayToResolver(
+        async () => {
+          if (!up) throw new Error('down')
+          return a
+        },
+        { grace: 1_000, ttl: 1_000 },
+      )
+      expect(await resolve()).toBe(a)
+      up = false
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe(a)
+      vi.advanceTimersByTime(1_001)
+      await expect(resolve()).rejects.toThrow('down')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('measures the cache window from when a slow read finishes', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(
+        () =>
+          new Promise<string>((done) => {
+            reads++
+            setTimeout(() => done(a), 900)
+          }),
+        { timeout: 5_000, ttl: 1_000 },
+      )
+      const first = resolve()
+      await vi.advanceTimersByTimeAsync(900)
+      expect(await first).toBe(a)
+      vi.advanceTimersByTime(500)
+      expect(await resolve()).toBe(a)
+      expect(reads).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('gives each caller its own error for a shared failure', async () => {
+    const resolve = Facilitator.createPayToResolver(async () => {
+      throw new Error('down')
+    })
+    const first = await resolve().catch((error) => error)
+    const second = await resolve().catch((error) => error)
+    const third = await resolve().catch((error) => error)
+    expect(second).not.toBe(third)
+    expect(String(second.message)).toMatch(/down/)
+    expect(first).toBeInstanceOf(Error)
+  })
+
+  test('aborts a read that times out', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | undefined
+      const resolve = Facilitator.createPayToResolver(
+        (options) => {
+          signal = options.signal
+          return new Promise<string>(() => {})
+        },
+        { timeout: 500 },
+      )
+      const pending = resolve().catch((error) => error)
+      await vi.advanceTimersByTimeAsync(501)
+      expect(await pending).toBeInstanceOf(Error)
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('reads from a facilitator URL refuse redirects and carry the abort signal', async () => {
+    const seen: RequestInit[] = []
+    const resolve = Facilitator.payToResolver('https://facilitator.example', {
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(init ?? {})
+        return Response.json({
+          extensions: [],
+          kinds: [{ extra: { payTo: a }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }],
+          signers: {},
+        })
+      }) as typeof fetch,
+      headers: { 'tempo-api-key': 'k' },
+      network: 'eip155:8453',
+    })
+    expect(await resolve()).toBe(a)
+    expect(seen[0]?.redirect).toBe('error')
+    expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
+  })
+})
+
+describe('x402 facilitator payToResolver refresh', () => {
+  test('forces a read at most once per 30 seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(async () => {
+        reads++
+        return '0x1111111111111111111111111111111111111111'
+      })
+      await resolve()
+      await resolve.refresh()
+      expect(reads).toBe(2)
+      await resolve.refresh()
+      expect(reads).toBe(2)
+      vi.advanceTimersByTime(30_001)
+      await resolve.refresh()
+      expect(reads).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('x402 facilitator payToResolver withdrawal and refresh', () => {
+  const a = '0x1111111111111111111111111111111111111111'
+  const kinds = (payTo?: string) => ({
+    extensions: [],
+    kinds: payTo
+      ? [{ extra: { payTo }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }]
+      : [],
+    signers: {},
+  })
+
+  test('stops serving an address the facilitator withdraws', async () => {
+    let published: string | undefined = a
+    const resolve = Facilitator.payToResolver(
+      { ...facilitatorStub, supported: async () => kinds(published) } as Types.Facilitator,
+      { network: 'eip155:8453', ttl: 0 },
+    )
+    expect(await resolve()).toBe(a)
+    published = undefined
+    await expect(resolve()).rejects.toThrow(/publishes no payTo/)
+    expect(resolve.current).toBeUndefined()
+    expect(resolve.issued(a)).toBeUndefined()
+  })
+
+  test('a forced refresh does not make other callers wait on it', async () => {
+    let release: (() => void) | undefined
+    let reads = 0
+    const resolve = Facilitator.createPayToResolver(async () => {
+      reads++
+      if (reads > 1) await new Promise<void>((done) => (release = done))
+      return a
+    })
+    await resolve()
+    const forced = resolve.refresh()
+    expect(await resolve()).toBe(a) // returns the fresh cache without waiting
+    release!()
+    expect(await forced).toBe(a)
+  })
+})

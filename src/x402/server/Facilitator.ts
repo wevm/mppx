@@ -165,8 +165,199 @@ export async function payTo(
   )
   const value = kind?.extra?.payTo
   if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(value))
-    throw new Error(`x402 facilitator publishes no payTo for ${scheme} on ${network}.`)
+    // A successful response without it: the address was withdrawn, not merely unreachable.
+    throw Object.assign(
+      new Error(`x402 facilitator publishes no payTo for ${scheme} on ${network}.`),
+      {
+        payToWithdrawn: true,
+      },
+    )
   return getAddress(value)
+}
+
+/**
+ * A function that returns the current recipient, reading it on demand and caching it, and that
+ * remembers the addresses it replaced for a grace period (see {@link createPayToResolver}).
+ */
+export type PayToResolver = (() => Promise<`0x${string}`>) & {
+  /** The last address read, without reading; `undefined` before the first success. */
+  readonly current: `0x${string}` | undefined
+  /**
+   * The current address, or one it replaced less than `grace` ago, equal to `address`
+   * (case-insensitive); otherwise `undefined`. A server accepts a payment naming an older address
+   * only through this, so a caller can never pick an address the server didn't issue.
+   */
+  issued(address: string): `0x${string}` | undefined
+  /**
+   * Reads again now, ignoring `ttl`, at most once per 30 seconds; otherwise returns the cached
+   * address. For a payment naming an address this server hasn't seen, which may be one the
+   * facilitator just published.
+   */
+  refresh(): Promise<`0x${string}`>
+}
+
+/** Options for {@link createPayToResolver} and {@link payToResolver}. */
+export type PayToResolverOptions = {
+  /**
+   * How long a replaced address still verifies, in milliseconds. Also how long past `ttl` the
+   * last address keeps being served while reads fail. @default 600_000 (10 minutes)
+   */
+  grace?: number | undefined
+  /** How long one read may take before it is aborted, in milliseconds. @default 10_000 */
+  timeout?: number | undefined
+  /** How long a read stays fresh, in milliseconds. @default 300_000 (5 minutes) */
+  ttl?: number | undefined
+}
+
+/**
+ * Wraps `read` in a {@link PayToResolver}. Concurrent calls share one read. A read that takes
+ * longer than `timeout` is aborted through the signal it receives, and fails. Before the first
+ * success a failure is shared with every caller for 30 seconds (each gets its own error); after
+ * it, a failed refresh keeps the last address and retries after 30 seconds, until the last
+ * successful read is older than `ttl + grace`, when reads fail again.
+ */
+export function createPayToResolver(
+  read: (options: { signal: AbortSignal }) => Promise<string>,
+  options: PayToResolverOptions = {},
+): PayToResolver {
+  const { grace = 600_000, timeout = 10_000, ttl = 300_000 } = options
+  const retryAfterFailure = Math.min(ttl, 30_000)
+  let current: `0x${string}` | undefined
+  let freshUntil = 0
+  let readAt = 0
+  let failure: { error: unknown; until: number } | undefined
+  let retired: { address: `0x${string}`; at: number }[] = []
+  let pending: Promise<`0x${string}`> | undefined
+
+  function readWithTimeout(): Promise<string> {
+    const controller = new AbortController()
+    const timer = setTimeout(
+      () => controller.abort(new Error(`Reading the recipient timed out after ${timeout}ms.`)),
+      timeout,
+    )
+    const aborted = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
+        once: true,
+      })
+    })
+    return Promise.race([
+      Promise.resolve().then(() => read({ signal: controller.signal })),
+      aborted,
+    ]).finally(() => clearTimeout(timer))
+  }
+
+  function replace(address: `0x${string}`, now: number) {
+    retired = retired.filter(
+      (entry) => entry.address.toLowerCase() !== address.toLowerCase() && now - entry.at < grace,
+    )
+    if (current && current.toLowerCase() !== address.toLowerCase())
+      retired.push({ address: current, at: now })
+    current = address
+  }
+
+  function unavailable(cause: unknown): Error {
+    // A fresh error per caller: rethrowing one instance would mix every caller's stack into it.
+    const error = new Error(`Recipient unavailable: ${(cause as Error)?.message ?? String(cause)}`)
+    // Set by hand (non-enumerable, like native `cause`) for consumers on pre-ES2022 libs.
+    Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+    return error
+  }
+
+  function startRead(): Promise<`0x${string}`> {
+    pending ??= readWithTimeout()
+      .then((value) => {
+        const address = getAddress(value)
+        // Measured after the read, so a slow read doesn't shorten the windows.
+        const now = Date.now()
+        failure = undefined
+        readAt = now
+        replace(address, now)
+        freshUntil = now + ttl
+        return address
+      })
+      .catch((error) => {
+        const now = Date.now()
+        if ((error as { payToWithdrawn?: unknown })?.payToWithdrawn === true) {
+          // Withdrawn by the facilitator: stop advertising or accepting it.
+          retired = retired.filter((entry) => entry.address !== current)
+          current = undefined
+          freshUntil = 0
+        }
+        if (!current || now - readAt > ttl + grace) {
+          failure = { error, until: now + retryAfterFailure }
+          throw error
+        }
+        freshUntil = now + retryAfterFailure
+        return current
+      })
+      .finally(() => {
+        pending = undefined
+      })
+    return pending
+  }
+
+  const resolve = (async () => {
+    if (current && Date.now() < freshUntil) return current
+    if (failure && Date.now() < failure.until) throw unavailable(failure.error)
+    return startRead()
+  }) as PayToResolver
+
+  Object.defineProperty(resolve, 'current', { get: () => current })
+  ;(resolve as { issued: PayToResolver['issued'] }).issued = (address) => {
+    const wanted = address.toLowerCase()
+    if (current && current.toLowerCase() === wanted) return current
+    const now = Date.now()
+    for (let i = retired.length - 1; i >= 0; i--) {
+      const entry = retired[i]!
+      if (entry.address.toLowerCase() === wanted && now - entry.at < grace) return entry.address
+    }
+    return undefined
+  }
+  let lastForced = Number.NEGATIVE_INFINITY
+  ;(resolve as { refresh: PayToResolver['refresh'] }).refresh = async () => {
+    // Only the caller waits on a forced read: the cached address stays fresh for everyone else.
+    if (pending) return pending
+    const now = Date.now()
+    if (now - lastForced < retryAfterFailure) return resolve()
+    lastForced = now
+    return startRead()
+  }
+  return resolve
+}
+
+/**
+ * Returns a {@link PayToResolver} for a facilitator's published `payTo` (see {@link payTo}), so a
+ * facilitator that rotates its deposit address is picked up without a restart. Payments naming an
+ * address it replaced still verify for `grace`.
+ *
+ * For a facilitator URL, reads are aborted on `timeout` and refuse redirects, so headers such as
+ * an API key are never forwarded to another origin. A {@link Types.Facilitator} object is called
+ * as is and can't be aborted.
+ *
+ * @example
+ * ```ts
+ * const payTo = x402.Facilitator.payToResolver(FACILITATOR_URL, { network: 'eip155:8453' })
+ * await payTo() // fetched on first use, then cached
+ * ```
+ */
+export function payToResolver(
+  facilitator: string | Types.FacilitatorConfig | Types.Facilitator,
+  parameters: Parameters<typeof payTo>[1] & PayToResolverOptions,
+): PayToResolver {
+  const { grace, timeout, ttl, fetch: fetch_, ...options } = parameters
+  return createPayToResolver(
+    ({ signal }) =>
+      payTo(facilitator, {
+        ...options,
+        fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+          unwrapFetch(fetch_ ?? globalThis.fetch)(input, {
+            ...init,
+            redirect: 'error',
+            signal,
+          })) as typeof globalThis.fetch,
+      }),
+    { grace, timeout, ttl },
+  )
 }
 
 /** Returns the underlying raw fetch implementation when given an mppx wrapper. */

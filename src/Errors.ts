@@ -827,3 +827,29 @@ export declare namespace ChannelClosedError {
     reason?: string
   }
 }
+
+/**
+ * A method's offer can't be made right now, such as when its recipient can't be read from the
+ * facilitator. A composed route leaves that offer out and still issues the others; a route with no
+ * other offer fails with it.
+ */
+export class OfferUnavailableError extends Error {
+  override readonly name = 'OfferUnavailableError'
+
+  constructor(options: OfferUnavailableError.Options) {
+    const { cause, reason } = options
+    super(`Offer unavailable: ${reason}.`)
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace OfferUnavailableError {
+  type Options = {
+    /** The underlying error. */
+    cause?: unknown
+    /** Why the offer is unavailable. */
+    reason: string
+  }
+}

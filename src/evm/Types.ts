@@ -67,7 +67,11 @@ export const ChargeRequestInputSchema = z.object({
   description: z.optional(z.string()),
   externalId: z.optional(z.string()),
   permit2Address: z.optional(z.address()),
-  recipient: z.address(),
+  /**
+   * Optional only for a server whose recipient is read from its facilitator per challenge; every
+   * issued challenge carries one.
+   */
+  recipient: z.optional(z.address()),
   splits: z.optional(
     z.array(
       z.object({
