@@ -816,4 +816,25 @@ describe('x402 facilitator payToResolver withdrawal and refresh', () => {
     release!()
     expect(await forced).toBe(a)
   })
+  test('a failed refresh near the stale deadline does not extend it', async () => {
+    vi.useFakeTimers()
+    try {
+      let up = true
+      const resolve = Facilitator.createPayToResolver(
+        async () => {
+          if (!up) throw new Error('down')
+          return '0x1111111111111111111111111111111111111111'
+        },
+        { grace: 1_000, ttl: 1_000 },
+      )
+      await resolve()
+      up = false
+      vi.advanceTimersByTime(1_999)
+      await resolve() // still within ttl + grace
+      vi.advanceTimersByTime(2)
+      await expect(resolve()).rejects.toThrow('down')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

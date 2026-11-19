@@ -287,7 +287,8 @@ export function createPayToResolver(
           failure = { error, until: now + retryAfterFailure }
           throw error
         }
-        freshUntil = now + retryAfterFailure
+        // Never past the stale-address deadline.
+        freshUntil = Math.min(now + retryAfterFailure, readAt + ttl + grace)
         return current
       })
       .finally(() => {
