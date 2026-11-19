@@ -3,26 +3,21 @@ import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { isAddress } from 'viem'
 
-/** The Tempo x402 facilitator's base URL. */
+/** The Tempo x402 facilitator. Fixed, so the API key only ever goes to Tempo over HTTPS. */
 export const url = 'https://api.tempo.xyz/v1/x402'
 
 /** Base mainnet, the network the Tempo x402 facilitator settles USDC on. */
 export const network = 'eip155:8453'
-const defaultNetwork: `${string}:${string}` = network
 
 /** Options for {@link tempoX402}. */
 export type Options = {
   /** Tempo API key with the `mpp:write` scope. @default process.env.TEMPO_API_KEY */
   apiKey?: string | undefined
-  /** x402 network to accept payments on. @default 'eip155:8453' (Base mainnet) */
-  network?: `${string}:${string}` | undefined
   /**
    * Tempo address that receives each payment, as `extra.tempoSettlement`. A route can override it.
    * @default process.env.TEMPO_PAYOUT_ADDRESS
    */
   payoutAddress?: string | undefined
-  /** Facilitator base URL. @default 'https://api.tempo.xyz/v1/x402' */
-  url?: string | undefined
 }
 
 /** Options for one route, passed to `route()`. */
@@ -58,14 +53,13 @@ export function tempoX402(options: Options = {}) {
   const apiKey = options.apiKey || env?.TEMPO_API_KEY
   if (!apiKey) throw new Error('tempoX402 requires `apiKey` or TEMPO_API_KEY.')
   const payoutAddress = options.payoutAddress || env?.TEMPO_PAYOUT_ADDRESS
-  const network = options.network ?? defaultNetwork
-  const base = options.url ?? url
   const headers = { 'tempo-api-key': apiKey }
 
   const server = new x402ResourceServer(
     new HTTPFacilitatorClient({
-      createAuthHeaders: async () => ({ settle: headers, supported: headers, verify: headers }),
-      url: base,
+      // GET /supported is public: the key goes only with verify and settle.
+      createAuthHeaders: async () => ({ settle: headers, supported: {}, verify: headers }),
+      url,
     }),
   ).register(network, new ExactEvmScheme())
 

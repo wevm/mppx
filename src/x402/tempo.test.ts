@@ -60,7 +60,12 @@ describe('tempoX402', () => {
       scheme: 'exact',
     })
     expect(calls.every((call) => call.url.startsWith('https://api.tempo.xyz/v1/x402/'))).toBe(true)
-    expect(calls.every((call) => call.headers['tempo-api-key'] === 'tempo:sk:test')).toBe(true)
+    expect(
+      calls.every(
+        (call) =>
+          call.url.endsWith('/supported') || call.headers['tempo-api-key'] === 'tempo:sk:test',
+      ),
+    ).toBe(true)
   })
 
   test('reads TEMPO_API_KEY and TEMPO_PAYOUT_ADDRESS', () => {
