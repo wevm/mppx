@@ -31,8 +31,14 @@ export function mpp(): Protocol {
   }
 }
 
+/** `Payment <base64url>`, as `Credential.serialize` writes it. */
+const serializedCredential = /^Payment [A-Za-z0-9_-]+={0,2}$/
+
 /** Returns the challenge a serialized Payment credential echoes, or `undefined` for any other value. */
 function credentialChallenge(credential: string): Challenge.Challenge | undefined {
+  // Parse only values shaped like a serialized credential, checked in linear time, so arbitrary
+  // strings never reach the deserializer's regex.
+  if (!serializedCredential.test(credential)) return undefined
   try {
     return Credential.deserialize(credential).challenge
   } catch {

@@ -341,6 +341,34 @@ describe('http', () => {
       expect(headers.get(Constants.Headers.paymentAuthorization)).toBeNull()
     })
 
+    test('drops only the Payment members of a credential field, in any case', () => {
+      const transport = Transport.http()
+      const fresh = Credential.serialize(credential)
+
+      const result = transport.setCredential(
+        {
+          headers: {
+            Authorization: 'payment stale',
+            [Constants.Headers.paymentAuthorization]: 'Bearer app, PAYMENT stale',
+          },
+        },
+        fresh,
+      )
+      const headers = result.headers as Headers
+
+      expect(headers.get('Authorization')).toBe(fresh)
+      expect(headers.get(Constants.Headers.paymentAuthorization)).toBe('Bearer app')
+    })
+
+    test('does not parse values that are not serialized credentials', () => {
+      const transport = Transport.http()
+      const value = `Payment${' '.repeat(60_000)}\n`
+
+      const start = performance.now()
+      transport.setCredential({}, value)
+      expect(performance.now() - start).toBeLessThan(100)
+    })
+
     test('keeps a non-Payment value in Payment-Authorization', () => {
       const transport = Transport.http()
 
