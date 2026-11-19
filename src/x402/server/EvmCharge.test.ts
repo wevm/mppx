@@ -851,3 +851,74 @@ describe('x402 evm charge with a lazy recipient', () => {
     expect(settled.map((r) => r.amount)).toEqual(['500000'])
   })
 })
+
+describe('x402 lazy offer with siblings', () => {
+  const lazyPayTo = privateKeyToAccount(`0x${'71'.repeat(32)}`).address
+  const fixedPayTo = privateKeyToAccount(`0x${'72'.repeat(32)}`).address
+
+  test('an x402 payment to a fixed sibling is not captured by the lazy offer', async () => {
+    const state = { down: false }
+    const settled: string[] = []
+    const facilitator = {
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+        settled.push(requirements.payTo)
+        return { network: requirements.network, success: true, transaction }
+      },
+      async supported() {
+        if (state.down) throw new Error('down')
+        return {
+          kinds: [
+            {
+              network: 'eip155:84532',
+              scheme: 'exact',
+              x402Version: 2,
+              extra: { payTo: lazyPayTo },
+            },
+          ],
+        }
+      },
+    } satisfies x402_Types.Facilitator
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: evm.facilitatorPayToResolver(facilitator, {
+            grace: 0,
+            network: 'eip155:84532',
+            ttl: 0,
+          }),
+          x402: { facilitator, routeBinding: 'resource' },
+        }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: fixedPayTo,
+          x402: { facilitator, routeBinding: 'resource' },
+        }),
+      ],
+      secretKey,
+    })
+    const [lazy, fixed] = mppx.methods
+    const route = mppx.compose([lazy!, { amount: '0.25' }], [fixed!, { amount: '0.25' }])
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = readChallenge(challenged.challenge).accepts.find(
+      (a) => a.payTo === fixedPayTo,
+    )!
+    const paid = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(paid.status).toBe(200)
+    expect(settled).toEqual([fixedPayTo])
+
+    // And while the lazy offer is unavailable.
+    state.down = true
+    const again = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(again.status).toBe(200)
+    expect(settled).toEqual([fixedPayTo, fixedPayTo])
+  })
+})

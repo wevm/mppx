@@ -142,7 +142,11 @@ export function resolveOptions(parameters: {
 }
 
 /** Creates the x402 wire path for an EVM charge method. */
-export function createPath(config: ResolvedOptions): Path {
+export function createPath(
+  config: ResolvedOptions,
+  /** A lazy route's recipient resolver: an x402 payment matches only a `payTo` it issued. */
+  recipient?: x402_Facilitator.PayToResolver | undefined,
+): Path {
   return {
     credentialHeaders: [x402_Types.paymentSignatureHeader],
     getCredential(request) {
@@ -158,17 +162,23 @@ export function createPath(config: ResolvedOptions): Path {
       )
     },
 
-    matchCredential({ input, request }) {
+    async matchCredential({ input, request }) {
       const paymentSignature = input.headers.get(x402_Types.paymentSignatureHeader)
       if (!paymentSignature) return false
       try {
         const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
         const expected = toPaymentRequirements(request as Types.ChargeRequest, config)
-        // A route whose recipient is read from its facilitator per challenge has none in its
-        // static form: match on the rest. bindCredential() checks payTo once it is resolved.
+        // A route whose recipient is read per challenge has none in its static form: match on the
+        // rest, and on a payTo this route issued (so a payment to a sibling offer's address is
+        // left for that offer). bindCredential() checks payTo again once it is resolved.
         if ((request as { recipient?: unknown }).recipient === undefined) {
-          const { payTo: _, ...accepted } = paymentPayload.accepted
-          const { payTo: __, ...rest } = expected
+          const { payTo, ...accepted } = paymentPayload.accepted
+          const { payTo: _, ...rest } = expected
+          if (recipient) {
+            // A server that hasn't read its address yet (a fresh worker) reads it first.
+            if (!recipient.current) await recipient().catch(() => {})
+            if (typeof payTo !== 'string' || !recipient.issued(payTo)) return false
+          }
           return isDeepStrictEqual(accepted, rest)
         }
         return isDeepStrictEqual(paymentPayload.accepted, expected)

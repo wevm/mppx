@@ -655,3 +655,103 @@ describe('x402 facilitator payToResolver', () => {
     }
   })
 })
+
+describe('x402 facilitator payToResolver hardening', () => {
+  const a = '0x1111111111111111111111111111111111111111'
+
+  test('stops serving the last address after ttl + grace without a successful read', async () => {
+    vi.useFakeTimers()
+    try {
+      let up = true
+      const resolve = Facilitator.createPayToResolver(
+        async () => {
+          if (!up) throw new Error('down')
+          return a
+        },
+        { grace: 1_000, ttl: 1_000 },
+      )
+      expect(await resolve()).toBe(a)
+      up = false
+      vi.advanceTimersByTime(1_001)
+      expect(await resolve()).toBe(a)
+      vi.advanceTimersByTime(1_001)
+      await expect(resolve()).rejects.toThrow('down')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('measures the cache window from when a slow read finishes', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(
+        () =>
+          new Promise<string>((done) => {
+            reads++
+            setTimeout(() => done(a), 900)
+          }),
+        { timeout: 5_000, ttl: 1_000 },
+      )
+      const first = resolve()
+      await vi.advanceTimersByTimeAsync(900)
+      expect(await first).toBe(a)
+      vi.advanceTimersByTime(500)
+      expect(await resolve()).toBe(a)
+      expect(reads).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('gives each caller its own error for a shared failure', async () => {
+    const resolve = Facilitator.createPayToResolver(async () => {
+      throw new Error('down')
+    })
+    const first = await resolve().catch((error) => error)
+    const second = await resolve().catch((error) => error)
+    const third = await resolve().catch((error) => error)
+    expect(second).not.toBe(third)
+    expect(String(second.message)).toMatch(/down/)
+    expect(first).toBeInstanceOf(Error)
+  })
+
+  test('aborts a read that times out', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | undefined
+      const resolve = Facilitator.createPayToResolver(
+        (options) => {
+          signal = options.signal
+          return new Promise<string>(() => {})
+        },
+        { timeout: 500 },
+      )
+      const pending = resolve().catch((error) => error)
+      await vi.advanceTimersByTimeAsync(501)
+      expect(await pending).toBeInstanceOf(Error)
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('reads from a facilitator URL refuse redirects and carry the abort signal', async () => {
+    const seen: RequestInit[] = []
+    const resolve = Facilitator.payToResolver('https://facilitator.example', {
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(init ?? {})
+        return Response.json({
+          extensions: [],
+          kinds: [{ extra: { payTo: a }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }],
+          signers: {},
+        })
+      }) as typeof fetch,
+      headers: { 'tempo-api-key': 'k' },
+      network: 'eip155:8453',
+    })
+    expect(await resolve()).toBe(a)
+    expect(seen[0]?.redirect).toBe('error')
+    expect(seen[0]?.signal).toBeInstanceOf(AbortSignal)
+  })
+})

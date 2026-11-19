@@ -933,3 +933,197 @@ describe('evm charge lazy recipient across workers', () => {
     expect(validation.request.recipient).toBe(recipient)
   })
 })
+
+describe('evm charge lazy recipient hardening', () => {
+  const rotated = '0x1111111111111111111111111111111111111111'
+  const fixedRecipient = '0x2222222222222222222222222222222222222222'
+  const secretKey = 'test-secret-key-test-secret-key-32'
+
+  function rotatingFacilitator(state: { payTo: string; down?: boolean }) {
+    const settled: string[] = []
+    return {
+      settled,
+      facilitator: {
+        async supported() {
+          if (state.down) throw new Error('down')
+          return {
+            kinds: [
+              {
+                extra: { payTo: state.payTo },
+                network: evm_Types.networkOf(84532),
+                scheme: 'exact',
+                x402Version: 2,
+              },
+            ],
+          }
+        },
+        async verify() {
+          return { isValid: true }
+        },
+        async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+          settled.push(requirements.payTo)
+          return { network: evm_Types.networkOf(84532), success: true, transaction }
+        },
+      } as x402_Types.Facilitator,
+    }
+  }
+
+  const client = () =>
+    ClientMppx.create({ methods: [evm_client({ account, maxAmount: '1' })], polyfill: false })
+
+  test('a rejected credential naming a replaced address gets a challenge for the current one', async () => {
+    vi.useFakeTimers()
+    try {
+      const state = { payTo: recipient as string }
+      const { facilitator } = rotatingFacilitator(state)
+      const mppx = Mppx.create({
+        methods: [
+          evm({
+            currency: evm.assets.baseSepolia.USDC,
+            recipient: evm.facilitatorPayToResolver(facilitator, {
+              network: evm_Types.networkOf(84532),
+              ttl: 1_000,
+            }),
+            x402: { facilitator },
+          }),
+        ],
+        secretKey,
+      })
+      const route = mppx.evm.charge({ amount: '0.25' })
+      const first = await route(new Request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const credential = Credential.deserialize(await client().createCredential(first.challenge))
+      state.payTo = rotated
+      vi.advanceTimersByTime(1_001)
+      // Still within grace, but the payload is broken: the retry must not re-sign the old address.
+      const broken = Credential.serialize({ ...credential, payload: { bogus: true } as never })
+      const result = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: broken } }),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      expect(Challenge.fromResponse(result.challenge).request.recipient).toBe(rotated)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a plain recipient function is called for each challenge', async () => {
+    let calls = 0
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: () => {
+            calls++
+            return recipient
+          },
+          settle: async () => ({ reference: transaction }),
+        }),
+      ],
+      secretKey,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+    await route(new Request('https://example.com/paid'))
+    await route(new Request('https://example.com/paid'))
+    expect(calls).toBe(2)
+  })
+
+  test('a lazy offer does not capture a credential for a fixed sibling offer', async () => {
+    const { facilitator, settled } = rotatingFacilitator({ payTo: recipient })
+    const fixedSettled: string[] = []
+    const mppx = Mppx.create({
+      methods: [
+        evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator } }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: fixedRecipient,
+          settle: async ({ request }) => {
+            fixedSettled.push(request.recipient)
+            return { reference: transaction }
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const [lazy, fixed] = mppx.methods
+    const route = mppx.compose([lazy!, { amount: '0.25' }], [fixed!, { amount: '0.25' }])
+    const challenged = await route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const offer = Challenge.fromResponseList(challenged.challenge).find(
+      (c) => c.request.recipient === fixedRecipient,
+    )!
+    const authorization = await client().createCredential(
+      new Response(null, {
+        headers: { 'WWW-Authenticate': Challenge.serialize(offer) },
+        status: 402,
+      }),
+    )
+    const paid = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    expect(paid.status).toBe(200)
+    expect(fixedSettled).toEqual([fixedRecipient])
+    expect(settled).toEqual([])
+  })
+
+  test('a credential for an unavailable lazy offer falls back to advertising the others', async () => {
+    const state = { payTo: recipient as string, down: false }
+    const { facilitator } = rotatingFacilitator(state)
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          // No grace: once down, the last address is not served either.
+          recipient: evm.facilitatorPayToResolver(facilitator, {
+            grace: 0,
+            network: evm_Types.networkOf(84532),
+            ttl: 0,
+          }),
+          x402: { facilitator },
+        }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: fixedRecipient,
+          settle: async () => ({ reference: transaction }),
+        }),
+      ],
+      secretKey,
+    })
+    const [lazy, fixed] = mppx.methods
+    const route = mppx.compose([lazy!, { amount: '0.25' }], [fixed!, { amount: '0.50' }])
+    const challenged = await route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const offer = Challenge.fromResponseList(challenged.challenge).find(
+      (c) => c.request.recipient === recipient,
+    )!
+    const authorization = await client().createCredential(
+      new Response(null, {
+        headers: { 'WWW-Authenticate': Challenge.serialize(offer) },
+        status: 402,
+      }),
+    )
+    state.down = true
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(Challenge.fromResponseList(result.challenge).map((c) => c.request.recipient)).toEqual([
+      fixedRecipient,
+    ])
+  })
+
+  test('discovery publishes no recipient for a lazy route', () => {
+    const { facilitator } = rotatingFacilitator({ payTo: recipient })
+    const mppx = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator } })],
+      secretKey,
+    })
+    const document = generateOpenApi(mppx, {
+      routes: [{ handler: mppx.evm.charge({ amount: '0.25' }), method: 'get', path: '/paid' }],
+    })
+    expect(JSON.stringify(document)).not.toContain(recipient)
+    expect(JSON.stringify(document)).not.toContain('recipient')
+  })
+})

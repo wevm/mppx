@@ -1302,6 +1302,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         html?: Method.Method['html'] | undefined
         request: Record<string, unknown>
       }) => {
+        parameters = { ...parameters, challenge: await retryChallengeFor(parameters.challenge) }
         let response = await transport.respondChallenge({
           challenge: parameters.challenge,
           input,
@@ -1343,6 +1344,34 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         return response
       }
 
+      // A method whose request is resolved from the credential (a lazy EVM recipient) answers a
+      // rejected credential with the Challenge a request without it gets, never one rebuilt from
+      // what the credential named.
+      let credentialChallenge: Challenge.Challenge | undefined
+      let freshChallenge: Promise<Challenge.Challenge | undefined> | undefined
+      const retryChallengeFor = async (challenge: Challenge.Challenge) => {
+        if (!credential || challenge !== credentialChallenge) return challenge
+        if (!(method as { _freshRetryChallenge?: boolean })._freshRetryChallenge) return challenge
+        freshChallenge ??= resolveRouteChallenge({
+          capturedRequest,
+          credential: undefined,
+          defaults,
+          description,
+          expires,
+          header: credentialHeader,
+          meta: challengeMeta,
+          method,
+          realm,
+          request: parameters.request,
+          routeRequest: rest,
+          secretKey,
+        }).then(
+          (fresh) => fresh.challenge,
+          () => undefined,
+        )
+        return (await freshChallenge) ?? challenge
+      }
+
       const emitPaymentFailed = async (parameters: {
         challenge: Challenge.Challenge
         credential: Credential.Credential | null
@@ -1351,6 +1380,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         retryChallenge?: Challenge.Challenge | undefined
         submittedChallenge?: Challenge.Challenge | undefined
       }) => {
+        if (parameters.retryChallenge)
+          parameters = {
+            ...parameters,
+            retryChallenge: await retryChallengeFor(parameters.retryChallenge),
+          }
         await events.emit(
           'payment.failed',
           createPaymentFailedContext({
@@ -1414,6 +1448,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
       if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
       const { challenge, parsedRequest, request } = routeChallenge
+      credentialChallenge = challenge
 
       // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
       // no Challenge) leaves nothing the client proved a payment check against.
@@ -3090,7 +3125,14 @@ function composeHandlers(
               (internal) => internal.name === credMethod && internal.intent === credIntent,
             ),
           )
-        if (match) return call(match)
+        if (match) {
+          try {
+            return await call(match)
+          } catch (error) {
+            // The credential's offer can't be made right now: advertise the ones that can.
+            if (!(error instanceof Errors.OfferUnavailableError)) throw error
+          }
+        }
       }
 
       // Unrecognized or malformed credentials still use the currently eligible
@@ -3131,7 +3173,14 @@ function composeHandlers(
       ...transportMatches.filter(({ checked }) => checked),
       ...transportMatches.filter(({ checked }) => !checked),
     ]) {
-      const result = await call(handler)
+      let result: MethodFn.Response<Transport.Http>
+      try {
+        result = await call(handler)
+      } catch (error) {
+        // An offer that can't be made right now leaves the payment to the others.
+        if (!(error instanceof Errors.OfferUnavailableError)) throw error
+        continue
+      }
       transportResults.set(handler, result)
       if (result.status === 200 || result.rejection) return result
     }

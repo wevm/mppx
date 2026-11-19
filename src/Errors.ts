@@ -838,7 +838,10 @@ export class OfferUnavailableError extends Error {
 
   constructor(options: OfferUnavailableError.Options) {
     const { cause, reason } = options
-    super(`Offer unavailable: ${reason}.`, cause === undefined ? undefined : { cause })
+    super(`Offer unavailable: ${reason}.`)
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
   }
 }
 

@@ -33,119 +33,130 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const paths = createPaths(config)
   const transport = httpTransport(paths)
 
-  return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
-    ...(config.x402.siwx ? { authorize: siwxAuthorize(config.x402.siwx) } : {}),
-    canOffer: parameters.canOffer,
-    onPaymentSuccess: parameters.onPaymentSuccess,
-    defaults: {
-      chainId: config.chainId,
-      currency: config.currency,
-      credentialTypes: ['authorization'],
-      decimals: config.decimals,
-      // A resolved recipient is filled in per challenge by the request hook below.
-      ...(typeof config.recipient === 'string' ? { recipient: config.recipient } : {}),
-    } as charge.Defaults,
-    ...(typeof config.recipient === 'function'
-      ? { request: recipientHook(config.recipient), stableBinding: chargeBinding }
-      : {}),
-    transport,
-    async validate({ credential }) {
-      const payload = credential.payload as Types.AuthorizationPayload
-      const request = credential.challenge.request as Types.ChargeRequest
-      const chainId = request.methodDetails.chainId
-      const isX402Credential = X402.isCredential(credential)
+  const server = Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(
+    Methods.charge,
+    {
+      ...(config.x402.siwx ? { authorize: siwxAuthorize(config.x402.siwx) } : {}),
+      canOffer: parameters.canOffer,
+      onPaymentSuccess: parameters.onPaymentSuccess,
+      defaults: {
+        chainId: config.chainId,
+        currency: config.currency,
+        credentialTypes: ['authorization'],
+        decimals: config.decimals,
+        // A resolved recipient is filled in per challenge by the request hook below.
+        ...(typeof config.recipient === 'string' ? { recipient: config.recipient } : {}),
+      } as charge.Defaults,
+      ...(typeof config.recipient === 'function'
+        ? {
+            request: recipientHook(config.recipient),
+            stableBinding: chargeBinding(config.recipient),
+          }
+        : {}),
+      transport,
+      async validate({ credential }) {
+        const payload = credential.payload as Types.AuthorizationPayload
+        const request = credential.challenge.request as Types.ChargeRequest
+        const chainId = request.methodDetails.chainId
+        const isX402Credential = X402.isCredential(credential)
 
-      if (!request.methodDetails.credentialTypes?.includes('authorization')) {
-        throw new VerificationFailedError({
-          reason: 'EVM authorization credentials are not supported for this challenge',
+        if (!request.methodDetails.credentialTypes?.includes('authorization')) {
+          throw new VerificationFailedError({
+            reason: 'EVM authorization credentials are not supported for this challenge',
+          })
+        }
+
+        if (request.methodDetails.splits?.length) {
+          throw new VerificationFailedError({
+            reason: 'EVM authorization credentials do not support splits',
+          })
+        }
+
+        assertAddressEqual(payload.to, request.recipient, 'EVM authorization recipient mismatch')
+        if (payload.value !== request.amount)
+          throw new VerificationFailedError({ reason: 'EVM authorization amount mismatch' })
+        if (!isX402Credential && payload.nonce !== Types.challengeHash(credential.challenge))
+          throw new VerificationFailedError({ reason: 'EVM authorization challenge hash mismatch' })
+        const now = BigInt(Math.floor(Date.now() / 1000))
+        if (BigInt(payload.validAfter) > now)
+          throw new VerificationFailedError({ reason: 'EVM authorization is not valid yet' })
+        if (BigInt(payload.validBefore) <= now)
+          throw new VerificationFailedError({ reason: 'EVM authorization has expired' })
+
+        const signer = await recoverTypedDataAddress({
+          domain: Types.authorizationDomain({
+            authorization: config.authorization,
+            chainId,
+            currency: request.currency as `0x${string}`,
+          }),
+          message: {
+            from: getAddress(payload.from),
+            nonce: payload.nonce as `0x${string}`,
+            to: getAddress(payload.to),
+            validAfter: BigInt(payload.validAfter),
+            validBefore: BigInt(payload.validBefore),
+            value: BigInt(payload.value),
+          },
+          primaryType: 'TransferWithAuthorization',
+          signature: payload.signature as `0x${string}`,
+          types: Types.authorizationTypes,
         })
-      }
+        assertAddressEqual(signer, payload.from, 'EVM authorization signature mismatch')
 
-      if (request.methodDetails.splits?.length) {
-        throw new VerificationFailedError({
-          reason: 'EVM authorization credentials do not support splits',
+        const source = Types.toSource({ address: getAddress(payload.from), chainId })
+        if (credential.source && credential.source !== source) {
+          throw new VerificationFailedError({ reason: 'EVM authorization source mismatch' })
+        }
+
+        const authorization = {
+          credential,
+          payload,
+          request,
+          source,
+        }
+        await config.validate?.(authorization)
+
+        const payer = getAddress(payload.from)
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: { payer },
+          intent: Methods.charge.intent,
+          method: Methods.charge.name,
+          payer,
+          request: credential.challenge.request,
+          source,
+        }
+      },
+      async broadcast({ credential }) {
+        const payload = credential.payload as Types.AuthorizationPayload
+        const request = credential.challenge.request as Types.ChargeRequest
+        const settled = await config.settle({
+          credential,
+          payload,
+          request,
+          source: Types.toSource({
+            address: getAddress(payload.from),
+            chainId: request.methodDetails.chainId,
+          }),
         })
-      }
 
-      assertAddressEqual(payload.to, request.recipient, 'EVM authorization recipient mismatch')
-      if (payload.value !== request.amount)
-        throw new VerificationFailedError({ reason: 'EVM authorization amount mismatch' })
-      if (!isX402Credential && payload.nonce !== Types.challengeHash(credential.challenge))
-        throw new VerificationFailedError({ reason: 'EVM authorization challenge hash mismatch' })
-      const now = BigInt(Math.floor(Date.now() / 1000))
-      if (BigInt(payload.validAfter) > now)
-        throw new VerificationFailedError({ reason: 'EVM authorization is not valid yet' })
-      if (BigInt(payload.validBefore) <= now)
-        throw new VerificationFailedError({ reason: 'EVM authorization has expired' })
-
-      const signer = await recoverTypedDataAddress({
-        domain: Types.authorizationDomain({
-          authorization: config.authorization,
-          chainId,
-          currency: request.currency as `0x${string}`,
-        }),
-        message: {
-          from: getAddress(payload.from),
-          nonce: payload.nonce as `0x${string}`,
-          to: getAddress(payload.to),
-          validAfter: BigInt(payload.validAfter),
-          validBefore: BigInt(payload.validBefore),
-          value: BigInt(payload.value),
-        },
-        primaryType: 'TransferWithAuthorization',
-        signature: payload.signature as `0x${string}`,
-        types: Types.authorizationTypes,
-      })
-      assertAddressEqual(signer, payload.from, 'EVM authorization signature mismatch')
-
-      const source = Types.toSource({ address: getAddress(payload.from), chainId })
-      if (credential.source && credential.source !== source) {
-        throw new VerificationFailedError({ reason: 'EVM authorization source mismatch' })
-      }
-
-      const authorization = {
-        credential,
-        payload,
-        request,
-        source,
-      }
-      await config.validate?.(authorization)
-
-      const payer = getAddress(payload.from)
-      return {
-        challenge: credential.challenge,
-        credential,
-        details: { payer },
-        intent: Methods.charge.intent,
-        method: Methods.charge.name,
-        payer,
-        request: credential.challenge.request,
-        source,
-      }
+        const extensions = toJsonExtensions(settled.extensions)
+        return Receipt.from({
+          ...(extensions ? { extensions } : {}),
+          method: Types.paymentMethod,
+          reference: settled.reference,
+          status: 'success',
+          timestamp: settled.timestamp ?? new Date().toISOString(),
+        })
+      },
     },
-    async broadcast({ credential }) {
-      const payload = credential.payload as Types.AuthorizationPayload
-      const request = credential.challenge.request as Types.ChargeRequest
-      const settled = await config.settle({
-        credential,
-        payload,
-        request,
-        source: Types.toSource({
-          address: getAddress(payload.from),
-          chainId: request.methodDetails.chainId,
-        }),
-      })
-
-      const extensions = toJsonExtensions(settled.extensions)
-      return Receipt.from({
-        ...(extensions ? { extensions } : {}),
-        method: Types.paymentMethod,
-        reference: settled.reference,
-        status: 'success',
-        timestamp: settled.timestamp ?? new Date().toISOString(),
-      })
-    },
-  })
+  )
+  // A route whose request is resolved from the credential answers a rejected credential with the
+  // Challenge a fresh request gets, so a replaced recipient is never re-signed.
+  if (typeof config.recipient === 'function')
+    Object.defineProperty(server, '_freshRetryChallenge', { value: true })
+  return server
 }
 
 export declare namespace charge {
@@ -177,7 +188,11 @@ export declare namespace charge {
 
   type RecipientConfig = {
     /**
-     * Recipient wallet address, or a function that returns it for each challenge.
+     * Recipient wallet address, or a function that returns it, called for each challenge.
+     *
+     * A payment naming an address the function returned less than 10 minutes ago still verifies,
+     * so in-flight payments survive a change. Pass `evm.facilitatorPayToResolver()` (or any
+     * `createPayToResolver()`) to cache reads or change that window.
      *
      * Leave it out when `x402.facilitator` settles into an address of its own and publishes it as
      * `payTo` in `GET /supported` (such as the Tempo x402 facilitator): the address is read on the
@@ -344,12 +359,36 @@ function recipientHook(resolver: X402Facilitator.PayToResolver) {
   }
 }
 
+/** Stands in for a lazy route's recipient in bindings: one this route issued, or none yet. */
+const lazyRecipient = 'mppx:lazy-recipient'
+
 /**
  * The fields a credential must match. Same as the default binding, but a route whose recipient is
- * read per challenge has none in its static form, so matching a credential to the route skips it;
- * the challenge rebuilt at verification still pins it.
+ * read per challenge has none in its static form. Its recipient binds as {@link lazyRecipient},
+ * and so does an echoed recipient only when this route issued it; any other address keeps its own
+ * value. So a credential for a sibling offer with another recipient never matches this route, and
+ * the challenge rebuilt at verification still pins the exact address.
  */
-function chargeBinding(
+function chargeBinding(resolver: X402Facilitator.PayToResolver) {
+  return (
+    request:
+      | z.output<typeof Methods.charge.schema.request>
+      | (Record<string, unknown> & { chainId?: unknown; splits?: unknown }),
+  ) => {
+    const binding = chargeBindingFields(request)
+    const { recipient } = binding
+    return {
+      ...binding,
+      recipient:
+        recipient === undefined ||
+        (typeof recipient === 'string' && resolver.issued(recipient) !== undefined)
+          ? lazyRecipient
+          : recipient,
+    }
+  }
+}
+
+function chargeBindingFields(
   request:
     | z.output<typeof Methods.charge.schema.request>
     | (Record<string, unknown> & { chainId?: unknown; splits?: unknown }),
@@ -382,7 +421,8 @@ function resolveRecipient(parameters: {
   if (typeof recipient === 'function')
     return 'issued' in recipient
       ? (recipient as X402Facilitator.PayToResolver)
-      : X402Facilitator.createPayToResolver(async () => recipient())
+      : // Called for each challenge, as documented: no caching.
+        X402Facilitator.createPayToResolver(async () => recipient(), { ttl: 0 })
   if (!x402?.facilitator)
     throw new Error(
       'EVM authorization requires `recipient` or an `x402.facilitator` that publishes `payTo`.',
@@ -397,7 +437,10 @@ function resolveRecipient(parameters: {
 function createPaths(config: ResolvedConfig): HttpPaths {
   return {
     mpp: createMppPath(),
-    x402: X402.createPath(config.x402),
+    x402: X402.createPath(
+      config.x402,
+      typeof config.recipient === 'function' ? config.recipient : undefined,
+    ),
   }
 }
 
