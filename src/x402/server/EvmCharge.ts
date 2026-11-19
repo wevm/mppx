@@ -142,11 +142,7 @@ export function resolveOptions(parameters: {
 }
 
 /** Creates the x402 wire path for an EVM charge method. */
-export function createPath(
-  config: ResolvedOptions,
-  /** A lazy route's recipient resolver: an x402 payment matches only a `payTo` it issued. */
-  recipient?: x402_Facilitator.PayToResolver | undefined,
-): Path {
+export function createPath(config: ResolvedOptions): Path {
   return {
     credentialHeaders: [x402_Types.paymentSignatureHeader],
     getCredential(request) {
@@ -162,32 +158,15 @@ export function createPath(
       )
     },
 
-    async matchCredential({ input, request }) {
+    matchCredential({ input, request }) {
       const paymentSignature = input.headers.get(x402_Types.paymentSignatureHeader)
       if (!paymentSignature) return false
       try {
         const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
-        const expected = toPaymentRequirements(request as Types.ChargeRequest, config)
-        // A route whose recipient is read per challenge has none in its static form: match on the
-        // rest, and on a payTo this route issued (so a payment to a sibling offer's address is
-        // left for that offer). bindCredential() checks payTo again once it is resolved.
-        if ((request as { recipient?: unknown }).recipient === undefined) {
-          const { payTo, ...accepted } = paymentPayload.accepted
-          const { payTo: _, ...rest } = expected
-          // Static terms first: a payment for a sibling offer never waits on a recipient read.
-          if (!isDeepStrictEqual(accepted, rest)) return false
-          if (recipient) {
-            // A server that hasn't read its address yet (a fresh worker) reads it first.
-            if (!recipient.current) await recipient().catch(() => {})
-            if (typeof payTo !== 'string') return false
-            // An address this server hasn't seen may be one the facilitator just published:
-            // re-read (rate-limited) before leaving the payment to another offer.
-            if (!recipient.issued(payTo)) await recipient.refresh().catch(() => {})
-            if (!recipient.issued(payTo)) return false
-          }
-          return isDeepStrictEqual(accepted, rest)
-        }
-        return isDeepStrictEqual(paymentPayload.accepted, expected)
+        return isDeepStrictEqual(
+          paymentPayload.accepted,
+          toPaymentRequirements(request as Types.ChargeRequest, config),
+        )
       } catch {
         return false
       }

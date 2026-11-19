@@ -48,9 +48,6 @@ export function charge(parameters: charge.Parameters) {
       if (request.methodDetails.splits?.length) {
         throw new Error('EVM authorization does not support payment splits.')
       }
-      // The request schema leaves recipient optional for servers that read it per challenge; an
-      // issued challenge always carries one.
-      if (!request.recipient) throw new Error('EVM authorization challenge has no recipient.')
 
       const authorization = resolveAuthorization(parameters, request)
       const validBefore = challenge.expires

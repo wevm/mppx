@@ -3,8 +3,6 @@ import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { isAddress } from 'viem'
 
-import * as Facilitator from './server/Facilitator.js'
-
 /** The Tempo x402 facilitator's base URL. */
 export const url = 'https://api.tempo.xyz/v1/x402'
 
@@ -23,8 +21,6 @@ export type Options = {
    * @default process.env.TEMPO_PAYOUT_ADDRESS
    */
   payoutAddress?: string | undefined
-  /** How long the facilitator's deposit address (`payTo`) is cached, in milliseconds. @default 300_000 */
-  ttl?: number | undefined
   /** Facilitator base URL. @default 'https://api.tempo.xyz/v1/x402' */
   url?: string | undefined
 }
@@ -43,8 +39,9 @@ export type RouteOptions = Omit<RouteConfig, 'accepts'> & {
  *
  * Returns an `x402ResourceServer` with the exact EVM scheme registered and the API key on every
  * facilitator request, and `route()`, which builds a route's config: it sets `payTo` to the
- * facilitator's deposit address (read from `GET /supported`, cached and refreshed every 5
- * minutes) and `extra.tempoSettlement` to the payout address.
+ * facilitator's deposit address and `extra.tempoSettlement` to the payout address. The deposit
+ * address comes from the facilitator's `GET /supported`, which the x402 SDK reads when the
+ * middleware starts.
  *
  * @example
  * ```ts
@@ -72,29 +69,12 @@ export function tempoX402(options: Options = {}) {
     }),
   ).register(network, new ExactEvmScheme())
 
-  const payTo = Facilitator.payToResolver(base, {
-    headers,
-    network,
-    ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),
-  })
-
-  /**
-   * The deposit address for this request: a paid retry keeps the address it was offered if this
-   * server issued it within `grace` (the x402 middleware requires an exact match), otherwise the
-   * current one.
-   */
-  async function payToFor(paymentHeader: string | undefined): Promise<string> {
-    const current = await payTo()
-    if (!paymentHeader) return current
-    // Only accepted.payTo is read, and only an address this server issued is used, so the
-    // header needs no further validation here (the middleware verifies the payment).
-    let offered: unknown
-    try {
-      offered = (JSON.parse(atob(paymentHeader)) as { accepted?: { payTo?: unknown } }).accepted
-        ?.payTo
-    } catch {}
-    if (typeof offered === 'string') return payTo.issued(offered) ?? current
-    return current
+  /** Tempo's deposit address for this network, from the SDK's `GET /supported` read. */
+  function payTo(): string {
+    const address = server.getSupportedKind(2, network, 'exact')?.extra?.payTo
+    if (typeof address !== 'string')
+      throw new Error(`Tempo x402 facilitator publishes no payTo for exact on ${network}.`)
+    return address
   }
 
   /** Builds a paid route's config. Throws when neither the route nor {@link tempoX402} names a payout address. */
@@ -112,7 +92,7 @@ export function tempoX402(options: Options = {}) {
       accepts: {
         extra: { tempoSettlement },
         network,
-        payTo: (context) => payToFor(context.paymentHeader),
+        payTo: () => payTo(),
         price,
         scheme: 'exact',
       },

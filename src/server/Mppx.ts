@@ -1302,12 +1302,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         html?: Method.Method['html'] | undefined
         request: Record<string, unknown>
       }) => {
-        {
-          const challenge = await retryChallengeFor(parameters.challenge)
-          // A rebuilt Challenge reports its own request, not the one resolved from the credential.
-          if (challenge !== parameters.challenge)
-            parameters = { ...parameters, challenge, request: challenge.request }
-        }
         let response = await transport.respondChallenge({
           challenge: parameters.challenge,
           input,
@@ -1349,37 +1343,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         return response
       }
 
-      // A method whose request is resolved from the credential (a lazy EVM recipient) answers a
-      // rejected credential with the Challenge a request without it gets, never one rebuilt from
-      // what the credential named.
-      // Set once the route's Challenge is resolved with a credential in view; kept even when the
-      // credential is later dropped as malformed (credential = null), which still needs a fresh
-      // retry Challenge.
-      let credentialChallenge: Challenge.Challenge | undefined
-      let freshChallenge: Promise<Challenge.Challenge | undefined> | undefined
-      const retryChallengeFor = async (challenge: Challenge.Challenge) => {
-        if (credentialChallenge === undefined || challenge !== credentialChallenge) return challenge
-        if (!(method as { _freshRetryChallenge?: boolean })._freshRetryChallenge) return challenge
-        freshChallenge ??= resolveRouteChallenge({
-          capturedRequest,
-          credential: undefined,
-          defaults,
-          description,
-          expires,
-          header: credentialHeader,
-          meta: challengeMeta,
-          method,
-          realm,
-          request: parameters.request,
-          routeRequest: rest,
-          secretKey,
-        }).then(
-          (fresh) => fresh.challenge,
-          () => undefined,
-        )
-        return (await freshChallenge) ?? challenge
-      }
-
       const emitPaymentFailed = async (parameters: {
         challenge: Challenge.Challenge
         credential: Credential.Credential | null
@@ -1388,11 +1351,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         retryChallenge?: Challenge.Challenge | undefined
         submittedChallenge?: Challenge.Challenge | undefined
       }) => {
-        if (parameters.retryChallenge)
-          parameters = {
-            ...parameters,
-            retryChallenge: await retryChallengeFor(parameters.retryChallenge),
-          }
         await events.emit(
           'payment.failed',
           createPaymentFailedContext({
@@ -1456,7 +1414,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       })
       if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
       const { challenge, parsedRequest, request } = routeChallenge
-      if (credential) credentialChallenge = challenge
 
       // A transport that builds the Credential's Challenge itself (x402, whose Credentials name
       // no Challenge) leaves nothing the client proved a payment check against.
@@ -3133,14 +3090,7 @@ function composeHandlers(
               (internal) => internal.name === credMethod && internal.intent === credIntent,
             ),
           )
-        if (match) {
-          try {
-            return await call(match)
-          } catch (error) {
-            // The credential's offer can't be made right now: advertise the ones that can.
-            if (!(error instanceof Errors.OfferUnavailableError)) throw error
-          }
-        }
+        if (match) return call(match)
       }
 
       // Unrecognized or malformed credentials still use the currently eligible
@@ -3181,14 +3131,7 @@ function composeHandlers(
       ...transportMatches.filter(({ checked }) => checked),
       ...transportMatches.filter(({ checked }) => !checked),
     ]) {
-      let result: MethodFn.Response<Transport.Http>
-      try {
-        result = await call(handler)
-      } catch (error) {
-        // An offer that can't be made right now leaves the payment to the others.
-        if (!(error instanceof Errors.OfferUnavailableError)) throw error
-        continue
-      }
+      const result = await call(handler)
       transportResults.set(handler, result)
       if (result.status === 200 || result.rejection) return result
     }
@@ -3211,31 +3154,15 @@ function composeHandlers(
     // can safely claim the request without racing each other.
     // An identity rejection from one offer does not hide the others: it is returned only
     // when no offer issued a payment challenge.
-    // An offer that can't be made right now (OfferUnavailableError) is left out, unless every
-    // offer is.
-    const results: (MethodFn.Response<Transport.Http> | undefined)[] = []
-    let unavailable: Errors.OfferUnavailableError | undefined
+    const results: MethodFn.Response<Transport.Http>[] = []
     for (const handler of selectedHandlers) {
-      let result: MethodFn.Response<Transport.Http>
-      try {
-        result = transportResults.get(handler) ?? (await call(handler))
-      } catch (error) {
-        if (!(error instanceof Errors.OfferUnavailableError)) throw error
-        unavailable ??= error
-        results.push(undefined)
-        continue
-      }
+      const result = transportResults.get(handler) ?? (await call(handler))
       if (result.status === 200) return result
       if (result.challenge.status !== 402 && !result.rejection) return result
       results.push(result)
     }
-    if (unavailable && results.every((result) => result === undefined)) throw unavailable
-    const offers = results.filter(
-      (result): result is MethodFn.Response<Transport.Http> =>
-        result !== undefined && result.status === 402 && !result.rejection,
-    )
-    const firstResult = results.find((result) => result !== undefined)
-    if (offers.length === 0 && firstResult) return firstResult
+    const offers = results.filter((result) => result.status === 402 && !result.rejection)
+    if (offers.length === 0 && results[0]) return results[0]
 
     const challengeEntries = (() => {
       const entries: {
@@ -3306,7 +3233,7 @@ function composeHandlers(
     // x402 requirements withheld by any offer with a payment check, including a nested
     // composer's, are not advertised by another offer either.
     const withheld = results.flatMap((result) =>
-      result?.status === 402 && result.challenge instanceof globalThis.Response
+      result.status === 402 && result.challenge instanceof globalThis.Response
         ? (withheldX402.get(result.challenge) ?? [])
         : [],
     )

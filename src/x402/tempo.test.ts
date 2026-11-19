@@ -78,19 +78,24 @@ describe('tempoX402', () => {
     expect(route.accepts).toMatchObject({ extra: { tempoSettlement: depositAddress } })
   })
 
-  test('refreshes the deposit address after ttl', async () => {
-    vi.useFakeTimers()
-    try {
-      const payTo = { current: depositAddress }
-      stubFacilitator(payTo)
-      const tempo = tempoX402({ apiKey: 'k', payoutAddress, ttl: 1_000 })
-      expect(await tempo.payTo()).toBe(depositAddress)
-      payTo.current = payoutAddress
-      vi.advanceTimersByTime(1_001)
-      expect(await tempo.payTo()).toBe(payoutAddress)
-    } finally {
-      vi.useRealTimers()
-    }
+  test('fails a route with no published deposit address instead of quoting none', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          extensions: [],
+          kinds: [{ network: 'eip155:8453', scheme: 'exact', x402Version: 2 }],
+          signers: {},
+        }),
+      ),
+    )
+    const tempo = tempoX402({ apiKey: 'k', payoutAddress })
+    const app = new Hono()
+    app.use(paymentMiddleware({ 'GET /weather': tempo.route({ price: '$0.01' }) }, tempo.server))
+    app.get('/weather', (c) => c.json({ forecast: 'sunny' }))
+    const response = await app.request('/weather')
+    expect(response.status).not.toBe(200)
+    expect(response.headers.get('payment-required')).toBeNull()
   })
 
   test('requires an API key and a payout address', () => {
@@ -101,49 +106,10 @@ describe('tempoX402', () => {
   })
 })
 
-describe('tempoX402 hardening', () => {
-  // Raw like the middleware's paymentHeader; the matcher decodes it with the full schema.
-  const paymentHeader = (payTo: string) =>
-    Buffer.from(
-      JSON.stringify({
-        accepted: {
-          amount: '10000',
-          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          extra: {},
-          maxTimeoutSeconds: 60,
-          network: 'eip155:8453',
-          payTo,
-          scheme: 'exact',
-        },
-        payload: { authorization: {}, signature: '0x' },
-        x402Version: 2,
-      }),
-    ).toString('base64')
-
+describe('tempoX402 payout address', () => {
   test('rejects a malformed payout address', () => {
     expect(() =>
       tempoX402({ apiKey: 'k', payoutAddress: '0x1234' }).route({ price: '$0.01' }),
     ).toThrow(/not an address/)
-  })
-
-  test('a paid retry keeps the deposit address it was offered, within grace', async () => {
-    vi.useFakeTimers()
-    try {
-      const payTo = { current: depositAddress }
-      stubFacilitator(payTo)
-      const tempo = tempoX402({ apiKey: 'k', payoutAddress, ttl: 1_000 })
-      const route = tempo.route({ price: '$0.01' })
-      const resolvePayTo = (route.accepts as { payTo: (c: unknown) => Promise<string> }).payTo
-      expect(await resolvePayTo({})).toBe(depositAddress)
-      payTo.current = payoutAddress
-      vi.advanceTimersByTime(1_001)
-      expect(await resolvePayTo({})).toBe(payoutAddress)
-      const header = paymentHeader(depositAddress)
-      expect(await resolvePayTo({ paymentHeader: header })).toBe(depositAddress)
-      const stranger = paymentHeader('0x3333333333333333333333333333333333333333')
-      expect(await resolvePayTo({ paymentHeader: stranger })).toBe(payoutAddress)
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })
