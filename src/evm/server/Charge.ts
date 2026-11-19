@@ -346,15 +346,18 @@ function recipientHook(
     if (request.recipient) {
       // An explicit route recipient: the binding can't tell it apart from the lazy sentinel, so
       // require the echoed recipient to be exactly it.
-      const echoed = credential && !X402.isPendingCredential(credential)
-        ? (credential.challenge.request as { recipient?: unknown }).recipient
-        : undefined
+      const echoed =
+        credential && !X402.isPendingCredential(credential)
+          ? (credential.challenge.request as { recipient?: unknown }).recipient
+          : undefined
       if (
         typeof echoed === 'string' &&
         typeof request.recipient === 'string' &&
         echoed.toLowerCase() !== request.recipient.toLowerCase()
       )
-        throw new VerificationFailedError({ reason: 'credential recipient does not match the route' })
+        throw new VerificationFailedError({
+          reason: 'credential recipient does not match the route',
+        })
       return request as never
     }
     const chainId =

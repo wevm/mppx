@@ -1165,7 +1165,6 @@ describe('evm charge lazy recipient chain override', () => {
   })
 })
 
-
 describe('evm charge lazy recipient codex round', () => {
   const a = '0x1111111111111111111111111111111111111111'
   const b = '0x2222222222222222222222222222222222222222'
@@ -1175,9 +1174,20 @@ describe('evm charge lazy recipient codex round', () => {
     const resolver = evm.facilitatorPayToResolver(
       {
         async supported() {
-          return { kinds: [{ extra: { payTo: current }, network: evm_Types.networkOf(84532), scheme: 'exact', x402Version: 2 }] }
+          return {
+            kinds: [
+              {
+                extra: { payTo: current },
+                network: evm_Types.networkOf(84532),
+                scheme: 'exact',
+                x402Version: 2,
+              },
+            ],
+          }
         },
-        async verify() { return { isValid: true } },
+        async verify() {
+          return { isValid: true }
+        },
         async settle(_p: PaymentPayload, r: x402_Types.PaymentRequirements) {
           settled.push(r.payTo)
           return { network: evm_Types.networkOf(84532), success: true, transaction }
@@ -1186,18 +1196,32 @@ describe('evm charge lazy recipient codex round', () => {
       { network: evm_Types.networkOf(84532), ttl: 0 },
     )
     const mppx = Mppx.create({
-      methods: [evm({ currency: evm.assets.baseSepolia.USDC, recipient: resolver, settle: async ({ request }) => { settled.push(request.recipient); return { reference: transaction } } })],
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: resolver,
+          settle: async ({ request }) => {
+            settled.push(request.recipient)
+            return { reference: transaction }
+          },
+        }),
+      ],
       secretKey: 'test-secret-key-test-secret-key-32',
     })
     const lazy = mppx.evm.charge({ amount: '0.25' })
     const first = await lazy(new Request('https://example.com/paid'))
     if (first.status !== 402) throw new Error()
-    const client = ClientMppx.create({ methods: [evm_client({ account, maxAmount: '1' })], polyfill: false })
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '1' })],
+      polyfill: false,
+    })
     const payA = await client.createCredential(first.challenge)
     current = b
     await lazy(new Request('https://example.com/paid')) // resolver now issued a and b
     const explicit = mppx.evm.charge({ amount: '0.25', recipient: b } as never)
-    const result = await explicit(new Request('https://example.com/paid', { headers: { Authorization: payA } }))
+    const result = await explicit(
+      new Request('https://example.com/paid', { headers: { Authorization: payA } }),
+    )
     expect(result.status).toBe(402)
     expect(settled).toEqual([])
   })
