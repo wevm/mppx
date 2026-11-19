@@ -2,6 +2,7 @@ import { getAddress, recoverTypedDataAddress } from 'viem'
 
 import type * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
+import * as Errors from '../../Errors.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
@@ -223,7 +224,7 @@ type ResolvedConfig = {
   chainId: number
   currency: `0x${string}`
   decimals: number
-  recipient: `0x${string}` | (() => Promise<`0x${string}`>)
+  recipient: `0x${string}` | X402Facilitator.PayToResolver
   settle: charge.SettleAuthorization
   validate?: ((parameters: Parameters<charge.SettleAuthorization>[0]) => Promise<void>) | undefined
   x402: X402.ResolvedOptions
@@ -303,18 +304,16 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
 }
 
 /**
- * Fills a route's `recipient` from a resolver on each challenge. A payment for a challenge issued
- * before the resolver picked up a rotation keeps the address it was issued with, so in-flight
- * payments still verify:
+ * Fills a route's `recipient` from a resolver on each challenge.
  *
- * - A native credential keeps the recipient its echoed challenge carries. That challenge is
- *   HMAC-bound to the server's secret and verified before payment, so this holds across workers and
- *   restarts that share the secret, and a forged recipient fails the HMAC check.
- * - An x402 payment's `accepted.payTo` is not signed by the server, so it is kept only when this
- *   process issued it recently (the last two addresses).
+ * New challenges always carry the current address. A payment still verifies against an address
+ * the resolver replaced less than its `grace` ago when the payment names it: the echoed challenge
+ * of a native credential, or an x402 payment's `accepted.payTo`. Neither is trusted on its own
+ * (both come from the caller, and a failed check re-issues a challenge from this request), so only
+ * addresses this process issued qualify. An HMAC-valid echo is not enough: another route or worker
+ * sharing the secret may have issued it for a different recipient.
  */
-function recipientHook(resolve: () => Promise<`0x${string}`>) {
-  const issued: `0x${string}`[] = []
+function recipientHook(resolver: X402Facilitator.PayToResolver) {
   return async ({
     credential,
     request,
@@ -323,22 +322,24 @@ function recipientHook(resolve: () => Promise<`0x${string}`>) {
     request: Record<string, unknown>
   }) => {
     if (request.recipient) return request as never
-    const recipient = await resolve()
-    if (!issued.includes(recipient)) issued.splice(0, issued.push(recipient) - 2)
-    if (!credential) return { ...request, recipient } as never
-    const echoed = credential.challenge.request as { payTo?: unknown; recipient?: unknown }
-    if (X402.isPendingCredential(credential)) {
-      // Unsigned x402 requirements: only an address this process issued.
-      const payTo = echoed.payTo
-      const known =
-        typeof payTo === 'string'
-          ? issued.find((address) => address.toLowerCase() === payTo.toLowerCase())
-          : undefined
-      return { ...request, recipient: known ?? recipient } as never
+    let recipient: `0x${string}`
+    try {
+      recipient = await resolver()
+    } catch (error) {
+      throw new Errors.OfferUnavailableError({
+        cause: error,
+        reason: 'EVM charge recipient unavailable',
+      })
     }
-    // HMAC-bound challenge: verified against the server secret before payment.
-    if (typeof echoed.recipient === 'string')
-      return { ...request, recipient: getAddress(echoed.recipient) } as never
+    const echoed = credential?.challenge.request as
+      | { payTo?: unknown; recipient?: unknown }
+      | undefined
+    const named = credential
+      ? X402.isPendingCredential(credential)
+        ? echoed?.payTo
+        : echoed?.recipient
+      : undefined
+    if (typeof named === 'string') recipient = resolver.issued(named) ?? recipient
     return { ...request, recipient } as never
   }
 }
@@ -378,7 +379,10 @@ function resolveRecipient(parameters: {
 }): ResolvedConfig['recipient'] {
   const { chainId, recipient, x402 } = parameters
   if (typeof recipient === 'string') return getAddress(recipient)
-  if (typeof recipient === 'function') return async () => getAddress(await recipient())
+  if (typeof recipient === 'function')
+    return 'issued' in recipient
+      ? (recipient as X402Facilitator.PayToResolver)
+      : X402Facilitator.createPayToResolver(async () => recipient())
   if (!x402?.facilitator)
     throw new Error(
       'EVM authorization requires `recipient` or an `x402.facilitator` that publishes `payTo`.',

@@ -1,5 +1,6 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { evm as evm_client, Mppx as ClientMppx } from 'mppx/client'
+import { generate as generateOpenApi } from 'mppx/discovery'
 import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
@@ -747,7 +748,9 @@ describe('evm charge lazy recipient across workers', () => {
     return { mppx, route: mppx.evm.charge({ amount: '0.25' }), settled }
   }
 
-  test('a worker that only knows the new address accepts a challenge issued before', async () => {
+  test('a credential cannot pick an address this server never issued', async () => {
+    // A server sharing the secret issued this challenge for an address this one never read (a
+    // retired deposit address, or a sibling route's recipient): an HMAC-valid echo is not enough.
     const before = worker(recipient)
     const challenged = await before.route(new Request('https://example.com/paid'))
     if (challenged.status !== 402) throw new Error()
@@ -761,8 +764,133 @@ describe('evm charge lazy recipient across workers', () => {
     const paid = await after.route(
       new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
     )
-    expect(paid.status).toBe(200)
-    expect(after.settled).toEqual([recipient])
+    expect(paid.status).toBe(402)
+    expect(after.settled).toEqual([])
+    if (paid.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(paid.challenge).request.recipient).toBe(rotated)
+  })
+
+  test('stops accepting a replaced address after grace', async () => {
+    vi.useFakeTimers()
+    try {
+      const state = { payTo: recipient as string }
+      const settled: string[] = []
+      const facilitator = {
+        async supported() {
+          return {
+            kinds: [
+              {
+                extra: { payTo: state.payTo },
+                network: evm_Types.networkOf(84532),
+                scheme: 'exact',
+                x402Version: 2,
+              },
+            ],
+          }
+        },
+        async verify() {
+          return { isValid: true }
+        },
+        async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+          settled.push(requirements.payTo)
+          return { network: evm_Types.networkOf(84532), success: true, transaction }
+        },
+      } as x402_Types.Facilitator
+      const mppx = Mppx.create({
+        methods: [
+          evm({
+            currency: evm.assets.baseSepolia.USDC,
+            recipient: evm.facilitatorPayToResolver(facilitator, {
+              grace: 60_000,
+              network: evm_Types.networkOf(84532),
+              ttl: 1_000,
+            }),
+            x402: { facilitator },
+          }),
+        ],
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const route = mppx.evm.charge({ amount: '0.25' })
+      const client = ClientMppx.create({
+        methods: [evm_client({ account, maxAmount: '1' })],
+        polyfill: false,
+      })
+      const first = await route(new Request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const stale = await client.createCredential(first.challenge)
+
+      state.payTo = rotated
+      vi.advanceTimersByTime(1_001)
+      await route(new Request('https://example.com/paid'))
+      vi.advanceTimersByTime(60_001)
+      const result = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: stale } }),
+      )
+      expect(result.status).toBe(402)
+      expect(settled).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a composed route leaves out an offer whose recipient is unavailable', async () => {
+    const down = {
+      async supported(): Promise<never> {
+        throw new Error('down')
+      },
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(): Promise<never> {
+        throw new Error('unreachable')
+      },
+    } as unknown as x402_Types.Facilitator
+    const mppx = Mppx.create({
+      methods: [
+        evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator: down } }),
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          settle: async () => ({ reference: transaction }),
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const [lazy, fixed] = mppx.methods
+    const route = mppx.compose([lazy!, { amount: '0.25' }], [fixed!, { amount: '0.50' }])
+    const result = await route(new Request('https://example.com/paid'))
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const offered = Challenge.fromResponseList(result.challenge)
+    expect(offered.map((c) => c.request.amount)).toEqual(['500000'])
+
+    const alone = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator: down } })],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    }).evm.charge({ amount: '0.25' })
+    await expect(alone(new Request('https://example.com/paid'))).rejects.toThrow(
+      /Offer unavailable/,
+    )
+  })
+
+  test('discovery describes a lazy-recipient route without reading payTo', () => {
+    const supported = vi.fn(async () => {
+      throw new Error('unreachable')
+    })
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          x402: { facilitator: { supported, async verify() {}, async settle() {} } as never },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const document = generateOpenApi(mppx, {
+      routes: [{ handler: mppx.evm.charge({ amount: '0.25' }), method: 'get', path: '/paid' }],
+    })
+    expect(JSON.stringify(document)).toContain('/paid')
+    expect(supported).not.toHaveBeenCalled()
   })
 
   test('rejects a credential whose echoed recipient was changed', async () => {

@@ -599,9 +599,57 @@ describe('x402 facilitator payToResolver', () => {
         { network: 'eip155:8453', ttl: 1_000 },
       )
       await expect(resolve()).rejects.toThrow('down')
+      // A first-read failure is shared until the retry, instead of every caller reading again.
+      await expect(resolve()).rejects.toThrow('down')
+      expect(supported).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1_001)
       expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
       vi.advanceTimersByTime(1_001)
       expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('fails a stalled read after timeout and keeps serving the last address', async () => {
+    vi.useFakeTimers()
+    try {
+      let reads = 0
+      const resolve = Facilitator.createPayToResolver(
+        () => {
+          reads++
+          return reads === 1
+            ? Promise.resolve('0x1111111111111111111111111111111111111111')
+            : new Promise<string>(() => {})
+        },
+        { timeout: 500, ttl: 1_000 },
+      )
+      expect(await resolve()).toBe('0x1111111111111111111111111111111111111111')
+      vi.advanceTimersByTime(1_001)
+      const stalled = resolve()
+      await vi.advanceTimersByTimeAsync(501)
+      expect(await stalled).toBe('0x1111111111111111111111111111111111111111')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('issued() covers the current address and replaced ones within grace only', async () => {
+    vi.useFakeTimers()
+    try {
+      let next = '0x1111111111111111111111111111111111111111'
+      const resolve = Facilitator.createPayToResolver(async () => next, { grace: 1_000, ttl: 0 })
+      await resolve()
+      next = '0x2222222222222222222222222222222222222222'
+      await resolve()
+      expect(resolve.current).toBe(next)
+      expect(resolve.issued('0x1111111111111111111111111111111111111111')).toBe(
+        '0x1111111111111111111111111111111111111111',
+      )
+      expect(resolve.issued('0x3333333333333333333333333333333333333333')).toBeUndefined()
+      vi.advanceTimersByTime(1_001)
+      expect(resolve.issued('0x1111111111111111111111111111111111111111')).toBeUndefined()
+      expect(resolve.issued(next.toLowerCase())).toBe(next)
     } finally {
       vi.useRealTimers()
     }

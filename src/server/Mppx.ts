@@ -3154,15 +3154,31 @@ function composeHandlers(
     // can safely claim the request without racing each other.
     // An identity rejection from one offer does not hide the others: it is returned only
     // when no offer issued a payment challenge.
-    const results: MethodFn.Response<Transport.Http>[] = []
+    // An offer that can't be made right now (OfferUnavailableError) is left out, unless every
+    // offer is.
+    const results: (MethodFn.Response<Transport.Http> | undefined)[] = []
+    let unavailable: Errors.OfferUnavailableError | undefined
     for (const handler of selectedHandlers) {
-      const result = transportResults.get(handler) ?? (await call(handler))
+      let result: MethodFn.Response<Transport.Http>
+      try {
+        result = transportResults.get(handler) ?? (await call(handler))
+      } catch (error) {
+        if (!(error instanceof Errors.OfferUnavailableError)) throw error
+        unavailable ??= error
+        results.push(undefined)
+        continue
+      }
       if (result.status === 200) return result
       if (result.challenge.status !== 402 && !result.rejection) return result
       results.push(result)
     }
-    const offers = results.filter((result) => result.status === 402 && !result.rejection)
-    if (offers.length === 0 && results[0]) return results[0]
+    if (unavailable && results.every((result) => result === undefined)) throw unavailable
+    const offers = results.filter(
+      (result): result is MethodFn.Response<Transport.Http> =>
+        result !== undefined && result.status === 402 && !result.rejection,
+    )
+    const firstResult = results.find((result) => result !== undefined)
+    if (offers.length === 0 && firstResult) return firstResult
 
     const challengeEntries = (() => {
       const entries: {
@@ -3233,7 +3249,7 @@ function composeHandlers(
     // x402 requirements withheld by any offer with a payment check, including a nested
     // composer's, are not advertised by another offer either.
     const withheld = results.flatMap((result) =>
-      result.status === 402 && result.challenge instanceof globalThis.Response
+      result?.status === 402 && result.challenge instanceof globalThis.Response
         ? (withheldX402.get(result.challenge) ?? [])
         : [],
     )

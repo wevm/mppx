@@ -170,10 +170,114 @@ export async function payTo(
 }
 
 /**
- * Returns a function that reads a facilitator's published `payTo` (see {@link payTo}) and caches it
- * for `ttl` milliseconds, so a facilitator that rotates its deposit address is picked up without a
- * restart. Concurrent calls share one `GET /supported`. When a refresh fails, the last address is
- * kept and the read is retried after 30 seconds; only the first read throws.
+ * A function that returns the current recipient, reading it on demand and caching it, and that
+ * remembers the addresses it replaced for a grace period (see {@link createPayToResolver}).
+ */
+export type PayToResolver = (() => Promise<`0x${string}`>) & {
+  /** The last address read, without reading; `undefined` before the first success. */
+  readonly current: `0x${string}` | undefined
+  /**
+   * The current address, or one it replaced less than `grace` ago, equal to `address`
+   * (case-insensitive); otherwise `undefined`. A server accepts a payment naming an older address
+   * only through this, so a caller can never pick an address the server didn't issue.
+   */
+  issued(address: string): `0x${string}` | undefined
+}
+
+/** Options for {@link createPayToResolver} and {@link payToResolver}. */
+export type PayToResolverOptions = {
+  /** How long a replaced address still verifies, in milliseconds. @default 600_000 (10 minutes) */
+  grace?: number | undefined
+  /** How long one read may take before it fails, in milliseconds. @default 10_000 */
+  timeout?: number | undefined
+  /** How long a read stays fresh, in milliseconds. @default 300_000 (5 minutes) */
+  ttl?: number | undefined
+}
+
+/**
+ * Wraps `read` in a {@link PayToResolver}. Concurrent calls share one read. A read that takes
+ * longer than `timeout` fails. Before the first success a failure is shared with every caller for
+ * 30 seconds; after it, a failed refresh keeps the last address and retries after 30 seconds.
+ */
+export function createPayToResolver(
+  read: () => Promise<string>,
+  options: PayToResolverOptions = {},
+): PayToResolver {
+  const { grace = 600_000, timeout = 10_000, ttl = 300_000 } = options
+  const retryAfterFailure = Math.min(ttl, 30_000)
+  let current: `0x${string}` | undefined
+  let freshUntil = 0
+  let failure: { error: unknown; until: number } | undefined
+  let retired: { address: `0x${string}`; at: number }[] = []
+  let pending: Promise<`0x${string}`> | undefined
+
+  function withTimeout(promise: Promise<string>): Promise<string> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Reading the recipient timed out after ${timeout}ms.`)),
+          timeout,
+        )
+      }),
+    ]).finally(() => clearTimeout(timer))
+  }
+
+  function replace(address: `0x${string}`, now: number) {
+    retired = retired.filter(
+      (entry) => entry.address.toLowerCase() !== address.toLowerCase() && now - entry.at < grace,
+    )
+    if (current && current.toLowerCase() !== address.toLowerCase())
+      retired.push({ address: current, at: now })
+    current = address
+  }
+
+  const resolve = (async () => {
+    if (current && Date.now() < freshUntil) return current
+    if (!current && failure && Date.now() < failure.until) throw failure.error
+    pending ??= withTimeout(Promise.resolve().then(read))
+      .then((value) => {
+        const address = getAddress(value)
+        const now = Date.now()
+        failure = undefined
+        replace(address, now)
+        freshUntil = now + ttl
+        return address
+      })
+      .catch((error) => {
+        const now = Date.now()
+        if (!current) {
+          failure = { error, until: now + retryAfterFailure }
+          throw error
+        }
+        freshUntil = now + retryAfterFailure
+        return current
+      })
+      .finally(() => {
+        pending = undefined
+      })
+    return pending
+  }) as PayToResolver
+
+  Object.defineProperty(resolve, 'current', { get: () => current })
+  ;(resolve as { issued: PayToResolver['issued'] }).issued = (address) => {
+    const wanted = address.toLowerCase()
+    if (current && current.toLowerCase() === wanted) return current
+    const now = Date.now()
+    for (let i = retired.length - 1; i >= 0; i--) {
+      const entry = retired[i]!
+      if (entry.address.toLowerCase() === wanted && now - entry.at < grace) return entry.address
+    }
+    return undefined
+  }
+  return resolve
+}
+
+/**
+ * Returns a {@link PayToResolver} for a facilitator's published `payTo` (see {@link payTo}), so a
+ * facilitator that rotates its deposit address is picked up without a restart. Payments naming an
+ * address it replaced still verify for `grace`.
  *
  * @example
  * ```ts
@@ -183,33 +287,10 @@ export async function payTo(
  */
 export function payToResolver(
   facilitator: string | Types.FacilitatorConfig | Types.Facilitator,
-  parameters: Parameters<typeof payTo>[1] & {
-    /** How long a read stays fresh, in milliseconds. @default 300_000 (5 minutes) */
-    ttl?: number | undefined
-  },
-): () => Promise<`0x${string}`> {
-  const { ttl = 300_000, ...options } = parameters
-  const retryAfterFailure = Math.min(ttl, 30_000)
-  let cached: { address: `0x${string}`; expiresAt: number } | undefined
-  let pending: Promise<`0x${string}`> | undefined
-
-  return async () => {
-    if (cached && Date.now() < cached.expiresAt) return cached.address
-    pending ??= payTo(facilitator, options)
-      .then((address) => {
-        cached = { address, expiresAt: Date.now() + ttl }
-        return address
-      })
-      .catch((error) => {
-        if (!cached) throw error
-        cached = { ...cached, expiresAt: Date.now() + retryAfterFailure }
-        return cached.address
-      })
-      .finally(() => {
-        pending = undefined
-      })
-    return pending
-  }
+  parameters: Parameters<typeof payTo>[1] & PayToResolverOptions,
+): PayToResolver {
+  const { grace, timeout, ttl, ...options } = parameters
+  return createPayToResolver(() => payTo(facilitator, options), { grace, timeout, ttl })
 }
 
 /** Returns the underlying raw fetch implementation when given an mppx wrapper. */
