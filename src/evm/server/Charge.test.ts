@@ -1,12 +1,13 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { evm as evm_client, Mppx as ClientMppx } from 'mppx/client'
-import { generate as generateOpenApi } from 'mppx/discovery'
 import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { privateKeyToAccount } from 'viem/accounts'
 import { usdc } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
+
+import { generate as generateOpenApi } from '../../discovery/OpenApi.js'
 
 const currency = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
 const recipient = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
