@@ -713,3 +713,94 @@ describe('evm charge recipient from the facilitator', () => {
     ).toThrow(/requires `recipient` or an `x402.facilitator`/)
   })
 })
+
+describe('evm charge lazy recipient across workers', () => {
+  const rotated = '0x1111111111111111111111111111111111111111'
+
+  function worker(payTo: string) {
+    const settled: string[] = []
+    const facilitator = {
+      async supported() {
+        return {
+          kinds: [
+            {
+              extra: { payTo },
+              network: evm_Types.networkOf(84532),
+              scheme: 'exact',
+              x402Version: 2,
+            },
+          ],
+        }
+      },
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+        settled.push(requirements.payTo)
+        return { network: evm_Types.networkOf(84532), success: true, transaction }
+      },
+    } as x402_Types.Facilitator
+    const mppx = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator } })],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    return { mppx, route: mppx.evm.charge({ amount: '0.25' }), settled }
+  }
+
+  test('a worker that only knows the new address accepts a challenge issued before', async () => {
+    const before = worker(recipient)
+    const challenged = await before.route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '1' })],
+      polyfill: false,
+    })
+    const authorization = await client.createCredential(challenged.challenge)
+
+    const after = worker(rotated)
+    const paid = await after.route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    expect(paid.status).toBe(200)
+    expect(after.settled).toEqual([recipient])
+  })
+
+  test('rejects a credential whose echoed recipient was changed', async () => {
+    const server = worker(recipient)
+    const challenged = await server.route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '1' })],
+      polyfill: false,
+    })
+    const credential = Credential.deserialize(await client.createCredential(challenged.challenge))
+    const forged = Credential.serialize({
+      ...credential,
+      challenge: {
+        ...credential.challenge,
+        request: { ...credential.challenge.request, recipient: rotated },
+      },
+    })
+    const result = await server.route(
+      new Request('https://example.com/paid', { headers: { Authorization: forged } }),
+    )
+    expect(result.status).toBe(402)
+    expect(server.settled).toEqual([])
+  })
+
+  test('validateCredential accepts a lazy-recipient credential', async () => {
+    const server = worker(recipient)
+    const challenged = await server.route(new Request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '1' })],
+      polyfill: false,
+    })
+    const credential = await client.createCredential(challenged.challenge)
+    const validation = await server.mppx.validateCredential(credential, {
+      realm: 'example.com',
+      request: { amount: '0.25' },
+    })
+    expect(validation.request.recipient).toBe(recipient)
+  })
+})

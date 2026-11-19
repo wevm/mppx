@@ -4,7 +4,7 @@ import { Proxy } from 'mppx/proxy'
 import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as RouteBinding from '../internal/RouteBinding.js'
 
@@ -732,5 +732,122 @@ describe('x402 evm charge facilitator extra and payTo', () => {
     await expect(evm.facilitatorPayTo(facilitator, { network: 'eip155:84532' })).rejects.toThrow(
       /publishes no payTo/,
     )
+  })
+})
+
+describe('x402 evm charge with a lazy recipient', () => {
+  const first = privateKeyToAccount(`0x${'61'.repeat(32)}`).address
+  const second = privateKeyToAccount(`0x${'62'.repeat(32)}`).address
+  const stranger = privateKeyToAccount(`0x${'63'.repeat(32)}`).address
+
+  function createRotatingFacilitator() {
+    const state = { payTo: first as string }
+    const settled: x402_Types.PaymentRequirements[] = []
+    return {
+      settled,
+      state,
+      facilitator: {
+        async verify() {
+          return { isValid: true }
+        },
+        async settle(_payload: PaymentPayload, requirements: x402_Types.PaymentRequirements) {
+          settled.push(requirements)
+          return { network: requirements.network, success: true, transaction }
+        },
+        async supported() {
+          return {
+            kinds: [
+              {
+                network: 'eip155:84532',
+                scheme: 'exact',
+                x402Version: 2,
+                extra: { payTo: state.payTo },
+              },
+            ],
+          }
+        },
+      } satisfies x402_Types.Facilitator,
+    }
+  }
+
+  function createLazyMppx(facilitator: x402_Types.Facilitator, ttl = 1_000) {
+    return Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: evm.facilitatorPayToResolver(facilitator, { network: 'eip155:84532', ttl }),
+          x402: { facilitator, routeBinding: 'resource' },
+        }),
+      ],
+      secretKey,
+    })
+  }
+
+  test('an x402 payment issued before a rotation still settles to its payTo', async () => {
+    vi.useFakeTimers()
+    try {
+      const { facilitator, settled, state } = createRotatingFacilitator()
+      const route = createLazyMppx(facilitator).evm.charge({ amount: '0.25' })
+
+      const before = await route(request('https://example.com/paid'))
+      if (before.status !== 402) throw new Error()
+      const accepted = readChallenge(before.challenge).accepts[0]!
+      expect(accepted.payTo).toBe(first)
+
+      state.payTo = second
+      vi.advanceTimersByTime(1_001)
+      const after = await route(request('https://example.com/paid'))
+      if (after.status !== 402) throw new Error()
+      expect(readChallenge(after.challenge).accepts[0]!.payTo).toBe(second)
+
+      const paid = await route(
+        request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+      )
+      expect(paid.status).toBe(200)
+      expect(settled.map((r) => r.payTo)).toEqual([first])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('an x402 payment to an address this server never issued is rejected', async () => {
+    const { facilitator, settled } = createRotatingFacilitator()
+    const route = createLazyMppx(facilitator).evm.charge({ amount: '0.25' })
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepted = { ...readChallenge(challenged.challenge).accepts[0]!, payTo: stranger }
+
+    const result = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted })),
+    )
+    expect(result.status).toBe(402)
+    expect(settled).toEqual([])
+  })
+
+  test('composed lazy offers dispatch an x402 payment to the offer it accepted', async () => {
+    const { facilitator, settled } = createRotatingFacilitator()
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          x402: { facilitator, routeBinding: 'resource' },
+        }),
+      ],
+      secretKey,
+    })
+    const route = Mppx.compose(
+      mppx.evm.charge({ amount: '0.25' }),
+      mppx.evm.charge({ amount: '0.50' }),
+    )
+    const challenged = await route(request('https://example.com/paid'))
+    if (challenged.status !== 402) throw new Error()
+    const accepts = readChallenge(challenged.challenge).accepts
+    const second = accepts.find((a) => a.amount === '500000')!
+
+    const paid = await route(
+      request('https://example.com/paid', await thirdPartyCredential({ accepted: second })),
+    )
+    expect(paid.status).toBe(200)
+    expect(settled.map((r) => r.amount)).toEqual(['500000'])
   })
 })

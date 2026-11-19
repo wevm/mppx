@@ -303,9 +303,15 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
 }
 
 /**
- * Fills a route's `recipient` from a resolver on each challenge. A credential for a challenge
- * issued with the previous address (before the resolver picked up a rotation) keeps that address,
- * so in-flight payments still verify.
+ * Fills a route's `recipient` from a resolver on each challenge. A payment for a challenge issued
+ * before the resolver picked up a rotation keeps the address it was issued with, so in-flight
+ * payments still verify:
+ *
+ * - A native credential keeps the recipient its echoed challenge carries. That challenge is
+ *   HMAC-bound to the server's secret and verified before payment, so this holds across workers and
+ *   restarts that share the secret, and a forged recipient fails the HMAC check.
+ * - An x402 payment's `accepted.payTo` is not signed by the server, so it is kept only when this
+ *   process issued it recently (the last two addresses).
  */
 function recipientHook(resolve: () => Promise<`0x${string}`>) {
   const issued: `0x${string}`[] = []
@@ -319,13 +325,20 @@ function recipientHook(resolve: () => Promise<`0x${string}`>) {
     if (request.recipient) return request as never
     const recipient = await resolve()
     if (!issued.includes(recipient)) issued.splice(0, issued.push(recipient) - 2)
-    const offered = (credential?.challenge.request as { recipient?: unknown } | undefined)
-      ?.recipient
-    if (
-      typeof offered === 'string' &&
-      issued.some((address) => address.toLowerCase() === offered.toLowerCase())
-    )
-      return { ...request, recipient: getAddress(offered) } as never
+    if (!credential) return { ...request, recipient } as never
+    const echoed = credential.challenge.request as { payTo?: unknown; recipient?: unknown }
+    if (X402.isPendingCredential(credential)) {
+      // Unsigned x402 requirements: only an address this process issued.
+      const payTo = echoed.payTo
+      const known =
+        typeof payTo === 'string'
+          ? issued.find((address) => address.toLowerCase() === payTo.toLowerCase())
+          : undefined
+      return { ...request, recipient: known ?? recipient } as never
+    }
+    // HMAC-bound challenge: verified against the server secret before payment.
+    if (typeof echoed.recipient === 'string')
+      return { ...request, recipient: getAddress(echoed.recipient) } as never
     return { ...request, recipient } as never
   }
 }
@@ -335,14 +348,26 @@ function recipientHook(resolve: () => Promise<`0x${string}`>) {
  * read per challenge has none in its static form, so matching a credential to the route skips it;
  * the challenge rebuilt at verification still pins it.
  */
-function chargeBinding(request: z.output<typeof Methods.charge.schema.request>) {
-  const { amount, currency, methodDetails, recipient } = request
+function chargeBinding(
+  request:
+    | z.output<typeof Methods.charge.schema.request>
+    | (Record<string, unknown> & { chainId?: unknown; splits?: unknown }),
+) {
+  // Standalone matching may pass raw defaults (chainId and splits at the top level) when the
+  // route-only amount is missing, rather than the transformed request.
+  const { amount, currency, methodDetails, recipient } = request as {
+    amount?: unknown
+    currency?: unknown
+    methodDetails?: { chainId?: unknown; splits?: unknown } | undefined
+    recipient?: unknown
+  }
+  const raw = request as { chainId?: unknown; splits?: unknown }
   return {
     amount,
-    chainId: methodDetails.chainId,
+    chainId: methodDetails?.chainId ?? raw.chainId,
     currency,
     recipient,
-    splits: methodDetails.splits,
+    splits: methodDetails?.splits ?? raw.splits,
   }
 }
 

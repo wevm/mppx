@@ -15,8 +15,6 @@ const defaultNetwork: `${string}:${string}` = network
 export type Options = {
   /** Tempo API key with the `mpp:write` scope. @default process.env.TEMPO_API_KEY */
   apiKey?: string | undefined
-  /** Fetch implementation used for facilitator requests. */
-  fetch?: typeof globalThis.fetch | undefined
   /** x402 network to accept payments on. @default 'eip155:8453' (Base mainnet) */
   network?: `${string}:${string}` | undefined
   /**
@@ -74,7 +72,6 @@ export function tempoX402(options: Options = {}) {
   ).register(network, new ExactEvmScheme())
 
   const payTo = Facilitator.payToResolver(base, {
-    fetch: options.fetch,
     headers,
     network,
     ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),

@@ -163,10 +163,15 @@ export function createPath(config: ResolvedOptions): Path {
       if (!paymentSignature) return false
       try {
         const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
-        return isDeepStrictEqual(
-          paymentPayload.accepted,
-          toPaymentRequirements(request as Types.ChargeRequest, config),
-        )
+        const expected = toPaymentRequirements(request as Types.ChargeRequest, config)
+        // A route whose recipient is read from its facilitator per challenge has none in its
+        // static form: match on the rest. bindCredential() checks payTo once it is resolved.
+        if ((request as { recipient?: unknown }).recipient === undefined) {
+          const { payTo: _, ...accepted } = paymentPayload.accepted
+          const { payTo: __, ...rest } = expected
+          return isDeepStrictEqual(accepted, rest)
+        }
+        return isDeepStrictEqual(paymentPayload.accepted, expected)
       } catch {
         return false
       }
