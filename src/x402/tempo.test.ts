@@ -100,3 +100,50 @@ describe('tempoX402', () => {
     expect(() => tempoX402({ apiKey: 'k' }).route({ price: '$0.01' })).toThrow(/payout address/)
   })
 })
+
+describe('tempoX402 hardening', () => {
+  // Raw like the middleware's paymentHeader; the matcher decodes it with the full schema.
+  const paymentHeader = (payTo: string) =>
+    Buffer.from(
+      JSON.stringify({
+        accepted: {
+          amount: '10000',
+          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          extra: {},
+          maxTimeoutSeconds: 60,
+          network: 'eip155:8453',
+          payTo,
+          scheme: 'exact',
+        },
+        payload: { authorization: {}, signature: '0x' },
+        x402Version: 2,
+      }),
+    ).toString('base64')
+
+  test('rejects a malformed payout address', () => {
+    expect(() =>
+      tempoX402({ apiKey: 'k', payoutAddress: '0x1234' }).route({ price: '$0.01' }),
+    ).toThrow(/not an address/)
+  })
+
+  test('a paid retry keeps the deposit address it was offered, within grace', async () => {
+    vi.useFakeTimers()
+    try {
+      const payTo = { current: depositAddress }
+      stubFacilitator(payTo)
+      const tempo = tempoX402({ apiKey: 'k', payoutAddress, ttl: 1_000 })
+      const route = tempo.route({ price: '$0.01' })
+      const resolvePayTo = (route.accepts as { payTo: (c: unknown) => Promise<string> }).payTo
+      expect(await resolvePayTo({})).toBe(depositAddress)
+      payTo.current = payoutAddress
+      vi.advanceTimersByTime(1_001)
+      expect(await resolvePayTo({})).toBe(payoutAddress)
+      const header = paymentHeader(depositAddress)
+      expect(await resolvePayTo({ paymentHeader: header })).toBe(depositAddress)
+      const stranger = paymentHeader('0x3333333333333333333333333333333333333333')
+      expect(await resolvePayTo({ paymentHeader: stranger })).toBe(payoutAddress)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

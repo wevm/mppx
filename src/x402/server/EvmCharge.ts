@@ -174,6 +174,8 @@ export function createPath(
         if ((request as { recipient?: unknown }).recipient === undefined) {
           const { payTo, ...accepted } = paymentPayload.accepted
           const { payTo: _, ...rest } = expected
+          // Static terms first: a payment for a sibling offer never waits on a recipient read.
+          if (!isDeepStrictEqual(accepted, rest)) return false
           if (recipient) {
             // A server that hasn't read its address yet (a fresh worker) reads it first.
             if (!recipient.current) await recipient().catch(() => {})

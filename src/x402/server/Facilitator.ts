@@ -165,7 +165,13 @@ export async function payTo(
   )
   const value = kind?.extra?.payTo
   if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(value))
-    throw new Error(`x402 facilitator publishes no payTo for ${scheme} on ${network}.`)
+    // A successful response without it: the address was withdrawn, not merely unreachable.
+    throw Object.assign(
+      new Error(`x402 facilitator publishes no payTo for ${scheme} on ${network}.`),
+      {
+        payToWithdrawn: true,
+      },
+    )
   return getAddress(value)
 }
 
@@ -257,9 +263,7 @@ export function createPayToResolver(
     return error
   }
 
-  const resolve = (async () => {
-    if (current && Date.now() < freshUntil) return current
-    if (failure && Date.now() < failure.until) throw unavailable(failure.error)
+  function startRead(): Promise<`0x${string}`> {
     pending ??= readWithTimeout()
       .then((value) => {
         const address = getAddress(value)
@@ -273,6 +277,12 @@ export function createPayToResolver(
       })
       .catch((error) => {
         const now = Date.now()
+        if ((error as { payToWithdrawn?: unknown })?.payToWithdrawn === true) {
+          // Withdrawn by the facilitator: stop advertising or accepting it.
+          retired = retired.filter((entry) => entry.address !== current)
+          current = undefined
+          freshUntil = 0
+        }
         if (!current || now - readAt > ttl + grace) {
           failure = { error, until: now + retryAfterFailure }
           throw error
@@ -284,6 +294,12 @@ export function createPayToResolver(
         pending = undefined
       })
     return pending
+  }
+
+  const resolve = (async () => {
+    if (current && Date.now() < freshUntil) return current
+    if (failure && Date.now() < failure.until) throw unavailable(failure.error)
+    return startRead()
   }) as PayToResolver
 
   Object.defineProperty(resolve, 'current', { get: () => current })
@@ -299,12 +315,12 @@ export function createPayToResolver(
   }
   let lastForced = Number.NEGATIVE_INFINITY
   ;(resolve as { refresh: PayToResolver['refresh'] }).refresh = async () => {
+    // Only the caller waits on a forced read: the cached address stays fresh for everyone else.
+    if (pending) return pending
     const now = Date.now()
-    if (!pending && now - lastForced >= retryAfterFailure) {
-      lastForced = now
-      freshUntil = 0
-    }
-    return resolve()
+    if (now - lastForced < retryAfterFailure) return resolve()
+    lastForced = now
+    return startRead()
   }
   return resolve
 }

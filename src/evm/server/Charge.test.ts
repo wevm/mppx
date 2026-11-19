@@ -1127,3 +1127,40 @@ describe('evm charge lazy recipient hardening', () => {
     expect(JSON.stringify(document)).not.toContain('recipient')
   })
 })
+
+describe('evm charge lazy recipient chain override', () => {
+  test('refuses to quote the facilitator payTo on another chain', async () => {
+    const facilitator = {
+      async supported() {
+        return {
+          kinds: [
+            {
+              extra: { payTo: recipient },
+              network: evm_Types.networkOf(84532),
+              scheme: 'exact',
+              x402Version: 2,
+            },
+          ],
+        }
+      },
+      async verify() {
+        return { isValid: true }
+      },
+      async settle(): Promise<never> {
+        throw new Error('unreachable')
+      },
+    } as unknown as x402_Types.Facilitator
+    const mppx = Mppx.create({
+      methods: [evm({ currency: evm.assets.baseSepolia.USDC, x402: { facilitator } })],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const route = mppx.evm.charge({
+      amount: '0.25',
+      chainId: 8453,
+      currency: evm.assets.base.USDC.address,
+    } as never)
+    await expect(route(new Request('https://example.com/paid'))).rejects.toThrow(
+      /explicit `recipient`/,
+    )
+  })
+})

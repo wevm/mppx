@@ -49,7 +49,10 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       } as charge.Defaults,
       ...(typeof config.recipient === 'function'
         ? {
-            request: recipientHook(config.recipient),
+            request: recipientHook(
+              config.recipient,
+              facilitatorChains.has(config.recipient) ? config.chainId : undefined,
+            ),
             stableBinding: chargeBinding(config.recipient),
           }
         : {}),
@@ -328,7 +331,11 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
  * addresses this process issued qualify. An HMAC-valid echo is not enough: another route or worker
  * sharing the secret may have issued it for a different recipient.
  */
-function recipientHook(resolver: X402Facilitator.PayToResolver) {
+function recipientHook(
+  resolver: X402Facilitator.PayToResolver,
+  /** For a recipient read from the facilitator: the only chain that address is for. */
+  facilitatorChainId?: number | undefined,
+) {
   return async ({
     credential,
     request,
@@ -337,6 +344,15 @@ function recipientHook(resolver: X402Facilitator.PayToResolver) {
     request: Record<string, unknown>
   }) => {
     if (request.recipient) return request as never
+    const chainId =
+      (request as { chainId?: unknown }).chainId ??
+      (request as { methodDetails?: { chainId?: unknown } }).methodDetails?.chainId
+    if (facilitatorChainId !== undefined && chainId !== undefined && chainId !== facilitatorChainId)
+      // The facilitator's payTo is published per network: never quote one chain's deposit
+      // address on another.
+      throw new Error(
+        `EVM charge reads its recipient from the facilitator for chain ${facilitatorChainId}; a route on chain ${String(chainId)} needs an explicit \`recipient\`.`,
+      )
     let recipient: `0x${string}`
     try {
       recipient = await resolver()
@@ -431,12 +447,17 @@ function resolveRecipient(parameters: {
     throw new Error(
       'EVM authorization requires `recipient` or an `x402.facilitator` that publishes `payTo`.',
     )
-  return X402Facilitator.payToResolver(x402.facilitator, {
+  const resolver = X402Facilitator.payToResolver(x402.facilitator, {
     fetch: x402.fetch,
     headers: x402.headers,
     network: Types.networkOf(chainId),
   })
+  facilitatorChains.add(resolver)
+  return resolver
 }
+
+/** Resolvers this module built from a facilitator's per-network payTo. */
+const facilitatorChains = new WeakSet<object>()
 
 function createPaths(config: ResolvedConfig): HttpPaths {
   return {

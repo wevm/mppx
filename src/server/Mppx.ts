@@ -1302,7 +1302,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         html?: Method.Method['html'] | undefined
         request: Record<string, unknown>
       }) => {
-        parameters = { ...parameters, challenge: await retryChallengeFor(parameters.challenge) }
+        {
+          const challenge = await retryChallengeFor(parameters.challenge)
+          // A rebuilt Challenge reports its own request, not the one resolved from the credential.
+          if (challenge !== parameters.challenge)
+            parameters = { ...parameters, challenge, request: challenge.request }
+        }
         let response = await transport.respondChallenge({
           challenge: parameters.challenge,
           input,

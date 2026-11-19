@@ -1,6 +1,7 @@
 import type { RouteConfig } from '@x402/core/server'
 import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
+import { isAddress } from 'viem'
 
 import * as Facilitator from './server/Facilitator.js'
 
@@ -77,6 +78,25 @@ export function tempoX402(options: Options = {}) {
     ...(options.ttl !== undefined ? { ttl: options.ttl } : {}),
   })
 
+  /**
+   * The deposit address for this request: a paid retry keeps the address it was offered if this
+   * server issued it within `grace` (the x402 middleware requires an exact match), otherwise the
+   * current one.
+   */
+  async function payToFor(paymentHeader: string | undefined): Promise<string> {
+    const current = await payTo()
+    if (!paymentHeader) return current
+    // Only accepted.payTo is read, and only an address this server issued is used, so the
+    // header needs no further validation here (the middleware verifies the payment).
+    let offered: unknown
+    try {
+      offered = (JSON.parse(atob(paymentHeader)) as { accepted?: { payTo?: unknown } }).accepted
+        ?.payTo
+    } catch {}
+    if (typeof offered === 'string') return payTo.issued(offered) ?? current
+    return current
+  }
+
   /** Builds a paid route's config. Throws when neither the route nor {@link tempoX402} names a payout address. */
   function route(parameters: RouteOptions): RouteConfig {
     const { payoutAddress: routePayoutAddress, price, ...rest } = parameters
@@ -85,12 +105,14 @@ export function tempoX402(options: Options = {}) {
       throw new Error(
         'tempoX402 requires a payout address: pass `payoutAddress` or set TEMPO_PAYOUT_ADDRESS.',
       )
+    if (!isAddress(tempoSettlement, { strict: false }))
+      throw new Error(`tempoX402 payout address is not an address: ${tempoSettlement}`)
     return {
       ...rest,
       accepts: {
         extra: { tempoSettlement },
         network,
-        payTo: () => payTo(),
+        payTo: (context) => payToFor(context.paymentHeader),
         price,
         scheme: 'exact',
       },

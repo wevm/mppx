@@ -778,3 +778,42 @@ describe('x402 facilitator payToResolver refresh', () => {
     }
   })
 })
+
+describe('x402 facilitator payToResolver withdrawal and refresh', () => {
+  const a = '0x1111111111111111111111111111111111111111'
+  const kinds = (payTo?: string) => ({
+    extensions: [],
+    kinds: payTo
+      ? [{ extra: { payTo }, network: 'eip155:8453', scheme: 'exact', x402Version: 2 }]
+      : [],
+    signers: {},
+  })
+
+  test('stops serving an address the facilitator withdraws', async () => {
+    let published: string | undefined = a
+    const resolve = Facilitator.payToResolver(
+      { ...facilitatorStub, supported: async () => kinds(published) } as Types.Facilitator,
+      { network: 'eip155:8453', ttl: 0 },
+    )
+    expect(await resolve()).toBe(a)
+    published = undefined
+    await expect(resolve()).rejects.toThrow(/publishes no payTo/)
+    expect(resolve.current).toBeUndefined()
+    expect(resolve.issued(a)).toBeUndefined()
+  })
+
+  test('a forced refresh does not make other callers wait on it', async () => {
+    let release: (() => void) | undefined
+    let reads = 0
+    const resolve = Facilitator.createPayToResolver(async () => {
+      reads++
+      if (reads > 1) await new Promise<void>((done) => (release = done))
+      return a
+    })
+    await resolve()
+    const forced = resolve.refresh()
+    expect(await resolve()).toBe(a) // returns the fresh cache without waiting
+    release!()
+    expect(await forced).toBe(a)
+  })
+})
