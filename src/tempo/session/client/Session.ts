@@ -376,12 +376,7 @@ export function session(parameters: session.Parameters = {}) {
       try {
         const automatic = !hasSessionAction(context) && context?.descriptor === undefined
         if (automatic) release = await lockChannels(store, getLockKeys(challengeContext))
-        let resolved = await selectChannelContext({
-          context,
-          origin,
-          resolved: challengeContext,
-          store,
-        })
+        let resolved = await selectChannelContext({ context, resolved: challengeContext, store })
         if (automatic && attempt && (await store.get(resolved.key))?.opened) await attempt.prepare()
         let entry = await store.get(resolved.key)
         if (entry && entry.origin !== origin) throw new Error('Session channel origin mismatch')
@@ -393,12 +388,7 @@ export function session(parameters: session.Parameters = {}) {
         if (!automatic && attempt && plan.type === 'open') {
           release = await lockChannels(store, getLockKeys(challengeContext))
           // Select again: another flow may have opened a channel, possibly in MACH, while this waited.
-          resolved = await selectChannelContext({
-            context,
-            origin,
-            resolved: challengeContext,
-            store,
-          })
+          resolved = await selectChannelContext({ context, resolved: challengeContext, store })
           const nextEntry = await store.get(resolved.key)
           if (nextEntry && nextEntry.origin !== origin)
             throw new Error('Session channel origin mismatch')

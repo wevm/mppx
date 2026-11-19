@@ -33,13 +33,11 @@ export function resolveMachineTokenContext(
 /**
  * Selects the channel a challenge pays from: for a `machTokenAccepted` challenge, a MACH channel when
  * the caller's descriptor, the stored channels or the server's snapshot point to one. A stored channel
- * in the challenge currency is kept, so the MACH preference never opens a second channel. Given an
- * `origin`, a stored MACH channel bound to another origin is skipped. Other challenges resolve
- * unchanged, without store reads.
+ * in the challenge currency is kept, so the MACH preference never opens a second channel. Other
+ * challenges resolve unchanged, without store reads.
  */
 export async function selectChannelContext(parameters: {
   context?: SessionContext | undefined
-  origin?: string | undefined
   resolved: ChallengeContext
   store: ChannelStore
 }): Promise<ChallengeContext> {
@@ -49,9 +47,7 @@ export async function selectChannelContext(parameters: {
   if (context?.descriptor)
     return isSameAddress(context.descriptor.token, machine.token) ? machine : resolved
   if (await store.get(resolved.key)) return resolved
-  const machineEntry = await store.get(machine.key)
-  if (machineEntry && (!('origin' in parameters) || machineEntry.origin === parameters.origin))
-    return machine
+  if (await store.get(machine.key)) return machine
   if (resolved.snapshot && isSameAddress(resolved.snapshot.descriptor.token, machine.token))
     return machine
   return resolved
