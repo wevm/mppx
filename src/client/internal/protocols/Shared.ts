@@ -7,6 +7,7 @@ export const paymentRequiredStatus = 402
 /** Credential headers purged before a fresh credential is attached. */
 const credentialHeaders = [
   Constants.Headers.authorization,
+  Constants.Headers.paymentAuthorization,
   x402_Types.paymentRequiredHeader,
   x402_Types.paymentResponseHeader,
   x402_Types.paymentSignatureHeader,
@@ -20,11 +21,17 @@ export function setCredentialHeader(
 ): RequestInit {
   const headers = new Headers(request.headers)
   for (const stale of credentialHeaders) {
-    // Never erase ordinary application credentials from Authorization.
-    if (stale === Constants.Headers.authorization && !headers.get(stale)?.startsWith('Payment '))
-      continue
+    // Never erase ordinary application credentials from Authorization; clear only Payment ones,
+    // so a retry never carries a stale credential in the field the new challenge did not select.
+    if (isPaymentField(stale) && !headers.get(stale)?.startsWith('Payment ')) continue
     headers.delete(stale)
   }
   headers.set(header, credential)
   return { ...request, headers }
+}
+
+function isPaymentField(header: string): boolean {
+  return (
+    header === Constants.Headers.authorization || header === Constants.Headers.paymentAuthorization
+  )
 }

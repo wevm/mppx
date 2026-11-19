@@ -289,6 +289,26 @@ describe('http', () => {
       },
       {
         challenge: undefined,
+        credential: Credential.serialize({
+          ...credential,
+          challenge: { ...challenge, header: Constants.Headers.paymentAuthorization },
+        }),
+        expectedHeader: Constants.Headers.paymentAuthorization,
+        expectedValue: Credential.serialize({
+          ...credential,
+          challenge: { ...challenge, header: Constants.Headers.paymentAuthorization },
+        }),
+        name: 'credential whose own challenge selects Payment-Authorization',
+      },
+      {
+        challenge: undefined,
+        credential: Credential.serialize(credential),
+        expectedHeader: 'Authorization',
+        expectedValue: Credential.serialize(credential),
+        name: 'Payment auth credential without selected challenge',
+      },
+      {
+        challenge: undefined,
         credential: 'custom-credential',
         expectedHeader: 'Authorization',
         expectedValue: 'custom-credential',
@@ -301,6 +321,36 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get(expectedHeader)).toBe(expectedValue)
+    })
+
+    test('clears a stale Payment credential from the field the new challenge does not select', () => {
+      const transport = Transport.http()
+      const stale = Credential.serialize({
+        ...credential,
+        challenge: { ...challenge, header: Constants.Headers.paymentAuthorization },
+      })
+      const fresh = Credential.serialize(credential)
+
+      const result = transport.setCredential(
+        { headers: { [Constants.Headers.paymentAuthorization]: stale } },
+        fresh,
+      )
+      const headers = result.headers as Headers
+
+      expect(headers.get('Authorization')).toBe(fresh)
+      expect(headers.get(Constants.Headers.paymentAuthorization)).toBeNull()
+    })
+
+    test('keeps a non-Payment value in Payment-Authorization', () => {
+      const transport = Transport.http()
+
+      const result = transport.setCredential(
+        { headers: { [Constants.Headers.paymentAuthorization]: 'Bearer app' } },
+        Credential.serialize(credential),
+      )
+      const headers = result.headers as Headers
+
+      expect(headers.get(Constants.Headers.paymentAuthorization)).toBe('Bearer app')
     })
 
     test('writes x402 credentials for x402 challenges from the same transport', () => {
