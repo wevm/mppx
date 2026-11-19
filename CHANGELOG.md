@@ -1,5 +1,29 @@
 # mppx
 
+## 0.21.0
+
+### Minor Changes
+
+- 7b47ff2: Fixed payment enforcement, stream handling, and excessive callback overhead in Express, and hardened subscription signing and CLI retries against chain mismatches and cleartext payment requests. Proxy replay now requires a stable, explicitly configured `replay.authority`, shared only by replicas with identical payment policies and upstream permissions.
+
+### Patch Changes
+
+- 1cb1c24: Validated the authority actually used to construct adapter request URLs. Returned HTTP 400 for malformed request targets in the x402 Express adapter.
+- a7e84b7: Added optional exact host allowlists to Express and Node adapters, rejecting unapproved requests before payment or identity verification.
+- d2d3fba: Fixed payment retries creating credentials after cancellation during approval.
+- 58513ac: Changed challenges to accept only `Payment-Authorization` (any case) as an explicit `header`, keeping the received spelling so credentials echo it unchanged; clients skip a challenge that names any other credential header. Servers now throw when configured with another header (`Authorization` still means the default).
+- bf0bbcb: The CLI paid a new Challenge offered in a 402 after a Credential, such as the real charge after a zero-amount proof, instead of failing with `PAYMENT_REJECTED`, and resent the same Credential when the same Challenge was offered again, as the client's fetch does.
+- c796e45: Preserved automatic-payment opt-outs through identity clients and session managers, and disabled payment during issuer key retrieval.
+- 7300c80: Fixed stale payment cleanup removing a newer replay claim.
+- b457436: Bound session credential sources to the funding payer while preserving delegated voucher signatures.
+- c796e45: Prevented Persona issuer lookups from paying through identity wrappers and unpaid session requests from changing accounting or opening payment-driven streams.
+- 6826a97: Added `headers` for x402 facilitators that need an API key: a flat record sent on every request, or an object keyed by `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns in `@x402/core`), or a function returning either. `x402.facilitator` accepts `{ url, headers }`, and `x402.headers`, `Facilitator.http(url, { headers })` and `evm.facilitatorPayTo(url, { headers })` authenticate a URL facilitator. A non-2xx facilitator response now throws `Errors.FacilitatorResponseError` (status and truncated body) and reaches the client as a 500 instead of a schema error. Clients with `maxAmount` and no `currencies` allowlist now read decimals and EIP-3009 metadata for assets mppx ships (such as Base USDC) from its registry.
+- c5c01a7: Added `x402.extra` to `evm.charge` for facilitators that read their own keys in a payment requirement's `extra`, an optional `supported()` on x402 facilitator clients (`GET /supported`, implemented by the HTTP client), and `evm.facilitatorPayTo()` to read the `payTo` a facilitator publishes there as the charge's `recipient`.
+- fa0388c: Added `extensions` to `Receipt` and to the result of `evm.charge`'s `settle` so a server reads the `extensions` an x402 facilitator returns from `/settle`, and forwarded them unchanged in the x402 `PAYMENT-RESPONSE` header. Fixed the HTTP facilitator client rejecting `/verify` and `/settle` responses whose `extensions` values aren't `{ info, schema }` declarations.
+- 6629814: Fixed `tempo.charge` clients so that `maxAmount` and `maxAtomicAmount` cover a Zone payment's withdrawal fee: the amount plus the fee must fit, checked before withdrawing.
+- 132e1b5: Fixed Zone payments so that a retry under a new Challenge no longer starts a second withdrawal: `tempo.charge` resumes the outstanding withdrawal for the same terms while it can still pay, and the fetch and MCP clients retry the original Challenge while it settles. Added the `zoneCredentialGraceMs` server option, which accepts a `zone` Credential for up to 5 minutes after its Challenge expires when its withdrawal settled before the expiry; only Challenges issued with the option on get this grace.
+- 88e8810: Fixed `tempo.charge` servers accepting a Zone withdrawal's settlement as a `hash` Credential as well as a `zone` Credential. A transfer sent by a Zone portal now counts only through its `zone` Credential, so one settlement pays once.
+
 ## 0.20.1
 
 ### Patch Changes
