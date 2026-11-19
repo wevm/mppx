@@ -233,6 +233,11 @@
       "types": "./dist/x402/mcp.d.ts",
       "default": "./dist/x402/mcp.js"
     },
+    "./x402/tempo": {
+      "src": "./src/x402/tempo.ts",
+      "types": "./dist/x402/tempo.d.ts",
+      "default": "./dist/x402/tempo.js"
+    },
     "./tempo": {
       "src": "./src/tempo/index.ts",
       "types": "./dist/tempo/index.d.ts",
@@ -328,6 +333,7 @@
     "@modelcontextprotocol/sdk": ">=1.25.0",
     "@stripe/agent-identity": ">=0.3.0",
     "@x402/core": ">=2.22.0",
+    "@x402/evm": ">=2.22.0",
     "@x402/express": ">=2.22.0",
     "@x402/hono": ">=2.22.0",
     "@x402/mcp": ">=2.22.0",
@@ -346,6 +352,9 @@
       "optional": true
     },
     "@x402/core": {
+      "optional": true
+    },
+    "@x402/evm": {
       "optional": true
     },
     "@x402/express": {
