@@ -6,6 +6,7 @@ import * as path from 'node:path'
 import type { Address, Hex } from 'viem'
 
 import * as Challenge from '../../Challenge.js'
+import * as MachineTokenCharge from '../../tempo/internal/machine-token-charge.js'
 import { resolveEscrow, type ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import {
   deserializeEntry,
@@ -496,59 +497,99 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
   }
 }
 
-/** Adapts a persistent registry selection to the session manager's channel store. */
+/**
+ * Adapts a persistent registry selection to the session manager's channel store. `scopes` adds
+ * payment scopes the manager may also use, such as the MACH channel a `machTokenAccepted`
+ * challenge accepts; each scope keeps its own selected and preferred channel.
+ */
 export function toChannelStore(
   registry: SessionRegistry,
   options: {
     scope: SessionScope
+    scopes?: readonly SessionScope[] | undefined
     selection: SessionSelection
     context: () => SessionPersistenceContext
     onNewChannel?: ((channel: ChannelEntry) => void) | undefined
   },
 ): ChannelStore {
-  const expectedKey = scopeEntryKey(options.scope)
-  let selectedChannelId: Hex | undefined =
+  const scopes = new Map<string, SessionScope>()
+  for (const scope of [options.scope, ...(options.scopes ?? [])])
+    scopes.set(scopeEntryKey(scope), scope)
+  const explicitChannelId =
     options.selection === 'auto' || options.selection === 'new'
       ? undefined
       : (normalizeChannelId(options.selection) as Hex)
+  // The channel selected for each payment scope, keyed by its channel store key.
+  const selectedChannelIds = new Map<string, Hex>()
 
-  function assertKey(key: string): void {
-    if (key.toLowerCase() !== expectedKey)
+  function resolveKey(key: string): { key: string; scope: SessionScope } {
+    const normalized = key.toLowerCase()
+    const scope = scopes.get(normalized)
+    if (!scope)
       throw new SessionStateError('Session manager requested an unexpected payment scope.')
+    return { key: normalized, scope }
   }
 
-  async function selected(reusableOnly = true): Promise<ManagedSession | undefined> {
-    if (options.selection === 'new' && !selectedChannelId) return undefined
-    const channelId = selectedChannelId ?? (await registry.getPreferred(options.scope))
-    if (!channelId) return undefined
+  /** Returns a channel's record, which must exist and belong to `scope`. */
+  async function load(channelId: Hex, scope: SessionScope): Promise<ManagedSession> {
     const record = await registry.get(channelId)
     if (!record) throw new SessionStateError(`Session ${channelId} does not exist.`)
-    assertChannelScope(record.channel, options.scope)
+    assertChannelScope(record.channel, scope)
+    return record
+  }
+
+  /** Returns the explicitly selected channel's record when it belongs to `scope`. */
+  async function explicitRecord(scope: SessionScope): Promise<ManagedSession | undefined> {
+    if (!explicitChannelId) return undefined
+    const record = await registry.get(explicitChannelId)
+    if (!record) throw new SessionStateError(`Session ${explicitChannelId} does not exist.`)
+    // An explicit channel belongs to one scope; the store's other scopes have no channel.
+    if (scopes.size > 1 && !matchesChannelScope(record.channel, scope)) return undefined
+    assertChannelScope(record.channel, scope)
+    return record
+  }
+
+  async function selected(
+    key: string,
+    scope: SessionScope,
+    reusableOnly = true,
+  ): Promise<ManagedSession | undefined> {
+    const selectedChannelId = selectedChannelIds.get(key)
+    const record = await (async () => {
+      if (selectedChannelId) return load(selectedChannelId, scope)
+      if (explicitChannelId) return explicitRecord(scope)
+      if (options.selection === 'new') return undefined
+      const channelId = await registry.getPreferred(scope)
+      return channelId ? load(channelId, scope) : undefined
+    })()
+    if (!record) return undefined
     if (reusableOnly && (record.status !== 'open' || !record.channel.opened)) return undefined
-    selectedChannelId = channelId
+    selectedChannelIds.set(key, record.channel.channelId)
     return record
   }
 
   return {
     async get(key) {
-      assertKey(key)
-      return (await selected())?.channel
+      const resolved = resolveKey(key)
+      return (await selected(resolved.key, resolved.scope))?.channel
     },
     async set(channel) {
-      assertKey(entryKey(channel))
-      assertChannelScope(channel, options.scope)
+      const { key, scope } = resolveKey(entryKey(channel))
+      assertChannelScope(channel, scope)
+      const selectedChannelId =
+        selectedChannelIds.get(key) ?? (await explicitRecord(scope))?.channel.channelId
       if (selectedChannelId && selectedChannelId.toLowerCase() !== channel.channelId.toLowerCase())
         throw new SessionStateError(
           `Session manager selected ${selectedChannelId}, but attempted to store ${channel.channelId}.`,
         )
       if (!selectedChannelId) options.onNewChannel?.(channel)
       const record = await registry.upsert({ ...options.context(), channel })
-      selectedChannelId = record.channel.channelId
-      await registry.setPreferred(options.scope, record.channel.channelId)
+      selectedChannelIds.set(key, record.channel.channelId)
+      await registry.setPreferred(scope, record.channel.channelId)
     },
     async delete(key) {
-      assertKey(key)
-      const record = await selected(false)
+      const resolved = resolveKey(key)
+      const record = await selected(resolved.key, resolved.scope, false)
       if (!record) return
       const context = options.context()
       await registry.upsert({
@@ -560,8 +601,8 @@ export function toChannelStore(
         units: context.units ?? record.units,
       })
       if (context.status !== 'closing')
-        await registry.clearPreferred(options.scope, record.channel.channelId)
-      selectedChannelId = undefined
+        await registry.clearPreferred(resolved.scope, record.channel.channelId)
+      selectedChannelIds.delete(resolved.key)
     },
   }
 }
@@ -770,7 +811,11 @@ function assertChallengeMatchesChannel(
   const token = normalizeAddress(challenge.request.currency, 'challenge currency', file)
   if (payee !== channel.descriptor.payee.toLowerCase())
     throw stateError(file, 'Session challenge payee does not match the channel.')
-  if (token !== channel.descriptor.token.toLowerCase())
+  // A `machTokenAccepted` challenge also accepts a channel funded in the chain's MACH.
+  if (
+    token !== channel.descriptor.token.toLowerCase() &&
+    !MachineTokenCharge.acceptsToken(challenge.request, channel.chainId, channel.descriptor.token)
+  )
     throw stateError(file, 'Session challenge token does not match the channel.')
   if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw stateError(file, 'Session challenge escrow does not match the channel.')
@@ -781,19 +826,23 @@ function assertChallengeMatchesChannel(
   }
 }
 
+function matchesChannelScope(channel: ChannelEntry, scope: SessionScope): boolean {
+  const normalized = normalizeScope(scope)
+  return (
+    channel.descriptor.payer.toLowerCase() === normalized.payer &&
+    channel.descriptor.payee.toLowerCase() === normalized.payee &&
+    channel.descriptor.token.toLowerCase() === normalized.token &&
+    channel.escrow.toLowerCase() === normalized.escrow &&
+    channel.chainId === normalized.chainId
+  )
+}
+
 function assertChannelScope(
   channel: ChannelEntry,
   scope: SessionScope,
   file?: string | undefined,
 ): void {
-  const normalized = normalizeScope(scope)
-  if (
-    channel.descriptor.payer.toLowerCase() !== normalized.payer ||
-    channel.descriptor.payee.toLowerCase() !== normalized.payee ||
-    channel.descriptor.token.toLowerCase() !== normalized.token ||
-    channel.escrow.toLowerCase() !== normalized.escrow ||
-    channel.chainId !== normalized.chainId
-  )
+  if (!matchesChannelScope(channel, scope))
     throw stateError(file, 'Session channel does not match the selected payment scope.')
 }
 

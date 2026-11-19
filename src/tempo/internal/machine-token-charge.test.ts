@@ -1,4 +1,14 @@
-import { createClient, custom, encodeFunctionData } from 'viem'
+import {
+  createClient,
+  custom,
+  decodeFunctionData,
+  encodeFunctionData,
+  encodeFunctionResult,
+  type Hex,
+  numberToHex,
+  zeroAddress,
+} from 'viem'
+import { tempoModerato } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
@@ -14,6 +24,68 @@ const client = createClient({
   transport: custom({ request: async () => undefined as never }),
 })
 const transfers = [{ amount: 1_000_000n, memo, recipient }] as const
+const accessKey = '0x3333333333333333333333333333333333333333'
+const calls = [{ data: '0x1234', to: deployment.token }] as const
+
+const chain = { ...tempoModerato, hardfork: 't3' } as const
+
+// Answers the balance, access-key and simulation reads canPayDirect makes, over a real transport.
+function rpc(options: {
+  balance: bigint
+  key?: { expiry?: bigint; isRevoked?: boolean; keyId?: Hex } | undefined
+  remaining?: bigint | undefined
+  simulate?: 'ok' | 'revert' | undefined
+  spendPolicy?: 'limited' | 'unlimited' | undefined
+}) {
+  const abi = [...Abis.tip20, ...Abis.accountKeychain]
+  return createClient({
+    chain,
+    transport: custom({
+      async request({ method, params }) {
+        if (method === 'eth_chainId') return numberToHex(chain.id)
+        if (method !== 'eth_call') throw new Error(`Unexpected RPC method: ${method}`)
+        const [request] = params as [{ data?: Hex }]
+        const decoded = (() => {
+          try {
+            return request.data ? decodeFunctionData({ abi, data: request.data }) : undefined
+          } catch {
+            return undefined
+          }
+        })()
+        if (!decoded) {
+          // The transfer simulation.
+          if (options.simulate === 'revert') throw new Error('PolicyForbids')
+          return '0x'
+        }
+        const result = (() => {
+          switch (decoded.functionName) {
+            case 'balanceOf':
+              return options.balance
+            case 'decimals':
+              return 6
+            case 'getKey':
+              return {
+                enforceLimits: (options.spendPolicy ?? 'limited') === 'limited',
+                expiry: options.key?.expiry ?? 2n ** 64n - 1n,
+                isRevoked: options.key?.isRevoked ?? false,
+                keyId: options.key?.keyId ?? accessKey,
+                signatureType: 0,
+              }
+            case 'getRemainingLimitWithPeriod':
+              return [options.remaining ?? 0n, 0n]
+            default:
+              throw new Error(`Unexpected call: ${decoded.functionName}`)
+          }
+        })()
+        return encodeFunctionResult({
+          abi,
+          functionName: decoded.functionName,
+          result,
+        } as never)
+      },
+    }),
+  })
+}
 
 describe('Tempo machine-token charges', () => {
   test('builds and validates the exact first-party approve + swapTo calls', async () => {
@@ -276,5 +348,51 @@ describe('MACH funding', () => {
       vi.doUnmock('viem/actions')
       vi.resetModules()
     }
+  })
+})
+
+describe('canPayDirect', () => {
+  async function canPay(
+    options: Parameters<typeof rpc>[0],
+    account: Record<string, unknown> = { address: payer, type: 'local' },
+  ) {
+    const MachineToken = await import('./machine-token-charge.js')
+    return MachineToken.canPayDirect(rpc(options), {
+      account: account as never,
+      amount: 1_000_000n,
+      calls,
+      token: deployment.token,
+    })
+  }
+
+  test('pays directly when the balance covers the amount and the transfer simulates', async () => {
+    expect(await canPay({ balance: 1_000_000n })).toBe(true)
+  })
+
+  test('falls back when the balance is short', async () => {
+    expect(await canPay({ balance: 999_999n })).toBe(false)
+  })
+
+  test('falls back when the transfer cannot be simulated', async () => {
+    expect(await canPay({ balance: 1_000_000n, simulate: 'revert' })).toBe(false)
+  })
+
+  test('checks the remaining limit of a limited access key', async () => {
+    const keyAccount = { accessKeyAddress: accessKey, address: payer, type: 'local' }
+
+    expect(await canPay({ balance: 1_000_000n, remaining: 999_999n }, keyAccount)).toBe(false)
+    expect(await canPay({ balance: 1_000_000n, remaining: 1_000_000n }, keyAccount)).toBe(true)
+    expect(await canPay({ balance: 1_000_000n, spendPolicy: 'unlimited' }, keyAccount)).toBe(true)
+  })
+
+  test('falls back for a revoked, expired or unregistered access key', async () => {
+    const keyAccount = { accessKeyAddress: accessKey, address: payer, type: 'local' }
+    const key = (key: NonNullable<Parameters<typeof rpc>[0]['key']>) =>
+      canPay({ balance: 1_000_000n, key, spendPolicy: 'unlimited' }, keyAccount)
+
+    expect(await key({ isRevoked: true })).toBe(false)
+    expect(await key({ expiry: 1n })).toBe(false)
+    expect(await key({ keyId: zeroAddress })).toBe(false)
+    expect(await key({ expiry: 0n })).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
+import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
@@ -39,7 +40,8 @@ function createChargeMethod<const parameters extends SharedParameters>(
 function createSessionMethod<const parameters extends SharedParameters>(
   parameters: parameters | undefined,
 ) {
-  // These options apply only to charge, even when configured at the family level.
+  // These options apply only to charge, even when configured at the family level: sessions have no
+  // swapper route, so only `machTokenAccepted` enables MACH for them.
   const {
     allowedFeeTokens: _allowedFeeTokens,
     machineTokenEnabled: _machineTokenEnabled,
@@ -108,7 +110,12 @@ export function tempo<const parameters extends tempo.Parameters>(
 
 type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   session_.Parameters & {
-    /** Enables MACH funding for compatible Tempo methods. Currently applies to `charge`. */
+    /**
+     * Accepts MACH paid directly: charges by a transfer to the recipient, sessions by a channel
+     * funded in MACH. The recipient must be on MACH's merchant list.
+     */
+    machTokenAccepted?: boolean | undefined
+    /** Charges only: lets payers fund charges with MACH through the swapper. */
     machineTokenEnabled?: boolean | undefined
   }
 
@@ -276,6 +283,16 @@ function sessionOffers<const parameters extends CurrencyParameters<session_.Para
     verifiers.set(key(currency.chainId, currency.currency), (channelId) =>
       verifyStream_(method, channelId),
     )
+    // `machTokenAccepted` offers also accept MACH channels; the first offer settles them.
+    const machineToken = parameters?.machTokenAccepted
+      ? MachineTokenCharge.getToken(currency.chainId)
+      : undefined
+    if (machineToken && !settlements.has(key(currency.chainId, machineToken))) {
+      settlements.set(key(currency.chainId, machineToken), method.extensions!.settleScheduled)
+      verifiers.set(key(currency.chainId, machineToken), (channelId) =>
+        verifyStream_(method, channelId),
+      )
+    }
     return { ...method, extensions }
   }
   return [create(first), ...rest.map(create)] as const

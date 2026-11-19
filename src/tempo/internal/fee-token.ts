@@ -78,3 +78,18 @@ export async function resolveFeeToken(parameters: {
 
   return tokens[0]
 }
+
+/**
+ * Resolves the first of `preferred` (default: the chain's fee tokens) the account holds, to pay gas.
+ * Returns `undefined` when none is funded, such as for a MACH-only payer.
+ */
+export async function resolveFundedFeeToken(parameters: {
+  account: Address
+  chainId: number | undefined
+  client: Client
+  preferred?: readonly Address[] | undefined
+}): Promise<Address | undefined> {
+  const { account, chainId, client, preferred = defaultFeeTokens(chainId) } = parameters
+  for (const token of preferred) if (await hasBalance(client, account, token)) return token
+  return undefined
+}

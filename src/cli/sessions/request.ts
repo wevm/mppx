@@ -8,6 +8,7 @@ import {
   resolveChallengeContext,
 } from '../../tempo/session/client/CredentialState.js'
 import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
+import { resolveMachineTokenContext } from '../../tempo/session/client/MachineToken.js'
 import { sessionManager } from '../../tempo/session/client/SessionManager.js'
 import type { TempoSessionChallenge } from '../../tempo/session/client/Transports.js'
 import { isEventStream, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
@@ -188,9 +189,26 @@ export async function runPersistentSessionRequest(
     escrow: challengeContext.escrow,
     chainId: challengeContext.chainId,
   }
+  // A `machTokenAccepted` challenge also accepts a channel funded in MACH, which the session
+  // manager may open or reuse instead, so the registry serves and locks that scope too.
+  const machineToken = resolveMachineTokenContext(challengeContext)?.token
+  const machineTokenScope = machineToken ? { ...scope, token: machineToken } : undefined
+  const scopes = machineTokenScope ? [scope, machineTokenScope] : [scope]
   const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
   const registry = parameters.registry ?? createSessionRegistry()
-  const lock = await registry.acquire(scope).catch((cause: unknown) => {
+  const locks: Awaited<ReturnType<typeof registry.acquire>>[] = []
+  const lock = {
+    async release() {
+      // Release every lock even when one fails, then report the first failure.
+      const results = await Promise.allSettled(locks.splice(0).map((lock) => lock.release()))
+      const failed = results.find((result) => result.status === 'rejected')
+      if (failed) throw failed.reason
+    },
+  }
+  try {
+    for (const scope of scopes) locks.push(await registry.acquire(scope))
+  } catch (cause) {
+    await lock.release()
     if (cause instanceof SessionBusyError)
       throw new Errors.IncurError({
         code: cause.code,
@@ -199,12 +217,13 @@ export async function runPersistentSessionRequest(
         cause,
       })
     throw cause
-  })
+  }
 
   try {
     const selectedId =
       selection === 'auto'
-        ? await registry.getPreferred(scope)
+        ? ((await registry.getPreferred(scope)) ??
+          (machineTokenScope ? await registry.getPreferred(machineTokenScope) : undefined))
         : selection === 'new'
           ? undefined
           : selection
@@ -219,7 +238,9 @@ export async function runPersistentSessionRequest(
       if (
         selected.status !== 'open' ||
         !selected.channel.opened ||
-        sessionScopeKey(sessionScope(selected.channel)) !== sessionScopeKey(scope) ||
+        !scopes.some(
+          (scope) => sessionScopeKey(sessionScope(selected.channel)) === sessionScopeKey(scope),
+        ) ||
         !canSignDescriptor(resolvedAccount.account, selected.channel.descriptor)
       )
         throw new Errors.IncurError({
@@ -251,6 +272,7 @@ export async function runPersistentSessionRequest(
     })
     const channelStore = toChannelStore(registry, {
       scope,
+      scopes: machineTokenScope ? [machineTokenScope] : undefined,
       selection,
       context: persistenceContext,
       onNewChannel() {

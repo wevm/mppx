@@ -7,8 +7,10 @@ import {
   isAddress,
   isAddressEqual,
   parseAbi,
+  type Account,
   type Address,
   type Client,
+  zeroAddress,
 } from 'viem'
 import { call, readContract } from 'viem/actions'
 import { Abis, Actions } from 'viem/tempo'
@@ -172,6 +174,29 @@ export function matchRoute(parameters: {
   }
 }
 
+/** Returns the canonical machine token on a chain, if one is deployed. */
+export function getToken(chainId: number | undefined): Address | undefined {
+  return getDeployment(chainId)?.token
+}
+
+/**
+ * Returns whether a request may be paid in `token` on `chainId`: its currency, or the chain's MACH
+ * when the request's method details set `machTokenAccepted`.
+ */
+export function acceptsToken(
+  request: { currency?: unknown; methodDetails?: unknown },
+  chainId: number,
+  token: Address,
+): boolean {
+  const normalized = token.toLowerCase()
+  if (typeof request.currency === 'string' && request.currency.toLowerCase() === normalized)
+    return true
+  const methodDetails = request.methodDetails as { machTokenAccepted?: unknown } | undefined
+  return (
+    methodDetails?.machTokenAccepted === true && getToken(chainId)?.toLowerCase() === normalized
+  )
+}
+
 /** Returns the trusted sender that settles the configured charge route on a chain. */
 export function getSettlementSender(chainId: number | undefined): Address | undefined {
   return getDeployment(chainId)?.swap
@@ -284,4 +309,67 @@ export async function getInsufficientBalanceError(
     fundingUrl: shortfall.fundingUrl,
     reason: shortfall.reason,
   })
+}
+
+/**
+ * Returns whether an account can spend `amount` of a token: its balance covers it and, for an access
+ * key, the key is registered, unrevoked and unexpired, and any spending limit covers it too. A key
+ * not yet registered on-chain returns false, since its pending limits cannot be read. Any failed
+ * read returns false.
+ */
+export async function canSpend(
+  client: Client,
+  parameters: { account: Account; amount: bigint; token: Address },
+): Promise<boolean> {
+  const { account, amount, token } = parameters
+  try {
+    const { amount: balance } = await Actions.token.getBalance(client, {
+      account: account.address,
+      token,
+    })
+    if (balance < amount) return false
+    const accessKey = 'accessKeyAddress' in account ? account.accessKeyAddress : undefined
+    if (typeof accessKey !== 'string' || !isAddress(accessKey)) return true
+    const metadata = await Actions.accessKey.getMetadata(client, {
+      account: account.address,
+      accessKey,
+    })
+    if (
+      metadata.isRevoked ||
+      metadata.address === zeroAddress ||
+      (metadata.expiry !== 0n && metadata.expiry <= BigInt(Math.floor(Date.now() / 1000)))
+    )
+      return false
+    if (metadata.spendPolicy !== 'limited') return true
+    const { remaining } = await Actions.accessKey.getRemainingLimit(client, {
+      account: account.address,
+      accessKey,
+      token,
+    })
+    return remaining >= amount
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Returns whether an account can pay a charge directly in the machine token: it can spend the total
+ * and a simulation of the transfer calls succeeds. Any failure returns false, so the caller pays in
+ * the challenge currency instead.
+ */
+export async function canPayDirect(
+  client: Client,
+  parameters: {
+    account: Account
+    amount: bigint
+    calls: readonly Call[]
+    token: Address
+  },
+): Promise<boolean> {
+  const { account, amount, calls, token } = parameters
+  if (!(await canSpend(client, { account, amount, token }))) return false
+  return call(client, { account: account.address, calls } as never).then(
+    () => true,
+    () => false,
+  )
 }
