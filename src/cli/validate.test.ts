@@ -11,8 +11,8 @@ import * as Http from '~test/Http.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Receipt from '../Receipt.js'
-import { validateRealmMatchesHost } from './validate/challenge.js'
-import { missingDiscoverySuggestion } from './validate/messages.js'
+import { validateRealmMatchesHost } from '../validation/challenge.js'
+import { missingDiscoverySuggestion } from '../validation/messages.js'
 
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
 const isAgentEnvironmentMock = vi.fn(() => false)
