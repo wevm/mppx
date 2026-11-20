@@ -10,6 +10,10 @@ import { describe, expect, test } from 'vp/test'
  *
  * Validation sits beside the adapters and must not import the CLI, because
  * `mppx/validation` ships without the CLI's bundled dependencies.
+ *
+ * Entry points that compose higher layers (such as `index.ts` and `bin.ts`)
+ * form their own top layer, so a constrained module cannot reach the CLI or
+ * a method by importing one of them.
  */
 const src = path.resolve(import.meta.dirname)
 
@@ -17,11 +21,11 @@ const methods = ['tempo', 'stripe', 'evm', 'x402', 'integrations']
 const adapters = ['cli', 'middlewares', 'proxy', 'mcp', 'validation', 'extensions']
 
 const forbidden: Record<string, readonly string[]> = {
-  core: ['client', 'server', ...methods, ...adapters],
-  internal: ['client', 'server', ...methods, ...adapters],
-  client: [...methods, ...adapters],
-  server: [...methods, ...adapters],
-  validation: ['cli'],
+  core: ['client', 'server', ...methods, ...adapters, 'entry'],
+  internal: ['client', 'server', ...methods, ...adapters, 'entry'],
+  client: [...methods, ...adapters, 'entry'],
+  server: [...methods, ...adapters, 'entry'],
+  validation: ['cli', 'entry'],
 }
 
 /** Entry points and barrels that intentionally compose higher layers. */
@@ -57,6 +61,7 @@ function runtimeImports(code: string) {
 
 function layerOf(file: string) {
   const parts = path.relative(src, file).split(path.sep)
+  if (allowed.has(parts.join('/').replace(/\.js$/, '.ts'))) return 'entry'
   return parts.length === 1 ? 'core' : parts[0]!
 }
 
@@ -107,6 +112,14 @@ describe('layering', () => {
       './reexport.js',
       './dynamic.js',
     ])
+  })
+
+  test('treats composing entry points as the top layer', () => {
+    expect(layerOf(path.join(src, 'bin.js'))).toBe('entry')
+    expect(layerOf(path.join(src, 'index.js'))).toBe('entry')
+    expect(layerOf(path.join(src, 'server', 'Methods.js'))).toBe('entry')
+    expect(layerOf(path.join(src, 'server', 'Mppx.js'))).toBe('server')
+    expect(layerOf(path.join(src, 'Challenge.js'))).toBe('core')
   })
 
   test('lower layers do not import higher layers', () => {
