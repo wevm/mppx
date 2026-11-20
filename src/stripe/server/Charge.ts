@@ -6,9 +6,9 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import type * as Html from '../../internal/html/config.ts'
 import type { ConfiguredDefaults, LooseOmit, MaybePromise, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import type * as Html from '../../server/internal/html/config.ts'
 import type * as z from '../../zod.js'
 import { stripePreviewVersion } from '../internal/constants.js'
 import * as PaymentIntent from '../internal/payment-intent.js'
