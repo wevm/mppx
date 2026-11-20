@@ -1,0 +1,324 @@
+import * as z from '../../zod.js'
+
+export const versions = [2] as const
+
+/** mppx method name used for EVM charge challenges backed by x402. */
+export const paymentMethod = 'evm' as const
+
+/** mppx intent name used for EVM charge challenges backed by x402 exact. */
+export const exactIntent = 'charge' as const
+
+export const schemes = ['exact'] as const
+export const assetTransferMethods = ['eip3009', 'permit2'] as const
+
+/** CAIP-2 namespace prefix for EVM networks. */
+export const evmNetworkPrefix = 'eip155:' as const
+
+/** Prefix for synthetic mppx challenge IDs derived from x402 `accepts` entries. */
+export const syntheticChallengeIdPrefix = 'x402:' as const
+
+/** x402 protocol version supported by this package. */
+export type Version = 2
+
+/** mppx payment method name used for EVM charge challenges backed by x402. */
+export type PaymentMethod = typeof paymentMethod
+
+/** mppx intent name used for EVM charge challenges backed by x402 exact. */
+export type ExactIntent = typeof exactIntent
+
+/** x402 scheme supported by this package. */
+export type Scheme = (typeof schemes)[number]
+
+/** x402 exact EVM asset transfer method. */
+export type AssetTransferMethod = (typeof assetTransferMethods)[number]
+
+/** CAIP-2 EVM network identifier. */
+export type EvmNetwork = `${typeof evmNetworkPrefix}${number}`
+
+/** HTTP header carrying a base64-encoded x402 payment-required response. */
+export const paymentRequiredHeader = 'PAYMENT-REQUIRED'
+
+/** HTTP header carrying a base64-encoded x402 payment payload. */
+export const paymentSignatureHeader = 'PAYMENT-SIGNATURE'
+
+/** Legacy HTTP header carrying an x402 v1 payment payload. */
+export const legacyPaymentSignatureHeader = 'X-PAYMENT'
+
+/** HTTP header carrying a base64-encoded x402 settlement response. */
+export const paymentResponseHeader = 'PAYMENT-RESPONSE'
+
+const nonEmptyString = z.string().check(z.minLength(1))
+const positiveNumber = z.number().check(z.refine((value) => value > 0, 'Must be positive'))
+const atomicAmount = z.string().check(z.regex(/^\d+$/, 'Invalid atomic amount'))
+const address = z.address()
+const evmNetwork = z
+  .string()
+  .check(
+    z.regex(new RegExp(`^${evmNetworkPrefix}\\d+$`), 'Invalid EVM CAIP-2 network'),
+  ) as z.ZodMiniType<EvmNetwork>
+
+/** Describes the protected resource in x402 v2 payment-required responses. */
+export const ResourceInfoSchema = z.object({
+  description: z.optional(z.string()),
+  iconUrl: z.optional(z.string()),
+  mimeType: z.optional(z.string()),
+  serviceName: z.optional(z.string()),
+  tags: z.optional(z.array(z.string())),
+  url: nonEmptyString,
+})
+
+/** Describes the protected resource in x402 v2 payment-required responses. */
+export type ResourceInfo = z.infer<typeof ResourceInfoSchema>
+
+/** Public transfer configuration for exact EVM payments. */
+export const ExactTransferSchema = z.discriminatedUnion('type', [
+  z.object({
+    name: nonEmptyString,
+    type: z.literal('eip3009'),
+    version: nonEmptyString,
+  }),
+  z.object({
+    name: z.optional(z.string()),
+    type: z.literal('permit2'),
+    version: z.optional(z.string()),
+  }),
+])
+
+/** Public EIP-3009 transfer configuration for exact EVM payments. */
+export type ExactEip3009Transfer = Extract<z.infer<typeof ExactTransferSchema>, { type: 'eip3009' }>
+
+/** Public Permit2 transfer configuration for exact EVM payments. */
+export type ExactPermit2Transfer = Extract<z.infer<typeof ExactTransferSchema>, { type: 'permit2' }>
+
+/** Public transfer configuration for exact EVM payments. */
+export type ExactTransfer = z.infer<typeof ExactTransferSchema>
+
+/** Known asset metadata used to derive x402 wire `extra` fields. */
+export type Asset = {
+  address: `0x${string}`
+  decimals: number
+  transfer: ExactTransfer
+}
+
+/** x402 v2 payment requirements for the `exact` scheme. */
+export const PaymentRequirementsSchema = z.object({
+  amount: atomicAmount,
+  asset: nonEmptyString,
+  extra: z.optional(z.record(z.string(), z.unknown())),
+  maxTimeoutSeconds: positiveNumber,
+  network: evmNetwork,
+  payTo: nonEmptyString,
+  scheme: z.enum(schemes),
+})
+
+/** x402 v2 payment requirements for the `exact` scheme. */
+export type PaymentRequirements = z.infer<typeof PaymentRequirementsSchema>
+
+/** x402 v2 protocol extension value. */
+export const ExtensionSchema = z.looseObject({
+  info: z.record(z.string(), z.unknown()),
+  schema: z.record(z.string(), z.unknown()),
+})
+
+/** x402 v2 protocol extension value. */
+export type Extension = z.infer<typeof ExtensionSchema>
+
+/** x402 v2 protocol extensions map. */
+export const ExtensionsSchema = z.record(z.string(), ExtensionSchema)
+
+/** x402 v2 protocol extensions map. */
+export type Extensions = z.infer<typeof ExtensionsSchema>
+
+/** Public exact EVM route request accepted by `mppx` handlers. */
+export type ExactRequest = PaymentRequirements & {
+  extensions?: Extensions | undefined
+  resource?: ResourceInfo | undefined
+}
+
+/** x402 v2 payment-required response. */
+export const PaymentRequiredSchema = z.object({
+  accepts: z.array(PaymentRequirementsSchema).check(z.minLength(1)),
+  error: z.optional(z.string()),
+  extensions: z.optional(ExtensionsSchema),
+  resource: ResourceInfoSchema,
+  x402Version: z.literal(2),
+})
+
+/** x402 v2 payment-required response. */
+export type PaymentRequired = z.infer<typeof PaymentRequiredSchema>
+
+/** EIP-3009 transferWithAuthorization payload for exact EVM payments. */
+export const ExactEip3009PayloadSchema = z.object({
+  authorization: z.object({
+    from: address,
+    nonce: z.hash(),
+    to: address,
+    validAfter: atomicAmount,
+    validBefore: atomicAmount,
+    value: atomicAmount,
+  }),
+  signature: z.signature(),
+})
+
+/** EIP-3009 transferWithAuthorization payload for exact EVM payments. */
+export type ExactEip3009Payload = z.infer<typeof ExactEip3009PayloadSchema>
+
+/** Permit2 payload for exact EVM payments. */
+export const ExactPermit2PayloadSchema = z.object({
+  permit2Authorization: z.object({
+    deadline: atomicAmount,
+    from: address,
+    nonce: atomicAmount,
+    permitted: z.object({
+      amount: atomicAmount,
+      token: address,
+    }),
+    spender: address,
+    witness: z.object({
+      to: address,
+      validAfter: atomicAmount,
+    }),
+  }),
+  signature: z.signature(),
+})
+
+/** Permit2 payload for exact EVM payments. */
+export type ExactPermit2Payload = z.infer<typeof ExactPermit2PayloadSchema>
+
+/** Exact EVM payment payload body. */
+export const ExactPayloadSchema = z.union([ExactEip3009PayloadSchema, ExactPermit2PayloadSchema])
+
+/** Exact EVM payment payload body. */
+export type ExactPayload = z.infer<typeof ExactPayloadSchema>
+
+/** x402 v2 payment payload. */
+export const PaymentPayloadSchema = z.object({
+  accepted: PaymentRequirementsSchema,
+  extensions: z.optional(ExtensionsSchema),
+  payload: ExactPayloadSchema,
+  resource: z.optional(ResourceInfoSchema),
+  x402Version: z.literal(2),
+})
+
+/** x402 v2 payment payload. */
+export type PaymentPayload = z.infer<typeof PaymentPayloadSchema>
+
+/** Facilitator verification response. */
+export const VerifyResponseSchema = z.object({
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extra: z.optional(z.record(z.string(), z.unknown())),
+  invalidMessage: z.optional(z.string()),
+  invalidReason: z.optional(z.string()),
+  isValid: z.boolean(),
+  payer: z.optional(z.string()),
+})
+
+/** Facilitator verification response. */
+export type VerifyResponse = z.infer<typeof VerifyResponseSchema>
+
+/** Facilitator settlement response and x402 `PAYMENT-RESPONSE` body. */
+export const SettleResponseSchema = z.object({
+  amount: z.optional(atomicAmount),
+  errorMessage: z.optional(z.string()),
+  errorReason: z.optional(z.string()),
+  // Response extension data is shaped by each extension, unlike PAYMENT-REQUIRED's { info, schema }.
+  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extra: z.optional(z.record(z.string(), z.unknown())),
+  network: nonEmptyString,
+  payer: z.optional(z.string()),
+  success: z.boolean(),
+  transaction: z.string(),
+})
+
+/** Facilitator settlement response and x402 `PAYMENT-RESPONSE` body. */
+export type SettleResponse = z.infer<typeof SettleResponseSchema>
+
+/** One payment kind a facilitator supports, from `GET /supported`. */
+export const SupportedKindSchema = z.object({
+  extra: z.optional(z.record(z.string(), z.unknown())),
+  network: nonEmptyString,
+  scheme: nonEmptyString,
+  x402Version: z.number(),
+})
+
+/** One payment kind a facilitator supports, from `GET /supported`. */
+export type SupportedKind = z.infer<typeof SupportedKindSchema>
+
+/** Facilitator `GET /supported` response. */
+export const SupportedResponseSchema = z.object({
+  extensions: z.optional(z.array(z.string())),
+  kinds: z.array(SupportedKindSchema),
+  signers: z.optional(z.record(z.string(), z.array(z.string()))),
+})
+
+/** Facilitator `GET /supported` response. */
+export type SupportedResponse = z.infer<typeof SupportedResponseSchema>
+
+/** x402 facilitator client interface used by server exact config. */
+export type Facilitator = {
+  settle: (
+    paymentPayload: PaymentPayload,
+    paymentRequirements: PaymentRequirements,
+  ) => Promise<SettleResponse>
+  verify: (
+    paymentPayload: PaymentPayload,
+    paymentRequirements: PaymentRequirements,
+  ) => Promise<VerifyResponse>
+  /**
+   * Lists the payment kinds the facilitator supports (`GET /supported`). Optional: needed only to
+   * read a `payTo` the facilitator publishes in `kinds[].extra.payTo`.
+   */
+  supported?: (() => Promise<SupportedResponse>) | undefined
+}
+
+/**
+ * Headers an HTTP facilitator client sends with each request, keyed by facilitator path, the
+ * shape `createAuthHeaders` returns in `@x402/core`'s `FacilitatorConfig`. A path left out
+ * sends no extra headers.
+ */
+export type FacilitatorPathHeaders = {
+  settle?: Record<string, string> | undefined
+  supported?: Record<string, string> | undefined
+  verify?: Record<string, string> | undefined
+}
+
+/**
+ * Headers an HTTP facilitator client sends: either a flat record sent on every request, or a
+ * {@link FacilitatorPathHeaders} object keyed by path. A value counts as per-path only when it has
+ * at least one key, every key is `verify`, `settle` or `supported`, and every value is an object;
+ * anything else is a flat record.
+ */
+export type FacilitatorHeaders = Record<string, string> | FacilitatorPathHeaders
+
+/**
+ * An HTTP facilitator that needs authentication, in the shape `@x402/core`'s
+ * `HTTPFacilitatorClient` takes, so one config works with both SDKs.
+ *
+ * @example
+ * ```ts
+ * const facilitator = {
+ *   url: 'https://facilitator.example',
+ *   headers: async () => ({ Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }),
+ * }
+ * ```
+ */
+export type FacilitatorConfig = {
+  /** Base URL of the facilitator. */
+  url: string
+  /**
+   * Headers to send, such as an API key: a flat record for every request, or an object keyed by
+   * `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns in `@x402/core`). A
+   * function is called before every request, so it can refresh short-lived tokens.
+   */
+  headers?:
+    | FacilitatorHeaders
+    | (() => FacilitatorHeaders | Promise<FacilitatorHeaders>)
+    | undefined
+}
+
+/** Extracts x402 `PaymentRequirements` from a canonical exact request. */
+export function toPaymentRequirements(request: ExactRequest): PaymentRequirements {
+  const { extensions: _extensions, resource: _resource, ...paymentRequirements } = request
+  return PaymentRequirementsSchema.parse(paymentRequirements)
+}
