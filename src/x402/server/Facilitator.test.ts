@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import { FacilitatorResponseError } from '../../Errors.js'
-import type * as Types from '../Types.js'
+import type * as Types from '../../internal/x402/Types.js'
 import * as Facilitator from './Facilitator.js'
 
 const paymentRequirements = {
