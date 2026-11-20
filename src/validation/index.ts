@@ -5,6 +5,7 @@ export type {
   EndpointSpec,
   EndpointValidationResult,
   PathParameter,
+  PaymentValidator,
   ValidateEvent,
   ValidateOptions,
   ValidateResult,
