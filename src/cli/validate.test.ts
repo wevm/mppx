@@ -1573,6 +1573,35 @@ describe('validateStream: custom payment validator', () => {
   test('reports failure when a validator says so', async () => {
     const event = await paymentEvent(async () => ({ results: [], succeeded: false }))
     expect(event.succeeded).toBe(false)
+    expect(event.results).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+  })
+
+  test('validate() keeps the succeeded flag and counts a reported failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const run = async (succeeded: boolean) =>
+      validate({
+        url: (await mppServer(makeChallenge())).url,
+        payment: async () => ({
+          results: [{ severity: 'pass', label: 'Paid with my wallet' }],
+          succeeded,
+        }),
+      })
+
+    const failed = await run(false)
+    expect(failed.endpoints[0]!.paymentSucceeded).toBe(false)
+    expect(failed.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(failed.summary.failed).toBeGreaterThan(0)
+
+    const passed = await run(true)
+    expect(passed.endpoints[0]!.paymentSucceeded).toBe(true)
+    expect(passed.endpoints[0]!.payment).not.toContainEqual(
+      expect.objectContaining({ label: 'Payment: failed' }),
+    )
+    expect(passed.summary.failed).toBe(failed.summary.failed - 1)
   })
 
   test('treats a passing success check as succeeded when only checks are returned', async () => {
