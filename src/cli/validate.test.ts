@@ -1553,3 +1553,31 @@ describe('validate: live mppx server', () => {
     expect(output).not.toContain('Payment request changed on retry')
   })
 })
+
+describe('validateStream: custom payment validator', () => {
+  async function paymentEvent(payment: import('../validation/index.js').PaymentValidator) {
+    const { validateStream } = await import('../validation/index.js')
+    const server = await mppServer(makeChallenge())
+    for await (const event of validateStream({ url: server.url, payment }))
+      if (event.phase === 'payment') return event
+    throw new Error('no payment event')
+  }
+
+  test('uses the succeeded flag a validator returns', async () => {
+    const results = [{ severity: 'pass' as const, label: 'Paid with my wallet' }]
+    const event = await paymentEvent(async () => ({ results, succeeded: true }))
+    expect(event.results).toEqual(results)
+    expect(event.succeeded).toBe(true)
+  })
+
+  test('reports failure when a validator says so', async () => {
+    const event = await paymentEvent(async () => ({ results: [], succeeded: false }))
+    expect(event.succeeded).toBe(false)
+  })
+
+  test('treats a passing success check as succeeded when only checks are returned', async () => {
+    const { paymentSuccessLabel } = await import('../validation/index.js')
+    const event = await paymentEvent(async () => [{ severity: 'pass', label: paymentSuccessLabel }])
+    expect(event.succeeded).toBe(true)
+  })
+})
