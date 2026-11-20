@@ -263,6 +263,8 @@ export type SessionMethodDetails = {
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
   operator?: Address | undefined
+  /** Whether the server accepts TIP-1166 configurable account (`0x05`) vouchers. */
+  configurableVouchers?: boolean | undefined
   /** Tempo session protocol version for this challenge. */
   sessionProtocol?: Constants.SessionProtocol | undefined
 }
@@ -352,6 +354,7 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
+    (value.configurableVouchers === undefined || typeof value.configurableVouchers === 'boolean') &&
     (value.sessionProtocol === undefined || value.sessionProtocol === Constants.SessionProtocols.v2)
   )
 }
