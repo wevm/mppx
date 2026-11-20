@@ -11,7 +11,13 @@ import {
   validateLlmsDoc,
 } from './discovery.js'
 import type { CheckResult, EndpointSpec, PathParameter } from './helpers.js'
-import { isValidIntegerAmount, parseEndpointArg, resolveBodyForEndpoint, skip } from './helpers.js'
+import {
+  fail,
+  isValidIntegerAmount,
+  parseEndpointArg,
+  resolveBodyForEndpoint,
+  skip,
+} from './helpers.js'
 import { missingDiscoverySuggestion } from './messages.js'
 
 export { buildUrl }
@@ -75,6 +81,8 @@ export type EndpointValidationResult = {
   challenge: CheckResult[]
   errorHandling: CheckResult[]
   payment: CheckResult[]
+  /** Whether the payment succeeded. Absent when the payment phase did not run. */
+  paymentSucceeded?: boolean | undefined
 }
 
 export type ValidateResult = {
@@ -209,10 +217,23 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
           interactive: options.interactive,
           ...(onResults && { onResults }),
         })
-        const paymentResults = Array.isArray(validation) ? validation : validation.results
+        let paymentResults = Array.isArray(validation) ? validation : validation.results
         const succeeded = Array.isArray(validation)
           ? validation.some((r) => r.severity === 'pass' && r.label === paymentSuccessLabel)
           : validation.succeeded
+        // A validator that reports failure without a failing check still fails the run.
+        if (
+          !Array.isArray(validation) &&
+          !succeeded &&
+          !paymentResults.some((r) => r.severity === 'fail')
+        )
+          paymentResults = [
+            ...paymentResults,
+            fail(
+              'Payment: failed',
+              'the payment validator reported that the payment did not succeed',
+            ),
+          ]
         yield { phase: 'payment', endpoint, results: paymentResults, succeeded }
       }
     }
@@ -255,7 +276,10 @@ export async function validate(options: ValidateOptions): Promise<ValidateResult
         if (current) current.errorHandling = event.results
         break
       case 'payment':
-        if (current) current.payment = event.results
+        if (current) {
+          current.payment = event.results
+          if (options.payment) current.paymentSucceeded = event.succeeded
+        }
         break
     }
   }
