@@ -115,6 +115,11 @@ export type OpenChannelStateParameters = {
   escrow: Address
   /** Transaction-bound expiring nonce hash from the open call. */
   expiringNonceHash: Hex
+  /**
+   * TIP-1166 signer config commitment the escrow recorded at open (`OpeningCommitmentRecorded`).
+   * Omitted when the signer had no config commitment.
+   */
+  openingCommitment?: Hex | undefined
   /** Initial or highest accepted cumulative voucher amount. */
   cumulativeAmount: bigint
   /** Voucher signature for `cumulativeAmount`. */
@@ -240,6 +245,12 @@ export type VerifyAndAcceptVoucherParameters = {
   methodDetails: SessionMethodDetails
   /** Minimum allowed voucher delta in raw units. */
   minVoucherDelta: bigint
+  /**
+   * Whether to accept TIP-1166 configurable account (`0x05`) vouchers, checked against the
+   * channel's `openingCommitment`.
+   * @default false
+   */
+  configurableVouchers?: boolean | undefined
   /** Whether this presentation must advance the accepted voucher. */
   requireAdvance?: boolean | undefined
   /** Server channel store. */
@@ -289,6 +300,11 @@ export interface PrecompileBackendState {
   operator: Address
   /** Salt used to derive the channel's identity. */
   salt: Hex
+  /**
+   * TIP-1166 signer config commitment the escrow recorded at open. Missing (as in records stored
+   * before TIP-1166) means the signer had no config commitment, so the opening commitment is zero.
+   */
+  openingCommitment?: Hex | undefined
 }
 
 /** Common persisted state for every session channel backend. */
@@ -489,7 +505,7 @@ export function resolvePrecompileChannelIdentity(
 export function openChannelState(parameters: OpenChannelStateParameters): State {
   const { authorizedSigner, chainId, channelId, current, descriptor, escrow, expiringNonceHash } =
     parameters
-  const { state } = parameters
+  const { openingCommitment, state } = parameters
   const { cumulativeAmount, signature } = parameters
   const highestVoucher = resolveHighestVoucher({
     channelId,
@@ -508,6 +524,7 @@ export function openChannelState(parameters: OpenChannelStateParameters): State 
       escrow,
       expiringNonceHash,
     }),
+    ...(openingCommitment ? { openingCommitment } : {}),
     closeRequestedAt: onChain.closeRequestedAt,
     deposit: onChain.deposit,
     settledOnChain: onChain.settledOnChain,
@@ -759,6 +776,32 @@ export function finalizeClosedChannelState(
   }
 }
 
+/**
+ * Returns the TIP-1166 opening commitment stored for a precompile channel. Also reads the
+ * `signerSnapshot` key that state stored before it was renamed to `openingCommitment`.
+ */
+export function resolveOpeningCommitment(channel: State): Hex | undefined {
+  if (!isPrecompileState(channel)) return undefined
+  return (
+    channel.openingCommitment ?? (channel as { signerSnapshot?: Hex | undefined }).signerSnapshot
+  )
+}
+
+/**
+ * Resolves the TIP-1166 voucher verification options for a stored channel. Without
+ * `configurableVouchers`, only primitive voucher signatures are accepted, as before TIP-1166.
+ */
+export function resolveVoucherOptions(
+  channel: State,
+  configurableVouchers: boolean | undefined,
+): Voucher.VerifyVoucherOptions {
+  const openingCommitment = resolveOpeningCommitment(channel)
+  return {
+    ...(configurableVouchers ? { configurable: true } : {}),
+    ...(openingCommitment ? { openingCommitment } : {}),
+  }
+}
+
 /** Loads a precompile-backed channel or throws a verification error. */
 export async function loadPrecompileChannel(
   parameters: LoadPrecompileChannelParameters,
@@ -778,7 +821,8 @@ export async function loadPrecompileChannel(
 export async function validateVoucher(
   parameters: ValidateVoucherParameters,
 ): Promise<VoucherValidation> {
-  const { minVoucherDelta, channel, voucher, channelState, methodDetails } = parameters
+  const { configurableVouchers, minVoucherDelta, channel, voucher, channelState, methodDetails } =
+    parameters
 
   validateChannelState(channelState)
   if (voucher.cumulativeAmount > channelState.deposit)
@@ -792,6 +836,7 @@ export async function validateVoucher(
     methodDetails.chainId,
     voucher,
     channel.authorizedSigner,
+    resolveVoucherOptions(channel, configurableVouchers),
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
 
