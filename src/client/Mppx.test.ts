@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
-import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
+import * as x402_ChallengeBrand from '../internal/x402/ChallengeBrand.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
 
 const realm = 'api.example.com'
