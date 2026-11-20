@@ -2,10 +2,10 @@ import type { Account } from 'viem'
 import { getAddress, parseUnits } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
+import * as Header from '../../internal/x402/Header.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as Assets from '../Assets.js'
-import * as Header from '../Header.js'
 import * as RouteBinding from '../internal/RouteBinding.js'
-import * as Types from '../Types.js'
 
 /**
  * Creates an x402 exact `PAYMENT-SIGNATURE` credential.

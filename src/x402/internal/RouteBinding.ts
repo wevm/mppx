@@ -1,7 +1,7 @@
 import { Bytes, Hash } from 'ox'
 
+import type * as Types from '../../internal/x402/Types.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
-import type * as Types from '../Types.js'
 
 /** Computes the route-bound EIP-3009 nonce for an x402 exact payment. */
 export function nonce(parameters: {
