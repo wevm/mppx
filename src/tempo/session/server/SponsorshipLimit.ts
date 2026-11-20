@@ -2,6 +2,7 @@ import { Address, type Hex } from 'ox'
 import { KeyAuthorization, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 
 import type * as Store from '../../../Store.js'
+import * as ConfigurableAccount from '../../internal/configurable-account.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 
 /**
@@ -65,9 +66,16 @@ function verifiedSigner(
  * - a direct signature: its signer;
  * - an access key authorized in the same transaction: the account that signed the authorization,
  *   so fresh keys do not get a fresh quota;
- * - an access key authorized earlier: the key itself (its account link is only checked on chain).
+ * - an access key authorized earlier: the key itself (its account link is only checked on chain);
+ * - a configurable account signature: its account, only against `options.configCommitment`, the
+ *   account's on-chain config commitment (zero for an unregistered account, whose version-zero
+ *   config must derive it). Without it, a configurable signature proves no payer, since a
+ *   version-zero config's owners may have been rotated out.
  */
-export function verifiedPayer(serializedTransaction: string): Address.Address | null {
+export function verifiedPayer(
+  serializedTransaction: string,
+  options: { configCommitment?: Hex.Hex | undefined } = {},
+): Address.Address | null {
   if (!/^0x7[68][0-9a-fA-F]+$/.test(serializedTransaction)) return null
   try {
     const { from: _claimedSender, ...fields } = TxEnvelopeTempo.deserialize(
@@ -76,6 +84,17 @@ export function verifiedPayer(serializedTransaction: string): Address.Address | 
     const { signature } = fields
     if (!signature) return null
     const envelope = TxEnvelopeTempo.from(fields)
+    // A configurable account signature proves its account only against the account's on-chain
+    // commitment.
+    if (signature.type === 'configurable')
+      return options.configCommitment !== undefined &&
+        ConfigurableAccount.verify(signature, {
+          account: signature.account,
+          commitment: options.configCommitment,
+          payload: TxEnvelopeTempo.getSignPayload(envelope),
+        })
+        ? lower(signature.account)
+        : null
     if (signature.type !== 'keychain')
       return lower(verifiedSigner(TxEnvelopeTempo.getSignPayload(envelope), signature))
     // Keychain V2 signs over the account too: keccak256(0x04 || sigHash || userAddress).
@@ -93,6 +112,19 @@ export function verifiedPayer(serializedTransaction: string): Address.Address | 
     return lower(
       verifiedSigner(KeyAuthorization.getSignPayload(authorization), authorization.signature),
     )
+  } catch {
+    return null
+  }
+}
+
+/** Returns the account a transaction's configurable account signature names, or null. */
+function configurableAccount(serializedTransaction: string): Address.Address | null {
+  if (!/^0x7[68][0-9a-fA-F]+$/.test(serializedTransaction)) return null
+  try {
+    const { signature } = TxEnvelopeTempo.deserialize(
+      serializedTransaction as TxEnvelopeTempo.Serialized,
+    )
+    return signature?.type === 'configurable' ? signature.account : null
   } catch {
     return null
   }
@@ -136,11 +168,18 @@ export async function limitFeePayer<feePayer>(parameters: {
   feePayer: feePayer | undefined
   limit: Parameters | undefined
   payload: SessionCredentialPayload
+  /** Reads an account's on-chain TIP-1107 config commitment, to verify a configurable payer. */
+  readConfigCommitment?: ((account: Address.Address) => Promise<Hex.Hex>) | undefined
 }): Promise<feePayer | undefined> {
-  const { chainId, feePayer, limit, payload } = parameters
+  const { chainId, feePayer, limit, payload, readConfigCommitment } = parameters
   if (!feePayer || !limit) return feePayer
   if (payload.action !== 'open' && payload.action !== 'topUp') return feePayer
-  const payer = verifiedPayer(payload.transaction)
+  const account = configurableAccount(payload.transaction)
+  const configCommitment =
+    account && readConfigCommitment
+      ? await readConfigCommitment(account).catch(() => undefined)
+      : undefined
+  const payer = verifiedPayer(payload.transaction, { configCommitment })
   if (!payer) return undefined
   const allowed = await reserve(limit.store, {
     action: payload.action,

@@ -19,6 +19,7 @@ import {
   InvalidSignatureError,
   VerificationFailedError,
 } from '../../../Errors.js'
+import * as ConfigurableAccount from '../../internal/configurable-account.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
 import * as Chain from '../precompile/Chain.js'
 import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
@@ -29,6 +30,7 @@ import {
   type ChannelDescriptor,
   type SessionCredentialPayload,
   type SessionReceipt,
+  type SignedVoucher,
 } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
@@ -49,6 +51,30 @@ export function authorizedSigner(descriptor: Channel.ChannelDescriptor): Address
   return isAddressEqual(descriptor.authorizedSigner, zeroAddress)
     ? descriptor.payer
     : descriptor.authorizedSigner
+}
+
+/**
+ * Verifies an open credential's initial voucher before its open lands, when the TIP-1166 signer
+ * opening commitment is not known yet: the escrow records `descriptor.salt` as the opening
+ * commitment when the signer has a config commitment, and none otherwise. After the open, the
+ * voucher is verified again against the opening commitment from the receipt.
+ */
+function verifyOpenVoucher(
+  escrow: Address,
+  chainId: number,
+  voucher: SignedVoucher,
+  descriptor: Channel.ChannelDescriptor,
+  configurableVouchers: boolean | undefined,
+): boolean {
+  const signer = authorizedSigner(descriptor)
+  if (!configurableVouchers) return Voucher.verifyVoucher(escrow, chainId, voucher, signer)
+  return (
+    Voucher.verifyVoucher(escrow, chainId, voucher, signer, { configurable: true }) ||
+    Voucher.verifyVoucher(escrow, chainId, voucher, signer, {
+      configurable: true,
+      openingCommitment: descriptor.salt,
+    })
+  )
 }
 
 /** Asserts that a credential payload includes a TIP-1034 descriptor. */
@@ -172,11 +198,13 @@ export async function assertCredentialSourceIsPayer(
     })
   let valid = false
   try {
-    const signer = verifiedPayer(serializedTransaction)
     const { signature, keyAuthorization } = TxEnvelopeTempo.deserialize(
       serializedTransaction as TxEnvelopeTempo.Serialized,
     )
-    if (signer && signature?.type !== 'keychain') valid = isAddressEqual(signer, payer)
+    const signer = signature?.type === 'configurable' ? null : verifiedPayer(serializedTransaction)
+    if (signature?.type === 'configurable')
+      valid = await verifyConfigurableTransactionPayer(serializedTransaction, payer, client)
+    else if (signer && signature?.type !== 'keychain') valid = isAddressEqual(signer, payer)
     else if (
       signer &&
       signature?.type === 'keychain' &&
@@ -202,6 +230,32 @@ export async function assertCredentialSourceIsPayer(
     throw new VerificationFailedError({
       reason: 'credential source is not authenticated by transaction signature',
     })
+}
+
+/**
+ * Authenticates a TIP-1107 configurable account transaction signature as `payer`: the envelope must
+ * name `payer`, its config must match the payer's on-chain commitment (or, when the payer has none,
+ * be the version-zero config that derives its address, which the transaction registers), and its
+ * owner approvals over the transaction's sign payload must reach the threshold.
+ */
+async function verifyConfigurableTransactionPayer(
+  serializedTransaction: Hex,
+  payer: Address,
+  client: Chain.TransactionClient,
+): Promise<boolean> {
+  if (!/^0x7[68][0-9a-fA-F]+$/.test(serializedTransaction)) return false
+  const { from: _claimedSender, ...fields } = TxEnvelopeTempo.deserialize(
+    serializedTransaction as TxEnvelopeTempo.Serialized,
+  )
+  const { signature } = fields
+  if (signature?.type !== 'configurable') return false
+  if (!isAddressEqual(signature.account, payer)) return false
+  const commitment = await Actions.accounts.getConfigCommitment(client, { account: payer })
+  return ConfigurableAccount.verify(signature, {
+    account: payer,
+    commitment,
+    payload: TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(fields)),
+  })
 }
 
 function readCredentialSourceAddress(source: string | undefined, chainId: number): Address {
@@ -402,6 +456,12 @@ export type BroadcastCredentialPayloadParameters = {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Optional fee token override for sponsored management and settlement transactions. */
   feeToken?: Address | undefined
+  /**
+   * Whether to accept TIP-1166 configurable account (`0x05`) vouchers and close authorizations.
+   * See `session.Parameters.configurableVouchers`.
+   * @default false
+   */
+  configurableVouchers?: boolean | undefined
   /** Last successful on-chain refresh timestamp per channel ID. */
   lastOnChainVerified: Map<Hex, number>
   /** Minimum allowed voucher delta in raw units. */
@@ -466,6 +526,7 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'channelStateTtl'
   | 'chainId'
   | 'client'
+  | 'configurableVouchers'
   | 'credentialSource'
   | 'escrow'
   | 'expectedOperator'
@@ -570,11 +631,12 @@ async function validateOpenCredential(
   )
   if (cumulativeAmount > transaction.openDeposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
-  const valid = await Voucher.verifyVoucher(
+  const valid = verifyOpenVoucher(
     escrow,
     chainId,
     { channelId, cumulativeAmount, signature: payload.signature },
-    authorizedSigner(transaction.descriptor),
+    transaction.descriptor,
+    parameters.configurableVouchers,
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   await Chain.simulateCredentialTransaction({
@@ -696,6 +758,7 @@ async function validateVoucherCredential(
     channel,
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
+    configurableVouchers: parameters.configurableVouchers,
     minVoucherDelta,
     voucher,
   })
@@ -787,6 +850,10 @@ async function validateCloseCredential(
     chainId,
     { channelId, cumulativeAmount, signature: payload.closeSignature },
     [channel.payer, channel.authorizedSigner],
+    {
+      ...ChannelStore.resolveVoucherOptions(channel, parameters.configurableVouchers),
+      voucherSigner: channel.authorizedSigner,
+    },
   )
   if (!closeAuthorized)
     throw new InvalidSignatureError({ reason: 'invalid close authorization signature' })
@@ -809,6 +876,7 @@ async function validateCloseCredential(
     chainId,
     { channelId, cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
+    ChannelStore.resolveVoucherOptions(channel, parameters.configurableVouchers),
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   const captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
@@ -922,18 +990,36 @@ async function handleOpenCredential(
       )
       if (cumulativeAmount > prepared.openDeposit)
         throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
-      const valid = await Voucher.verifyVoucher(
+      const valid = verifyOpenVoucher(
         escrow,
         chainId,
         { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
-        authorizedSigner(prepared.descriptor),
+        prepared.descriptor,
+        parameters.configurableVouchers,
       )
       if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
     },
   })
-  const { descriptor, state } = result
+  const { descriptor, openingCommitment, state } = result
   assertSameDescriptor(descriptor, payload.descriptor)
   validateChannelState(state, request.amount)
+  // The open voucher was checked against both possible opening commitments before broadcast; always check it
+  // again against the one the escrow recorded. With none (no OpeningCommitmentRecorded in the receipt),
+  // this applies the zero-commitment rules: a primitive signature recovering to the signer, or a
+  // configurable signature whose version-zero config derives the signer's address.
+  if (
+    !Voucher.verifyVoucher(
+      escrow,
+      chainId,
+      { channelId, cumulativeAmount, signature: payload.signature },
+      authorizedSigner(descriptor),
+      {
+        configurable: parameters.configurableVouchers,
+        ...(openingCommitment ? { openingCommitment } : {}),
+      },
+    )
+  )
+    throw new InvalidSignatureError({ reason: 'invalid voucher signature for opening commitment' })
 
   const updated = await store.updateChannel(channelId, (current) => {
     if (
@@ -952,6 +1038,7 @@ async function handleOpenCredential(
       descriptor,
       escrow,
       expiringNonceHash: result.expiringNonceHash,
+      ...(openingCommitment ? { openingCommitment } : {}),
       cumulativeAmount,
       signature: payload.signature,
       state,
@@ -1124,6 +1211,7 @@ async function handleVoucherCredential(
       voucher,
       channelState: storedChannelState(channel),
       methodDetails: { chainId, escrowContract: escrow },
+      configurableVouchers: parameters.configurableVouchers,
       chargeAmount,
       prepaidRefundKey: parameters.prepaidRefundKey,
       onCharged,
@@ -1154,6 +1242,7 @@ async function handleVoucherCredential(
     voucher,
     channelState,
     methodDetails: { chainId, escrowContract: escrow },
+    configurableVouchers: parameters.configurableVouchers,
     verifiedAt: startedAt,
     chargeAmount,
     prepaidRefundKey: parameters.prepaidRefundKey,
@@ -1183,8 +1272,29 @@ async function acceptVoucherInOneUpdate(
     store,
   } = parameters
   const voucherStateMaxAge = parameters.voucherStateMaxAge ?? 0
-  const valid = await Voucher.verifyVoucher(escrow, chainId, voucher, authorizedSigner(descriptor))
-  if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  // Configurable account vouchers depend on the stored TIP-1166 opening commitment, so they are
+  // verified inside the update, against the stored channel.
+  if (!parameters.configurableVouchers) {
+    const valid = await Voucher.verifyVoucher(
+      escrow,
+      chainId,
+      voucher,
+      authorizedSigner(descriptor),
+    )
+    if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  }
+  // Compare-and-swap stores rerun the update after a conflicting write, so verify each distinct
+  // signer and options once per request.
+  const verified = new Map<string, boolean>()
+  const verifyStoredVoucher = (signer: Address, options: Voucher.VerifyVoucherOptions) => {
+    const key = `${signer.toLowerCase()}:${options.configurable ? 1 : 0}:${options.openingCommitment ?? ''}`
+    let valid = verified.get(key)
+    if (valid === undefined) {
+      valid = Voucher.verifyVoucher(escrow, chainId, voucher, signer, options)
+      verified.set(key, valid)
+    }
+    return valid
+  }
   const outcome = await store.updateChannelResult!<
     { channel: ChannelStore.State; charged: boolean } | undefined
   >(voucher.channelId, (current) => {
@@ -1202,6 +1312,14 @@ async function acceptVoucherInOneUpdate(
     )
     assertCredentialSourceCanSpend({ chainId, channel: current, source: credentialSource })
     if (current.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+    if (
+      (parameters.configurableVouchers || ChannelStore.resolveOpeningCommitment(current)) &&
+      !verifyStoredVoucher(
+        current.authorizedSigner,
+        ChannelStore.resolveVoucherOptions(current, parameters.configurableVouchers),
+      )
+    )
+      throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
     if (
       !canUseStoredChannelState({
         channel: current,
@@ -1334,6 +1452,10 @@ async function handleCloseCredential(
     chainId,
     { channelId, cumulativeAmount, signature: payload.closeSignature },
     [channel.payer, channel.authorizedSigner],
+    {
+      ...ChannelStore.resolveVoucherOptions(channel, parameters.configurableVouchers),
+      voucherSigner: channel.authorizedSigner,
+    },
   )
   if (!closeAuthorized)
     throw new InvalidSignatureError({ reason: 'invalid close authorization signature' })
@@ -1356,6 +1478,7 @@ async function handleCloseCredential(
     chainId,
     { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
+    ChannelStore.resolveVoucherOptions(channel, parameters.configurableVouchers),
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)

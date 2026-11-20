@@ -9,6 +9,7 @@ import {
 
 import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
+import * as Errors from '../../../Errors.js'
 import * as Account from '../../../viem/Account.js'
 import { assertAllowedChainId, assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
@@ -24,6 +25,7 @@ import {
   createOpenPayload,
   createTopUpPayload,
   createVoucherPayload,
+  isConfigurableSigner,
   isSameAddress,
   resolveAuthorizedSigner,
   resolveEscrow,
@@ -217,6 +219,8 @@ export type ClientSessionMethodDetails = {
   feeToken?: Address | undefined
   /** Channel operator address advertised by the server. */
   operator?: Address | undefined
+  /** Whether the server accepts TIP-1166 configurable account (`0x05`) vouchers. */
+  configurableVouchers?: boolean | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
   sessionSnapshot?: SessionSnapshot | undefined
 }
@@ -286,6 +290,8 @@ export type ChallengeContext = {
   challenge: Challenge.Challenge
   chainId: number
   client: Client
+  /** Whether the server accepts TIP-1166 configurable account (`0x05`) vouchers. */
+  configurableVouchers?: boolean | undefined
   escrow: Address
   feePayer?: boolean | undefined
   feeToken?: Address | undefined
@@ -341,6 +347,8 @@ export type HydrateSessionSnapshotParameters = {
   snapshot: SessionSnapshot
   /** Optional state reader for deterministic tests. */
   readChannelState?: ReadReusableChannelState | undefined
+  /** Optional escrow voucher check (`verifyVoucher` view) for deterministic tests. */
+  verifyVoucherOnChain?: typeof Chain.verifyVoucher | undefined
 }
 
 /** Validated client channel state reconstructed without local persistence. */
@@ -413,6 +421,10 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
     feeToken: readOptionalAddress(methodDetails.feeToken),
     operator: readOptionalAddress(methodDetails.operator),
+    configurableVouchers:
+      typeof methodDetails.configurableVouchers === 'boolean'
+        ? methodDetails.configurableVouchers
+        : undefined,
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
       Constants.MethodDetailKeys.sessionSnapshot,
@@ -459,6 +471,9 @@ export async function resolveChallengeContext(
     challenge,
     chainId,
     client,
+    ...(methodDetails.configurableVouchers !== undefined
+      ? { configurableVouchers: methodDetails.configurableVouchers }
+      : {}),
     escrow,
     feePayer: methodDetails.feePayer,
     feeToken: methodDetails.feeToken,
@@ -568,7 +583,13 @@ export function resolveRecoveredCumulative(
 export async function hydrateSessionSnapshot(
   parameters: HydrateSessionSnapshotParameters,
 ): Promise<HydratedSessionSnapshot> {
-  const { account, client, readChannelState, snapshot } = parameters
+  const {
+    account,
+    client,
+    readChannelState,
+    snapshot,
+    verifyVoucherOnChain = Chain.verifyVoucher,
+  } = parameters
   const signed = snapshot.highestVoucher
   if (!signed) throw new Error('session snapshot is missing its highest signed voucher')
   if (signed.channelId.toLowerCase() !== snapshot.channelId.toLowerCase())
@@ -587,19 +608,36 @@ export async function hydrateSessionSnapshot(
   if (snapshotSettled > snapshotDeposit)
     throw new Error('session snapshot settled amount exceeds deposit')
 
-  if (
-    !Voucher.verifyVoucher(
+  const highestVoucher = {
+    channelId: signed.channelId,
+    cumulativeAmount: voucherCumulative,
+    signature: signed.signature,
+  }
+  const voucherSigner = Channel.resolveAuthorizedSigner(snapshot.descriptor)
+  // A configurable account signer's vouchers carry its config: the one recorded at open (the
+  // channel salt) when it had a commitment then, else its version-zero config. The salt alone
+  // cannot show that the channel opened with no commitment, so only the escrow's `verifyVoucher`
+  // view, which knows the opening commitment, may accept a voucher that does not match the salt.
+  const configurable = isConfigurableSigner(account)
+  const valid =
+    Voucher.verifyVoucher(
       snapshot.escrow,
       snapshot.chainId,
-      {
-        channelId: signed.channelId,
-        cumulativeAmount: voucherCumulative,
-        signature: signed.signature,
-      },
-      Channel.resolveAuthorizedSigner(snapshot.descriptor),
-    )
-  )
-    throw new Error('session snapshot highest voucher signature is invalid')
+      highestVoucher,
+      voucherSigner,
+      configurable ? { configurable: true, openingCommitment: snapshot.descriptor.salt } : {},
+    ) ||
+    (configurable &&
+      (await verifyVoucherOnChain(
+        client,
+        {
+          descriptor: snapshot.descriptor,
+          cumulativeAmount: voucherCumulative,
+          signature: highestVoucher.signature,
+        },
+        snapshot.escrow,
+      ).catch(() => false)))
+  if (!valid) throw new Error('session snapshot highest voucher signature is invalid')
 
   const reusable = await resolveReusableChannel({
     channelId: snapshot.channelId,
@@ -745,6 +783,10 @@ async function open(
   autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
   const { account, resolved } = plan
+  // Servers without TIP-1166 support reject configurable account vouchers, so fail before the
+  // open transaction locks a deposit.
+  if (isConfigurableSigner(account) && resolved.configurableVouchers !== true)
+    throw new Errors.ConfigurableVouchersUnsupportedError({ signer: account.address })
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
     maxDeposit: plan.maxDeposit,

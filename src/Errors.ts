@@ -457,6 +457,87 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * A `tempo/session` client would open a channel whose vouchers a TIP-1166 configurable account
+ * signs, but the server's challenge does not advertise `configurableVouchers`, so the server
+ * would reject those vouchers. The client stops before it locks a deposit.
+ *
+ * Pay with a primitive account or access key, or ask the server operator to enable
+ * `configurableVouchers` once the chain runs T15.
+ */
+export class ConfigurableVouchersUnsupportedError extends Error {
+  override readonly name = 'ConfigurableVouchersUnsupportedError'
+
+  /** Configurable account that would sign the channel's vouchers. */
+  readonly signer: `0x${string}`
+
+  constructor(options: ConfigurableVouchersUnsupportedError.Options) {
+    const { signer } = options
+    super(
+      `Configurable account ${signer} signs vouchers with TIP-1166 configurable account signatures, but the session challenge does not advertise \`configurableVouchers\`, so the channel was not opened.`,
+    )
+    this.signer = signer
+  }
+}
+
+export declare namespace ConfigurableVouchersUnsupportedError {
+  type Options = {
+    /** Configurable account that would sign the channel's vouchers. */
+    signer: `0x${string}`
+  }
+}
+
+/**
+ * A `tempo/session` top-up would revert because the channel signer's TIP-1166 config changed
+ * since the channel opened, so the client did not sign it.
+ *
+ * The escrow reverts a nonzero top-up with `SignerConfigChanged(signer)` when the config
+ * commitment recorded at open differs from the signer's current one, or with
+ * `RootKeyRetired(signer)` when the signer had no commitment at open and has one now. Vouchers
+ * already signed for the channel still settle, since the escrow checks them against the commitment
+ * recorded at open, but the channel takes no new funds: close it and open a new one. The
+ * simulation error is the `cause`.
+ */
+export class SignerConfigChangedError extends Error {
+  override readonly name = 'SignerConfigChangedError'
+
+  /** Channel whose signer config changed. */
+  readonly channelId: `0x${string}`
+  /** Escrow error that reverted the top-up. */
+  readonly reason: SignerConfigChangedError.Reason
+  /** Voucher signer of the channel. */
+  readonly signer: `0x${string}`
+
+  constructor(options: SignerConfigChangedError.Options) {
+    const { cause, channelId, reason, signer } = options
+    super(
+      `Signer ${signer} of channel ${channelId} changed its account config since the channel opened, so the top-up was not signed. Close the channel and open a new one.`,
+    )
+    this.channelId = channelId
+    this.reason = reason
+    this.signer = signer
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace SignerConfigChangedError {
+  /** `SignerConfigChanged`: the commitment recorded at open differs. `RootKeyRetired`: the signer had none at open. */
+  type Reason = 'SignerConfigChanged' | 'RootKeyRetired'
+
+  type Options = {
+    /** The simulation error. */
+    cause?: unknown
+    /** Channel whose signer config changed. */
+    channelId: `0x${string}`
+    /** Escrow error that reverted the top-up. */
+    reason: Reason
+    /** Voucher signer of the channel. */
+    signer: `0x${string}`
+  }
+}
+
+/**
  * The access key that signs a Tempo payment has less spending limit left than the payment needs,
  * so the client did not sign it.
  *

@@ -14,7 +14,7 @@ import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
-import type { ChannelEntry } from '../client/ChannelOps.js'
+import { resolveEscrow, type ChannelEntry } from '../client/ChannelOps.js'
 import {
   createChannelStore,
   deleteChannel,
@@ -525,6 +525,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!header) return undefined
     const snapshot = deserializeSessionSnapshot(header)
     Client.assertAllowedChainId(parameters.allowedChainIds, snapshot.chainId)
+    // The snapshot's escrow verifies its voucher and reports its deposit, so it must pass the
+    // same escrow policy as a challenge before any contract read.
+    resolveEscrow(
+      { request: { methodDetails: { escrow: snapshot.escrow } } },
+      parameters.escrow,
+      allowCustomEscrow,
+    )
     const client = await getClient({ chainId: snapshot.chainId })
     Client.assertChainId(client, snapshot.chainId)
     const defaultAccount = getAccount(client)

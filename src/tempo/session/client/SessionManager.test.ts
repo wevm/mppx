@@ -2783,6 +2783,48 @@ describe('allowedChainIds', () => {
     },
   )
 
+  test.each<{
+    name: string
+    options: Pick<sessionManager.Parameters, 'allowCustomEscrow' | 'escrow'>
+  }>([
+    { name: 'default policy', options: {} },
+    { name: 'escrow pin', options: { escrow: tip20ChannelEscrow, allowCustomEscrow: true } },
+  ])('rejects a bootstrap snapshot from a noncanonical escrow ($name)', async ({ options }) => {
+    const getClient = vi.fn(() => client)
+    const store = makeChannelStore()
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== 'HEAD') return makeOkResponse()
+      return new Response(null, {
+        status: 204,
+        headers: {
+          [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+            acceptedCumulative: '0',
+            chainId: 4217,
+            channelId: storedChannelId,
+            deposit: '10000000',
+            descriptor: storedDescriptor,
+            escrow: '0x000000000000000000000000000000000000dEaD',
+            requiredCumulative: '0',
+            settled: '0',
+            spent: '0',
+            units: 0,
+          }),
+        },
+      })
+    })
+    const manager = sessionManager({
+      account,
+      bootstrap: true,
+      getClient,
+      fetch,
+      channelStore: store.store,
+      ...options,
+    })
+    expect((await manager.fetch('https://api.example.com')).status).toBe(200)
+    expect(getClient).not.toHaveBeenCalled()
+    expect(store.set).not.toHaveBeenCalled()
+  })
+
   test.each([4217, undefined])(
     'signs vouchers on the allowed chain when advertised chain is %s',
     async (chainId) => {

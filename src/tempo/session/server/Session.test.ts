@@ -7,7 +7,7 @@ import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Secp256k1 } from 'ox'
-import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
+import { AccountConfig, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   createClient,
@@ -21,10 +21,11 @@ import {
   HttpRequestError,
   maxUint256,
   RpcRequestError,
+  toFunctionSelector,
   zeroAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Transaction } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
@@ -305,13 +306,14 @@ async function createOpenPayload(
     operator?: Address | undefined
     authorizedSigner?: Address | undefined
     feeToken?: Address | undefined
+    salt?: Hex | undefined
   } = {},
 ): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
   const account = parameters.account ?? payer
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const initialAmount = Types.uint96(parameters.initialAmount ?? 100n)
   const deposit = Types.uint96(parameters.deposit ?? 1_000n)
-  const salt = `0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex
+  const salt = parameters.salt ?? (`0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex)
   const operator = parameters.operator ?? zeroAddress
   const authorizedSigner = parameters.authorizedSigner ?? account.address
   const data = encodeFunctionData({
@@ -2101,6 +2103,382 @@ describe('precompile server session unit guardrails', () => {
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/invalid voucher signature/)
+  })
+
+  describe('TIP-1166 configurable account vouchers', () => {
+    const owners = [
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+    ]
+    const signer = TempoAccount.fromConfig({ owners, threshold: 2 })
+    const rotated = TempoAccount.fromConfig({
+      address: signer.address,
+      owners: [owners[0]!],
+      salt: signer.config!.salt,
+      threshold: 1,
+      version: 1,
+    })
+    const recordedCommitment = AccountConfig.getCommitment(rotated.config!)
+
+    async function verifyConfigurableVoucher(
+      parameters: {
+        configurableVouchers?: boolean | undefined
+        openingCommitment?: Hex | undefined
+        retryUpdates?: boolean | undefined
+        voucherSigner?: typeof signer | undefined
+      } = {},
+    ) {
+      const { method, store } = createServer({
+        channelStateTtl: Number.MAX_SAFE_INTEGER,
+        ...(parameters.retryUpdates ? { voucherStateMaxAge: Number.MAX_SAFE_INTEGER } : {}),
+        ...(parameters.configurableVouchers !== undefined
+          ? { configurableVouchers: parameters.configurableVouchers }
+          : {}),
+      })
+      const openPayload = await createOpenPayload({
+        authorizedSigner: signer.address,
+        initialAmount: 100n,
+      })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 100n,
+        ...(parameters.openingCommitment
+          ? { openingCommitment: parameters.openingCommitment }
+          : {}),
+      })
+      if (parameters.retryUpdates) {
+        // Runs every update twice, as a compare-and-swap store does after a conflicting write.
+        const update = store.updateChannelResult!.bind(store)
+        store.updateChannelResult = ((channelId: Hex, fn: (current: never) => never) =>
+          update(channelId, (current) => {
+            fn(current as never)
+            return fn(current as never)
+          })) as NonNullable<typeof store.updateChannelResult>
+      }
+      const voucherSigner = parameters.voucherSigner ?? rotated
+      const signature = await Voucher.signVoucher(
+        createClient({
+          account: voucherSigner,
+          chain: testChain,
+          transport: custom({ request: async () => null }),
+        }),
+        voucherSigner,
+        { channelId: openPayload.channelId, cumulativeAmount: 250n },
+        tip20ChannelEscrow,
+        chainId,
+      )
+      return method.verify({
+        credential: voucherCredential(
+          {
+            action: 'voucher',
+            channelId: openPayload.channelId,
+            cumulativeAmount: '250',
+            descriptor: openPayload.descriptor,
+            signature,
+          },
+          openPayload.channelId,
+        ),
+        request: verifyRequest(openPayload.channelId),
+      })
+    }
+
+    function openingCommitmentLog(payload: Extract<SessionCredentialPayload, { action: 'open' }>) {
+      return {
+        address: tip20ChannelEscrow,
+        data: encodeAbiParameters([{ type: 'bytes32' }], [payload.descriptor.salt]),
+        topics: encodeEventTopics({
+          abi: escrowAbi,
+          eventName: 'OpeningCommitmentRecorded',
+          args: { channelId: payload.channelId, signer: payload.descriptor.authorizedSigner },
+        }),
+      }
+    }
+
+    async function verifyOpen(parameters: {
+      configurableVouchers?: boolean | undefined
+      configurableVoucher: boolean
+      withOpeningCommitmentLog: boolean
+    }) {
+      const rawStore = Store.memory()
+      let openPayload = await createOpenPayload(
+        parameters.configurableVoucher
+          ? { authorizedSigner: signer.address, initialAmount: 100n, salt: recordedCommitment }
+          : { initialAmount: 100n },
+      )
+      if (parameters.configurableVoucher)
+        openPayload = {
+          ...openPayload,
+          signature: await Voucher.signVoucher(
+            createClient({
+              account: rotated,
+              chain: testChain,
+              transport: custom({ request: async () => null }),
+            }),
+            rotated,
+            { channelId: openPayload.channelId, cumulativeAmount: 100n },
+            tip20ChannelEscrow,
+            chainId,
+          ),
+        }
+      const method = session({
+        amount: '1',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        ...(parameters.configurableVouchers ? { configurableVouchers: true } : {}),
+        getClient: () =>
+          createServerClient([], payer, openPayload.channelId, {
+            descriptor: openPayload.descriptor,
+            receipt: transactionReceipt([
+              openedLog(openPayload),
+              ...(parameters.withOpeningCommitmentLog ? [openingCommitmentLog(openPayload)] : []),
+            ]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          }),
+      })
+      await method.verify({
+        credential: { challenge: makeChallenge(openPayload.channelId), payload: openPayload },
+        request: verifyRequest(openPayload.channelId),
+      })
+      const stored = await channelStore(rawStore).getChannel(openPayload.channelId)
+      if (!stored || !ChannelStore.isPrecompileState(stored))
+        throw new Error('expected precompile state')
+      return stored
+    }
+
+    test('stores the opening commitment from an open with a configurable account voucher', async () => {
+      const stored = await verifyOpen({
+        configurableVouchers: true,
+        configurableVoucher: true,
+        withOpeningCommitmentLog: true,
+      })
+      expect(stored.openingCommitment).toBe(recordedCommitment)
+    })
+
+    test('rejects an open voucher that needs an opening commitment the escrow did not record', async () => {
+      await expect(
+        verifyOpen({
+          configurableVouchers: true,
+          configurableVoucher: true,
+          withOpeningCommitmentLog: false,
+        }),
+      ).rejects.toThrow(/invalid voucher signature for opening commitment/)
+    })
+
+    test('rejects a primitive open voucher when the escrow recorded an opening commitment', async () => {
+      await expect(
+        verifyOpen({ configurableVoucher: false, withOpeningCommitmentLog: true }),
+      ).rejects.toThrow(/invalid voucher signature for opening commitment/)
+    })
+
+    test('stores no opening commitment for a primitive open without OpeningCommitmentRecorded', async () => {
+      const stored = await verifyOpen({
+        configurableVoucher: false,
+        withOpeningCommitmentLog: false,
+      })
+      expect(stored.openingCommitment).toBeUndefined()
+    })
+
+    /**
+     * Opens a channel through the server whose payer, open transaction signer and voucher signer
+     * are one configurable account, with `commitment` as the account's on-chain commitment.
+     */
+    async function verifyConfigurableOpen(parameters: { account: typeof signer; commitment: Hex }) {
+      const rawStore = Store.memory()
+      const registered = BigInt(parameters.commitment) !== 0n
+      // An unregistered version-zero account registers its config in the open transaction, so the
+      // escrow records that commitment; the salt equals the opening commitment either way.
+      const recorded = registered
+        ? parameters.commitment
+        : AccountConfig.getCommitment(parameters.account.config!)
+      const openPayload = await createOpenPayload({
+        account: parameters.account as never,
+        initialAmount: 100n,
+        salt: recorded,
+      })
+      const commitmentSelector = toFunctionSelector('getConfigCommitment(address)')
+      const commitmentReads: Hex[] = []
+      const method = session({
+        amount: '1',
+        chainId,
+        configurableVouchers: true,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () => {
+          const inner = createServerClient([], payer, openPayload.channelId, {
+            descriptor: openPayload.descriptor,
+            receipt: transactionReceipt([
+              openedLog(openPayload),
+              openingCommitmentLog(openPayload),
+            ]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          })
+          return createClient({
+            account: payer,
+            chain: testChain,
+            transport: custom(
+              {
+                async request(args) {
+                  const call = (args.params as [{ data?: Hex; to?: Hex }] | undefined)?.[0]
+                  if (args.method === 'eth_call' && call?.data?.startsWith(commitmentSelector)) {
+                    commitmentReads.push(call.data)
+                    return encodeAbiParameters([{ type: 'bytes32' }], [parameters.commitment])
+                  }
+                  return inner.request(args as never)
+                },
+              },
+              { retryCount: 0 },
+            ),
+          })
+        },
+      })
+      const result = await method.verify({
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload: openPayload,
+          source: `did:pkh:eip155:${chainId}:${parameters.account.address}`,
+        },
+        request: verifyRequest(openPayload.channelId),
+      })
+      const stored = await channelStore(rawStore).getChannel(openPayload.channelId)
+      return { commitmentReads, openPayload, result, stored }
+    }
+
+    test('opens a channel from an unregistered configurable account payer', async () => {
+      const { commitmentReads, openPayload, result, stored } = await verifyConfigurableOpen({
+        account: signer,
+        commitment: `0x${'00'.repeat(32)}`,
+      })
+      expect(SignatureEnvelope.deserialize(openPayload.signature).type).toBe('configurable')
+      expect(
+        TxEnvelopeTempo.deserialize(openPayload.transaction as TxEnvelopeTempo.Serialized).signature
+          ?.type,
+      ).toBe('configurable')
+      expect(commitmentReads.length).toBeGreaterThan(0)
+      expect(result).toMatchObject({ channelId: openPayload.channelId })
+      expect(stored?.payer.toLowerCase()).toBe(signer.address.toLowerCase())
+      expect(stored).toMatchObject({
+        openingCommitment: AccountConfig.getCommitment(signer.config!),
+      })
+    })
+
+    test('opens a channel from a registered configurable account payer with its current config', async () => {
+      const { openPayload, result, stored } = await verifyConfigurableOpen({
+        account: rotated,
+        commitment: recordedCommitment,
+      })
+      expect(result).toMatchObject({ channelId: openPayload.channelId })
+      expect(stored?.payer.toLowerCase()).toBe(rotated.address.toLowerCase())
+      expect(stored).toMatchObject({ openingCommitment: recordedCommitment })
+    })
+
+    test('rejects a configurable account open whose config does not match the on-chain commitment', async () => {
+      // A config other than the registered one does not authenticate the payer.
+      await expect(
+        verifyConfigurableOpen({
+          account: signer,
+          commitment: recordedCommitment,
+        }),
+      ).rejects.toThrow('credential source is not authenticated by transaction signature')
+      // Without a registered config, only the version-zero config that derives the payer does.
+      await expect(
+        verifyConfigurableOpen({
+          account: rotated,
+          commitment: `0x${'00'.repeat(32)}`,
+        }),
+      ).rejects.toThrow('credential source is not authenticated by transaction signature')
+    })
+
+    test('advertises configurableVouchers only when enabled', async () => {
+      const request = {
+        credential: null,
+        request: {
+          amount: '1',
+          currency: token,
+          decimals: 0,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never
+      expect(await createServer().method.request!(request)).not.toHaveProperty(
+        'configurableVouchers',
+      )
+      expect(
+        await createServer({ configurableVouchers: true }).method.request!(request),
+      ).toMatchObject({ configurableVouchers: true })
+    })
+
+    test('does not advertise configurableVouchers a route sets when the server has them off', async () => {
+      const request = {
+        credential: null,
+        request: {
+          amount: '1',
+          configurableVouchers: true,
+          currency: token,
+          decimals: 0,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never
+      expect(await createServer().method.request!(request)).not.toHaveProperty(
+        'configurableVouchers',
+      )
+    })
+
+    test('rejects configurable account vouchers by default', async () => {
+      await expect(
+        verifyConfigurableVoucher({ openingCommitment: recordedCommitment }),
+      ).rejects.toThrow(/invalid voucher signature/)
+    })
+
+    test('accepts a configurable account voucher matching the stored opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({
+          configurableVouchers: true,
+          openingCommitment: recordedCommitment,
+        }),
+      ).resolves.toBeDefined()
+    })
+
+    test('verifies a configurable account voucher once across store update retries', async () => {
+      const verify = vi.spyOn(Voucher, 'verifyVoucher')
+      try {
+        const options = { configurableVouchers: true, openingCommitment: recordedCommitment }
+        await verifyConfigurableVoucher(options)
+        const once = verify.mock.calls.length
+        verify.mockClear()
+        await expect(
+          verifyConfigurableVoucher({ ...options, retryUpdates: true }),
+        ).resolves.toBeDefined()
+        expect(verify.mock.calls.length).toBe(once)
+      } finally {
+        verify.mockRestore()
+      }
+    })
+
+    test('rejects a configurable account voucher from a config other than the opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({
+          configurableVouchers: true,
+          openingCommitment: recordedCommitment,
+          voucherSigner: signer,
+        }),
+      ).rejects.toThrow(/invalid voucher signature/)
+    })
+
+    test('accepts the version-zero config when the channel has no opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({ configurableVouchers: true, voucherSigner: signer }),
+      ).resolves.toBeDefined()
+      await expect(verifyConfigurableVoucher({ configurableVouchers: true })).rejects.toThrow(
+        /invalid voucher signature/,
+      )
+    })
   })
 
   test('rejects precompile voucher exceeding deposit', async () => {

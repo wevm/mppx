@@ -1,8 +1,8 @@
 import { P256, Secp256k1 } from 'ox'
-import { KeyAuthorization, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
+import { AccountConfig, KeyAuthorization, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 
 import * as Store from '../../../Store.js'
@@ -150,6 +150,74 @@ describe('SponsorshipLimit.verifiedPayer', () => {
     expect(
       SponsorshipLimit.verifiedPayer(withSignature(envelope, keychainSignature(envelope))),
     ).toBe(payer.address.toLowerCase())
+  })
+
+  test('keys a configurable account transaction on its account only when its config derives it', async () => {
+    const owners = [
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+    ]
+    const initial = TempoAccount.fromConfig({ owners, threshold: 2 })
+    const rotated = TempoAccount.fromConfig({
+      address: initial.address,
+      owners: [owners[0]!],
+      salt: initial.config!.salt,
+      threshold: 1,
+      version: 1,
+    })
+    const envelope = unsignedOpen()
+    const configurableSignature = async (signer: typeof initial, payload: Hex) =>
+      SignatureEnvelope.from(await signer.sign({ hash: payload }))
+    const payload = TxEnvelopeTempo.getSignPayload(envelope)
+    const zero = `0x${'00'.repeat(32)}` as const
+    const initialTransaction = withSignature(
+      envelope,
+      await configurableSignature(initial, payload),
+    )
+    const rotatedTransaction = withSignature(
+      envelope,
+      await configurableSignature(rotated, payload),
+    )
+    const rotatedCommitment = AccountConfig.getCommitment(rotated.config!)
+    // Without the on-chain commitment, a configurable signature proves no payer.
+    expect(SponsorshipLimit.verifiedPayer(initialTransaction)).toBeNull()
+    // An unregistered account (zero commitment) is proven by the version-zero config that derives it.
+    expect(SponsorshipLimit.verifiedPayer(initialTransaction, { configCommitment: zero })).toBe(
+      initial.address.toLowerCase(),
+    )
+    // After a rotation, only the current config proves the account; its old owners do not.
+    expect(
+      SponsorshipLimit.verifiedPayer(initialTransaction, { configCommitment: rotatedCommitment }),
+    ).toBeNull()
+    expect(
+      SponsorshipLimit.verifiedPayer(rotatedTransaction, { configCommitment: rotatedCommitment }),
+    ).toBe(initial.address.toLowerCase())
+    expect(
+      SponsorshipLimit.verifiedPayer(
+        withSignature(envelope, await configurableSignature(initial, zero)),
+        { configCommitment: zero },
+      ),
+    ).toBeNull()
+    // limitFeePayer reads the commitment, so superseded owners cannot spend the account's quota.
+    const limit = { perDay: 1, store: Store.memory() }
+    await expect(
+      SponsorshipLimit.limitFeePayer({
+        chainId: 4217,
+        feePayer: true,
+        limit,
+        payload: openPayload(initialTransaction),
+        readConfigCommitment: async () => rotatedCommitment,
+      }),
+    ).resolves.toBeUndefined()
+    await expect(
+      SponsorshipLimit.limitFeePayer({
+        chainId: 4217,
+        feePayer: true,
+        limit,
+        payload: openPayload(rotatedTransaction),
+        readConfigCommitment: async () => rotatedCommitment,
+      }),
+    ).resolves.toBe(true)
   })
 
   test.each(['', 'not-hex', '0x76deadbeef'])('returns no payer for %j', (transaction) => {
