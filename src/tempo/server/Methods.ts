@@ -1,6 +1,7 @@
 import type { NoExtraKeys } from '../../internal/types.js'
 import * as Store from '../../Store.js'
 import * as Currencies from '../internal/currencies.js'
+import * as defaults from '../internal/defaults.js'
 import * as ChannelStore from '../session/server/ChannelStore.js'
 import { superviseCloses as superviseCloses_ } from '../session/server/CloseSupervisor.js'
 import {
@@ -84,6 +85,12 @@ export function tempo<const parameters extends tempo.Parameters>(
   if (parameters?.currency !== undefined) {
     if (parameters.currencies !== undefined)
       throw new Error('Specify either `currency` or `currencies`, not both.')
+    Currencies.assertMachineTokenNotFirst({
+      chainId:
+        parameters.chainId ??
+        (parameters.testnet ? defaults.chainId.testnet : defaults.chainId.mainnet),
+      currency: parameters.currency,
+    })
     return [createChargeMethod(parameters), createSessionMethod(parameters)] as const
   }
   const { currencies: _currencies, ...shared } = parameters ?? {}

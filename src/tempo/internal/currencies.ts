@@ -2,6 +2,7 @@ import { isAddress } from 'viem'
 
 import * as Currency_ from '../../Currency.js'
 import * as defaults from './defaults.js'
+import * as MachineTokenCharge from './machine-token-charge.js'
 
 /** An accepted Tempo currency: an address or a `viem/tokens` token, chain-indexed or resolved. */
 export type Currency = Currency_.Currency
@@ -52,5 +53,22 @@ export function resolve(parameters: {
     resolved.push({ currency: currency.address, decimals, chainId })
   }
   if (resolved.length === 0) throw new Error(`No accepted USD currencies for chain ${chainId}.`)
+  assertMachineTokenNotFirst(resolved[0]!)
   return resolved as [(typeof resolved)[number], ...typeof resolved]
+}
+
+/**
+ * MACH is paid straight to the recipient, but clients that don't prefer it pay the first offer, so
+ * it must come after a stablecoin: list it as `currencies: [usdc, mach]`, never first or alone.
+ */
+export function assertMachineTokenNotFirst(currency: { chainId: number; currency: string }) {
+  if (
+    MachineTokenCharge.isMachineToken({
+      chainId: currency.chainId,
+      currency: currency.currency as `0x${string}`,
+    })
+  )
+    throw new Error(
+      'MACH cannot be the first accepted currency. List it after a stablecoin, such as `currencies: [usdc, mach]`.',
+    )
 }

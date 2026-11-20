@@ -351,7 +351,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           context,
         )
         const orderedCandidates = await resolveChallengeOrder(
-          candidates,
+          await AcceptPayment.preferCandidates(candidates, context),
           (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
             orderChallenges,
         )
