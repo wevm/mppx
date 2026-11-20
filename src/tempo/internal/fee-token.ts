@@ -19,7 +19,11 @@ function pushUnique(
   tokens.push(token)
 }
 
-async function hasBalance(client: Client, account: Address, token: Address): Promise<boolean> {
+export async function hasBalance(
+  client: Client,
+  account: Address,
+  token: Address,
+): Promise<boolean> {
   try {
     return (await Actions.token.getBalance(client as never, { account, token })).amount > 0n
   } catch {

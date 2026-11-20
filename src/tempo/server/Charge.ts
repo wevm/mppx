@@ -630,7 +630,10 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
-      machineTokenEnabled,
+      // A MACH-priced charge is paid straight to the recipient, never routed through the swapper.
+      machineTokenEnabled: MachineTokenCharge.isMachineTokenAddress(currency)
+        ? undefined
+        : machineTokenEnabled,
       amount,
       currency,
       decimals,
@@ -692,15 +695,6 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
-      if (
-        MachineTokenCharge.isMachineToken({
-          chainId,
-          currency: request.currency as `0x${string}`,
-        })
-      )
-        throw new Error(
-          'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
-        )
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 

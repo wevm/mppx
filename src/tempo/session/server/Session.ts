@@ -22,6 +22,7 @@ import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
 import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
@@ -379,6 +380,16 @@ export function session<const parameters extends session.Parameters>(
   const { account, feePayer, remoteFeePayer, recipient } = Account.resolve(parameters)
   const configuredFeePayer =
     feePayer ?? (remoteFeePayer || parameters.feePayer === true ? true : undefined)
+  // MACH can't pay transaction fees: a sponsored MACH session needs a fee token to sponsor in.
+  if (
+    configuredFeePayer &&
+    !parameters.feeToken &&
+    MachineTokenCharge.isMachineToken({
+      chainId: parameters.chainId,
+      currency: currency as `0x${string}`,
+    })
+  )
+    throw new Error('A sponsored MACH session needs `feeToken`, since MACH cannot pay fees.')
   const getClient = Client.getResolver({
     chain: tempo_chain,
     remoteFeePayer,

@@ -25,6 +25,7 @@ import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import * as Method from '../../Method.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
 import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
@@ -35,7 +36,7 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
+import { defaultFeeTokens, hasBalance, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Simulation from '../internal/simulation.js'
@@ -327,6 +328,15 @@ export function charge(parameters: charge.Parameters = {}) {
               prioritizeCandidates: true,
             })
           : undefined
+      // MACH can't pay fees: without sponsorship, stop before signing when no stablecoin can.
+      if (
+        isMachineTokenCurrency &&
+        !methodDetails?.feePayer &&
+        (!feeToken || !(await hasBalance(client, account.address, feeToken)))
+      )
+        throw new Errors.InsufficientBalanceError({
+          reason: `${account.address} holds no stablecoin to pay the transaction fee for a MACH payment`,
+        })
 
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
@@ -449,7 +459,33 @@ export function charge(parameters: charge.Parameters = {}) {
     }
     return promise
   }
-  return MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash)
+  return MethodResponse.registerTransactionHash(
+    AcceptPayment.withPreference({ ...method, createCredential }, preferMachineToken),
+    transactionHash,
+  )
+
+  /**
+   * Moves a MACH offer first when the payer can spend its amount in MACH. Zone payers and accounts
+   * chosen per payment by `resolveAccount` keep the server's order.
+   */
+  async function preferMachineToken({
+    challenge,
+    context,
+  }: Parameters<AcceptPayment.PreferChallenge>[0]): Promise<boolean> {
+    if (parameters.zone || parameters.resolveAccount) return false
+    if (challenge.method !== 'tempo' || challenge.intent !== 'charge') return false
+    const request = challenge.request as ChargeRequest
+    const chainId = request.methodDetails?.chainId
+    if (typeof chainId !== 'number') return false
+    if (!MachineTokenCharge.isMachineToken({ chainId, currency: request.currency as Address }))
+      return false
+    const client = await getClient({ chainId })
+    return MachineTokenCharge.canSpend(client, {
+      account: getAccount(client, context as never),
+      amount: BigInt(request.amount),
+      chainId,
+    })
+  }
 }
 
 /**

@@ -17,6 +17,78 @@ type MethodLike = {
  */
 export const deferredContext: unique symbol = Symbol('mppx.deferredContext')
 
+/**
+ * Internal key for a client method's offer preference, such as Tempo preferring MACH when the payer
+ * holds enough of it. Not part of the public method API.
+ */
+export const prefer: unique symbol = Symbol.for('mppx.preferChallenge')
+
+/** Offer preference stored on a client method under {@link prefer}. */
+export type PreferChallenge = (parameters: {
+  challenge: Challenge.Challenge
+  challenges: readonly Challenge.Challenge[]
+  context?: unknown
+}) => Promise<boolean>
+
+/** Attaches an internal offer preference to a client method and returns the method. */
+export function withPreference<const method extends object>(
+  method: method,
+  preferChallenge: PreferChallenge,
+): method {
+  // Enumerable, so wrappers that spread the method keep it.
+  Object.defineProperty(method, prefer, { enumerable: true, value: preferChallenge })
+  return method
+}
+
+/**
+ * Moves offers a method prefers ahead of the adjacent offers for the same method and intent (one
+ * route's currencies), keeping every other order: payment preferences and a caller's
+ * `orderChallenges`, which runs after, still decide. Expired offers are never moved, and a failing
+ * preference counts as none.
+ */
+export async function preferCandidates<
+  const candidate extends { challenge: Challenge.Challenge; method: object },
+>(candidates: readonly candidate[], context?: unknown): Promise<readonly candidate[]> {
+  if (candidates.length < 2) return candidates
+  const challenges = candidates.map(({ challenge }) => challenge)
+  const preferred = await Promise.all(
+    candidates.map(async ({ challenge, method }) => {
+      const preferChallenge = (method as { [prefer]?: PreferChallenge })[prefer]
+      if (!preferChallenge) return false
+      if (challenge.expires && new Date(challenge.expires).getTime() <= Date.now()) return false
+      try {
+        return await preferChallenge({
+          challenge,
+          challenges,
+          ...(context === undefined || context === deferredContext ? {} : { context }),
+        })
+      } catch {
+        return false
+      }
+    }),
+  )
+  if (!preferred.some(Boolean)) return candidates
+  const ordered: candidate[] = []
+  let start = 0
+  for (let end = 1; end <= candidates.length; end++) {
+    if (
+      end < candidates.length &&
+      keyOf(candidates[end]!.challenge) === keyOf(candidates[start]!.challenge)
+    )
+      continue
+    const run = candidates.slice(start, end).map((candidate, offset) => ({
+      candidate,
+      preferred: preferred[start + offset]!,
+    }))
+    ordered.push(
+      ...run.filter((entry) => entry.preferred).map((entry) => entry.candidate),
+      ...run.filter((entry) => !entry.preferred).map((entry) => entry.candidate),
+    )
+    start = end
+  }
+  return ordered
+}
+
 /** Supported challenge paired with the configured client method that can sign it. */
 export type ChallengeCandidate<method extends MethodLike = MethodLike> = method extends MethodLike
   ? {

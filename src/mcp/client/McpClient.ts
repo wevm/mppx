@@ -223,9 +223,10 @@ function createPaymentAwareCallTool<methods extends Methods>(
       paymentPreferences.entries,
       call.context,
     )
+    const preferredCandidates = await AcceptPayment.preferCandidates(candidates, call.context)
     const orderedCandidates = config.orderChallenges
-      ? await config.orderChallenges(candidates)
-      : candidates
+      ? await config.orderChallenges(preferredCandidates)
+      : preferredCandidates
     const selected = orderedCandidates[0]
 
     if (!selected) {
