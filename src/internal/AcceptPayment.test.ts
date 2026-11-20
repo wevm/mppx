@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vp/test'
 
-import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as AcceptPayment from './AcceptPayment.js'
+import * as x402_ChallengeBrand from './x402/ChallengeBrand.js'
 
 function stripIndex(entry: AcceptPayment.Entry) {
   const { index: _index, ...rest } = entry
