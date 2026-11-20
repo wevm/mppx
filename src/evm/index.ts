@@ -13,4 +13,4 @@ export type {
   ExactPermit2Transfer,
   ExactTransfer,
   ResourceInfo,
-} from '../x402/Types.js'
+} from '../internal/x402/Types.js'

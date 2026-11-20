@@ -1,5 +1,5 @@
 import * as Constants from '../../../Constants.js'
-import * as x402_Types from '../../../x402/Types.js'
+import * as x402_Types from '../../../internal/x402/Types.js'
 
 /** HTTP status that signals a native payment challenge. */
 export const paymentRequiredStatus = 402
