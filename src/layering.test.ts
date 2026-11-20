@@ -35,8 +35,25 @@ const allowed = new Set([
   'server/Methods.ts',
 ])
 
+/** Side-effect imports, static imports and re-exports, and dynamic `import()` calls. */
 const specifier =
-  /(?:import|export)(\s+type)?[^'"]*?from\s+['"](\.[^'"]+)['"]|import\(\s*['"](\.[^'"]+)['"]\s*\)/g
+  /\bimport\s*['"]([^'"]+)['"]|\b(?:import|export)\b(\s+type\b)?(?:[^;'"=()]|'[^']*'|"[^"]*")*?\bfrom\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g
+
+/** Removes comments so imports quoted in them are not counted (and cannot hide real ones). */
+function stripComments(code: string) {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1')
+}
+
+/** Relative module specifiers that create runtime edges. Type-only imports are erased at build time. */
+function runtimeImports(code: string) {
+  const found: string[] = []
+  for (const match of stripComments(code).matchAll(specifier)) {
+    if (match[2]) continue
+    const target = match[1] ?? match[3] ?? match[4]!
+    if (target.startsWith('.')) found.push(target)
+  }
+  return found
+}
 
 function layerOf(file: string) {
   const parts = path.relative(src, file).split(path.sep)
@@ -60,11 +77,8 @@ function violations() {
     const layer = layerOf(file)
     const rules = forbidden[layer]
     if (!rules) continue
-    const contents = fs.readFileSync(file, 'utf8')
-    for (const match of contents.matchAll(specifier)) {
-      // Type-only imports are erased at build time and do not create runtime edges.
-      if (match[1]) continue
-      const target = path.resolve(path.dirname(file), match[2] ?? match[3]!)
+    for (const specifier of runtimeImports(fs.readFileSync(file, 'utf8'))) {
+      const target = path.resolve(path.dirname(file), specifier)
       if (!target.startsWith(src + path.sep)) continue
       const targetLayer = layerOf(target)
       if (rules.includes(targetLayer)) found.push(`${relative} (${layer}) imports ${targetLayer}`)
@@ -74,6 +88,27 @@ function violations() {
 }
 
 describe('layering', () => {
+  test('finds every kind of runtime import', () => {
+    const code = [
+      "import { a } from './a.js'",
+      "import './side-effect.js'",
+      "import { 'quoted-name' as b } from './quoted.js'",
+      "export * from './reexport.js'",
+      "const c = await import('./dynamic.js')",
+      "import type { D } from './type-only.js'",
+      "// import { e } from './commented.js'",
+      "/* import { f } from './block-commented.js' */",
+      "import { g } from 'package'",
+    ].join('\n')
+    expect(runtimeImports(code)).toEqual([
+      './a.js',
+      './side-effect.js',
+      './quoted.js',
+      './reexport.js',
+      './dynamic.js',
+    ])
+  })
+
   test('lower layers do not import higher layers', () => {
     expect(violations()).toEqual([])
   })

@@ -17,9 +17,18 @@ import { missingDiscoverySuggestion } from './messages.js'
 export { buildUrl }
 export type { CheckResult, EndpointSpec, PathParameter }
 
+/** Label of the passing check that marks a payment as successful when a validator returns only checks. */
+export const paymentSuccessLabel = 'Payment: successful'
+
+/** What a {@link PaymentValidator} returns: its checks, and optionally whether the payment succeeded. */
+export type PaymentValidation = CheckResult[] | { results: CheckResult[]; succeeded: boolean }
+
 /**
  * Pays an endpoint and checks the receipt. `mppx validate` supplies one that signs with the
  * CLI's configured account; library callers can pass their own.
+ *
+ * Return `{ results, succeeded }` to report the outcome directly. A plain array of checks
+ * counts as succeeded when it holds a passing check labelled {@link paymentSuccessLabel}.
  */
 export type PaymentValidator = (
   baseUrl: string,
@@ -34,7 +43,7 @@ export type PaymentValidator = (
     interactive?: boolean | undefined
     onResults?: (results: CheckResult[]) => void
   },
-) => Promise<CheckResult[]>
+) => Promise<PaymentValidation>
 
 export type ValidateOptions = {
   url: string
@@ -191,7 +200,7 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
           yield { phase: 'payment', endpoint, results, succeeded: false }
           continue
         }
-        const paymentResults = await options.payment(baseUrl, endpoint, verbose, {
+        const validation = await options.payment(baseUrl, endpoint, verbose, {
           body: effectiveBody,
           query: options.query,
           extraHeaders: options.headers,
@@ -200,9 +209,10 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
           interactive: options.interactive,
           ...(onResults && { onResults }),
         })
-        const succeeded = paymentResults.some(
-          (r) => r.severity === 'pass' && r.label === 'Payment: successful',
-        )
+        const paymentResults = Array.isArray(validation) ? validation : validation.results
+        const succeeded = Array.isArray(validation)
+          ? validation.some((r) => r.severity === 'pass' && r.label === paymentSuccessLabel)
+          : validation.succeeded
         yield { phase: 'payment', endpoint, results: paymentResults, succeeded }
       }
     }
