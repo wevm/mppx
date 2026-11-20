@@ -118,6 +118,11 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./client/core": {
+      "src": "./src/client/core.ts",
+      "types": "./dist/client/core.d.ts",
+      "default": "./dist/client/core.js"
+    },
     "./client/node": {
       "src": "./src/client/node.ts",
       "types": "./dist/client/node.d.ts",
@@ -242,6 +247,16 @@
       "src": "./src/tempo/index.ts",
       "types": "./dist/tempo/index.d.ts",
       "default": "./dist/tempo/index.js"
+    },
+    "./tempo/client": {
+      "src": "./src/tempo/client/index.ts",
+      "types": "./dist/tempo/client/index.d.ts",
+      "default": "./dist/tempo/client/index.js"
+    },
+    "./tempo/server": {
+      "src": "./src/tempo/server/index.ts",
+      "types": "./dist/tempo/server/index.d.ts",
+      "default": "./dist/tempo/server/index.js"
     },
     "./extensions/identity": {
       "src": "./src/extensions/identity/index.ts",
