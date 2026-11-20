@@ -14,7 +14,7 @@ import { tempoModerato } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
-import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
+import * as ChallengeMeta from '../../internal/challengeMeta.js'
 import * as Attribution from '../Attribution.js'
 import * as Zone from '../internal/zone.js'
 
