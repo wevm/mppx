@@ -271,6 +271,7 @@ export const session = Method.from({
           amount: z.amount(),
           chainId: z.optional(z.number()),
           channelId: z.optional(z.hash()),
+          configurableVouchers: z.optional(z.boolean()),
           currency: z.string(),
           decimals: z.number(),
           escrowContract: z.optional(z.string()),
@@ -302,6 +303,7 @@ export const session = Method.from({
           amount,
           chainId,
           channelId,
+          configurableVouchers,
           decimals,
           escrowContract,
           feePayer,
@@ -330,6 +332,7 @@ export const session = Method.from({
             ...(feePayer !== undefined && { feePayer }),
             ...(feeToken !== undefined && { feeToken }),
             ...(operator !== undefined && { operator }),
+            ...(configurableVouchers !== undefined && { configurableVouchers }),
             ...(sessionProtocol !== undefined && {
               [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,
             }),

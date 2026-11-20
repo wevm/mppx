@@ -9,12 +9,21 @@
  * @see https://tips.sh/1034-1
  */
 import { Hex } from 'ox'
-import { encodeFunctionData, isAddress, type Account, type Address, type Client } from 'viem'
+import { AccountConfig } from 'ox/tempo'
+import {
+  decodeErrorResult,
+  encodeFunctionData,
+  isAddress,
+  type Account,
+  type Address,
+  type Client,
+} from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
-import { Transaction } from 'viem/tempo'
+import { Actions, Transaction } from 'viem/tempo'
 
 import type { Challenge } from '../../../Challenge.js'
 import * as Credential from '../../../Credential.js'
+import * as Errors from '../../../Errors.js'
 import * as Simulation from '../../internal/simulation.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
@@ -83,6 +92,91 @@ function randomValidAfter(): number {
 /** Resolves the voucher authority address for a client account. */
 export function resolveAuthorizedSigner(account: Account): Address {
   return readAccessKeyAddress(account) ?? account.address
+}
+
+/**
+ * Returns whether a client account's vouchers are TIP-1166 configurable account (`0x05`)
+ * signatures, which only servers that advertise `configurableVouchers` accept.
+ */
+export function isConfigurableSigner(account: Account): boolean {
+  return resolveConfigurableSigner(account) !== undefined
+}
+
+/**
+ * Returns the configurable account that signs a client account's vouchers: the account itself,
+ * or the configurable account behind a configurable access key (TIP-1111), which signs vouchers
+ * raw as the channel's authorized signer.
+ */
+function resolveConfigurableSigner(
+  account: Account,
+): (Account & { config?: AccountConfig.Config | undefined }) | undefined {
+  const accessKeyAddress = readAccessKeyAddress(account)
+  if (accessKeyAddress === undefined)
+    return Voucher.isConfigurableAccount(account) ? account : undefined
+  const delegate = (account as { delegate?: Account | undefined }).delegate
+  if (
+    delegate &&
+    Voucher.isConfigurableAccount(delegate) &&
+    delegate.address.toLowerCase() === accessKeyAddress.toLowerCase()
+  )
+    return delegate
+  return undefined
+}
+
+/**
+ * Resolves the default TIP-1034 open salt for a client account.
+ *
+ * From T15 (TIP-1166), the escrow requires the salt of a channel whose signer has a config
+ * commitment to equal that commitment, and records it so vouchers are checked against it. A
+ * configurable account signer therefore opens with its commitment: the one on chain, or, when it
+ * is not registered yet, the one its version-zero config registers in the open transaction itself.
+ * Every other account gets a random salt, with no RPC call.
+ */
+export async function resolveOpenSalt(client: Client, account: Account): Promise<Hex.Hex> {
+  const signer = resolveConfigurableSigner(account)
+  if (!signer) return Hex.random(32)
+  const { config } = signer
+  const onChain = await Actions.accounts.getConfigCommitment(client, { account: signer.address })
+  const local = config ? AccountConfig.getCommitment(config) : undefined
+  if (BigInt(onChain) !== 0n) {
+    if (local && local.toLowerCase() !== onChain.toLowerCase())
+      throw new Error(
+        `Configurable account ${signer.address} holds a config whose commitment ${local} does not match its on-chain commitment ${onChain}. Use the account's current config.`,
+      )
+    return onChain
+  }
+  if (!local || BigInt(config!.version ?? 0n) !== 0n)
+    throw new Error(
+      `Configurable account ${signer.address} is not registered, so it needs its version-zero config to open a channel.`,
+    )
+  return local
+}
+
+/**
+ * Maps a top-up simulation that reverted with TIP-1166 `SignerConfigChanged` or
+ * `RootKeyRetired` for the channel signer to {@link Errors.SignerConfigChangedError}.
+ */
+function toSignerConfigChangedError(
+  error: unknown,
+  parameters: { channelId: Hex.Hex; signer: Address },
+): Errors.SignerConfigChangedError | undefined {
+  const data = Simulation.getRevertData(error)
+  if (!data) return undefined
+  try {
+    const decoded = decodeErrorResult({ abi: escrowAbi, data })
+    if (decoded.errorName !== 'SignerConfigChanged' && decoded.errorName !== 'RootKeyRetired')
+      return undefined
+    const [signer] = decoded.args as readonly [Address]
+    if (signer.toLowerCase() !== parameters.signer.toLowerCase()) return undefined
+    return new Errors.SignerConfigChangedError({
+      cause: error,
+      channelId: parameters.channelId,
+      reason: decoded.errorName,
+      signer,
+    })
+  } catch {
+    return undefined
+  }
 }
 
 async function prepareTempoChannelTransaction(
@@ -167,6 +261,29 @@ export function isSameAddress(a: Address, b: Address): boolean {
 }
 
 /**
+ * Asserts that a configurable account signer can sign a voucher an existing channel settles
+ * (TIP-1166). A channel whose signer had a config commitment at open carries it as its salt and
+ * settles only `0x05` vouchers whose config hashes to it. A channel opened with no commitment (a
+ * zero opening commitment) settles a `0x05` voucher only from the version-zero config that derives the
+ * signer's address; otherwise it settles only primitive vouchers, which a configurable account
+ * cannot sign. Primitive account signers keep signing primitive vouchers.
+ */
+export function assertCanSignVoucher(account: Account, descriptor: Channel.ChannelDescriptor) {
+  const signer = resolveConfigurableSigner(account)
+  if (!signer?.config) return
+  const { config } = signer
+  if (AccountConfig.getCommitment(config).toLowerCase() === descriptor.salt.toLowerCase()) return
+  if (
+    BigInt(config.version ?? 0n) === 0n &&
+    AccountConfig.getAddress(config).toLowerCase() === signer.address.toLowerCase()
+  )
+    return
+  throw new Error(
+    `Configurable account ${signer.address} holds a config that does not match the channel's opening commitment (salt ${descriptor.salt}), so it cannot sign a voucher the channel settles. Sign with the config the channel opened with, or close the channel and open a new one.`,
+  )
+}
+
+/**
  * Signs and creates a TIP-1034 voucher credential payload for an existing channel.
  *
  * @see https://tips.sh/1034-1#execution-semantics
@@ -185,6 +302,7 @@ export async function createVoucherPayload(
     escrow,
   })
   const amount = uint96(cumulativeAmount)
+  assertCanSignVoucher(account, descriptor)
   const signature = await Voucher.signVoucher(
     client,
     account,
@@ -265,13 +383,18 @@ export async function createOpenPayload(
     payee: Address
     /** Calls executed atomically before the channel is opened. */
     prefixCalls?: readonly TempoChannelCall[] | undefined
+    /**
+     * Channel salt. Defaults to the signer's TIP-1166 config commitment for a configurable
+     * account, else a random value. See {@link resolveOpenSalt}.
+     */
+    salt?: Hex.Hex | undefined
     token: Address
   },
 ): Promise<OpenCredentialPayload> {
   const authorizedSigner = resolveAuthorizedSigner(account)
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
-  const salt = Hex.random(32)
+  const salt = parameters.salt ?? (await resolveOpenSalt(client, account))
 
   const deposit = uint96(parameters.deposit)
   const initialAmount = uint96(parameters.initialAmount)
@@ -285,6 +408,9 @@ export async function createOpenPayload(
     calls: [...(parameters.prefixCalls ?? []), { to: escrow, data: openData }],
     feePayer: parameters.feePayer,
     feeToken: parameters.feeToken ?? parameters.token,
+    // A configurable signer's salt is its stable config commitment, so the open needs its own
+    // entropy to get a distinct expiring nonce hash and channel ID.
+    validAfter: randomValidAfter(),
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
   const signed = Transaction.deserialize(transaction as Transaction.TransactionSerializedTempo)
@@ -367,6 +493,13 @@ export async function createTopUpPayload(
     feePayer,
     feeToken,
     validAfter: randomValidAfter(),
+  }).catch((error: unknown) => {
+    throw (
+      toSignerConfigChangedError(error, {
+        channelId,
+        signer: Channel.resolveAuthorizedSigner(descriptor),
+      }) ?? error
+    )
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
 
