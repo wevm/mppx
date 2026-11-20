@@ -52,10 +52,20 @@ export class RpcStore extends Store.DurableObjectStore.rpc(DurableObject) {
   }
 
   /** Seeds a pre-ownership replay table to exercise the additive migration. */
-  async legacyReplay(key: string, expires: number) {
+  async legacyReplay(key: string, expires: number, owner?: string) {
     const sql = this.state.storage.sql!
     sql.exec('CREATE TABLE mppx_replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)')
     sql.exec('INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?)', key, expires)
+    if (owner !== undefined) {
+      sql.exec('ALTER TABLE mppx_replay_claims ADD COLUMN owner TEXT')
+      sql.exec('UPDATE mppx_replay_claims SET owner = ? WHERE key = ?', owner, key)
+    }
+  }
+
+  /** Replays an old deployment's expiry-only upsert against migrated storage. */
+  async legacyReplaceReplay(key: string, expires: number) {
+    const sql = this.state.storage.sql!
+    sql.exec('UPDATE mppx_replay_claims SET expires = ? WHERE key = ?', expires, key)
   }
 
   /** The keys this object holds replay claims for, as a replay shard. */
@@ -147,7 +157,7 @@ type Command = {
   | { op: 'increment'; key: string }
   | { op: 'bigint'; key: string; amount: string }
   | { op: 'claim'; key: string; expires: number; owner?: string }
-  | { op: 'legacyReplay'; key: string; expires: number }
+  | { op: 'legacyReplay' | 'legacyReplaceReplay'; key: string; expires: number; owner?: string }
   | { op: 'releaseClaim'; key: string; owner: string }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
   | { op: 'log' | 'shard'; key: string }
@@ -209,9 +219,14 @@ export default {
         const stored = (await store.get(command.key)) as { amount: bigint }
         return Response.json({ type: typeof stored.amount, amount: stored.amount.toString() })
       }
+      case 'legacyReplaceReplay': {
+        const object = namespace.get(namespace.idFromName(command.key)) as unknown as RpcStore
+        await object.legacyReplaceReplay(command.key, command.expires)
+        return Response.json(null)
+      }
       case 'legacyReplay': {
         const object = namespace.get(namespace.idFromName(command.key)) as unknown as RpcStore
-        await object.legacyReplay(command.key, command.expires)
+        await object.legacyReplay(command.key, command.expires, command.owner)
         return Response.json(null)
       }
       case 'releaseClaim':
