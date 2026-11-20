@@ -1,26 +1,40 @@
 import type { Chain } from 'viem'
 import * as viemChains from 'viem/chains'
 
-import { validateChallenge, validateErrorHandling } from '../cli/validate/challenge.js'
+import { validate as validateDiscoveryDoc } from '../discovery/Validate.js'
+import { validateChallenge, validateErrorHandling } from './challenge.js'
 import {
   buildUrl,
   extractEndpointsFromDiscovery,
   extractRequestBodyFromDiscovery,
   fetchDiscoveryDoc,
   validateLlmsDoc,
-} from '../cli/validate/discovery.js'
-import type { CheckResult, EndpointSpec, PathParameter } from '../cli/validate/helpers.js'
-import {
-  isValidIntegerAmount,
-  parseEndpointArg,
-  resolveBodyForEndpoint,
-} from '../cli/validate/helpers.js'
-import { missingDiscoverySuggestion } from '../cli/validate/messages.js'
-import { validatePaymentFlow } from '../cli/validate/payment.js'
-import { validate as validateDiscoveryDoc } from '../discovery/Validate.js'
+} from './discovery.js'
+import type { CheckResult, EndpointSpec, PathParameter } from './helpers.js'
+import { isValidIntegerAmount, parseEndpointArg, resolveBodyForEndpoint, skip } from './helpers.js'
+import { missingDiscoverySuggestion } from './messages.js'
 
 export { buildUrl }
 export type { CheckResult, EndpointSpec, PathParameter }
+
+/**
+ * Pays an endpoint and checks the receipt. `mppx validate` supplies one that signs with the
+ * CLI's configured account; library callers can pass their own.
+ */
+export type PaymentValidator = (
+  baseUrl: string,
+  endpoint: EndpointSpec,
+  verbose: boolean,
+  options: {
+    body?: string | undefined
+    query?: string[] | undefined
+    extraHeaders?: string[] | undefined
+    yes?: boolean | undefined
+    silent?: boolean | undefined
+    interactive?: boolean | undefined
+    onResults?: (results: CheckResult[]) => void
+  },
+) => Promise<CheckResult[]>
 
 export type ValidateOptions = {
   url: string
@@ -34,6 +48,8 @@ export type ValidateOptions = {
   interactive?: boolean | undefined
   discoveryPath?: string | undefined
   onPaymentResults?: (results: CheckResult[]) => void
+  /** Runs the payment phase. Without it, payment checks are reported as skipped. */
+  payment?: PaymentValidator | undefined
 }
 
 export type DiscoveryResult = {
@@ -163,7 +179,19 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
 
       if (!options.skipPayment && challengeIsValid) {
         const onResults = options.onPaymentResults
-        const paymentResults = await validatePaymentFlow(baseUrl, endpoint, verbose, {
+        if (!options.payment) {
+          const results = [
+            skip(
+              'Payment: not tested',
+              'no payment validator configured',
+              'Run `mppx validate` to test payment, or pass `payment` to validate().',
+            ),
+          ]
+          onResults?.(results)
+          yield { phase: 'payment', endpoint, results, succeeded: false }
+          continue
+        }
+        const paymentResults = await options.payment(baseUrl, endpoint, verbose, {
           body: effectiveBody,
           query: options.query,
           extraHeaders: options.headers,
