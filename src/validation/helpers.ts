@@ -1,5 +1,4 @@
-import { identityOf, skipPayment, unwrapFetch } from '../../client/internal/Fetch.js'
-import { pc } from '../utils.js'
+import { identityOf, skipPayment, unwrapFetch } from '../client/internal/Fetch.js'
 
 export type CheckResult = {
   label: string
@@ -51,46 +50,6 @@ export function skip(label: string, detail?: string, hint?: string): CheckResult
   const r: CheckResult = detail ? { label, detail, severity: 'skip' } : { label, severity: 'skip' }
   if (hint) r.hint = hint
   return r
-}
-
-const SEVERITY_ICONS = {
-  pass: pc.green('✓'),
-  fail: pc.red('✗'),
-  warn: pc.yellow('⚠'),
-  suggested: pc.cyan('◇'),
-  skip: pc.dim('○'),
-} as const
-
-export function printCheck(result: CheckResult) {
-  const icon = SEVERITY_ICONS[result.severity]
-  const text = result.detail ? `${result.label} (${result.detail})` : result.label
-  console.log(`  ${icon} ${text}`)
-  if (result.hint && result.severity !== 'pass') {
-    console.log(pc.dim(`    → ${result.hint}`))
-  }
-}
-
-export function printSection(title: string) {
-  console.log(`\n${pc.bold(title)}`)
-}
-
-export type Counts = {
-  passed: number
-  failed: number
-  warnings: number
-  suggested: number
-  skipped: number
-}
-
-export function printResults(results: CheckResult[], counts: Counts) {
-  for (const result of results) {
-    printCheck(result)
-    if (result.severity === 'pass') counts.passed++
-    else if (result.severity === 'fail') counts.failed++
-    else if (result.severity === 'warn') counts.warnings++
-    else if (result.severity === 'suggested') counts.suggested++
-    else if (result.severity === 'skip') counts.skipped++
-  }
 }
 
 /** Fetches a validation target without automatic payments or redirected probes. */

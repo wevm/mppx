@@ -1,10 +1,11 @@
 import { Cli, z } from 'incur'
 
 import { validate as validateCore, validateStream } from '../../validation/core.js'
+import { missingDiscoverySuggestion } from '../../validation/messages.js'
 import { isAgentEnvironment, pc } from '../utils.js'
-import type { Counts } from './helpers.js'
-import { printResults, printSection } from './helpers.js'
-import { missingDiscoverySuggestion } from './messages.js'
+import { validatePaymentFlow } from './payment.js'
+import type { Counts } from './print.js'
+import { printResults, printSection } from './print.js'
 
 const validate = Cli.create('validate', {
   description: 'Validate an MPP server implementation end-to-end',
@@ -49,6 +50,7 @@ const validate = Cli.create('validate', {
         verbose: c.options.verbose > 0,
         yes: c.options.yes,
         interactive: false,
+        payment: validatePaymentFlow,
       })
       console.log(JSON.stringify(result, null, 2))
       const noEndpoints = result.endpoints.length === 0 && !c.options.endpoint
@@ -80,6 +82,7 @@ const validate = Cli.create('validate', {
       yes: c.options.yes,
       interactive: !!process.stdin.isTTY,
       onPaymentResults: (results) => printResults(results, counts),
+      payment: validatePaymentFlow,
     })) {
       switch (event.phase) {
         case 'discovery':

@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vp/test'
 
+import * as X402Header from '../internal/x402/Header.js'
 import * as X402Assets from '../x402/Assets.js'
-import * as X402Header from '../x402/Header.js'
 import cli, { resolveX402CredentialTarget } from './cli.js'
 import * as internal from './internal.js'
 

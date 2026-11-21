@@ -8,7 +8,7 @@ import { loadStripe } from '@stripe/stripe-js/pure'
 
 import { stripe } from '../../../../client/index.js'
 import * as Html from '../../../../Html.js'
-import { mergeDefined } from '../../../../server/internal/html/config.js'
+import { mergeDefined } from '../../../../internal/html/config.js'
 import type { charge as chargeClient } from '../../../../stripe/client/Charge.js'
 import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'

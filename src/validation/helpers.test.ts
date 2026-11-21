@@ -3,13 +3,13 @@ import type { AddressInfo } from 'node:net'
 
 import { describe, expect, test, vi } from 'vp/test'
 
-import * as Challenge from '../../Challenge.js'
-import * as Fetch from '../../client/internal/Fetch.js'
-import * as Mppx from '../../client/Mppx.js'
-import * as Identity from '../../identity/index.js'
-import * as Method from '../../Method.js'
-import { validate } from '../../validation/core.js'
-import * as z from '../../zod.js'
+import * as Challenge from '../Challenge.js'
+import * as Fetch from '../client/internal/Fetch.js'
+import * as Mppx from '../client/Mppx.js'
+import * as Identity from '../identity/index.js'
+import * as Method from '../Method.js'
+import * as z from '../zod.js'
+import { validate } from './core.js'
 import { fetchWithTimeout } from './helpers.js'
 
 describe('fetchWithTimeout', () => {

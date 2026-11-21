@@ -14,8 +14,8 @@ const formatBundleSize = (bytes: number) =>
 // Tab script (bundled as raw JS string for compose HTML)
 // Must be built before HTML entries since they import config.ts which re-exports tabScript
 {
-  const entry = 'src/server/internal/html/compose.main.ts'
-  const outFile = path.resolve(root, 'src/server/internal/html/compose.main.gen.ts')
+  const entry = 'src/internal/html/compose.main.ts'
+  const outFile = path.resolve(root, 'src/internal/html/compose.main.gen.ts')
 
   await build({
     input: path.resolve(root, entry),
@@ -105,8 +105,8 @@ for (const { entry, mode, outFile } of htmlEntries) {
 
 // Service worker (bundled as raw JS string)
 {
-  const entry = 'src/server/internal/html/serviceWorker.ts'
-  const outFile = path.resolve(root, 'src/server/internal/html/serviceWorker.gen.ts')
+  const entry = 'src/internal/html/serviceWorker.ts'
+  const outFile = path.resolve(root, 'src/internal/html/serviceWorker.gen.ts')
 
   await build({
     input: path.resolve(root, entry),

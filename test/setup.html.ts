@@ -6,8 +6,8 @@ const root = path.resolve(import.meta.dirname, '..')
 
 /** Generated HTML modules that source files import; `pnpm build:html` writes them. */
 const generated = [
-  'src/server/internal/html/compose.main.gen.ts',
-  'src/server/internal/html/serviceWorker.gen.ts',
+  'src/internal/html/compose.main.gen.ts',
+  'src/internal/html/serviceWorker.gen.ts',
   'src/stripe/server/internal/html.gen.ts',
   'src/tempo/server/internal/html.gen.ts',
 ]

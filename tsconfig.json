@@ -8,9 +8,9 @@
   "files": [],
   "references": [
     { "path": "./src" },
-    { "path": "./src/server/internal/html/tsconfig.compose.json" },
-    { "path": "./src/server/internal/html/tsconfig.worker.client.json" },
-    { "path": "./src/server/internal/html/tsconfig.worker.json" },
+    { "path": "./src/internal/html/tsconfig.compose.json" },
+    { "path": "./src/internal/html/tsconfig.worker.client.json" },
+    { "path": "./src/internal/html/tsconfig.worker.json" },
     { "path": "./test" }
   ]
 }

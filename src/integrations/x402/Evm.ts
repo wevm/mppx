@@ -11,8 +11,8 @@ import { evm } from '../../evm/server/Methods.js'
 import { eip3009 } from '../../evm/Types.js'
 import type * as EvmTypes from '../../evm/Types.js'
 import * as Expires from '../../Expires.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as Mppx from '../../server/Mppx.js'
-import * as Types from '../../x402/Types.js'
 
 /** Configuration shared by the x402 compatibility integrations. */
 export type Config = {

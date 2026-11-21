@@ -1,6 +1,6 @@
 import { Secp256k1 } from 'ox'
 
-import * as PaymentRequest from '../../PaymentRequest.js'
+import * as PaymentRequest from '../PaymentRequest.js'
 
 /** Reserved metadata key for HMAC-bound, per-issuance challenge randomness. */
 const nonceKey = '_mppx_nonce'

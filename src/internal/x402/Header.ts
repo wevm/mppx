@@ -1,6 +1,6 @@
 import { Base64 } from 'ox'
 
-import * as HeaderCodec from '../internal/HeaderCodec.js'
+import * as HeaderCodec from '../HeaderCodec.js'
 import {
   ExtensionsSchema,
   PaymentPayloadSchema,

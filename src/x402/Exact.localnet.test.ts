@@ -25,9 +25,9 @@ import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 import * as evm_Types from '../evm/Types.js'
-import * as Header from './Header.js'
-import * as x402_ChallengeBrand from './internal/ChallengeBrand.js'
-import * as Types from './Types.js'
+import * as x402_ChallengeBrand from '../internal/x402/ChallengeBrand.js'
+import * as Header from '../internal/x402/Header.js'
+import * as Types from '../internal/x402/Types.js'
 
 const runLocalnet = process.env.X402_LOCALNET === 'true'
 const describeLocalnet = runLocalnet ? describe : describe.skip

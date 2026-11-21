@@ -1,8 +1,8 @@
 import { getAddress } from 'viem'
 
 import { FacilitatorResponseError } from '../../Errors.js'
+import * as Types from '../../internal/x402/Types.js'
 import type * as z from '../../zod.js'
-import * as Types from '../Types.js'
 
 const mppxFetchWrapper = Symbol.for('mppx.fetch.wrapper')
 

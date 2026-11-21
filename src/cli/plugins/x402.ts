@@ -2,9 +2,9 @@ import type { Address, Chain } from 'viem'
 import * as viemChains from 'viem/chains'
 
 import { evm as evmMethods, assets as evmAssets } from '../../evm/client/index.js'
+import * as x402_ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
+import type * as x402_Types from '../../internal/x402/Types.js'
 import * as Assets from '../../x402/Assets.js'
-import * as x402_ChallengeBrand from '../../x402/internal/ChallengeBrand.js'
-import type * as x402_Types from '../../x402/Types.js'
 import { resolveAccount } from '../account.js'
 import { createPlugin } from './plugin.js'
 

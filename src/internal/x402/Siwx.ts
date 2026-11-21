@@ -3,8 +3,8 @@ import { getAddress, recoverMessageAddress, type Account, type Address, type Cli
 import { getChainId, verifyMessage } from 'viem/actions'
 import { createSiweMessage } from 'viem/siwe'
 
-import * as Store from '../Store.js'
-import * as z from '../zod.js'
+import * as Store from '../../Store.js'
+import * as z from '../../zod.js'
 import * as Types from './Types.js'
 
 /** Key of the x402 `sign-in-with-x` (SIWX) extension in a 402's `extensions`. */

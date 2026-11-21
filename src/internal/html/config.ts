@@ -1,7 +1,7 @@
 import { Json } from 'ox'
 
-import type * as Challenge from '../../../Challenge.js'
-import type * as Method from '../../../Method.js'
+import type * as Challenge from '../../Challenge.js'
+import type * as Method from '../../Method.js'
 import { tabScript } from './compose.main.gen.js'
 
 export type Options = {
