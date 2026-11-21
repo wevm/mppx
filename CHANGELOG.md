@@ -1,5 +1,16 @@
 # mppx
 
+## 0.21.2
+
+### Patch Changes
+
+- 60f265c: Fixed `mppx/validation` so it no longer imports the CLI, which pulled in the CLI's bundled `incur` dependency and failed to load from npm. `validate()` and `validateStream()` now take an optional `payment` validator; without one, payment checks are reported as skipped. `mppx validate` passes its own.
+
+  Moved shared modules so lower layers no longer import higher ones: the HTML payment-page infrastructure and x402 wire helpers now live under `src/internal`, and the MCP SDK server transport lives under `src/server`. Public entry points are unchanged.
+
+- 6056a5b: Added `mppx/client/core`, `mppx/tempo/client` and `mppx/tempo/server` entrypoints, so apps can load the client primitives or only the Tempo method without the other payment methods. `mppx/client` and `mppx/server` export the same API as before.
+- 98d110b: Added TIP-1166 configurable account voucher signers to `tempo/session`. Servers accept configurable account (`0x05`) vouchers and close authorizations when `configurableVouchers` is set (default `false`), advertise it in the challenge, and check each voucher against the signer config commitment recorded at open (`OpeningCommitmentRecorded`). Configurable account clients open channels with their config commitment as the salt, sign vouchers with configurable account signatures, refuse to open against servers that do not advertise `configurableVouchers` (`ConfigurableVouchersUnsupportedError`), and surface top-ups that revert because the signer config changed as `SignerConfigChangedError`. `Voucher.verifyVoucher` and `Voucher.verifyCloseAuthorization` take optional `{ configurable, openingCommitment }` options; without them they accept only primitive signatures, as before.
+
 ## 0.21.1
 
 ### Patch Changes
