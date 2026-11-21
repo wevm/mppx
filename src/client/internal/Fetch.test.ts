@@ -3010,3 +3010,25 @@ describe('Fetch.polyfill / restore', () => {
     globalThis.fetch = originalFetch
   })
 })
+
+describe('retryKey', () => {
+  const challenge = {
+    id: 'abc',
+    realm: 'shop\u2014example',
+    method: 'tempo',
+    intent: 'charge',
+    request: { amount: '1', currency: 'usd' },
+    description: 'Coffee \u2014 large',
+  } satisfies Challenge.Challenge
+
+  test('behavior: keys a realm a header cannot carry', () => {
+    expect(() => Fetch.retryKey(challenge)).not.toThrow()
+  })
+
+  test('behavior: ignores description and field order', () => {
+    const { request, id, ...rest } = challenge
+    expect(Fetch.retryKey({ ...rest, description: 'Coffee u2014 large', request, id })).toBe(
+      Fetch.retryKey(challenge),
+    )
+  })
+})

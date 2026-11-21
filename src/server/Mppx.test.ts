@@ -67,6 +67,18 @@ describe('create', () => {
     expect(handler.transport.name).toBe('mcp')
   })
 
+  test('error: rejects a realm above U+00FF', () => {
+    expect(() => Mppx.create({ methods: [method], realm: 'shop\u2014example', secretKey })).toThrow(
+      'Invalid realm: characters above U+00FF cannot be sent in a header.',
+    )
+  })
+
+  test('error: rejects a method name outside a-z', () => {
+    expect(() =>
+      Mppx.create({ methods: [{ ...method, name: 'legacy-pay' }], realm, secretKey }),
+    ).toThrow('Invalid method: "legacy-pay". Must be lowercase letters a-z per spec.')
+  })
+
   test('error: rejects short explicit secret key', () => {
     expect(() => Mppx.create({ methods: [method], realm, secretKey: 'short' })).toThrow(
       'Secret key must be at least 32 bytes.',

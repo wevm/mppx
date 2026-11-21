@@ -1065,6 +1065,17 @@ describe('deserializeList', () => {
     request: { amount: '1000000', currency: 'USD' },
   })
 
+  test('behavior: skips an offer whose method id is outside a-z', () => {
+    const invalid = secondHeader
+      .replace('method="tempo"', 'method="tempo2"')
+      .replace('id="second"', 'id="invalid"')
+
+    const challenges = Challenge.deserializeList(`${invalid}, ${secondHeader}`)
+
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]).toMatchObject({ id: 'second', method: 'tempo' })
+  })
+
   test('behavior: parses the reported Stripe and Tempo header with payment in description', () => {
     const stripeHeader =
       'Payment id="k3fGx9QpLmZ2vT8sWyR4nB6cD1eH5jA7uN0iO2aS9dU", realm="example.com", method="stripe", intent="charge", request="eyJhbW91bnQiOiI1MCIsImN1cnJlbmN5IjoidXNkIiwiZXh0ZXJuYWxJZCI6Im9yZGVyLTEyMyIsIm1ldGhvZERldGFpbHMiOnsibmV0d29ya0lkIjoicHJvZmlsZV8wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwicGF5bWVudE1ldGhvZFR5cGVzIjpbImNhcmQiLCJsaW5rIl19fQ", description="Agentcash card payment test", expires="2026-09-01T00:00:00.000Z", opaque="eyJfbXBweF9zY29wZSI6ImNvZmZlZXNob3A6b3JkZXI6b3JkZXItMTIzOnBheSJ9"'
