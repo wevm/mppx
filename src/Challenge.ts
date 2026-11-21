@@ -351,6 +351,7 @@ export declare namespace fromMethod {
  * ```
  */
 export function serialize(challenge: Challenge): string {
+  assertMethod(challenge.method)
   const parts = [
     authParam('id', challenge.id),
     authParam('realm', challenge.realm),
@@ -360,7 +361,7 @@ export function serialize(challenge: Challenge): string {
   ]
 
   if (challenge.description !== undefined)
-    parts.push(authParam('description', challenge.description))
+    parts.push(authParam('description', challenge.description, { escapeUnicode: true }))
   if (challenge.digest !== undefined) parts.push(authParam('digest', challenge.digest))
   if (challenge.expires !== undefined) parts.push(authParam('expires', challenge.expires))
   const credentialHeader = advertisedCredentialHeader(challenge.header)
@@ -372,18 +373,33 @@ export function serialize(challenge: Challenge): string {
   return `${Constants.Schemes.payment} ${parts.join(', ')}`
 }
 
+/** Payment method identifier grammar: `1*LOWERALPHA` (a-z only). */
+const methodPattern = /^[a-z]+$/
+
+/** @internal Throws unless `method` matches the spec's method identifier grammar (a-z only). */
+function assertMethod(method: string): void {
+  if (!methodPattern.test(method))
+    throw new Error(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
+}
+
 /** @internal */
-function authParam(name: string, value: string): string {
+function authParam(
+  name: string,
+  value: string,
+  options: { escapeUnicode?: boolean | undefined } = {},
+): string {
   if (/[\r\n]/.test(value)) throw new Error('Invalid quoted-string value.')
-  const escaped = value
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    // Header values must be ByteStrings (code points ≤ 0xFF): escape anything
-    // above Latin-1 (em dashes, smart quotes, emoji in descriptions) so the
-    // serialized challenge is always a legal header value instead of crashing
-    // Response construction.
-    .replace(/[\u0100-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
-  return `${name}="${escaped}"`
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  // Header values must be ByteStrings (code points ≤ 0xFF). Receivers read a
+  // backslash as quoted-pair (`\\u2014` is the text `u2014`), so other
+  // characters cannot round-trip in a quoted-string.
+  if (!/[\u0100-\uffff]/.test(escaped)) return `${name}="${escaped}"`
+  // The display-only description is not bound into the Challenge ID: keep the
+  // `\\uXXXX` escape there so a 402 never fails on an em dash or emoji in a
+  // product title. Receivers show the escape text.
+  if (options.escapeUnicode)
+    return `${name}="${escaped.replace(/[\u0100-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}"`
+  throw new Error(`Invalid ${name}: characters above U+00FF cannot be sent in a header.`)
 }
 
 /**
@@ -415,8 +431,7 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   const { request, opaque, header, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
   if (request.length > maxRequestParameterLength) throw new Error('Request parameter too large.')
-  if (rest.method && !/^[a-z][a-z0-9:_-]*$/.test(rest.method))
-    throw new Error(`Invalid method: "${rest.method}". Must be lowercase per spec.`)
+  if (rest.method !== undefined) assertMethod(rest.method)
   // Validate the raw value before `from` treats `Authorization` as the omitted default: a
   // received challenge may only select `Payment-Authorization`.
   if (header !== undefined && !isPaymentAuthorizationHeader(header))
@@ -503,15 +518,10 @@ function readQuotedAuthParamValue(
     i++
 
     if (escaped) {
+      // quoted-pair (RFC 9110): drop the backslash and keep the next character
+      // as is, so `\\u2014` is the text `u2014`, not an escape.
       parts ??= []
-      // `\\uXXXX` unescapes characters above Latin-1. Unambiguous: serializers
-      // always double raw backslashes, so a bare `\\u` only ever comes from
-      // the unicode escape in `authParam`.
-      const hex = char === 'u' ? input.slice(i, i + 4) : undefined
-      if (hex && /^[0-9A-Fa-f]{4}$/.test(hex)) {
-        parts.push(String.fromCharCode(Number.parseInt(hex, 16)))
-        i += 4
-      } else parts.push(char)
+      parts.push(char)
       segmentStart = i
       escaped = false
       continue
