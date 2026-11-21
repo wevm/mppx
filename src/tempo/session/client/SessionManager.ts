@@ -470,7 +470,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         use && use.challengesReceived > 0 && challenge.id === runtime.lastChallenge?.id
       const isSameRetryChallenge =
         isRepeatedRetryChallenge &&
-        Challenge.serialize(challenge) === Challenge.serialize(runtime.lastChallenge!)
+        Fetch.retryKey(challenge) === Fetch.retryKey(runtime.lastChallenge!)
       if (use) use.challengesReceived++
       if (isSameRetryChallenge) return undefined
       if (!commitReferencedChannel(challenge)) {

@@ -351,11 +351,12 @@ export declare namespace fromMethod {
  * ```
  */
 export function serialize(challenge: Challenge): string {
-  assertMethod(challenge.method)
+  const { method } = challenge
+  assertMethod(method)
   const parts = [
     authParam('id', challenge.id),
     authParam('realm', challenge.realm),
-    authParam('method', challenge.method),
+    authParam('method', method),
     authParam('intent', challenge.intent),
     authParam('request', PaymentRequest.serialize(challenge.request)),
   ]
@@ -376,10 +377,24 @@ export function serialize(challenge: Challenge): string {
 /** Payment method identifier grammar: `1*LOWERALPHA` (a-z only). */
 const methodPattern = /^[a-z]+$/
 
+/** @internal Thrown for a method identifier outside the spec's grammar. */
+class InvalidMethodError extends Error {
+  override readonly name = 'InvalidMethodError'
+
+  constructor(method: string) {
+    super(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
+  }
+}
+
 /** @internal Throws unless `method` matches the spec's method identifier grammar (a-z only). */
-function assertMethod(method: string): void {
-  if (!methodPattern.test(method))
-    throw new Error(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
+export function assertMethod(method: string): void {
+  if (!methodPattern.test(method)) throw new InvalidMethodError(method)
+}
+
+/** @internal Throws unless `realm` can be sent in a header (no characters above U+00FF). */
+export function assertRealm(realm: string): void {
+  if (/[\u0100-\uffff]/.test(realm))
+    throw new Error('Invalid realm: characters above U+00FF cannot be sent in a header.')
 }
 
 /** @internal */
@@ -721,6 +736,9 @@ export function deserializeList<
       // A challenge with an unsupported credential header gets no credential,
       // but must not stop the client from paying another challenge.
       if (error instanceof UnsupportedCredentialHeaderError) return []
+      // An offer for a method id outside the grammar can't be paid, but must not stop the
+      // client from paying another offer in the same header.
+      if (error instanceof InvalidMethodError) return []
       throw error
     }
   })
