@@ -1,6 +1,7 @@
 ---
 title: 'Changesets v3 crashes on workspace package name collisions'
 severity: 'minor'
+issue: 'wevm/mppx#833'
 ---
 
 ## Expected Behavior

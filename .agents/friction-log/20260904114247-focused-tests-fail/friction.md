@@ -1,6 +1,7 @@
 ---
 title: 'Focused tests fail before HTML composition is generated'
 severity: 'minor'
+issue: 'wevm/mppx#868'
 ---
 
 ## Expected Behavior
