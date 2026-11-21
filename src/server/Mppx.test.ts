@@ -73,6 +73,17 @@ describe('create', () => {
     )
   })
 
+  test('behavior: accepts a realm above U+00FF with the mcp transport', () => {
+    const handler = Mppx.create({
+      methods: [method],
+      realm: 'shop\u2014example',
+      secretKey,
+      transport: Transport.mcp(),
+    })
+
+    expect(handler.realm).toBe('shop\u2014example')
+  })
+
   test('error: rejects a method name outside a-z', () => {
     expect(() =>
       Mppx.create({ methods: [{ ...method, name: 'legacy-pay' }], realm, secretKey }),

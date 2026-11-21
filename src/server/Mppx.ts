@@ -580,11 +580,15 @@ export function create<
     )
   }
   SecretKey.assert(secretKey)
-  // Fail at startup rather than on every 402: a challenge can't carry these values.
-  if (realm !== undefined) Challenge.assertRealm(realm)
-
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
+  // Fail at startup rather than on every 402: a challenge can't carry these values. MCP
+  // transports return the Challenge as JSON, so only a header-emitting transport needs the realm check.
   for (const mi of methods) Challenge.assertMethod(mi.name)
+  const emitsHeader = (methods as readonly Method.AnyServer[]).some((mi) => {
+    const name = (mi.transport ?? transport).name
+    return name !== 'mcp' && name !== 'mcp-sdk'
+  })
+  if (realm !== undefined && emitsHeader) Challenge.assertRealm(realm)
   const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
 
   const handlers: Record<string, unknown> = {}
