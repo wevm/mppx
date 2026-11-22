@@ -17,6 +17,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import { resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
 import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
@@ -606,8 +607,20 @@ export function session(parameters: session.Parameters = {}) {
       if (other && isSameAddress(other.payee, payee) && (await store.get(other.key))?.opened)
         return false
     }
+    const account = getAccount(client, sessionContext)
+    // MACH can't pay fees: without a sponsor, the payer needs a stablecoin to pay them.
+    if (
+      !resolved.feePayer &&
+      !(await resolveMachineTokenFeeToken({
+        account: account.address,
+        chainId,
+        client,
+        preferred: resolved.feeToken,
+      }))
+    )
+      return false
     return MachineTokenCharge.canSpend(client, {
-      account: getAccount(client, sessionContext),
+      account,
       amount: resolveOpeningDeposit({
         contextDepositRaw: sessionContext?.depositRaw,
         maxDeposit,

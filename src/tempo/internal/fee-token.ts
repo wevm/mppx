@@ -82,3 +82,39 @@ export async function resolveFeeToken(parameters: {
 
   return tokens[0]
 }
+
+/**
+ * Stablecoins a MACH payment can pay its fees in: MACH itself can't. The server's or caller's fee
+ * token comes first, then the payer's own fee token and the chain's, then Tempo's stablecoins.
+ */
+export function machineTokenFeeTokens(
+  chainId: number | undefined,
+  preferred?: Address | undefined,
+): Address[] {
+  const tokens: Address[] = []
+  pushUnique(tokens, preferred)
+  for (const token of defaultFeeTokens(chainId)) pushUnique(tokens, token)
+  pushUnique(tokens, defaults.tokens.ousd)
+  pushUnique(tokens, defaults.tokens.usdc)
+  return tokens
+}
+
+/**
+ * The first stablecoin the payer holds to pay a MACH payment's fees, checking its own fee token and
+ * the chain's too, or `undefined` when it holds none.
+ */
+export async function resolveMachineTokenFeeToken(parameters: {
+  account: Address
+  chainId: number | undefined
+  client: Client
+  preferred?: Address | undefined
+}): Promise<Address | undefined> {
+  const { account, chainId, client, preferred } = parameters
+  const token = await resolveFeeToken({
+    account,
+    candidateTokens: machineTokenFeeTokens(chainId, preferred),
+    client,
+    prioritizeCandidates: preferred !== undefined,
+  })
+  return token && (await hasBalance(client, account, token)) ? token : undefined
+}

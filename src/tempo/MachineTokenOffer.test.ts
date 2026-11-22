@@ -144,19 +144,6 @@ describe('MACH direct payments', () => {
     ).toThrow('MACH cannot be the first accepted currency')
   })
 
-  test('server: a sponsored MACH session needs a fee token', () => {
-    expect(() =>
-      tempo_server({
-        chainId: chain.id,
-        currencies: [asset, mach],
-        feePayer: accounts[1],
-        getClient: () => client,
-        recipient,
-        store: Store.memory(),
-      }),
-    ).toThrow('A sponsored MACH session needs `feeToken`')
-  })
-
   test('server: settles a credential for the MACH offer directly to the recipient', async () => {
     const payer = await createPayer({ machineToken: 5_000_000n, stablecoin: 5_000_000n })
     const server = createServer(true)
@@ -276,14 +263,15 @@ describe('MACH direct payments', () => {
     httpServer.close()
   })
 
-  test('charge: a payer with MACH but nothing to pay gas with gets an error, not a silent switch', async () => {
+  test('charge: a payer with MACH but nothing to pay gas with is not moved to MACH', async () => {
     const payer = await createPayer({ machineToken: 5_000_000n, stablecoin: 0n })
     const httpServer = await serve(chargeRoute(createServer(true)))
     const mppx = Mppx_client.create({
       methods: [tempo_client({ account: payer, getClient: () => client })],
       polyfill: false,
     })
-    await expect(mppx.fetch(httpServer.url)).rejects.toThrow('to pay the transaction fee')
+    // MACH isn't preferred without gas, so the client pays the first offer, which it can't afford.
+    await expect(mppx.fetch(httpServer.url)).rejects.toThrow('holds 0 of token')
     expect(await balance(payer.address, mach)).toBe(5_000_000n)
     httpServer.close()
   })
@@ -455,5 +443,92 @@ describe('MACH direct payments', () => {
     expect(response.status).toBe(200)
     expect(await balance(payer.address, asset)).toBeLessThanOrEqual(4_900_000n)
     httpServer.close()
+  })
+})
+
+describe('MACH gas', () => {
+  // A stablecoin other than pathUSD, the localnet default fee token.
+  const alphaUsd = '0x20c0000000000000000000000000000000000001' as const
+
+  async function payerWith(stablecoin: Address | undefined) {
+    const payer = privateKeyToAccount(generatePrivateKey())
+    if (stablecoin) {
+      await Actions.token.transferSync(client, {
+        account: accounts[0],
+        amount: 5_000_000n,
+        chain,
+        to: payer.address,
+        token: stablecoin,
+      })
+      // The payer's own fee token: a stablecoin that isn't one of Tempo's defaults.
+      await Actions.fee.setUserTokenSync(client, {
+        account: payer,
+        chain,
+        feeToken: stablecoin,
+        token: stablecoin,
+      } as never)
+    }
+    await Actions.token.mintSync(client, {
+      account: accounts[0],
+      amount: 5_000_000n,
+      chain,
+      to: payer.address,
+      token: mach,
+    })
+    return payer
+  }
+
+  function server(options: { sponsored: boolean | 'feeToken'; main: Address }) {
+    return Mppx_server.create({
+      methods: [
+        tempo_server({
+          chainId: chain.id,
+          currencies: [options.main, mach],
+          ...(options.sponsored ? { feePayer: accounts[1] } : {}),
+          ...(options.sponsored === 'feeToken' ? { feeToken: asset } : {}),
+          getClient: () => client,
+          recipient,
+          store: Store.memory(),
+        }),
+      ],
+      secretKey,
+    })
+  }
+
+  async function pay(intent: 'charge' | 'session', s: ReturnType<typeof server>, payer: any) {
+    const httpServer = await serve(async (request) => {
+      const result =
+        intent === 'charge'
+          ? await s.charge({ amount: '1', decimals: 6 })(request)
+          : await s.session({ amount: '0.1', decimals: 6, unitType: 'request' })(request)
+      if (result.status === 402) return result.challenge
+      return result.withReceipt(new Response('paid'))
+    })
+    const mppx = Mppx_client.create({
+      methods: [tempo_client({ account: payer, getClient: () => client, maxDeposit: '1' })],
+      polyfill: false,
+    })
+    try {
+      const response = await mppx.fetch(httpServer.url)
+      return response.status === 200 ? 'paid' : `status ${response.status}`
+    } catch (error) {
+      return `error: ${(error as Error).message.slice(0, 160)}`
+    } finally {
+      httpServer.close()
+    }
+  }
+
+  test.each([
+    { intent: 'charge', sponsored: false },
+    { intent: 'charge', sponsored: true },
+    { intent: 'session', sponsored: false },
+    { intent: 'session', sponsored: true },
+    { intent: 'session', sponsored: 'feeToken' },
+  ] as const)('$intent, sponsored $sponsored: pays MACH', async ({ intent, sponsored }) => {
+    // Unsponsored: the payer holds MACH and a non-default stablecoin for gas. Sponsored: only MACH.
+    const payer = await payerWith(sponsored ? undefined : alphaUsd)
+    const result = await pay(intent, server({ sponsored, main: alphaUsd }), payer)
+    expect(result).toBe('paid')
+    expect(await balance(payer.address, mach)).toBeLessThan(5_000_000n)
   })
 })

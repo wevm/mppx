@@ -14,7 +14,7 @@ import * as Account from '../../../viem/Account.js'
 import { assertAllowedChainId, assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
-import { defaultFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
+import { machineTokenFeeTokens, resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
 import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
@@ -1027,7 +1027,7 @@ async function manualTopUp(
  * The fee token for a channel's open or top-up: the one the server names, else the channel token,
  * except MACH, which can't pay fees, so the payer's own stablecoin fee token pays them instead.
  */
-async function resolveChannelFeeToken(
+export async function resolveChannelFeeToken(
   account: Address,
   resolved: {
     chainId: number
@@ -1037,14 +1037,22 @@ async function resolveChannelFeeToken(
     token: Address
   },
 ): Promise<Address | undefined> {
-  if (resolved.feeToken || resolved.feePayer) return resolved.feeToken
-  if (!MachineTokenCharge.isMachineToken({ chainId: resolved.chainId, currency: resolved.token }))
-    return undefined
-  return resolveFeeToken({
+  const { chainId, client, feePayer, feeToken, token } = resolved
+  if (!MachineTokenCharge.isMachineToken({ chainId, currency: token })) return feeToken
+  // MACH can't pay fees. A sponsor pays them in the server's fee token, or else a default
+  // stablecoin, which the server accepts for MACH; an unsponsored payer pays in one it holds.
+  if (feePayer) return feeToken ?? machineTokenFeeTokens(chainId)[0]
+  const funded = await resolveMachineTokenFeeToken({
     account,
-    candidateTokens: defaultFeeTokens(resolved.chainId),
-    client: resolved.client,
+    chainId,
+    client,
+    preferred: feeToken,
   })
+  if (!funded)
+    throw new Errors.InsufficientBalanceError({
+      reason: `${account} holds no stablecoin to pay the transaction fee for a MACH channel`,
+    })
+  return funded
 }
 
 function manualVoucher(parameters: ManualCredentialParameters): Promise<SessionCredentialPayload> {
