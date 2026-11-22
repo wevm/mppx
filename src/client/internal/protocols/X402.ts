@@ -1,7 +1,7 @@
 import * as Challenge from '../../../Challenge.js'
-import * as x402_Header from '../../../x402/Header.js'
-import * as x402_ChallengeBrand from '../../../x402/internal/ChallengeBrand.js'
-import * as x402_Types from '../../../x402/Types.js'
+import * as x402_ChallengeBrand from '../../../internal/x402/ChallengeBrand.js'
+import * as x402_Header from '../../../internal/x402/Header.js'
+import * as x402_Types from '../../../internal/x402/Types.js'
 import type { Protocol } from './Protocol.js'
 import { paymentRequiredStatus, setCredentialHeader } from './Shared.js'
 

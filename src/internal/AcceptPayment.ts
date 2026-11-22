@@ -1,6 +1,6 @@
 import type * as Challenge from '../Challenge.js'
-import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import type { MaybePromise } from './types.js'
+import * as x402_ChallengeBrand from './x402/ChallengeBrand.js'
 
 type MethodLike = {
   canHandleChallenge?:

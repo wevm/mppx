@@ -2,7 +2,7 @@ import { getAddress } from 'viem'
 import type { Token } from 'viem/tokens'
 
 import * as Currency_ from '../Currency.js'
-import type { Asset, EvmNetwork, ExactTransfer } from './Types.js'
+import type { Asset, EvmNetwork, ExactTransfer } from '../internal/x402/Types.js'
 
 const knownAsset = Symbol('mppx.x402.asset')
 

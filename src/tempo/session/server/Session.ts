@@ -7,16 +7,17 @@
  */
 import { isAddress, type Address, type Hex } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
+import { Actions } from 'viem/tempo'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as Errors from '../../../Errors.js'
 import * as Expires from '../../../Expires.js'
+import * as ChallengeMeta from '../../../internal/challengeMeta.js'
 import type { MaybePromise } from '../../../internal/types.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
-import * as ChallengeMeta from '../../../server/internal/challengeMeta.js'
 import * as Store from '../../../Store.js'
 import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
@@ -505,6 +506,7 @@ export function session<const parameters extends session.Parameters>(
             channelStateTtl,
             chainId: context.chainId,
             client: context.client,
+            configurableVouchers: parameters.configurableVouchers,
             credentialSource: credential.source,
             escrow: context.escrow,
             expectedOperator: context.methodDetails.operator,
@@ -581,6 +583,7 @@ export function session<const parameters extends session.Parameters>(
       channelStateTtl,
       chainId: context.chainId,
       client: context.client,
+      configurableVouchers: parameters.configurableVouchers,
       credentialSource: credential.source,
       escrow: context.escrow,
       expectedOperator: context.methodDetails.operator,
@@ -589,6 +592,8 @@ export function session<const parameters extends session.Parameters>(
         feePayer: context.feePayer,
         limit: parameters.sponsorshipLimit,
         payload,
+        readConfigCommitment: (account) =>
+          Actions.accounts.getConfigCommitment(context.client, { account }),
       }),
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: context.methodDetails.feeToken,
@@ -692,8 +697,13 @@ export function session<const parameters extends session.Parameters>(
         sseEnabled: Boolean(parameters.sse),
         store,
       })
+      // Verification honors only the server option, so a route cannot advertise TIP-1166
+      // vouchers the server would reject.
+      const { configurableVouchers: _routeConfigurableVouchers, ...routeRequest } =
+        resolvedRequest as typeof resolvedRequest & { configurableVouchers?: boolean | undefined }
       return {
-        ...resolvedRequest,
+        ...routeRequest,
+        ...(parameters.configurableVouchers ? { configurableVouchers: true } : {}),
         feeToken: parameters.feeToken,
         sessionProtocol: Constants.SessionProtocols.v2,
       }
@@ -771,6 +781,14 @@ export namespace session {
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /**
+     * Accepts TIP-1166 configurable account (`0x05`) vouchers and close authorizations, and
+     * advertises `methodDetails.configurableVouchers` in the challenge so configurable account
+     * clients may open channels. Each voucher is checked against the signer config commitment the
+     * escrow recorded at open (`OpeningCommitmentRecorded`). Enable once the chain runs T15.
+     * @default false
+     */
+    configurableVouchers?: boolean | undefined
     /**
      * Maps authenticated application identity and payment scope to an existing channel ID.
      * Called only when the request does not already supply a channel ID. MPPx then loads that

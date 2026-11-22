@@ -2,15 +2,15 @@ import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
+import * as Html from '../internal/html/config.js'
+import { serviceWorker } from '../internal/html/serviceWorker.gen.js'
+import * as McpCredential from '../internal/McpCredential.js'
 import type { Distribute, MaybePromise, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
-import * as McpCredential from '../mcp/internal/Credential.js'
 import type * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
-import * as Html from './internal/html/config.js'
-import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 
-export { type McpSdk, mcpSdk } from '../mcp/server/Transport.js'
+export { type McpSdk, mcpSdk } from './internal/mcpSdk.js'
 
 /**
  * Server-side transport adapter.

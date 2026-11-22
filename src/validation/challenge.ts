@@ -1,10 +1,10 @@
 import type { Chain } from 'viem'
 import * as viemChains from 'viem/chains'
 
-import * as Challenge from '../../Challenge.js'
-import * as Constants from '../../Constants.js'
-import * as x402Header from '../../x402/Header.js'
-import { pc } from '../utils.js'
+import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
+import { pc } from '../internal/pc.js'
+import * as x402Header from '../internal/x402/Header.js'
 import { buildUrl, extractRequestBodyFromDiscovery } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
 import {

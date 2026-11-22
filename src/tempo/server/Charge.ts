@@ -32,11 +32,11 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as ChallengeMeta from '../../internal/challengeMeta.js'
 import * as CredentialExpiry from '../../internal/CredentialExpiry.js'
+import type * as Html from '../../internal/html/config.ts'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
-import type * as Html from '../../server/internal/html/config.ts'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import type * as z from '../../zod.js'

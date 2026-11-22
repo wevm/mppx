@@ -11,8 +11,8 @@ import type { PaymentRequired } from '@x402/core/types'
 
 import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as SecretKey from '../../server/internal/SecretKey.js'
-import * as Types from '../../x402/Types.js'
 import * as Evm from './Evm.js'
 
 /** Configuration for MPP negotiation over an existing x402 route table. */

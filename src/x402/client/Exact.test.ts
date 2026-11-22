@@ -4,10 +4,10 @@ import { tokens } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Chains from '../../evm/Chains.js'
+import * as Header from '../../internal/x402/Header.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as Assets from '../Assets.js'
-import * as Header from '../Header.js'
 import * as RouteBinding from '../internal/RouteBinding.js'
-import * as Types from '../Types.js'
 import { canHandleChallenge, createCredential } from './Exact.js'
 
 type X402Challenge = Parameters<typeof createCredential>[0]['challenge']

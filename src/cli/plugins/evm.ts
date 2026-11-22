@@ -3,7 +3,7 @@ import { readContract } from 'viem/actions'
 import * as viemChains from 'viem/chains'
 
 import { evm as evmMethods, assets as evmAssets } from '../../evm/client/index.js'
-import * as x402_ChallengeBrand from '../../x402/internal/ChallengeBrand.js'
+import * as x402_ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
 import { resolveAccount } from '../account.js'
 import { createPlugin } from './plugin.js'
 

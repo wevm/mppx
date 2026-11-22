@@ -5,9 +5,9 @@ import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 import * as evm_Types from '../evm/Types.js'
-import * as Header from './Header.js'
+import * as Header from '../internal/x402/Header.js'
+import * as Types from '../internal/x402/Types.js'
 import * as RouteBinding from './internal/RouteBinding.js'
-import * as Types from './Types.js'
 
 const secretKey = 'test-secret-key-test-secret-key-32'
 const transaction = `0x${'1'.repeat(64)}`

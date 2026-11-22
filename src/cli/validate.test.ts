@@ -11,8 +11,8 @@ import * as Http from '~test/Http.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Receipt from '../Receipt.js'
-import { validateRealmMatchesHost } from './validate/challenge.js'
-import { missingDiscoverySuggestion } from './validate/messages.js'
+import { validateRealmMatchesHost } from '../validation/challenge.js'
+import { missingDiscoverySuggestion } from '../validation/messages.js'
 
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
 const isAgentEnvironmentMock = vi.fn(() => false)
@@ -1551,5 +1551,62 @@ describe('validate: live mppx server', () => {
     // The CLI fetches a fresh Challenge before paying; its new nonce is not a changed payment.
     expect(output).toContain('Payment: submitted')
     expect(output).not.toContain('Payment request changed on retry')
+  })
+})
+
+describe('validateStream: custom payment validator', () => {
+  async function paymentEvent(payment: import('../validation/index.js').PaymentValidator) {
+    const { validateStream } = await import('../validation/index.js')
+    const server = await mppServer(makeChallenge())
+    for await (const event of validateStream({ url: server.url, payment }))
+      if (event.phase === 'payment') return event
+    throw new Error('no payment event')
+  }
+
+  test('uses the succeeded flag a validator returns', async () => {
+    const results = [{ severity: 'pass' as const, label: 'Paid with my wallet' }]
+    const event = await paymentEvent(async () => ({ results, succeeded: true }))
+    expect(event.results).toEqual(results)
+    expect(event.succeeded).toBe(true)
+  })
+
+  test('reports failure when a validator says so', async () => {
+    const event = await paymentEvent(async () => ({ results: [], succeeded: false }))
+    expect(event.succeeded).toBe(false)
+    expect(event.results).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+  })
+
+  test('validate() keeps the succeeded flag and counts a reported failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const run = async (succeeded: boolean) =>
+      validate({
+        url: (await mppServer(makeChallenge())).url,
+        payment: async () => ({
+          results: [{ severity: 'pass', label: 'Paid with my wallet' }],
+          succeeded,
+        }),
+      })
+
+    const failed = await run(false)
+    expect(failed.endpoints[0]!.paymentSucceeded).toBe(false)
+    expect(failed.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(failed.summary.failed).toBeGreaterThan(0)
+
+    const passed = await run(true)
+    expect(passed.endpoints[0]!.paymentSucceeded).toBe(true)
+    expect(passed.endpoints[0]!.payment).not.toContainEqual(
+      expect.objectContaining({ label: 'Payment: failed' }),
+    )
+    expect(passed.summary.failed).toBe(failed.summary.failed - 1)
+  })
+
+  test('treats a passing success check as succeeded when only checks are returned', async () => {
+    const { paymentSuccessLabel } = await import('../validation/index.js')
+    const event = await paymentEvent(async () => [{ severity: 'pass', label: paymentSuccessLabel }])
+    expect(event.succeeded).toBe(true)
   })
 })

@@ -1,4 +1,4 @@
-import * as z from '../zod.js'
+import * as z from '../../zod.js'
 
 export const versions = [2] as const
 

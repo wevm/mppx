@@ -149,6 +149,25 @@ function openedLog(parameters: {
   }
 }
 
+function openingCommitmentLog(parameters: {
+  channelId: `0x${string}`
+  commitment?: `0x${string}` | undefined
+  signer?: Address | undefined
+}) {
+  return {
+    address: tip20ChannelEscrow,
+    data: encodeAbiParameters([{ type: 'bytes32' }], [parameters.commitment ?? descriptor.salt]),
+    topics: encodeEventTopics({
+      abi: escrowAbi,
+      eventName: 'OpeningCommitmentRecorded',
+      args: {
+        channelId: parameters.channelId,
+        signer: parameters.signer ?? descriptor.authorizedSigner,
+      },
+    }),
+  }
+}
+
 function topUpLog(parameters: { channelId: `0x${string}`; newDeposit: bigint }) {
   return {
     address: tip20ChannelEscrow,
@@ -1283,6 +1302,73 @@ describe('precompile broadcastOpenTransaction', () => {
     expect(ethCallBlockTags).toEqual(['0x1'])
   })
 
+  describe('TIP-1166 opening commitment', () => {
+    async function open(
+      logs: (channelId: Hex, expiringNonceHash: Hex) => Record<string, unknown>[],
+    ) {
+      const serializedTransaction = await createOpenTransaction()
+      const expiringNonceHash = expectedExpiringNonceHash(serializedTransaction)
+      const expectedDescriptor = { ...descriptor, expiringNonceHash }
+      const channelId = Channel.computeId({
+        ...expectedDescriptor,
+        chainId,
+        escrow: tip20ChannelEscrow,
+      })
+      return Chain.broadcastOpenTransaction({
+        chainId,
+        client: createMockClient({
+          channel: {
+            descriptor: expectedDescriptor,
+            state: { settled: 0n, deposit, closeRequestedAt: 0 },
+          },
+          receipt: receipt([
+            openedLog({ channelId, expiringNonceHash }),
+            ...logs(channelId, expiringNonceHash),
+          ]),
+        }),
+        escrowContract: tip20ChannelEscrow,
+        expectedAuthorizedSigner: descriptor.authorizedSigner,
+        expectedChannelId: channelId,
+        expectedCurrency: descriptor.token,
+        expectedExpiringNonceHash: expiringNonceHash,
+        expectedOperator: descriptor.operator,
+        expectedPayee: descriptor.payee,
+        expectedPayer: descriptor.payer,
+        serializedTransaction,
+      })
+    }
+
+    test('omits the opening commitment when the receipt has no OpeningCommitmentRecorded event', async () => {
+      const result = await open(() => [])
+      expect(result.openingCommitment).toBeUndefined()
+      expect('openingCommitment' in result).toBe(false)
+    })
+
+    test('returns the opening commitment from OpeningCommitmentRecorded', async () => {
+      const result = await open((channelId) => [openingCommitmentLog({ channelId })])
+      expect(result.openingCommitment).toBe(descriptor.salt)
+    })
+
+    test('ignores OpeningCommitmentRecorded events for other channels', async () => {
+      const result = await open(() => [openingCommitmentLog({ channelId: `0x${'99'.repeat(32)}` })])
+      expect(result.openingCommitment).toBeUndefined()
+    })
+
+    test('rejects an opening commitment that differs from the channel salt', async () => {
+      await expect(
+        open((channelId) => [
+          openingCommitmentLog({ channelId, commitment: `0x${'77'.repeat(32)}` }),
+        ]),
+      ).rejects.toThrow('OpeningCommitmentRecorded commitment does not match descriptor salt')
+    })
+
+    test('rejects an opening commitment for another signer', async () => {
+      await expect(
+        open((channelId) => [openingCommitmentLog({ channelId, signer: descriptor.payee })]),
+      ).rejects.toThrow('OpeningCommitmentRecorded signer does not match descriptor')
+    })
+  })
+
   test('rejects ChannelOpened receipt deposit mismatches', async () => {
     const serializedTransaction = await createOpenTransaction()
     const expiringNonceHash = expectedExpiringNonceHash(serializedTransaction)
@@ -1587,12 +1673,14 @@ describe('precompile escrowAbi parity', () => {
       'getChannelStatesBatch',
       'computeChannelId',
       'getVoucherDigest',
+      'verifyVoucher',
       'domainSeparator',
     ])
 
     const events = escrowAbi.filter((item) => item.type === 'event').map((item) => item.name)
     expect(events).toEqual([
       'ChannelOpened',
+      'OpeningCommitmentRecorded',
       'Settled',
       'TopUp',
       'CloseRequested',

@@ -1,4 +1,4 @@
-import * as Credential from '../../Credential.js'
+import * as Credential from '../Credential.js'
 
 /** Parsed MCP credential and its canonical HTTP Authorization value. */
 export type Parsed = { header: string; value: Credential.Credential }

@@ -3,9 +3,9 @@ import * as path from 'node:path'
 
 import * as Challenge from '../Challenge.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
+import * as ChallengeMeta from '../internal/challengeMeta.js'
 import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
-import * as ChallengeMeta from '../server/internal/challengeMeta.js'
 import type { Config } from './config.js'
 import type * as Extension from './Extension.js'
 import {

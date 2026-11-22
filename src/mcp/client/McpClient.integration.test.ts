@@ -17,13 +17,13 @@ import { accounts, asset, client as testClient, fundAccount } from '~test/tempo/
 
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
+import * as McpServer_transport from '../../server/internal/mcpSdk.js'
 import * as Store from '../../Store.js'
 import type {
   SessionCredentialPayload,
   SessionReceipt,
 } from '../../tempo/session/precompile/Protocol.js'
 import * as ChannelStore from '../../tempo/session/server/ChannelStore.js'
-import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
 const realm = 'api.example.com'

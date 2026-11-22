@@ -1,7 +1,7 @@
 import type * as Credential from '../Credential.js'
 import { PaymentExpiredError } from '../Errors.js'
 import * as Expires from '../Expires.js'
-import * as ChallengeMeta from '../server/internal/challengeMeta.js'
+import * as ChallengeMeta from './challengeMeta.js'
 
 /**
  * Lets a server method keep accepting some credentials for a bounded time after their

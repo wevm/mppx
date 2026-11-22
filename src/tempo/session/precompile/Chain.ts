@@ -83,6 +83,11 @@ export type ChannelOpenedReceiptFields = {
   deposit: bigint
   /** Expiring nonce hash emitted by the precompile. */
   expiringNonceHash: Hex
+  /**
+   * TIP-1166 signer config commitment recorded at open (`OpeningCommitmentRecorded`), present only when
+   * the channel signer had a nonzero config commitment.
+   */
+  openingCommitment?: Hex | undefined
 }
 
 /** Typed fields decoded from a TopUp receipt event. */
@@ -137,6 +142,53 @@ export function readChannelOpenedReceiptFields(
     deposit: readUint96(event.args.deposit, 'ChannelOpened deposit'),
     expiringNonceHash: readBytes32(event.args.expiringNonceHash, 'ChannelOpened expiringNonceHash'),
   }
+}
+
+/**
+ * Reads the TIP-1166 `OpeningCommitmentRecorded` event the escrow emits for a channel at open.
+ *
+ * Returns `undefined` when the receipt has none, which means the signer had no config commitment
+ * when the channel opened. The escrow requires the channel salt to equal the recorded commitment, so
+ * an opening commitment that names another signer or differs from `descriptor.salt` is rejected.
+ */
+export function readOpeningCommitment(
+  receipt: ChannelEventReceipt,
+  parameters: {
+    /** Channel ID the opening commitment must belong to. */
+    channelId: Hex
+    /** Descriptor of the opened channel. */
+    descriptor: ChannelDescriptor
+    /** Escrow that must have emitted the event. */
+    escrow: Address
+  },
+): Hex | undefined {
+  const { channelId, descriptor, escrow } = parameters
+  const logs = parseEventLogs({
+    abi: escrowAbi,
+    eventName: 'OpeningCommitmentRecorded',
+    logs: receipt.logs,
+  }).filter(
+    (log) =>
+      isAddressEqual(log.address, escrow) &&
+      log.args.channelId.toLowerCase() === channelId.toLowerCase(),
+  )
+  if (logs.length === 0) return undefined
+  if (logs.length > 1)
+    throw new VerificationFailedError({
+      reason:
+        'expected at most one OpeningCommitmentRecorded event for credential channelId in receipt',
+    })
+  const { commitment, signer } = logs[0]!.args
+  const recorded = readBytes32(commitment, 'OpeningCommitmentRecorded commitment')
+  if (!isAddressEqual(signer, ChannelUtils.resolveAuthorizedSigner(descriptor)))
+    throw new VerificationFailedError({
+      reason: 'OpeningCommitmentRecorded signer does not match descriptor',
+    })
+  if (recorded.toLowerCase() !== descriptor.salt.toLowerCase())
+    throw new VerificationFailedError({
+      reason: 'OpeningCommitmentRecorded commitment does not match descriptor salt',
+    })
+  return recorded
 }
 
 /** Reads and validates typed fields from a TopUp receipt event. */
@@ -309,6 +361,28 @@ export async function getChannel(
     descriptor: channel.descriptor,
     state: stateFromTuple(channel.state),
   }
+}
+
+/**
+ * Asks the escrow whether `settle` and `close` would accept `signature` for the channel at
+ * `cumulativeAmount`, under the voucher rules for the channel's opening commitment (TIP-1166).
+ */
+export async function verifyVoucher(
+  client: Client,
+  parameters: {
+    descriptor: ChannelDescriptor
+    cumulativeAmount: bigint
+    signature: Hex
+  },
+  escrow: Address = tip20ChannelEscrow,
+): Promise<boolean> {
+  const { cumulativeAmount, descriptor, signature } = parameters
+  return readContract(client, {
+    address: escrow,
+    abi: escrowAbi,
+    functionName: 'verifyVoucher',
+    args: [descriptorTuple(descriptor), cumulativeAmount, signature],
+  })
 }
 
 /**
@@ -921,6 +995,11 @@ export type BroadcastOpenTransactionResult = {
   expiringNonceHash: Hex
   /** Deposit amount encoded in the open calldata. */
   openDeposit: bigint
+  /**
+   * TIP-1166 signer config commitment the escrow recorded at open, present only when the receipt
+   * has an `OpeningCommitmentRecorded` event for the channel.
+   */
+  openingCommitment?: Hex | undefined
 }
 
 /** Inputs for broadcasting and verifying a client-signed TIP-1034 open transaction. */
@@ -929,7 +1008,9 @@ export type BroadcastOpenTransactionParameters = {
   allowedFeeTokens?: readonly Address[] | undefined
   /** Hook invoked after calldata validation but before broadcasting. */
   beforeBroadcast?:
-    | ((result: Omit<BroadcastOpenTransactionResult, 'txHash' | 'state'>) => Promise<void> | void)
+    | ((
+        result: Omit<BroadcastOpenTransactionResult, 'txHash' | 'state' | 'openingCommitment'>,
+      ) => Promise<void> | void)
     | undefined
   /** Challenge expiration propagated into fee-payer policy checks. */
   challengeExpires?: string | undefined
@@ -1078,6 +1159,11 @@ export async function broadcastOpenTransaction(
     expectedChannelId: parameters.expectedChannelId,
     openDeposit,
   })
+  const openingCommitment = readOpeningCommitment(receipt, {
+    channelId: parameters.expectedChannelId,
+    descriptor,
+    escrow: parameters.escrowContract,
+  })
   const chainChannel = await readbackWithRetry(() =>
     getChannel(parameters.client, descriptor, parameters.escrowContract, receipt.blockNumber),
   )
@@ -1089,6 +1175,7 @@ export async function broadcastOpenTransaction(
     state,
     expiringNonceHash: opened.expiringNonceHash,
     openDeposit,
+    ...(openingCommitment ? { openingCommitment } : {}),
   }
 }
 

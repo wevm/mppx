@@ -5,7 +5,7 @@ import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from
 import { Base64 } from 'ox'
 import { describe, expect, test } from 'vp/test'
 
-import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
+import * as x402_ChallengeBrand from '../internal/x402/ChallengeBrand.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'

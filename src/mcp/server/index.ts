@@ -1,1 +1,1 @@
-export * as Transport from './Transport.js'
+export * as Transport from '../../server/internal/mcpSdk.js'

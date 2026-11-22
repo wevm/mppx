@@ -1,6 +1,5 @@
 import { Json } from 'ox'
 
-import type * as Method from './Method.js'
 import {
   attrs,
   type Config,
@@ -9,8 +8,9 @@ import {
   type Text,
   type Theme,
   vars,
-} from './server/internal/html/config.js'
-import { submitCredential } from './server/internal/html/serviceWorker.client.js'
+} from './internal/html/config.js'
+import { submitCredential } from './internal/html/serviceWorker.client.js'
+import type * as Method from './Method.js'
 
 export function init<
   method extends Method.Method = Method.Method,
