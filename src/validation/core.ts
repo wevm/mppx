@@ -226,14 +226,14 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
           !Array.isArray(validation) &&
           !succeeded &&
           !paymentResults.some((r) => r.severity === 'fail')
-        )
-          paymentResults = [
-            ...paymentResults,
-            fail(
-              'Payment: failed',
-              'the payment validator reported that the payment did not succeed',
-            ),
-          ]
+        ) {
+          const failed = fail(
+            'Payment: failed',
+            'the payment validator reported that the payment did not succeed',
+          )
+          paymentResults = [...paymentResults, failed]
+          onResults?.([failed])
+        }
         yield { phase: 'payment', endpoint, results: paymentResults, succeeded }
       }
     }
@@ -306,7 +306,11 @@ export async function validate(options: ValidateOptions): Promise<ValidateResult
 
   if (!discovery) throw new Error('Discovery phase did not complete')
 
-  const suggestions = computeSuggestions(endpointResults, discovery, { sawTestnet, sawMainnet })
+  const suggestions = computeSuggestions(endpointResults, discovery, {
+    sawTestnet,
+    sawMainnet,
+    hasPaymentValidator: !!options.payment,
+  })
 
   return {
     url: baseUrl,
@@ -320,7 +324,7 @@ export async function validate(options: ValidateOptions): Promise<ValidateResult
 function computeSuggestions(
   endpoints: EndpointValidationResult[],
   discovery: DiscoveryResult,
-  flags: { sawTestnet: boolean; sawMainnet: boolean },
+  flags: { sawTestnet: boolean; sawMainnet: boolean; hasPaymentValidator: boolean },
 ): string[] {
   const steps: string[] = []
   const allResults = endpoints.flatMap((ep) => [...ep.challenge, ...ep.payment])
@@ -336,8 +340,11 @@ function computeSuggestions(
   )
 
   if (sawCryptoMainnet && !sawCryptoTestnet) {
+    // Only a payment validator (such as the one `mppx validate` injects) provisions a wallet.
     steps.push(
-      'Validate your testnet server to test without real funds (Tempo wallets are automatically provisioned).',
+      flags.hasPaymentValidator
+        ? 'Validate your testnet server to test without real funds (Tempo wallets are automatically provisioned).'
+        : 'Validate your testnet server to test without real funds. Run `mppx validate` to test payment with an automatically provisioned Tempo wallet.',
     )
   } else if (sawCryptoTestnet && !sawCryptoMainnet) {
     steps.push('Validate your mainnet server to confirm real payments work end-to-end.')
