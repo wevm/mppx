@@ -682,3 +682,151 @@ test('exposes the headers provers declare, lowercased and frozen', () => {
   expect(client.headers).toEqual(['x-agent-token', 'x-other'])
   expect(Object.isFrozen(client.headers)).toBe(true)
 })
+
+const liveChallenge = (id = 'live') =>
+  Challenge.from({
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    id,
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+
+/** A streamed body that never ends and records when it is cancelled. */
+const tracked = () => {
+  const state = { cancelled: false }
+  const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      state.cancelled = true
+    },
+  })
+  return { state, stream }
+}
+
+test('releases a rejected unread response before proving the resend', async () => {
+  const body = new ReadableStream<Uint8Array>({ cancel: () => void (state.cancelled = true) })
+  const state = { cancelled: false }
+  const seen: boolean[] = []
+  let proves = 0
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove(request) {
+        if (proves++ > 0) seen.push(state.cancelled)
+        return request
+      },
+      retry: () => true,
+    },
+  ])
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(body, { status: 401 }))
+    .mockResolvedValueOnce(new Response('ok'))
+  const { response } = await client.send(fetch as never, new Request('https://api.example'))
+  expect(await response.text()).toBe('ok')
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(seen).toEqual([true])
+})
+
+test('cancels the upload source of a paid attempt that is not resent', async () => {
+  const challenge = liveChallenge()
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const client = Identity.Client.from([
+    { scope: '*', prove: (request) => request, retry: () => undefined },
+  ])
+  const upload = tracked()
+  // The fetch stops reading the upload, as when a server answers before the body ends.
+  const fetch = vi.fn(async (request: Request) => {
+    await request.body?.cancel()
+    return new Response(null, { status: 401 })
+  })
+  const { response } = await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      body: upload.stream,
+      duplex: 'half',
+      headers: { Authorization: credential },
+      method: 'POST',
+    } as RequestInit),
+    { challenge },
+  )
+  expect(response.status).toBe(401)
+  expect(fetch).toHaveBeenCalledTimes(1)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(upload.state.cancelled).toBe(true)
+})
+
+test('returns the paid 401 when a retry hook or re-proving fails, without resending', async () => {
+  const challenge = liveChallenge()
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const paid = () =>
+    new Request('https://merchant.example', { headers: { Authorization: credential } })
+  const failingRetry = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      retry: () => Promise.reject(new Error('hook failed')),
+    },
+  ])
+  const fetch = vi.fn(async () => new Response('denied', { status: 401 }))
+  const first = await failingRetry.send(fetch as never, paid(), { challenge })
+  expect(first.response.status).toBe(401)
+  expect(await first.response.text()).toBe('denied')
+  expect(fetch).toHaveBeenCalledTimes(1)
+
+  let proves = 0
+  const failingProve = Identity.Client.from([
+    {
+      scope: '*',
+      prove(request) {
+        if (proves++ > 0) throw new Error('prove failed')
+        return request
+      },
+      retry: () => ({ 'X-Token': 'fresh' }),
+    },
+  ])
+  const second = await failingProve.send(fetch as never, paid(), { challenge })
+  expect(second.response.status).toBe(401)
+  expect(await second.response.text()).toBe('denied')
+  expect(second.headers).toEqual([])
+  expect(fetch).toHaveBeenCalledTimes(2)
+
+  // An unpaid attempt's failing retry hook still rejects.
+  await expect(
+    failingRetry.send(fetch as never, new Request('https://merchant.example')),
+  ).rejects.toThrow('hook failed')
+})
+
+test('cuts off a paid 401 kept while its resend is proved', async () => {
+  const challenge = Challenge.from({
+    expires: new Date(Date.now() + 50).toISOString(),
+    id: 'short',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove: (request) => request,
+      async retry() {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        return {}
+      },
+    },
+  ])
+  const large = 'a'.repeat(64 * 1024 + 1)
+  const fetch = vi.fn(async () => new Response(large, { status: 401 }))
+  const { response } = await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: credential } }),
+    { challenge },
+  )
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(response.status).toBe(401)
+  expect(response.headers.get('Mppx-Body-Truncated')).toBe('true')
+  expect((await response.text()).length).toBe(64 * 1024)
+})

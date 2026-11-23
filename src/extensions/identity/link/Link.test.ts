@@ -637,3 +637,35 @@ test('presentation key retrieval never pays through an untagged payment fetch', 
   expect(sign).not.toHaveBeenCalled()
   expect(raw).toHaveBeenCalledOnce()
 })
+
+test('ignores a claims challenge body over 64 KiB', async () => {
+  const present = vi.fn(async () => 'presentation')
+  const prover = Link.Client.claims({
+    claims: ['email'],
+    issuers: ['https://issuer.example'],
+    present,
+    scope: ['https://api.example'],
+  })
+  const challenge = {
+    aud: 'https://api.example',
+    claims: ['email'],
+    formats: [Link.Constants.format],
+    nonce: 'n1',
+    trusted_issuers: ['https://issuer.example'],
+    type: Link.Constants.claimsRequiredType,
+  }
+  const rejection = (body: string) =>
+    new Response(body, {
+      headers: {
+        'Content-Type': 'application/problem+json',
+        'WWW-Authenticate': Link.Constants.presentationHeader,
+      },
+      status: 401,
+    })
+  const request = new Request('https://api.example')
+  const padded = JSON.stringify({ ...challenge, padding: 'a'.repeat(64 * 1024) })
+  expect(await prover.retry!(rejection(padded), { request })).toBeUndefined()
+  expect(present).not.toHaveBeenCalled()
+  expect(await prover.retry!(rejection(JSON.stringify(challenge)), { request })).toEqual({})
+  expect(present).toHaveBeenCalledOnce()
+})
