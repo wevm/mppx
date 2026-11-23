@@ -7,16 +7,13 @@ import {
   isAddress,
   isAddressEqual,
   parseAbi,
-  type Account,
   type Address,
   type Client,
-  zeroAddress,
 } from 'viem'
 import { call, readContract } from 'viem/actions'
 import { Abis, Actions } from 'viem/tempo'
 
 import * as Errors from '../../Errors.js'
-import { isAccessKeyAccount } from './account.js'
 import * as defaults from './defaults.js'
 
 /** ABI for the first-party machine-token settlement swapper. */
@@ -251,40 +248,6 @@ export async function getBalance(
     }) as never,
   ).catch(() => undefined)
   return typeof balance === 'bigint' ? balance : undefined
-}
-
-/**
- * Whether `account` can spend `amount` of MACH: it holds that much, and a published access key's
- * spending limit allows it. Clients prefer a MACH offer only then. Failed reads answer `false`.
- */
-export async function canSpend(
-  client: Client,
-  parameters: { account: Account; amount: bigint; chainId: number | undefined },
-): Promise<boolean> {
-  const { account, amount, chainId } = parameters
-  const deployment = getDeployment(chainId)
-  if (!deployment) return false
-  try {
-    const [balance, withinLimit] = await Promise.all([
-      getBalance(client, { account: account.address, chainId }),
-      (async () => {
-        if (!isAccessKeyAccount(account)) return true
-        const keys = { account: account.address, accessKey: account.accessKeyAddress }
-        const metadata = await Actions.accessKey.getMetadata(client as never, keys)
-        if (metadata.isRevoked) return false
-        // An unpublished key, or one without a limit, is checked by the payment itself.
-        if (metadata.address === zeroAddress || metadata.spendPolicy !== 'limited') return true
-        const { remaining } = await Actions.accessKey.getRemainingLimit(client as never, {
-          ...keys,
-          token: deployment.token,
-        })
-        return remaining >= amount
-      })(),
-    ])
-    return balance !== undefined && balance >= amount && withinLimit
-  } catch {
-    return false
-  }
 }
 
 /**

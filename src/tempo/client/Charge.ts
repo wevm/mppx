@@ -36,11 +36,7 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import {
-  defaultFeeTokens,
-  resolveFeeToken,
-  resolveMachineTokenFeeToken,
-} from '../internal/fee-token.js'
+import { defaultFeeTokens, machineTokenFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Simulation from '../internal/simulation.js'
@@ -334,15 +330,15 @@ export function charge(parameters: charge.Parameters = {}) {
         return supportedModes[0]!
       })()
       // MACH can't pay fees. The server pays them only for a sponsored pull payment; otherwise the
-      // payer pays them in a stablecoin it holds, and a payer holding none stops before signing.
+      // payer pays them in a stablecoin it holds.
       const machineTokenFeesPaidByPayer =
         isMachineTokenCurrency && !(methodDetails?.feePayer && mode === 'pull')
       const feeToken = machineTokenFeesPaidByPayer
-        ? await resolveMachineTokenFeeToken({
+        ? await resolveFeeToken({
             account: account.address,
-            chainId,
+            candidateTokens: machineTokenFeeTokens(chainId, explicitFeeToken),
             client,
-            preferred: explicitFeeToken,
+            prioritizeCandidates: explicitFeeToken !== undefined,
           })
         : explicitFeeToken
           ? explicitFeeToken
@@ -355,10 +351,6 @@ export function charge(parameters: charge.Parameters = {}) {
                 prioritizeCandidates: true,
               })
             : undefined
-      if (machineTokenFeesPaidByPayer && !feeToken)
-        throw new Errors.InsufficientBalanceError({
-          reason: `${account.address} holds no stablecoin to pay the transaction fee for a MACH payment`,
-        })
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds
@@ -499,17 +491,23 @@ export function charge(parameters: charge.Parameters = {}) {
           ? 'push'
           : 'pull'
         : supportedModes[0])
-    // Gas as payment pays it: the server for a sponsored pull payment, else the payer's stablecoin.
+    // MACH can't pay gas: the server pays it for a sponsored pull payment, else a stablecoin must.
+    const preferred =
+      (context as { feeToken?: Address } | undefined)?.feeToken ?? parameters.feeToken
     const gasCovered =
       (request.methodDetails?.feePayer === true && mode === 'pull') ||
-      (await resolveMachineTokenFeeToken({
+      (await resolveFeeToken({
         account: account.address,
-        chainId,
+        candidateTokens: machineTokenFeeTokens(chainId, preferred),
         client,
-        preferred: (context as { feeToken?: Address } | undefined)?.feeToken ?? parameters.feeToken,
+        funded: true,
       })) !== undefined
     if (!gasCovered) return false
-    return MachineTokenCharge.canSpend(client, { account, amount: BigInt(request.amount), chainId })
+    const balance = await MachineTokenCharge.getBalance(client, {
+      account: account.address,
+      chainId,
+    })
+    return balance !== undefined && balance >= BigInt(request.amount)
   }
 }
 

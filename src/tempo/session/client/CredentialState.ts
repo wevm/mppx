@@ -14,7 +14,7 @@ import * as Account from '../../../viem/Account.js'
 import { assertAllowedChainId, assertChainId } from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
-import { machineTokenFeeTokens, resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
+import { machineTokenFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
 import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
@@ -1027,7 +1027,7 @@ async function manualTopUp(
  * The fee token for a channel's open or top-up: the one the server names, else the channel token,
  * except MACH, which can't pay fees, so the payer's own stablecoin fee token pays them instead.
  */
-export async function resolveChannelFeeToken(
+async function resolveChannelFeeToken(
   account: Address,
   resolved: {
     chainId: number
@@ -1042,17 +1042,12 @@ export async function resolveChannelFeeToken(
   // MACH can't pay fees. A sponsor pays them in the server's fee token, or else a default
   // stablecoin, which the server accepts for MACH; an unsponsored payer pays in one it holds.
   if (feePayer) return feeToken ?? machineTokenFeeTokens(chainId)[0]
-  const funded = await resolveMachineTokenFeeToken({
+  return resolveFeeToken({
     account,
-    chainId,
+    candidateTokens: machineTokenFeeTokens(chainId, feeToken),
     client,
-    preferred: feeToken,
+    prioritizeCandidates: feeToken !== undefined,
   })
-  if (!funded)
-    throw new Errors.InsufficientBalanceError({
-      reason: `${account} holds no stablecoin to pay the transaction fee for a MACH channel`,
-    })
-  return funded
 }
 
 function manualVoucher(parameters: ManualCredentialParameters): Promise<SessionCredentialPayload> {

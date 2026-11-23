@@ -162,4 +162,18 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
 
     expectAddress(feeToken, asset)
   })
+
+  test('returns undefined when none are funded and a funded token is required', async () => {
+    const account = testAccount()
+    const client = clientFor(account)
+
+    const feeToken = await resolveFeeToken({
+      account: account.address,
+      candidateTokens: [asset, Addresses.pathUsd],
+      client,
+      funded: true,
+    })
+
+    expect(feeToken).toBeUndefined()
+  })
 })

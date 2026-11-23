@@ -60,8 +60,11 @@ export async function resolveFeeToken(parameters: {
   candidateTokens?: readonly Address[] | undefined
   client: Client
   prioritizeCandidates?: boolean | undefined
+  /** Return `undefined` instead of the first token when the account holds none of them. */
+  funded?: boolean | undefined
 }): Promise<Address | undefined> {
-  const { account, allowedTokens, candidateTokens, client, prioritizeCandidates } = parameters
+  const { account, allowedTokens, candidateTokens, client, funded, prioritizeCandidates } =
+    parameters
   const tokens: Address[] = []
 
   if (prioritizeCandidates)
@@ -80,7 +83,7 @@ export async function resolveFeeToken(parameters: {
     if (await hasBalance(client, account, token)) return token
   }
 
-  return tokens[0]
+  return funded ? undefined : tokens[0]
 }
 
 /**
@@ -97,24 +100,4 @@ export function machineTokenFeeTokens(
   pushUnique(tokens, defaults.tokens.ousd)
   pushUnique(tokens, defaults.tokens.usdc)
   return tokens
-}
-
-/**
- * The first stablecoin the payer holds to pay a MACH payment's fees, checking its own fee token and
- * the chain's too, or `undefined` when it holds none.
- */
-export async function resolveMachineTokenFeeToken(parameters: {
-  account: Address
-  chainId: number | undefined
-  client: Client
-  preferred?: Address | undefined
-}): Promise<Address | undefined> {
-  const { account, chainId, client, preferred } = parameters
-  const token = await resolveFeeToken({
-    account,
-    candidateTokens: machineTokenFeeTokens(chainId, preferred),
-    client,
-    prioritizeCandidates: preferred !== undefined,
-  })
-  return token && (await hasBalance(client, account, token)) ? token : undefined
 }

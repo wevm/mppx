@@ -17,7 +17,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
-import { resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
+import { machineTokenFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
 import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
@@ -603,15 +603,22 @@ export function session(parameters: session.Parameters = {}) {
     )
     const account = getAccount(client, sessionContext)
     /** Whether the payer can fund `amount` of MACH and the gas for depositing it. */
-    const canFund = async (amount: bigint) =>
-      (resolved.feePayer ||
-        (await resolveMachineTokenFeeToken({
+    const canFund = async (amount: bigint) => {
+      const gasCovered =
+        resolved.feePayer ||
+        (await resolveFeeToken({
           account: account.address,
-          chainId,
+          candidateTokens: machineTokenFeeTokens(chainId, resolved.feeToken),
           client,
-          preferred: resolved.feeToken,
-        })) !== undefined) &&
-      MachineTokenCharge.canSpend(client, { account, amount, chainId })
+          funded: true,
+        })) !== undefined
+      if (!gasCovered) return false
+      const balance = await MachineTokenCharge.getBalance(client, {
+        account: account.address,
+        chainId,
+      })
+      return balance !== undefined && balance >= amount
+    }
     const entry = await store.get(resolved.key)
     if (entry?.opened) {
       const required = entry.cumulativeAmount + resolved.amount
