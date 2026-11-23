@@ -1,5 +1,11 @@
 # mppx
 
+## 0.21.4
+
+### Patch Changes
+
+- 8b6b501: Required an explicit host allowlist or fixed Node host before accepting signed identity headers in Node and Express adapters. Unconfigured adapters now return 421 for those requests.
+
 ## 0.21.3
 
 ### Patch Changes
