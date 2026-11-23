@@ -472,6 +472,10 @@ function parseAuthParams(input: string): Record<string, string> {
     const [value, nextIndex] = readAuthParamValue(input, i)
     i = nextIndex
 
+    // auth-params = auth-param *( OWS "," OWS auth-param ): a value ends at OWS, then "," or the end.
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+    if (i < input.length && input[i] !== ',') throw new Error('Malformed auth-param.')
+
     if (key in result) throw new Error(`Duplicate parameter: ${key}`)
     result[key] = value
   }
@@ -483,10 +487,15 @@ function parseAuthParams(input: string): Record<string, string> {
 function readAuthParamValue(input: string, start: number): [value: string, nextIndex: number] {
   if (input[start] === '"') return readQuotedAuthParamValue(input, start + 1)
 
+  // token = 1*tchar (RFC 9110)
   let i = start
-  while (i < input.length && input[i] !== ',') i++
-  return [input.slice(start, i).trim(), i]
+  while (i < input.length && tcharPattern.test(input[i] ?? '')) i++
+  if (i === start) throw new Error('Malformed auth-param.')
+  return [input.slice(start, i), i]
 }
+
+/** @internal RFC 9110 `tchar`. */
+const tcharPattern = /[!#$%&'*+\-.^_`|~0-9A-Za-z]/
 
 /** @internal */
 function readQuotedAuthParamValue(

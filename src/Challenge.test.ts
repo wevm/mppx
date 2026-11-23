@@ -855,6 +855,52 @@ describe('deserialize', () => {
     expect(() => Challenge.deserialize(header)).toThrow(error)
   })
 
+  test.each([
+    {
+      name: 'params without commas',
+      header: 'Payment method="tempo" realm="api" intent="charge" request="e30" id="a"',
+    },
+    {
+      name: 'text after a closing quote',
+      header:
+        'Payment id="a", method="tempo", intent="charge", request="e30", realm="p"ay.example.com:8443"',
+    },
+    {
+      name: 'unquoted value followed by another param without a comma',
+      header: 'Payment id="a", method=tempo realm="api", intent="charge", request="e30"',
+    },
+    {
+      name: 'unquoted value with a non-token character',
+      header: 'Payment id="a", realm=api/v1, method="tempo", intent="charge", request="e30"',
+    },
+    {
+      name: 'empty unquoted value',
+      header: 'Payment id="a", realm=, method="tempo", intent="charge", request="e30"',
+    },
+  ])('error: rejects malformed auth-param list ($name)', ({ header }) => {
+    expect(() => Challenge.deserialize(header)).toThrow('Malformed auth-param.')
+  })
+
+  test('behavior: parses token values and OWS around commas', () => {
+    const challenge = Challenge.deserialize(
+      'Payment id=a ,realm=api.example.com ,  method=tempo,intent=charge , request=e30 ',
+    )
+    expect(challenge).toMatchObject({
+      id: 'a',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+    })
+  })
+
+  test.each([
+    'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", Basic realm="x"',
+    'Basic realm="x", Payment id="a", realm="api", method="tempo", intent="charge", request="e30"',
+    'Payment id=a, realm=api, method=tempo, intent=charge, request=e30, Bearer token68==',
+  ])('behavior: parses Payment beside other schemes (%s)', (header) => {
+    expect(Challenge.deserialize(header)).toMatchObject({ id: 'a', realm: 'api' })
+  })
+
   test('error: missing required fields', () => {
     expect(() => Challenge.deserialize('Payment realm="test"')).toThrow()
   })
