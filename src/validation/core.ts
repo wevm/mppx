@@ -232,7 +232,8 @@ export async function* validateStream(options: ValidateOptions): AsyncGenerator<
             'the payment validator reported that the payment did not succeed',
           )
           paymentResults = [...paymentResults, failed]
-          onResults?.([failed])
+          // Hand the callback its own copy so it cannot change the yielded check.
+          onResults?.([{ ...failed }])
         }
         yield { phase: 'payment', endpoint, results: paymentResults, succeeded }
       }

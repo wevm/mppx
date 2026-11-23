@@ -1592,6 +1592,21 @@ describe('validateStream: custom payment validator', () => {
     )
   })
 
+  test('onPaymentResults cannot erase a synthesized payment failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const result = await validate({
+      url: (await mppServer(makeChallenge())).url,
+      payment: async () => ({ results: [], succeeded: false }),
+      onPaymentResults: (results) => {
+        for (const r of results) r.severity = 'warn'
+      },
+    })
+    expect(result.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(result.summary.failed).toBeGreaterThan(0)
+  })
+
   test('only promises wallet provisioning when a payment validator is configured', async () => {
     const { validate } = await import('../validation/index.js')
     const run = async (payment?: import('../validation/index.js').PaymentValidator) => {
