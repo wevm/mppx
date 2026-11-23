@@ -3,6 +3,7 @@ import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { isAddress, isAddressEqual, type Address } from 'viem'
 
 import { VerificationFailedError } from '../../Errors.js'
+import { isLowS } from '../internal/signature.js'
 import type * as Methods from '../Methods.js'
 import type {
   SubscriptionAccessKey,
@@ -393,7 +394,11 @@ function recoverAuthorizationSource(
       payload: signPayload,
       signature,
     })
-    if (!SignatureEnvelope.verify(signature, { address: source, payload: signPayload })) {
+    // Tempo rejects high-s key authorization signatures, so the subscription could never be charged.
+    if (
+      !isLowS(signature) ||
+      !SignatureEnvelope.verify(signature, { address: source, payload: signPayload })
+    ) {
       throw new VerificationFailedError({ reason: 'keyAuthorization signature is invalid' })
     }
     return source

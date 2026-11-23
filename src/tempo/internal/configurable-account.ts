@@ -2,6 +2,7 @@ import type { Address, Hex } from 'ox'
 import { AccountConfig, SignatureEnvelope } from 'ox/tempo'
 
 import * as TempoAddress from './address.js'
+import { isLowS } from './signature.js'
 
 /** Returns whether a signature envelope type is a TIP-1020 primitive signature. */
 export function isPrimitiveEnvelope(type: string): boolean {
@@ -29,7 +30,7 @@ export function verifyApprovals(
   let weight = 0
   let minWeight: number | undefined
   for (const [index, approval] of signatures.entries()) {
-    if (!isPrimitiveEnvelope(approval.type)) return false
+    if (!isPrimitiveEnvelope(approval.type) || !isLowS(approval)) return false
     // A quorum must end at the last approval.
     if (index > 0 && weight >= threshold) return false
     const owner = SignatureEnvelope.extractAddress({ payload: digest, signature: approval })

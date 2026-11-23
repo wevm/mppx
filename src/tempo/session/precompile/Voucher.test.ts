@@ -1,4 +1,4 @@
-import { P256, Secp256k1 } from 'ox'
+import { type Hex, P256, Secp256k1, Signature } from 'ox'
 import { AccountConfig, SignatureEnvelope } from 'ox/tempo'
 import { createClient, hashTypedData, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -31,6 +31,15 @@ const client = createClient({
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as const
 const cumulativeAmount = uint96(1_000_000n)
+
+const secp256k1Order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n
+const p256Order = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n
+
+/** Returns the high-s twin of a secp256k1 signature: it recovers the same signer, but Tempo rejects it. */
+function toHighS(signature: Hex.Hex): Hex.Hex {
+  const { r, s, yParity } = Signature.fromHex(signature)
+  return Signature.toHex({ r, s: secp256k1Order - s, yParity: yParity === 0 ? 1 : 0 })
+}
 
 describe('Precompile Voucher', () => {
   test('sign and verify round-trip', async () => {
@@ -269,6 +278,97 @@ describe('Precompile Voucher', () => {
         chainId,
         { channelId, cumulativeAmount, signature: suffixed },
         account.address,
+      ),
+    ).toBe(false)
+  })
+
+  test('verify rejects the high-s twin of a valid voucher', async () => {
+    const signature = await signVoucher(
+      client,
+      account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    const highS = toHighS(signature)
+    const payload = hashTypedData({
+      domain: getVoucherDomain(escrowContract, chainId),
+      types: voucherTypes,
+      primaryType: 'Voucher',
+      message: { channelId, cumulativeAmount },
+    })
+    // The twin still recovers the signer: only the low-s rule rejects it.
+    expect(
+      Secp256k1.recoverAddress({ payload, signature: Signature.fromHex(highS) }).toLowerCase(),
+    ).toBe(account.address.toLowerCase())
+
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature },
+        account.address,
+      ),
+    ).toBe(true)
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature: highS },
+        account.address,
+      ),
+    ).toBe(false)
+  })
+
+  test('verifyCloseAuthorization rejects high-s signatures', async () => {
+    const signature = await signCloseAuthorization(
+      client,
+      account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    expect(
+      verifyCloseAuthorization(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature },
+        [account.address],
+      ),
+    ).toBe(true)
+    expect(
+      verifyCloseAuthorization(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature: toHighS(signature) },
+        [account.address],
+      ),
+    ).toBe(false)
+  })
+
+  test('verify rejects high-s p256 vouchers', async () => {
+    const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), { access: rootAccount })
+    const signature = await signVoucher(
+      createClient({ account: accessKey, transport: http('http://127.0.0.1') }),
+      accessKey,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    const envelope = SignatureEnvelope.from(
+      signature as SignatureEnvelope.Serialized,
+    ) as SignatureEnvelope.P256
+    const highS = SignatureEnvelope.serialize({
+      ...envelope,
+      signature: { ...envelope.signature, s: p256Order - envelope.signature.s },
+    })
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature: highS },
+        accessKey.accessKeyAddress,
       ),
     ).toBe(false)
   })
@@ -515,6 +615,33 @@ describe('TIP-1166 configurable account vouchers', () => {
       ...envelope,
       signatures: envelope.signatures.slice(0, 1),
     })
+    expect(
+      verifyVoucher(escrowContract, chainId, { ...voucher, signature }, initial.address, {
+        configurable: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('rejects a configurable account voucher with a high-s approval', async () => {
+    const voucher = await sign(initial)
+    const envelope = SignatureEnvelope.from(
+      voucher.signature as SignatureEnvelope.Serialized,
+    ) as SignatureEnvelope.Configurable
+    const [first, ...rest] = envelope.signatures
+    if (first?.type !== 'secp256k1') throw new Error('expected a secp256k1 approval')
+    const signature = SignatureEnvelope.serialize({
+      ...envelope,
+      signatures: [
+        {
+          ...first,
+          signature: Signature.fromHex(toHighS(Signature.toHex(first.signature))),
+        },
+        ...rest,
+      ],
+    })
+    expect(
+      verifyVoucher(escrowContract, chainId, voucher, initial.address, { configurable: true }),
+    ).toBe(true)
     expect(
       verifyVoucher(escrowContract, chainId, { ...voucher, signature }, initial.address, {
         configurable: true,

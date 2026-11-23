@@ -5,6 +5,7 @@ import { hashTypedData } from 'viem'
 import { signTypedData } from 'viem/actions'
 
 import { getAccountSignerAddress, isAccessKeyAccount } from '../../internal/account.js'
+import { isLowS } from '../../internal/signature.js'
 import type { LegacySignedVoucher, LegacyVoucher } from './Types.js'
 
 /** Must match the on-chain TempoStreamChannel DOMAIN_SEPARATOR name. */
@@ -153,7 +154,8 @@ export async function verifyVoucher(
   try {
     const envelope = SignatureEnvelope.from(voucher.signature)
 
-    if (!acceptsVoucherEnvelope(envelope)) return false
+    // The escrow rejects high-s signatures, so a voucher carrying one could never be settled.
+    if (!acceptsVoucherEnvelope(envelope) || !isLowS(envelope)) return false
 
     const canonical = SignatureEnvelope.serialize(envelope)
     if (canonical.toLowerCase() !== voucher.signature.toLowerCase()) return false
