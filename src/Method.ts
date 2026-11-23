@@ -1,4 +1,4 @@
-import type * as Challenge from './Challenge.js'
+import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Errors from './Errors.js'
 import * as CredentialExpiry from './internal/CredentialExpiry.js'
@@ -540,7 +540,11 @@ export function toClient<
     ...method,
     canHandleChallenge,
     context,
-    createCredential,
+    // Refuse a legacy `\uXXXX`-escaped challenge before the method signs or broadcasts anything.
+    async createCredential(parameters: Parameters<typeof createCredential>[0]) {
+      Challenge.assertNotLegacyUnicodeEscaped(parameters.challenge)
+      return createCredential(parameters)
+    },
   } as Client<method, context>
 }
 

@@ -1,4 +1,5 @@
-import { Challenge, Credential, Method, z } from 'mppx'
+import { Challenge, Credential, Errors, Method, z } from 'mppx'
+import { Base64 } from 'ox'
 import { describe, expect, expectTypeOf, test } from 'vp/test'
 
 describe('from', () => {
@@ -174,4 +175,37 @@ describe('credential execution', () => {
 
     expect(calls).toEqual(['validate', 'broadcast'])
   })
+})
+
+describe('toClient', () => {
+  const base = Method.from({
+    name: 'alpha',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({ amount: z.string() }),
+    },
+  })
+
+  test.each(['caf\\u00e9.example.com', 'merchant\\u2014api.example.com'])(
+    'behavior: refuses a legacy unicode-escaped realm (%s) without signing',
+    async (realm) => {
+      let signed = 0
+      const method = Method.toClient(base, {
+        async createCredential() {
+          signed++
+          return 'credential'
+        },
+      })
+      const request = Base64.fromString(JSON.stringify({ amount: '1' }), { pad: false, url: true })
+      const challenge = Challenge.deserialize(
+        `Payment id="a", realm="${realm}", method="alpha", intent="charge", request="${request}"`,
+      )
+
+      await expect(method.createCredential({ challenge: challenge as never })).rejects.toThrow(
+        Errors.LegacyUnicodeEscapedChallengeError,
+      )
+      expect(signed).toBe(0)
+    },
+  )
 })

@@ -1,6 +1,7 @@
 import { Base64, Bytes, Hash } from 'ox'
 
 import * as Constants from './Constants.js'
+import * as Errors from './Errors.js'
 import { constantTimeEqual } from './internal/constantTimeEqual.js'
 import type { OneOf } from './internal/types.js'
 import type * as Method from './Method.js'
@@ -8,6 +9,12 @@ import * as PaymentRequest from './PaymentRequest.js'
 import * as z from './zod.js'
 
 const maxRequestParameterLength = 16 * 1024
+
+/**
+ * Marks a challenge parsed from a header whose HMAC-bound parameter carried a legacy `\\uXXXX`
+ * escape. A symbol key, so it survives spreads but stays out of JSON and the wire form.
+ */
+const legacyUnicodeEscape = Symbol('mppx.Challenge.legacyUnicodeEscape')
 
 const unsupportedCredentialHeaderMessage =
   'Unsupported credential header: challenges may only select Payment-Authorization.'
@@ -441,7 +448,8 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   const params = extractPaymentAuthParams(value)
   if (!params) throw new Error('Missing Payment scheme.')
 
-  const result = parseAuthParams(params)
+  const legacyEscaped = new Set<string>()
+  const result = parseAuthParams(params, legacyEscaped)
 
   const { request, opaque, header, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
@@ -462,8 +470,41 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   )
   // Keep the spelling the server sent: the client echoes it unchanged, and the server's challenge
   // ID may bind that exact spelling.
-  if (header === undefined) return challenge
-  return { ...challenge, header } as from.ReturnType<from.Parameters, methods>
+  const parsed = (header === undefined ? challenge : { ...challenge, header }) as from.ReturnType<
+    from.Parameters,
+    methods
+  >
+  // Servers before quoted-pair parsing escaped characters above U+00FF as `\\uXXXX`. Quoted-pair
+  // reads those as different text than the server bound into the challenge ID, so the client must
+  // not pay such a challenge. `description` is not bound.
+  if ([...legacyEscaped].some((key) => key !== 'description'))
+    (parsed as Record<symbol, unknown>)[legacyUnicodeEscape] = true
+  return parsed
+}
+
+/**
+ * Returns whether a challenge parsed from a header escaped an HMAC-bound parameter as `\\uXXXX`,
+ * as servers did before quoted-pair parsing. Paying it would fail verification after the payment
+ * may already have moved funds.
+ *
+ * @internal
+ */
+export function isLegacyUnicodeEscaped(challenge: unknown): boolean {
+  return Boolean(
+    challenge &&
+    typeof challenge === 'object' &&
+    (challenge as Record<symbol, unknown>)[legacyUnicodeEscape],
+  )
+}
+
+/**
+ * Throws {@link Errors.LegacyUnicodeEscapedChallengeError} for a challenge that
+ * {@link isLegacyUnicodeEscaped} reports, before a credential is created for it.
+ *
+ * @internal
+ */
+export function assertNotLegacyUnicodeEscaped(challenge: unknown): void {
+  if (isLegacyUnicodeEscaped(challenge)) throw new Errors.LegacyUnicodeEscapedChallengeError()
 }
 
 /** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
@@ -478,7 +519,7 @@ function extractPaymentAuthParams(header: string): string | null {
 }
 
 /** @internal Parses auth-params with support for escaped quoted-string values. */
-function parseAuthParams(input: string): Record<string, string> {
+function parseAuthParams(input: string, legacyEscaped?: Set<string>): Record<string, string> {
   const result: Record<string, string> = Object.create(null)
   let i = 0
 
@@ -499,8 +540,9 @@ function parseAuthParams(input: string): Record<string, string> {
 
     while (i < input.length && /\s/.test(input[i] ?? '')) i++
 
-    const [value, nextIndex] = readAuthParamValue(input, i)
+    const [value, nextIndex, legacy] = readAuthParamValue(input, i)
     i = nextIndex
+    if (legacy) legacyEscaped?.add(key)
 
     if (key in result) throw new Error(`Duplicate parameter: ${key}`)
     result[key] = value
@@ -510,7 +552,10 @@ function parseAuthParams(input: string): Record<string, string> {
 }
 
 /** @internal */
-function readAuthParamValue(input: string, start: number): [value: string, nextIndex: number] {
+function readAuthParamValue(
+  input: string,
+  start: number,
+): [value: string, nextIndex: number, legacyEscape?: boolean] {
   if (input[start] === '"') return readQuotedAuthParamValue(input, start + 1)
 
   let i = start
@@ -522,9 +567,10 @@ function readAuthParamValue(input: string, start: number): [value: string, nextI
 function readQuotedAuthParamValue(
   input: string,
   start: number,
-): [value: string, nextIndex: number] {
+): [value: string, nextIndex: number, legacyEscape: boolean] {
   let i = start
   let escaped = false
+  let legacyEscape = false
   let segmentStart = start
   let parts: string[] | undefined
 
@@ -535,6 +581,7 @@ function readQuotedAuthParamValue(
     if (escaped) {
       // quoted-pair (RFC 9110): drop the backslash and keep the next character
       // as is, so `\\u2014` is the text `u2014`, not an escape.
+      if (char === 'u' && /^[0-9a-fA-F]{4}/.test(input.slice(i, i + 4))) legacyEscape = true
       parts ??= []
       parts.push(char)
       segmentStart = i
@@ -554,7 +601,7 @@ function readQuotedAuthParamValue(
       const value = parts
         ? [...parts, input.slice(segmentStart, i - 1)].join('')
         : input.slice(start, i - 1)
-      return [value, i]
+      return [value, i, legacyEscape]
     }
   }
 

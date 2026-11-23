@@ -780,6 +780,32 @@ describe('deserialize', () => {
   })
 
   test.each([
+    { name: 'realm \\u00e9', params: 'realm="caf\\u00e9.example.com"', legacy: true },
+    { name: 'realm \\u2014', params: 'realm="merchant\\u2014api"', legacy: true },
+    { name: 'uppercase hex', params: 'realm="caf\\u00E9", opaque="x"', legacy: true },
+    { name: 'other bound param', params: 'realm="a", digest="sha-256=\\u00e9"', legacy: true },
+    { name: 'escaped quote', params: 'realm="say \\"hi\\""', legacy: false },
+    { name: 'escaped backslash', params: 'realm="a\\\\u00e9"', legacy: false },
+    { name: 'not four hex digits', params: 'realm="\\u00g9"', legacy: false },
+    { name: 'description only', params: 'realm="a", description="caf\\u00e9"', legacy: false },
+  ])(
+    'behavior: flags a legacy \\uXXXX escape in a bound parameter ($name)',
+    ({ params, legacy }) => {
+      const challenge = Challenge.deserialize(
+        `Payment id="a", ${params}, method="tempo", intent="charge", request="e30"`,
+      )
+      expect(Challenge.isLegacyUnicodeEscaped(challenge)).toBe(legacy)
+      // The flag stays out of the JSON and wire forms.
+      expect(JSON.stringify(challenge)).not.toContain('legacy')
+      expect(Challenge.isLegacyUnicodeEscaped({ ...challenge })).toBe(legacy)
+      if (legacy)
+        expect(() => Challenge.assertNotLegacyUnicodeEscaped(challenge)).toThrow(
+          'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',
+        )
+    },
+  )
+
+  test.each([
     {
       name: 'uppercase',
       header: paymentHeader.replace(/\b(id|realm|method|intent|request)=/g, (param) =>

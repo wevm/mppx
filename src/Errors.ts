@@ -457,6 +457,25 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * The server escaped an HMAC-bound challenge parameter (such as `realm`) as `\\uXXXX`, as mppx
+ * servers before quoted-pair parsing did for characters above U+00FF. The client reads that
+ * escape as different text than the server bound into the challenge ID, so the server would
+ * reject the credential, possibly after the payment moved funds. The client stops before it
+ * creates, signs or broadcasts anything.
+ *
+ * Upgrade the server, or keep bound parameters within Latin-1.
+ */
+export class LegacyUnicodeEscapedChallengeError extends Error {
+  override readonly name = 'LegacyUnicodeEscapedChallengeError'
+
+  constructor() {
+    super(
+      'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',
+    )
+  }
+}
+
+/**
  * A `tempo/session` client would open a channel whose vouchers a TIP-1166 configurable account
  * signs, but the server's challenge does not advertise `configurableVouchers`, so the server
  * would reject those vouchers. The client stops before it locks a deposit.

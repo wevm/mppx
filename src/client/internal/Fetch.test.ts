@@ -391,7 +391,14 @@ const x402Eip3009Accept = {
 } satisfies x402_Types.PaymentRequirements
 
 /** Builds a valid 402 response with a WWW-Authenticate header. */
-function make402(overrides?: { expires?: string; id?: string; intent?: string; method?: string }) {
+function make402(overrides?: {
+  description?: string
+  expires?: string
+  id?: string
+  intent?: string
+  method?: string
+  realm?: string
+}) {
   const id = overrides?.id ?? 'abc'
   const method = overrides?.method ?? 'test'
   const intent = overrides?.intent ?? 'test'
@@ -400,7 +407,10 @@ function make402(overrides?: { expires?: string; id?: string; intent?: string; m
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
-  const header = `Payment id="${id}", realm="test", method="${method}", intent="${intent}", request="${request}"${expires}`
+  const realm = overrides?.realm ?? 'test'
+  const description =
+    overrides?.description === undefined ? '' : `, description="${overrides.description}"`
+  const header = `Payment id="${id}", realm="${realm}", method="${method}", intent="${intent}", request="${request}"${expires}${description}`
   return new Response(null, {
     status: 402,
     headers: { 'WWW-Authenticate': header },
@@ -763,6 +773,64 @@ describe('Fetch.from: 402 retry path', () => {
     expect(onChallenge).not.toHaveBeenCalled()
     expect(createCredential).not.toHaveBeenCalled()
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['caf\\u00e9.example.com', 'merchant\\u2014api.example.com'])(
+    'refuses a legacy unicode-escaped realm (%s) before credential creation',
+    async (realm) => {
+      const createCredential = vi.fn(async () => 'credential')
+      const mockFetch = vi.fn(async () => make402({ realm }))
+      const fetch = Fetch.from({
+        fetch: mockFetch as typeof globalThis.fetch,
+        methods: [{ ...noopMethod, createCredential }],
+      })
+
+      await expect(fetch('https://example.com/api')).rejects.toThrow(
+        Errors.LegacyUnicodeEscapedChallengeError,
+      )
+      expect(createCredential).not.toHaveBeenCalled()
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  test('skips a legacy unicode-escaped offer and pays another one', async () => {
+    const createCredential = vi.fn(async (_parameters: unknown) => 'credential')
+    const legacy = make402({ id: 'legacy', realm: 'caf\\u00e9.example.com' })
+    const plain = make402({ id: 'plain' })
+    const header = `${legacy.headers.get('WWW-Authenticate')}, ${plain.headers.get('WWW-Authenticate')}`
+    const mockFetch = vi.fn(async () =>
+      mockFetch.mock.calls.length === 1
+        ? new Response(null, { status: 402, headers: { 'WWW-Authenticate': header } })
+        : new Response('OK', { status: 200 }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+    expect(createCredential.mock.calls[0]).toMatchObject([{ challenge: { id: 'plain' } }])
+  })
+
+  test.each([
+    { realm: 'say \\"hi\\".example.com' },
+    { realm: 'back\\\\slash.example.com' },
+    { description: 'caf\\u00e9' },
+  ])('pays a challenge with other quoted-pairs (%o)', async (overrides) => {
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch = vi.fn(async () =>
+      mockFetch.mock.calls.length === 1 ? make402(overrides) : new Response('OK', { status: 200 }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
   })
 
   test('strips context from init on retry', async () => {
