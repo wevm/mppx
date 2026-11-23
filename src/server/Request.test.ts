@@ -37,6 +37,24 @@ function createMockRequest(options: {
 }
 
 describe('fromNodeListener', () => {
+  test.each(['Agent-Id', 'Agent-Signature', 'Signature', 'Signature-Input'])(
+    'requires an independent receiving host for %s',
+    (header) => {
+      const make = () =>
+        createMockRequest({ rawHeaders: ['Host', 'relay.example', header, 'proof'] })
+      expect(() => Request.fromNodeListener(...make())).toThrow(Request.UntrustedHostError)
+      expect(
+        Request.fromNodeListener(...make(), { host: 'service.example', protocol: 'https:' }).url,
+      ).toBe('https://service.example/')
+      expect(() =>
+        Request.fromNodeListener(...make(), { allowedHosts: ['service.example'] }),
+      ).toThrow(Request.UntrustedHostError)
+      expect(Request.fromNodeListener(...make(), { allowedHosts: ['relay.example'] }).url).toBe(
+        'http://relay.example/',
+      )
+    },
+  )
+
   test.each([
     { host: 'api.example.com', allowedHosts: ['api.example.com'], accepted: true },
     { host: 'API.EXAMPLE.COM', allowedHosts: ['api.example.com'], accepted: true },
