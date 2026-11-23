@@ -6,6 +6,7 @@ import { Account as TempoAccount } from 'viem/tempo'
 
 import * as TempoAddress from '../../internal/address.js'
 import * as ConfigurableAccount from '../../internal/configurable-account.js'
+import { isLowS, toLowS } from '../../internal/signature.js'
 import type { Voucher, SignedVoucher } from './Protocol.js'
 import { uint96 } from './Protocol.js'
 
@@ -140,6 +141,8 @@ function verifySignerEnvelope(
   }
 
   if (!ConfigurableAccount.isPrimitiveEnvelope(envelope.type)) return false
+  // Tempo settlement rejects high-s signatures, so a voucher carrying one could never be collected.
+  if (!isLowS(envelope)) return false
   // A channel whose signer had a config commitment at open accepts only that config's approvals.
   if (!ConfigurableAccount.isZeroCommitment(options.openingCommitment)) return false
   const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
@@ -210,7 +213,7 @@ export async function signVoucher(
       `TIP-1034 vouchers require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
 
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
 /**
@@ -244,7 +247,7 @@ export async function signCloseAuthorization(
     throw new Error(
       `TIP-1034 close authorizations require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
 /** Options for {@link verifyCloseAuthorization}. */
