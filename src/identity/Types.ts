@@ -228,7 +228,8 @@ export type Prover = {
    * Same-named headers returned by several provers are combined, comma-separated. Payment
    * credential headers (`Authorization`, `Payment-Authorization`, `Payment-Signature`,
    * `X-Payment`, the header the Challenge names, and any header holding a Payment credential) are
-   * ignored. Return `false` or `undefined` not to resend. Paid attempts are never resent. `true`
+   * ignored. Return `false` or `undefined` not to resend. A paid attempt is asked only after a
+   * 401, and resent with the same Payment credential while its Challenge has not expired. `true`
    * resends with no extra headers and is deprecated: return `{}` instead.
    */
   readonly retry?:

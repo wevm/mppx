@@ -28,8 +28,10 @@ export type Client = {
    * Requests that carry proofs do not follow redirects: a redirect rejects
    * (`redirect: 'error'`), so proofs never reach another URL. Requests with no
    * prover in scope are sent unchanged. If a prover asks to retry a rejected
-   * (non-402) response, the request is proved again and resent once, except for
-   * paid attempts, which are never resent.
+   * (non-402) response, the request is proved again and resent once. A paid
+   * attempt is resent only after a 401, with the same Payment credential and
+   * while its Challenge has not expired: servers check other authentication
+   * before verifying a Payment credential, so a 401 means nothing settled.
    */
   readonly send: (
     fetch: typeof globalThis.fetch,
@@ -69,7 +71,8 @@ const credentialHeaders: ReadonlySet<string> = new Set([
  *
  * - `unproved`: nothing sent yet.
  * - `sent`: an unpaid attempt was sent; it may be resent once.
- * - `paid`: a paid attempt was sent; it is never resent, since its payment may have settled.
+ * - `paid`: a paid attempt was sent; it is resent once, with the same credential, only after a 401
+ *   while its Challenge has not expired, since any other response may follow settlement.
  * - `resent`: the request is proved again and resent once, with `headers` set.
  * - `done`: the last response is final.
  *
@@ -101,6 +104,7 @@ export const initial: Attempt = Object.freeze({ phase: 'unproved' })
  * | `unproved`         | `send` (paid)          | `paid`     |
  * | `unproved`         | `send` (unpaid)        | `sent`     |
  * | `sent`             | `response` with resend | `resent`   |
+ * | `paid` (after a 401) | `response` with resend | `resent`   |
  * | `sent`, `paid`, `resent` | `response` without   | `done`     |
  *
  * @internal
@@ -115,7 +119,7 @@ export function transition(attempt: Attempt, event: AttemptEvent): Attempt {
         if (attempt.phase === 'unproved' || attempt.phase === 'done') break
         return Object.freeze({ phase: 'done' })
       }
-      if (attempt.phase !== 'sent') break
+      if (attempt.phase !== 'sent' && attempt.phase !== 'paid') break
       return Object.freeze({ phase: 'resent', headers: event.resend })
   }
   const resend = event.type === 'response' && event.resend !== undefined ? ' with resend' : ''
@@ -199,12 +203,18 @@ export function from(provers: readonly Types.Prover[]): Client {
         payment: isPaid(request, context) ? 'paid' : 'unpaid',
       })
       const retriers = inScope(request.url).filter((prover) => prover.retry)
-      const keepReadable = attempt.phase === 'sent' && retriers.length > 0
+      // A paid attempt may be resent only with a Payment credential whose Challenge is known.
+      const paidChallenge =
+        attempt.phase === 'paid'
+          ? (credentialChallenge(request.headers) ?? context.challenge)
+          : undefined
+      const keepReadable =
+        retriers.length > 0 && (attempt.phase === 'sent' || paidChallenge !== undefined)
       const carried = context.headers ?? []
       const result = await sendOnce({ context, fetch, headers: carried, keepReadable, request })
       const { response } = result
       const resend =
-        keepReadable && response.status >= 400 && response.status !== 402
+        keepReadable && canResend(attempt, response, paidChallenge)
           ? await resendHeaders(retriers, response, result.request)
           : undefined
       attempt = transition(attempt, { type: 'response', resend })
@@ -231,6 +241,22 @@ export function from(provers: readonly Types.Prover[]): Client {
       }
     },
   }
+}
+
+/**
+ * Whether a rejected response may be resent. An unpaid attempt may be resent after any non-402
+ * rejection. A paid attempt only after a 401, which never follows settlement, and only while the
+ * credential's Challenge has not expired, so the server processes the same credential afresh.
+ * A 403 can follow a settled payment, so it is never resent.
+ */
+function canResend(
+  attempt: Attempt,
+  response: Response,
+  challenge: Challenge.Challenge | undefined,
+): boolean {
+  if (attempt.phase === 'sent') return response.status >= 400 && response.status !== 402
+  if (attempt.phase !== 'paid' || response.status !== 401 || !challenge?.expires) return false
+  return Date.parse(challenge.expires) > Date.now()
 }
 
 /**

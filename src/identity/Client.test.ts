@@ -373,7 +373,7 @@ test('combines same-named retry headers from several provers', async () => {
   expect(seen).toEqual([null, 'a, b'])
 })
 
-test('a retry returning headers never resends a paid attempt, and resends at most once', async () => {
+test('a retry never resends a paid attempt whose Challenge has no expiry, and resends at most once', async () => {
   const retry = vi.fn(() => ({ 'X-Token': 't' }))
   const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
   const fetch = vi.fn(async () => new Response(null, { status: 401 }))
@@ -387,6 +387,90 @@ test('a retry returning headers never resends a paid attempt, and resends at mos
   expect(retry).toHaveBeenCalledTimes(1)
 })
 
+test('resends a paid attempt once after a 401, with the same credential, while its Challenge is valid', async () => {
+  const challenge = Challenge.from({
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    id: 'live',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const nonces: string[] = []
+  const retry = vi.fn(() => ({ 'X-Token': 'fresh' }))
+  const client = Identity.Client.from([
+    {
+      scope: '*',
+      prove(request, context) {
+        nonces.push(context.nonce)
+        return request
+      },
+      retry,
+    },
+  ])
+  const sent: Request[] = []
+  const fetch = vi.fn(async (request: Request) => {
+    sent.push(request)
+    return new Response(null, { status: 401 })
+  })
+  const { headers, response } = await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      body: 'x',
+      headers: { 'Payment-Authorization': credential, 'X-Token': 'stale' },
+      method: 'POST',
+    }),
+    { challenge },
+  )
+  // Resent once: a second 401 is final.
+  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(retry).toHaveBeenCalledTimes(1)
+  expect(response.status).toBe(401)
+  expect(headers).toEqual([['x-token', 'fresh']])
+  expect(sent.map((request) => request.headers.get('Payment-Authorization'))).toEqual([
+    credential,
+    credential,
+  ])
+  expect(sent.map((request) => request.headers.get('X-Token'))).toEqual(['stale', 'fresh'])
+  expect(await sent[1]!.text()).toBe('x')
+  expect(new Set(nonces).size).toBe(2)
+})
+
+test('never resends a paid attempt after a 403, or once its Challenge has expired', async () => {
+  const challengeExpiring = (expires: string) =>
+    Challenge.from({
+      expires,
+      id: 'c',
+      intent: 'charge',
+      method: 'test',
+      realm: 'merchant.example',
+      request: { amount: '1' },
+    })
+  const live = challengeExpiring(new Date(Date.now() + 60_000).toISOString())
+  const expired = challengeExpiring(new Date(Date.now() - 1_000).toISOString())
+  const retry = vi.fn(() => ({ 'X-Token': 'fresh' }))
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(null, { status: 403 }))
+    .mockResolvedValueOnce(new Response(null, { status: 401 }))
+    .mockResolvedValueOnce(new Response(null, { status: 401 }))
+  const paid = (challenge: Challenge.Challenge) =>
+    new Request('https://merchant.example', {
+      headers: { Authorization: Credential.serialize({ challenge, payload: {} }) },
+    })
+  await client.send(fetch as never, paid(live), { challenge: live })
+  await client.send(fetch as never, paid(expired), { challenge: expired })
+  // A credential whose Challenge is unknown is never resent.
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { 'Payment-Signature': 'x' } }),
+  )
+  expect(fetch).toHaveBeenCalledTimes(3)
+  expect(retry).not.toHaveBeenCalled()
+})
+
 test('attempt transitions', () => {
   const { initial, transition } = Identity.Client
   const sent = transition(initial, { type: 'send', payment: 'unpaid' })
@@ -395,11 +479,14 @@ test('attempt transitions', () => {
   expect(Object.isFrozen(sent)).toBe(true)
   const resent = transition(sent, { type: 'response', resend: [['x-token', 't']] })
   expect(resent).toEqual({ phase: 'resent', headers: [['x-token', 't']] })
+  expect(transition(paid, { type: 'response', resend: [] })).toEqual({
+    phase: 'resent',
+    headers: [],
+  })
   for (const state of [sent, paid, resent])
     expect(transition(state, { type: 'response', resend: undefined })).toEqual({ phase: 'done' })
   const done = transition(sent, { type: 'response', resend: undefined })
   const illegal = [
-    [paid, { type: 'response', resend: [] }, 'response with resend', 'paid'],
     [resent, { type: 'response', resend: [] }, 'response with resend', 'resent'],
     [initial, { type: 'response', resend: undefined }, 'response', 'unproved'],
     [done, { type: 'response', resend: undefined }, 'response', 'done'],
