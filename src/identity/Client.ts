@@ -29,8 +29,8 @@ export type Client = {
    * (`redirect: 'error'`), so proofs never reach another URL. Requests with no
    * prover in scope are sent unchanged. If a prover asks to retry a rejected
    * (non-402) response, the request is proved again and resent once. A paid
-   * attempt is resent only after a 401, with the same Payment credential and
-   * while its Challenge has not expired: servers check other authentication
+   * attempt is resent only after a 401 with no receipt, with the same Payment
+   * credential and while its Challenge has not expired: servers check other authentication
    * before verifying a Payment credential, so a 401 means nothing settled.
    */
   readonly send: (
@@ -165,13 +165,18 @@ export function from(provers: readonly Types.Prover[]): Client {
     context: SendContext
     keepReadable: boolean
     headers: ResendHeaders
-  }): Promise<{ request: Request; response: Response }> {
-    const { context, fetch, headers, keepReadable, request } = parameters
+    /** Runs after the provers, right before the fetch; returning `false` sends nothing. */
+    proceed?: (() => boolean) | undefined
+  }): Promise<{ request: Request; response: Response } | undefined> {
+    const { context, fetch, headers, keepReadable, proceed, request } = parameters
     // Keep the original readable only when it may be resent; otherwise a clone would tee
     // (and buffer) a streamed body that is never read again.
     const source = keepReadable ? request.clone() : request
     const scoped = inScope(request.url)
-    if (scoped.length === 0) return { request: source, response: await fetch(source) }
+    if (scoped.length === 0) {
+      if (proceed && !proceed()) return undefined
+      return { request: source, response: await fetch(source) }
+    }
     const attempt: Types.ProveContext = Object.freeze({
       ...SigningContext.create(),
       ...(context.challenge && { challenge: context.challenge }),
@@ -192,6 +197,7 @@ export function from(provers: readonly Types.Prover[]): Client {
       redirect: request.redirect === 'follow' ? 'error' : request.redirect,
     })
     for (const prover of scoped) sent = await prover.prove(sent, attempt)
+    if (proceed && !proceed()) return undefined
     return { request: sent, response: await fetch(sent) }
   }
 
@@ -203,15 +209,13 @@ export function from(provers: readonly Types.Prover[]): Client {
         payment: isPaid(request, context) ? 'paid' : 'unpaid',
       })
       const retriers = inScope(request.url).filter((prover) => prover.retry)
-      // A paid attempt may be resent only with a Payment credential whose Challenge is known.
+      // A paid attempt may be resent only with the Payment credential for the transport's Challenge.
       const paidChallenge =
-        attempt.phase === 'paid'
-          ? (credentialChallenge(request.headers) ?? context.challenge)
-          : undefined
+        attempt.phase === 'paid' ? resendableChallenge(request, context) : undefined
       const keepReadable =
         retriers.length > 0 && (attempt.phase === 'sent' || paidChallenge !== undefined)
       const carried = context.headers ?? []
-      const result = await sendOnce({ context, fetch, headers: carried, keepReadable, request })
+      const result = (await sendOnce({ context, fetch, headers: carried, keepReadable, request }))!
       const { response } = result
       const resend =
         keepReadable && canResend(attempt, response, paidChallenge)
@@ -219,10 +223,23 @@ export function from(provers: readonly Types.Prover[]): Client {
           : undefined
       attempt = transition(attempt, { type: 'response', resend })
       if (attempt.phase !== 'resent') return { ...result, headers: carried }
-      release([response])
       const headers = mergeHeaders(carried, attempt.headers)
-      const resent = await sendOnce({ context, fetch, headers, keepReadable: false, request })
+      const resent = await sendOnce({
+        context,
+        fetch,
+        headers,
+        keepReadable: false,
+        // The Challenge may expire while provers refresh identity: a paid attempt is checked again
+        // right before the resend, and an expired one returns the 401 instead.
+        proceed() {
+          if (paidChallenge && !isUnexpired(paidChallenge)) return false
+          release([response])
+          return true
+        },
+        request,
+      })
       transition(attempt, { type: 'response', resend: undefined })
+      if (!resent) return { ...result, headers: carried }
       return { ...resent, headers }
     },
     async challenge(response, { challenge }, url) {
@@ -243,11 +260,15 @@ export function from(provers: readonly Types.Prover[]): Client {
   }
 }
 
+/** Response headers that report a settled payment (MPP receipt, x402 settlement response). */
+const settlementHeaders = ['payment-receipt', 'payment-response', 'x-payment-response'] as const
+
 /**
  * Whether a rejected response may be resent. An unpaid attempt may be resent after any non-402
- * rejection. A paid attempt only after a 401, which never follows settlement, and only while the
- * credential's Challenge has not expired, so the server processes the same credential afresh.
- * A 403 can follow a settled payment, so it is never resent.
+ * rejection. A paid attempt only after a 401, which never follows settlement, that carries no
+ * receipt or other settlement header, and only while the credential's Challenge has not expired,
+ * so the server processes the same credential afresh. A 403 can follow a settled payment, so it is
+ * never resent.
  */
 function canResend(
   attempt: Attempt,
@@ -255,8 +276,37 @@ function canResend(
   challenge: Challenge.Challenge | undefined,
 ): boolean {
   if (attempt.phase === 'sent') return response.status >= 400 && response.status !== 402
-  if (attempt.phase !== 'paid' || response.status !== 401 || !challenge?.expires) return false
-  return Date.parse(challenge.expires) > Date.now()
+  if (attempt.phase !== 'paid' || response.status !== 401 || !challenge) return false
+  if (settlementHeaders.some((name) => response.headers.has(name))) return false
+  return isUnexpired(challenge)
+}
+
+/** Whether a Challenge has an `expires` still in the future. */
+function isUnexpired(challenge: Challenge.Challenge): boolean {
+  return challenge.expires !== undefined && Date.parse(challenge.expires) > Date.now()
+}
+
+/**
+ * Returns the Challenge a paid attempt may be resent for: the transport's Challenge (or, without
+ * one, the Challenge of the request's Payment credential), when a header holds a Payment credential
+ * for it. A request carrying an x402 credential header is never resent, nor one whose Payment
+ * credential answers another Challenge.
+ */
+function resendableChallenge(
+  request: Request,
+  context: SendContext,
+): Challenge.Challenge | undefined {
+  if (x402CredentialHeaders.some((name) => request.headers.has(name))) return undefined
+  const challenge = context.challenge ?? credentialChallenge(request.headers)
+  if (!challenge) return undefined
+  for (const [, value] of request.headers) {
+    const payment = Credential.extractPaymentScheme(value)
+    if (!payment) continue
+    try {
+      if (Credential.deserialize(payment).challenge.id === challenge.id) return challenge
+    } catch {}
+  }
+  return undefined
 }
 
 /**

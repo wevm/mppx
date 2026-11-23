@@ -316,8 +316,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     )
     const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     let response = first.response
-    // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
-    const identityHeaders = first.headers
+    // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too,
+    // replaced by those a paid attempt was resent with, so a later paid attempt carries them.
+    let identityHeaders = first.headers
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
     if ((init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment])
@@ -514,7 +515,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
           })
         try {
-          ;({ response } = await send(
+          ;({ response, headers: identityHeaders } = await send(
             paymentInput,
             {
               ...transport.setCredential(

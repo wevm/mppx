@@ -471,6 +471,94 @@ test('never resends a paid attempt after a 403, or once its Challenge has expire
   expect(retry).not.toHaveBeenCalled()
 })
 
+test('never resends a paid 401 that reports settlement', async () => {
+  const challenge = Challenge.from({
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    id: 'settled',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const retry = vi.fn(() => ({ 'X-Token': 'fresh' }))
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  for (const header of ['Payment-Receipt', 'Payment-Response', 'X-Payment-Response']) {
+    const fetch = vi.fn(
+      async () => new Response('denied', { headers: { [header]: 'r' }, status: 401 }),
+    )
+    const { response } = await client.send(
+      fetch as never,
+      new Request('https://merchant.example', { headers: { Authorization: credential } }),
+      { challenge },
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(response.headers.get(header)).toBe('r')
+    expect(await response.text()).toBe('denied')
+  }
+  expect(retry).not.toHaveBeenCalled()
+})
+
+test('resends a paid attempt only for the credential that answers the transport Challenge', async () => {
+  const challenge = (id: string) =>
+    Challenge.from({
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      id,
+      intent: 'charge',
+      method: 'test',
+      realm: 'merchant.example',
+      request: { amount: '1' },
+    })
+  const transport = challenge('transport')
+  const other = Credential.serialize({ challenge: challenge('other'), payload: {} })
+  const retry = vi.fn(() => ({ 'X-Token': 'fresh' }))
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  const fetch = vi.fn(async () => new Response(null, { status: 401 }))
+  // An x402 credential next to an unrelated Payment credential.
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', {
+      headers: { 'Payment-Authorization': other, 'Payment-Signature': 'x402' },
+    }),
+    { challenge: transport },
+  )
+  // A Payment credential for another Challenge than the transport's.
+  await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: other } }),
+    { challenge: transport },
+  )
+  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(retry).not.toHaveBeenCalled()
+})
+
+test('does not resend a paid attempt whose Challenge expired while identity refreshed', async () => {
+  const challenge = Challenge.from({
+    expires: new Date(Date.now() + 50).toISOString(),
+    id: 'short',
+    intent: 'charge',
+    method: 'test',
+    realm: 'merchant.example',
+    request: { amount: '1' },
+  })
+  const credential = Credential.serialize({ challenge, payload: {} })
+  const retry = vi.fn(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return { 'X-Token': 'fresh' }
+  })
+  const client = Identity.Client.from([{ scope: '*', prove: (request) => request, retry }])
+  const fetch = vi.fn(async () => new Response('stale', { status: 401 }))
+  const { headers, response } = await client.send(
+    fetch as never,
+    new Request('https://merchant.example', { headers: { Authorization: credential } }),
+    { challenge },
+  )
+  expect(retry).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(headers).toEqual([])
+  expect(await response.text()).toBe('stale')
+})
+
 test('attempt transitions', () => {
   const { initial, transition } = Identity.Client
   const sent = transition(initial, { type: 'send', payment: 'unpaid' })

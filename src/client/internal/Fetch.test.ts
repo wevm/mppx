@@ -1978,6 +1978,60 @@ describe('Fetch.from: 402 retry path', () => {
     expect(proved).toEqual([undefined, 'earlier'])
   })
 
+  test('carries identity headers a paid attempt was resent with onto the next paid attempt', async () => {
+    const challenge = (id: string) =>
+      Challenge.from({
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        id,
+        intent: 'charge',
+        method: 'test',
+        realm: 'api.example.com',
+        request: { amount: '1' },
+      })
+    const tokens: (string | null)[] = []
+    let calls = 0
+    const fetch = Fetch.from({
+      fetch: async (input) => {
+        tokens.push(new Request(input as Request).headers.get('X-Token'))
+        calls++
+        if (calls === 1 || calls === 3)
+          return new Response(null, {
+            headers: { 'WWW-Authenticate': Challenge.serialize(challenge(`c${calls}`)) },
+            status: 402,
+          })
+        // The paid attempt's identity expired: a 401, then a fresh 402 after the resend.
+        if (calls === 2) return new Response(null, { status: 401 })
+        return new Response('ok')
+      },
+      identity: IdentityClient.from([
+        {
+          scope: '*',
+          prove: (request) => request,
+          retry: (response) => (response.status === 401 ? { 'X-Token': 'fresh' } : undefined),
+        },
+      ]),
+      methods: [
+        Method.toClient(
+          Method.from({
+            intent: 'charge',
+            name: 'test',
+            schema: {
+              credential: { payload: z.object({}) },
+              request: z.object({ amount: z.string() }),
+            },
+          }),
+          {
+            createCredential: async ({ challenge }) =>
+              Credential.serialize({ challenge, payload: {} }),
+          },
+        ),
+      ],
+    })
+
+    expect(await (await fetch('https://api.example.com/resource')).text()).toBe('ok')
+    expect(tokens).toEqual([null, null, 'fresh', 'fresh'])
+  })
+
   test('retries a relative request whose 402 has no URL', async () => {
     const challenge = Challenge.from({
       id: 'relative',
