@@ -16,6 +16,18 @@ const maxRequestParameterLength = 16 * 1024
  */
 const legacyUnicodeEscape = Symbol('mppx.Challenge.legacyUnicodeEscape')
 
+/** Auth-params the challenge keeps and binds into its ID (see `idBindingInput`). */
+const boundParams = new Set([
+  'digest',
+  'expires',
+  'header',
+  'intent',
+  'method',
+  'opaque',
+  'realm',
+  'request',
+])
+
 const unsupportedCredentialHeaderMessage =
   'Unsupported credential header: challenges may only select Payment-Authorization.'
 
@@ -358,6 +370,9 @@ export declare namespace fromMethod {
  * ```
  */
 export function serialize(challenge: Challenge): string {
+  // Re-serializing drops the backslash that marks a legacy escape, so a signer reading the new
+  // header would not see it.
+  assertNotLegacyUnicodeEscaped(challenge)
   const { method } = challenge
   assertMethod(method)
   const parts = [
@@ -476,8 +491,8 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   >
   // Servers before quoted-pair parsing escaped characters above U+00FF as `\\uXXXX`. Quoted-pair
   // reads those as different text than the server bound into the challenge ID, so the client must
-  // not pay such a challenge. `description` is not bound.
-  if ([...legacyEscaped].some((key) => key !== 'description'))
+  // not pay such a challenge. `description` and unknown params are not bound.
+  if ([...legacyEscaped].some((key) => boundParams.has(key)))
     (parsed as Record<symbol, unknown>)[legacyUnicodeEscape] = true
   return parsed
 }

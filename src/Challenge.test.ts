@@ -788,6 +788,7 @@ describe('deserialize', () => {
     { name: 'escaped backslash', params: 'realm="a\\\\u00e9"', legacy: false },
     { name: 'not four hex digits', params: 'realm="\\u00g9"', legacy: false },
     { name: 'description only', params: 'realm="a", description="caf\\u00e9"', legacy: false },
+    { name: 'unknown param', params: 'realm="a", foo="caf\u00e9"', legacy: false },
   ])(
     'behavior: flags a legacy \\uXXXX escape in a bound parameter ($name)',
     ({ params, legacy }) => {
@@ -798,6 +799,9 @@ describe('deserialize', () => {
       // The flag stays out of the JSON and wire forms.
       expect(JSON.stringify(challenge)).not.toContain('legacy')
       expect(Challenge.isLegacyUnicodeEscaped({ ...challenge })).toBe(legacy)
+      // Re-serializing would drop the escape that marks it.
+      if (legacy) expect(() => Challenge.serialize(challenge)).toThrow('Legacy unicode-escaped')
+      else expect(() => Challenge.serialize(challenge)).not.toThrow()
       if (legacy)
         expect(() => Challenge.assertNotLegacyUnicodeEscaped(challenge)).toThrow(
           'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',

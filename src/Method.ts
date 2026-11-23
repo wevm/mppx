@@ -541,9 +541,9 @@ export function toClient<
     canHandleChallenge,
     context,
     // Refuse a legacy `\uXXXX`-escaped challenge before the method signs or broadcasts anything.
-    async createCredential(parameters: Parameters<typeof createCredential>[0]) {
+    async createCredential(this: unknown, parameters: Parameters<typeof createCredential>[0]) {
       Challenge.assertNotLegacyUnicodeEscaped(parameters.challenge)
-      return createCredential(parameters)
+      return createCredential.call(this, parameters)
     },
   } as Client<method, context>
 }

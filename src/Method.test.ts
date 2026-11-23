@@ -208,4 +208,20 @@ describe('toClient', () => {
       expect(signed).toBe(0)
     },
   )
+  test('behavior: calls createCredential with the method as receiver', async () => {
+    const method = Method.toClient(base, {
+      createCredential: async function (this: { name: string }) {
+        return this.name
+      },
+    })
+    const challenge = Challenge.from({
+      id: 'a',
+      intent: 'charge',
+      method: 'alpha',
+      realm: 'example.com',
+      request: { amount: '1' },
+    })
+
+    await expect(method.createCredential({ challenge: challenge as never })).resolves.toBe('alpha')
+  })
 })
