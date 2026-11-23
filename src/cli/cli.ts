@@ -953,9 +953,14 @@ const cli = Cli.create('mppx', {
         const persistentSessionAccount =
           process.env.MPPX_PRIVATE_KEY?.trim() ||
           !isTempoAccount(resolveAccountName(c.options.account))
-        // Configured methods own their signing policies and channel storage.
+        // Configured methods and plugins own their signing policies and channel storage.
         // Rebuilding a persistent manager would discard those policies.
-        if (isTempoSessionChallenge(challenge) && persistentSessionAccount && !configMethod) {
+        if (
+          isTempoSessionChallenge(challenge) &&
+          persistentSessionAccount &&
+          !configMethod &&
+          !(plugin && loaded?.config.plugins?.includes(plugin))
+        ) {
           try {
             const credentialContext = await preparePayment(
               challenge,
