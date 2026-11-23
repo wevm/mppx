@@ -425,6 +425,55 @@ describe('MACH direct payments', () => {
     httpServer.close()
   })
 
+  test("session: an exhausted MACH channel the payer can't top up is not preferred", async () => {
+    // Exactly one opening deposit of MACH: nothing left to top the channel up with.
+    const payer = await createPayer({ machineToken: 100_000n, stablecoin: 5_000_000n })
+    const server = createServer(true)
+    const httpServer = await serve(async (request) => {
+      const result = await server.session({ amount: '0.1', decimals: 6, unitType: 'request' })(
+        request,
+      )
+      if (result.status === 402) return result.challenge
+      return result.withReceipt(new Response('paid'))
+    })
+    const mppx = Mppx_client.create({
+      methods: [tempo_client({ account: payer, getClient: () => client, maxDeposit: '1' })],
+      polyfill: false,
+    })
+    expect((await mppx.fetch(httpServer.url)).status).toBe(200)
+    expect(await balance(payer.address, mach)).toBe(0n)
+    // The open channel is spent and can't be topped up, so the stablecoin offer pays.
+    expect((await mppx.fetch(httpServer.url)).status).toBe(200)
+    expect(await balance(payer.address, asset)).toBeLessThan(5_000_000n)
+    httpServer.close()
+  })
+
+  test('session: a client with resolveAccount keeps the server order', async () => {
+    const payer = await createPayer({ machineToken: 5_000_000n, stablecoin: 5_000_000n })
+    const server = createServer(true)
+    const httpServer = await serve(async (request) => {
+      const result = await server.session({ amount: '0.1', decimals: 6, unitType: 'request' })(
+        request,
+      )
+      if (result.status === 402) return result.challenge
+      return result.withReceipt(new Response('paid'))
+    })
+    const mppx = Mppx_client.create({
+      methods: [
+        tempo_client({
+          account: payer,
+          getClient: () => client,
+          maxDeposit: '1',
+          resolveAccount: () => undefined,
+        }),
+      ],
+      polyfill: false,
+    })
+    expect((await mppx.fetch(httpServer.url)).status).toBe(200)
+    expect(await balance(payer.address, mach)).toBe(5_000_000n)
+    httpServer.close()
+  })
+
   test('session: a payer without MACH opens its channel in the main currency', async () => {
     const payer = await createPayer({ machineToken: 0n, stablecoin: 5_000_000n })
     const server = createServer(true)

@@ -28,6 +28,8 @@ export type PreferChallenge = (parameters: {
   challenge: Challenge.Challenge
   challenges: readonly Challenge.Challenge[]
   context?: unknown
+  /** Whether the caller runs the method's challenge hooks (such as a session top-up) before paying. */
+  preparesChallenge: boolean
 }) => Promise<boolean>
 
 /** Attaches an internal offer preference to a client method and returns the method. */
@@ -48,7 +50,11 @@ export function withPreference<const method extends object>(
  */
 export async function preferCandidates<
   const candidate extends { challenge: Challenge.Challenge; method: object },
->(candidates: readonly candidate[], context?: unknown): Promise<readonly candidate[]> {
+>(
+  candidates: readonly candidate[],
+  context?: unknown,
+  options: { preparesChallenge?: boolean | undefined } = {},
+): Promise<readonly candidate[]> {
   if (candidates.length < 2) return candidates
   const challenges = candidates.map(({ challenge }) => challenge)
   const preferred = await Promise.all(
@@ -60,6 +66,7 @@ export async function preferCandidates<
         return await preferChallenge({
           challenge,
           challenges,
+          preparesChallenge: options.preparesChallenge === true,
           ...(context === undefined || context === deferredContext ? {} : { context }),
         })
       } catch {

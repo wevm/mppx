@@ -580,8 +580,10 @@ export function session(parameters: session.Parameters = {}) {
     challenge,
     challenges,
     context,
+    preparesChallenge,
   }: Parameters<AcceptPayment.PreferChallenge>[0]): Promise<boolean> {
-    if (!isTip1034SessionChallenge(challenge)) return false
+    // The account `resolveAccount` picks per channel isn't known here, so keep the server order.
+    if (resolveAccount || !isTip1034SessionChallenge(challenge)) return false
     const sessionContext = context as CredentialContext | undefined
     if (hasSessionAction(sessionContext) || sessionContext?.descriptor !== undefined) return false
     const resolveOffer = (offer: Challenge.Challenge) =>
@@ -595,11 +597,40 @@ export function session(parameters: session.Parameters = {}) {
     const resolved = await resolveOffer(challenge)
     const { chainId, client, payee, token } = resolved
     if (!MachineTokenCharge.isMachineToken({ chainId, currency: token })) return false
-    const { maxDeposit } = resolveAmounts(challenge.request as SpendingRequest, chainId)
+    const { maxDeposit, topUpAmount } = resolveAmounts(
+      challenge.request as SpendingRequest,
+      chainId,
+    )
+    const account = getAccount(client, sessionContext)
+    /** Whether the payer can fund `amount` of MACH and the gas for depositing it. */
+    const canFund = async (amount: bigint) =>
+      (resolved.feePayer ||
+        (await resolveMachineTokenFeeToken({
+          account: account.address,
+          chainId,
+          client,
+          preferred: resolved.feeToken,
+        })) !== undefined) &&
+      MachineTokenCharge.canSpend(client, { account, amount, chainId })
     const entry = await store.get(resolved.key)
     if (entry?.opened) {
       const required = entry.cumulativeAmount + resolved.amount
-      return required <= entry.deposit || maxDeposit === undefined || required <= maxDeposit
+      if (required <= entry.deposit) return true
+      // A voucher adds no funds: an exhausted channel pays only where the caller tops it up first
+      // (`fetch`, not MCP), within `maxDeposit`, from MACH the payer can still deposit.
+      if (!preparesChallenge || (maxDeposit !== undefined && required > maxDeposit)) return false
+      return canFund(
+        resolveAutomaticTopUp({
+          deposit: entry.deposit,
+          maxDeposit,
+          requiredCumulative: required,
+          suggestedDeposit:
+            resolved.suggestedDepositRaw === undefined
+              ? undefined
+              : BigInt(resolved.suggestedDepositRaw),
+          topUpAmount,
+        }),
+      )
     }
     for (const offer of challenges) {
       if (offer === challenge || !isTip1034SessionChallenge(offer)) continue
@@ -607,28 +638,14 @@ export function session(parameters: session.Parameters = {}) {
       if (other && isSameAddress(other.payee, payee) && (await store.get(other.key))?.opened)
         return false
     }
-    const account = getAccount(client, sessionContext)
-    // MACH can't pay fees: without a sponsor, the payer needs a stablecoin to pay them.
-    if (
-      !resolved.feePayer &&
-      !(await resolveMachineTokenFeeToken({
-        account: account.address,
-        chainId,
-        client,
-        preferred: resolved.feeToken,
-      }))
-    )
-      return false
-    return MachineTokenCharge.canSpend(client, {
-      account,
-      amount: resolveOpeningDeposit({
+    return canFund(
+      resolveOpeningDeposit({
         contextDepositRaw: sessionContext?.depositRaw,
         maxDeposit,
         requestAmount: resolved.amount,
         suggestedDepositRaw: resolved.suggestedDepositRaw,
       }),
-      chainId,
-    })
+    )
   }
 
   return MethodResponse.register(
