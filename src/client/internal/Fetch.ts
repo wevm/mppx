@@ -1,3 +1,5 @@
+import { Json } from 'ox'
+
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
@@ -395,7 +397,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           trustedTempoProofRealms,
         )
         const previousCredential = preparedCredential
-        const key = Challenge.serialize(selectedChallenge)
+        const key = retryKey(selectedChallenge)
         const sameAttempt =
           previousCredential?.method === selected.method && previousCredential?.key === key
         let canReusePrevious = false
@@ -1399,4 +1401,16 @@ export function skippedChallengeCount(response: unknown): number {
   return Challenge.countUnsupportedCredentialHeaders(
     response.headers.get(Constants.Headers.wwwAuthenticate),
   )
+}
+
+/**
+ * Keys a payment retry by its Challenge. Not `Challenge.serialize`: an MCP Challenge carried as JSON
+ * may hold values a header can't, and its display-only `description` reads differently from a
+ * header (`\u2014` is the text `u2014`) than from JSON.
+ *
+ * @internal
+ */
+export function retryKey(challenge: Challenge.Challenge): string {
+  const { description: _description, ...rest } = challenge
+  return Json.canonicalize(rest)
 }

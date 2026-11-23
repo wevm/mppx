@@ -597,14 +597,9 @@ describe('serialize', () => {
       label: 'trailing backslash',
     },
     {
-      description: '1 \u00d7 Classmatic \u2014 General Admission',
-      escaped: '1 \u00d7 Classmatic \\u2014 General Admission',
-      label: 'characters above Latin-1 (em dash)',
-    },
-    {
-      description: 'Tickets \ud83c\udf9f\ufe0f "VIP"',
-      escaped: 'Tickets \\ud83c\\udf9f\\ufe0f \\"VIP\\"',
-      label: 'surrogate pairs and quotes',
+      description: 'caf\u00e9 na\u00efve',
+      escaped: 'caf\u00e9 na\u00efve',
+      label: 'raw Latin-1',
     },
   ])('behavior: escapes quoted-string values: $label', ({ description, escaped }) => {
     const challenge = Challenge.from({
@@ -620,6 +615,70 @@ describe('serialize', () => {
     expect(header).toContain(`description="${escaped}"`)
     expect(Challenge.deserialize(header).description).toBe(description)
   })
+
+  test.each([
+    {
+      description: '1 \u00d7 Classmatic \u2014 General Admission',
+      escaped: '1 \u00d7 Classmatic \\u2014 General Admission',
+      parsed: '1 \u00d7 Classmatic u2014 General Admission',
+      label: 'characters above Latin-1 (em dash)',
+    },
+    {
+      description: 'Tickets \ud83c\udf9f\ufe0f "VIP"',
+      escaped: 'Tickets \\ud83c\\udf9f\\ufe0f \\"VIP\\"',
+      parsed: 'Tickets ud83cudf9fufe0f "VIP"',
+      label: 'surrogate pairs and quotes',
+    },
+  ])(
+    'behavior: escapes description characters above Latin-1 as display-only text: $label',
+    ({ description, escaped, parsed }) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        description,
+      })
+
+      const header = Challenge.serialize(challenge)
+      expect(header).toContain(`description="${escaped}"`)
+      // quoted-pair keeps the escaped character, not a decoded code point.
+      expect(Challenge.deserialize(header).description).toBe(parsed)
+    },
+  )
+
+  test.each(['realm', 'intent', 'id'] as const)(
+    'error: rejects characters above Latin-1 in %s',
+    (field) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        [field]: 'merchant\u2014api',
+      })
+
+      expect(() => Challenge.serialize(challenge)).toThrow(
+        `Invalid ${field}: characters above U+00FF cannot be sent in a header.`,
+      )
+    },
+  )
+
+  test.each(['Tempo', 'tempo2', 'x402', 'a1:b_2-c', 'my-method', ''])(
+    'error: rejects method %j outside the a-z grammar',
+    (method) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method,
+        intent: 'charge',
+        request: { amount: '1000000' },
+      })
+      expect(() => Challenge.serialize(challenge)).toThrow(`Invalid method: "${method}"`)
+    },
+  )
 
   test('behavior: serialized challenges are valid HTTP header values', () => {
     const description = '1 \u00d7 Classmatic \u2014 General Admission \ud83c\udf9f\ufe0f'
@@ -637,7 +696,6 @@ describe('serialize', () => {
     // construction throw in fetch-compliant runtimes.
     expect([...header].every((char) => char.charCodeAt(0) <= 0xff)).toBe(true)
     expect(() => new Headers({ 'WWW-Authenticate': header })).not.toThrow()
-    expect(Challenge.deserialize(header).description).toBe(description)
   })
 
   test('error: rejects CRLF in quoted-string values', () => {
@@ -712,6 +770,44 @@ describe('deserialize', () => {
       }
     `)
   })
+
+  test('behavior: reads \\uXXXX in a quoted-string as quoted-pair, not a unicode escape', () => {
+    const challenge = Challenge.deserialize(
+      'Payment id="a", realm="merchant\\u2014api.example.com", method="tempo", intent="charge", request="e30", description="literal \\\\u2014"',
+    )
+    expect(challenge.realm).toBe('merchantu2014api.example.com')
+    expect(challenge.description).toBe('literal \\u2014')
+  })
+
+  test.each([
+    { name: 'realm \\u00e9', params: 'realm="caf\\u00e9.example.com"', legacy: true },
+    { name: 'realm \\u2014', params: 'realm="merchant\\u2014api"', legacy: true },
+    { name: 'uppercase hex', params: 'realm="caf\\u00E9", opaque="x"', legacy: true },
+    { name: 'other bound param', params: 'realm="a", digest="sha-256=\\u00e9"', legacy: true },
+    { name: 'escaped quote', params: 'realm="say \\"hi\\""', legacy: false },
+    { name: 'escaped backslash', params: 'realm="a\\\\u00e9"', legacy: false },
+    { name: 'not four hex digits', params: 'realm="\\u00g9"', legacy: false },
+    { name: 'description only', params: 'realm="a", description="caf\\u00e9"', legacy: false },
+    { name: 'unknown param', params: 'realm="a", foo="caf\u00e9"', legacy: false },
+  ])(
+    'behavior: flags a legacy \\uXXXX escape in a bound parameter ($name)',
+    ({ params, legacy }) => {
+      const challenge = Challenge.deserialize(
+        `Payment id="a", ${params}, method="tempo", intent="charge", request="e30"`,
+      )
+      expect(Challenge.isLegacyUnicodeEscaped(challenge)).toBe(legacy)
+      // The flag stays out of the JSON and wire forms.
+      expect(JSON.stringify(challenge)).not.toContain('legacy')
+      expect(Challenge.isLegacyUnicodeEscaped({ ...challenge })).toBe(legacy)
+      // Re-serializing would drop the escape that marks it.
+      if (legacy) expect(() => Challenge.serialize(challenge)).toThrow('Legacy unicode-escaped')
+      else expect(() => Challenge.serialize(challenge)).not.toThrow()
+      if (legacy)
+        expect(() => Challenge.assertNotLegacyUnicodeEscaped(challenge)).toThrow(
+          'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',
+        )
+    },
+  )
 
   test.each([
     {
@@ -838,7 +934,17 @@ describe('deserialize', () => {
     {
       name: 'invalid method casing',
       header: 'Payment id="a", realm="api", method="Tempo", intent="charge", request="e30"',
-      error: 'Invalid method: "Tempo". Must be lowercase per spec.',
+      error: 'Invalid method: "Tempo". Must be lowercase letters a-z per spec.',
+    },
+    {
+      name: 'method with digits',
+      header: 'Payment id="a", realm="api", method="tempo2", intent="charge", request="e30"',
+      error: 'Invalid method: "tempo2". Must be lowercase letters a-z per spec.',
+    },
+    {
+      name: 'method with punctuation',
+      header: 'Payment id="a", realm="api", method="a1:b_2-c", intent="charge", request="e30"',
+      error: 'Invalid method: "a1:b_2-c". Must be lowercase letters a-z per spec.',
     },
     {
       name: 'malformed auth-param',
@@ -987,6 +1093,17 @@ describe('deserializeList', () => {
     method: 'tempo',
     intent: 'charge',
     request: { amount: '1000000', currency: 'USD' },
+  })
+
+  test('behavior: skips an offer whose method id is outside a-z', () => {
+    const invalid = secondHeader
+      .replace('method="tempo"', 'method="tempo2"')
+      .replace('id="second"', 'id="invalid"')
+
+    const challenges = Challenge.deserializeList(`${invalid}, ${secondHeader}`)
+
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]).toMatchObject({ id: 'second', method: 'tempo' })
   })
 
   test('behavior: parses the reported Stripe and Tempo header with payment in description', () => {

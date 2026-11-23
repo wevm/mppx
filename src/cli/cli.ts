@@ -18,6 +18,7 @@ import * as Mppx from '../client/Mppx.js'
 import * as Transport from '../client/Transport.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
+import { LegacyUnicodeEscapedChallengeError } from '../Errors.js'
 import * as x402_ChallengeBrand from '../internal/x402/ChallengeBrand.js'
 import * as x402_Header from '../internal/x402/Header.js'
 import * as x402_Types from '../internal/x402/Types.js'
@@ -1783,8 +1784,17 @@ const sign = Cli.create('sign', {
       return undefined as never
     }
 
+    // Skip offers a legacy server escaped as `\\uXXXX`: the server would reject their credential.
+    const usable = challenges.filter((challenge) => !Challenge.isLegacyUnicodeEscaped(challenge))
+    if (challenges.length > 0 && usable.length === 0)
+      return c.error({
+        code: 'LEGACY_UNICODE_ESCAPED_CHALLENGE',
+        message: new LegacyUnicodeEscapedChallengeError().message,
+        exitCode: 2,
+      })
+
     const loaded = await loadConfig(c.options.config)
-    const selected = selectChallenge(challenges, loaded?.config)
+    const selected = selectChallenge(usable, loaded?.config)
     if (!selected) {
       const offers = challenges
         .map((challenge) => `${challenge.method}/${challenge.intent}`)

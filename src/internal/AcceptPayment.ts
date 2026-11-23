@@ -1,4 +1,4 @@
-import type * as Challenge from '../Challenge.js'
+import * as Challenge from '../Challenge.js'
 import type { MaybePromise } from './types.js'
 import * as x402_ChallengeBrand from './x402/ChallengeBrand.js'
 
@@ -201,7 +201,7 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
     else methodsByKey.set(key, [method])
   }
 
-  return challenges
+  const candidates = challenges
     .flatMap((challenge, index) => {
       const matchingMethods = methodsByKey.get(keyOf(challenge))
       if (!matchingMethods) return []
@@ -236,6 +236,12 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
       const { match: _match, ...rest } = candidate
       return rest as unknown as ChallengeCandidate<methods[number]>
     })
+  // Skip offers a legacy server escaped as `\uXXXX`: paying one fails verification, possibly after
+  // funds moved. When only those remain, fail with the reason instead of "no method found".
+  const usable = candidates.filter(({ challenge }) => !Challenge.isLegacyUnicodeEscaped(challenge))
+  if (usable.length === 0 && candidates[0])
+    Challenge.assertNotLegacyUnicodeEscaped(candidates[0].challenge)
+  return usable
 }
 
 /** Returns the canonical `method/intent` key for a method or challenge-like value. */

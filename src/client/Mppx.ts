@@ -1,5 +1,6 @@
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
+import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
 import * as IdentityClient from '../identity/Client.js'
 import * as IdentityHeaders from '../identity/Headers.js'
@@ -307,12 +308,23 @@ export function create<
     let challenge: Challenge.Challenge | undefined
     let mi: FlattenMethods<methods>[number] | undefined
     try {
-      let candidates = AcceptPayment.selectChallengeCandidates(
-        challenges,
-        methods,
-        preferences,
-        selectionContext,
-      )
+      let candidates: AcceptPayment.ChallengeCandidate<FlattenMethods<methods>[number]>[]
+      let legacyError: Errors.LegacyUnicodeEscapedChallengeError | undefined
+      try {
+        candidates = AcceptPayment.selectChallengeCandidates(
+          challenges,
+          methods,
+          preferences,
+          selectionContext,
+        )
+      } catch (error) {
+        // Only legacy-escaped offers passed the policy, but the deferred pass below may still
+        // find a clean offer the policy skipped.
+        if (!(error instanceof Errors.LegacyUnicodeEscapedChallengeError)) throw error
+        if (selectionContext !== undefined) throw error
+        candidates = []
+        legacyError = error
+      }
       // Without a context yet, as in `preparePayment(response).createCredential(context)`, fall back
       // to offers a method skips only by policy: an explicit close may still use them, and the
       // method enforces the policy for anything else when the credential is created.
@@ -323,6 +335,7 @@ export function create<
           preferences,
           AcceptPayment.deferredContext,
         )
+      if (candidates.length === 0 && legacyError) throw legacyError
       const orderedCandidates = await resolveChallengeOrder(
         candidates,
         options?.orderChallenges ?? orderChallenges,
