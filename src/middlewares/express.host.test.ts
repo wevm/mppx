@@ -92,6 +92,34 @@ test.each(['factory', 'payment'] as const)(
   },
 )
 
+test.each(['Agent-Signature', 'Signature-Input'])(
+  'rejects identity header %s without an operator host allowlist',
+  async (header) => {
+    const app = express()
+    const mppx = Mppx.create({
+      methods: [
+        tempo.charge({
+          store: Store.memory(),
+          currency: '0x20c0000000000000000000000000000000000000',
+          recipient: '0x0000000000000000000000000000000000000001',
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    app.get('/paid', mppx.charge({ amount: '1' }), (_req, res) => res.send('protected'))
+    const server = app.listen(0, '127.0.0.1')
+    servers.push(server)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('No listener address')
+    const url = `http://127.0.0.1:${address.port}/paid`
+    expect((await send(url, { headers: ['Host', 'relay.example', header, 'proof'] })).status).toBe(
+      421,
+    )
+    expect((await send(url, { headers: { Host: 'relay.example' } })).status).toBe(402)
+  },
+)
+
 function send(
   url: string,
   options: { headers: { Host: string } | string[]; path?: string },

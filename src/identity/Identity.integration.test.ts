@@ -965,13 +965,15 @@ async function createServer(
   const payments = createPayments()
   const requests: boolean[] = []
   const signatureInputs: string[] = []
+  const options: ServerRequest.RequestListenerOptions = { allowedHosts: [] }
   const listener = ServerRequest.toNodeListener(async (request) => {
     requests.push(request.headers.has(MppConstants.Headers.authorization))
     signatureInputs.push(request.headers.get(Signatures.Headers.signatureInput) ?? '')
     return handler(request, payments)
-  })
+  }, options)
   const server = await Http.createServer(((request, response) =>
     listener(request, response)) as RequestListener)
+  options.allowedHosts = [new URL(server.url).host]
   return { requests, server, signatureInputs }
 }
 

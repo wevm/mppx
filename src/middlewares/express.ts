@@ -44,7 +44,7 @@ export namespace Mppx {
 
 /** Optional ingress validation shared by Express payment handlers. */
 export type AdapterOptions = {
-  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Omitted preserves existing behavior; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Required for signed identity requests unless a fixed Node host is configured; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
   allowedHosts?: readonly string[] | undefined
 }
 
