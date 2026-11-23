@@ -6,7 +6,7 @@ import { Account as TempoAccount } from 'viem/tempo'
 
 import * as TempoAddress from '../../internal/address.js'
 import * as ConfigurableAccount from '../../internal/configurable-account.js'
-import { isLowS } from '../../internal/signature.js'
+import { isLowS, toLowS } from '../../internal/signature.js'
 import type { Voucher, SignedVoucher } from './Protocol.js'
 import { uint96 } from './Protocol.js'
 
@@ -213,7 +213,7 @@ export async function signVoucher(
       `TIP-1034 vouchers require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
 
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
 /**
@@ -247,7 +247,7 @@ export async function signCloseAuthorization(
     throw new Error(
       `TIP-1034 close authorizations require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
 /** Options for {@link verifyCloseAuthorization}. */

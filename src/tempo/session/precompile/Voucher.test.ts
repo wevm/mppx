@@ -1,7 +1,7 @@
 import { type Hex, P256, Secp256k1, Signature } from 'ox'
 import { AccountConfig, SignatureEnvelope } from 'ox/tempo'
 import { createClient, hashTypedData, http } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import { privateKeyToAccount, toAccount } from 'viem/accounts'
 import { signTypedData } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
@@ -318,6 +318,46 @@ describe('Precompile Voucher', () => {
         account.address,
       ),
     ).toBe(false)
+  })
+
+  test('signVoucher and signCloseAuthorization normalize high-s signers', async () => {
+    // A signer that returns the high-s twin of each signature, as some KMS backends do.
+    const highSAccount = toAccount({
+      address: account.address,
+      async signMessage() {
+        throw new Error('unused')
+      },
+      async signTransaction() {
+        throw new Error('unused')
+      },
+      async signTypedData(parameters) {
+        return toHighS(await account.signTypedData(parameters as never))
+      },
+    })
+    const highSClient = createClient({
+      account: highSAccount,
+      transport: http('http://127.0.0.1'),
+    })
+    const voucher = { channelId, cumulativeAmount }
+
+    const signature = await signVoucher(highSClient, highSAccount, voucher, escrowContract, chainId)
+    expect(signature).toBe(await signVoucher(client, account, voucher, escrowContract, chainId))
+    expect(verifyVoucher(escrowContract, chainId, { ...voucher, signature }, account.address)).toBe(
+      true,
+    )
+
+    const close = await signCloseAuthorization(
+      highSClient,
+      highSAccount,
+      voucher,
+      escrowContract,
+      chainId,
+    )
+    expect(
+      verifyCloseAuthorization(escrowContract, chainId, { ...voucher, signature: close }, [
+        account.address,
+      ]),
+    ).toBe(true)
   })
 
   test('verifyCloseAuthorization rejects high-s signatures', async () => {
