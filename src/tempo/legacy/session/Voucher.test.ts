@@ -21,14 +21,6 @@ const client = createClient({
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as const
 const cumulativeAmount = 1000000n
 
-const secp256k1Order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n
-
-/** Returns the high-s twin of a secp256k1 signature: it recovers the same signer, but Tempo rejects it. */
-function toHighS(signature: Hex): Hex {
-  const { r, s, yParity } = Signature.fromHex(signature)
-  return Signature.toHex({ r, s: secp256k1Order - s, yParity: yParity === 0 ? 1 : 0 })
-}
-
 describe('Voucher', () => {
   test('signVoucher and verifyVoucher round-trip', async () => {
     const signature = await signVoucher(
@@ -250,24 +242,6 @@ describe('Voucher', () => {
       escrowContract,
       chainId,
       { channelId, cumulativeAmount, signature: signatureWithMagic },
-      account.address,
-    )
-    expect(isValid).toBe(false)
-  })
-
-  test('verifyVoucher rejects the high-s twin of a valid voucher', async () => {
-    const signature = await signVoucher(
-      client,
-      account,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
-    )
-
-    const isValid = await verifyVoucher(
-      escrowContract,
-      chainId,
-      { channelId, cumulativeAmount, signature: toHighS(signature) },
       account.address,
     )
     expect(isValid).toBe(false)

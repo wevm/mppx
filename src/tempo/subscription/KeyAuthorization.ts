@@ -3,7 +3,7 @@ import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { isAddress, isAddressEqual, type Address } from 'viem'
 
 import { VerificationFailedError } from '../../Errors.js'
-import { isLowS } from '../internal/signature.js'
+import { isLowS, toLowS } from '../internal/signature.js'
 import type * as Methods from '../Methods.js'
 import type {
   SubscriptionAccessKey,
@@ -190,7 +190,8 @@ export async function signSubscriptionKeyAuthorization(parameters: {
     })
   }
   return KeyAuthorization.from(authorization, {
-    signature,
+    // Tempo accepts only low-s signatures; some signers (KMS, HSM) return either form.
+    signature: SignatureEnvelope.serialize(toLowS(signatureEnvelope)),
   })
 }
 
