@@ -6,6 +6,7 @@ import { signTypedData } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
+import { toLowS } from '../../internal/signature.js'
 import { tip20ChannelEscrow } from './Protocol.js'
 import { uint96 } from './Protocol.js'
 import {
@@ -687,6 +688,23 @@ describe('TIP-1166 configurable account vouchers', () => {
         configurable: true,
       }),
     ).toBe(false)
+
+    // Normalizing the envelope restores each approval to its low-s form.
+    const normalized = SignatureEnvelope.serialize(
+      toLowS(SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)),
+    )
+    expect(normalized).toBe(voucher.signature)
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { ...voucher, signature: normalized },
+        initial.address,
+        {
+          configurable: true,
+        },
+      ),
+    ).toBe(true)
   })
 
   test('rejects configurable account approvals out of owner order', async () => {

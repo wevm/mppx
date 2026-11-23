@@ -23,12 +23,15 @@ export function isLowS(envelope: SignatureEnvelope.SignatureEnvelope): boolean {
 
 /**
  * Returns a primitive signature with `s` at most half its curve order: a high `s` becomes the
- * equivalent `n - s` (flipping the secp256k1 recovery parity). Signers such as KMS or HSM backends
+ * equivalent `n - s` (flipping the secp256k1 recovery parity), including each owner approval of a configurable
+ * account signature. Signers such as KMS or HSM backends
  * may return either form; Tempo accepts only the low one. Other envelope types are returned as is.
  */
 export function toLowS<envelope extends SignatureEnvelope.SignatureEnvelope>(
   envelope: envelope,
 ): envelope {
+  if (envelope.type === 'configurable')
+    return { ...envelope, signatures: envelope.signatures.map((approval) => toLowS(approval)) }
   if (isLowS(envelope)) return envelope
   if (envelope.type === 'secp256k1') {
     const { r, s, yParity } = envelope.signature
