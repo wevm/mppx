@@ -14,6 +14,7 @@ import * as Credential from '../../Credential.js'
 import * as SecretKey from '../../server/internal/SecretKey.js'
 import * as Types from '../../x402/Types.js'
 import * as Evm from './Evm.js'
+import * as Solana from './Solana.js'
 
 /** Configuration for MPP negotiation over an existing x402 route table. */
 export type Config = Evm.Config & {
@@ -77,8 +78,10 @@ export function create(config: Config): Negotiator {
 
       const x402Response = responseFromInstructions(result.response)
       const paymentRequired = getPaymentRequired(result)
+      // A native MPP rail is offered only when the route's x402 scheme can settle its credential.
       const handler = paymentRequired
-        ? Evm.createHandler({ config, context, paymentRequired })
+        ? (Evm.createHandler({ config, context, paymentRequired }) ??
+          Solana.createHandler({ config, context, paymentRequired }))
         : undefined
       if (!handler) return { response: x402Response, status: 'handled' }
 
