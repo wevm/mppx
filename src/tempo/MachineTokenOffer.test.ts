@@ -76,8 +76,9 @@ function createServer(withMachineToken: boolean, payee: Address = recipient) {
   return Mppx_server.create({
     methods: [
       tempo_server({
+        acceptMachineToken: withMachineToken,
         chainId: chain.id,
-        currencies: withMachineToken ? [asset, mach] : [asset],
+        currencies: [asset],
         getClient: () => client,
         recipient: payee,
         store: Store.memory(),
@@ -134,14 +135,46 @@ describe('MACH direct payments', () => {
     expect(Challenge.fromResponseList(charge.challenge)).toHaveLength(1)
   })
 
-  test('server: MACH cannot be the first or only currency', () => {
+  test('server: MACH cannot be listed as a currency, in any position', () => {
     const mainnetMachineToken = '0x20c000000000000000000000f37de3740ADec032'
+    for (const currencies of [
+      [mainnetMachineToken, asset],
+      [asset, mainnetMachineToken],
+      [mainnetMachineToken],
+    ])
+      expect(() =>
+        tempo_server({ currencies: currencies as never, recipient, testnet: false }),
+      ).toThrow('MACH cannot be listed as a currency')
     expect(() =>
-      tempo_server({ currencies: [mainnetMachineToken, asset], recipient, testnet: false }),
-    ).toThrow('MACH cannot be the first accepted currency')
-    expect(() =>
-      tempo_server({ currency: mainnetMachineToken, recipient, testnet: false }),
-    ).toThrow('MACH cannot be the first accepted currency')
+      tempo_server.subscription({
+        amount: '1',
+        currencies: [mainnetMachineToken],
+        periodCount: 1,
+        periodUnit: 'day',
+        recipient,
+        testnet: false,
+      } as never),
+    ).toThrow('MACH cannot be listed as a currency')
+  })
+
+  test('server: a route cannot set MACH as its currency', async () => {
+    const server = Mppx_server.create({
+      methods: [
+        tempo_server.charge({
+          chainId: chain.id,
+          currencies: [asset],
+          getClient: () => client,
+          machineTokenEnabled: true,
+          recipient,
+        }),
+      ],
+      secretKey,
+    })
+    await expect(
+      server.charge({ amount: '1', currency: mach, decimals: 6 })(
+        new Request('https://api.example.com/'),
+      ),
+    ).rejects.toThrow('MACH cannot be listed as a currency')
   })
 
   test('server: settles a credential for the MACH offer directly to the recipient', async () => {
@@ -186,8 +219,9 @@ describe('MACH direct payments', () => {
     const server = Mppx_server.create({
       methods: [
         tempo_server({
+          acceptMachineToken: true,
           chainId: chain.id,
-          currencies: [asset, mach],
+          currencies: [asset],
           getClient: () => client,
           machineTokenEnabled: true,
           recipient,
@@ -531,8 +565,9 @@ describe('MACH gas', () => {
     return Mppx_server.create({
       methods: [
         tempo_server({
+          acceptMachineToken: true,
           chainId: chain.id,
-          currencies: [options.main, mach],
+          currencies: [options.main],
           ...(options.sponsored ? { feePayer: accounts[1] } : {}),
           ...(options.sponsored === 'feeToken' ? { feeToken: asset } : {}),
           getClient: () => client,

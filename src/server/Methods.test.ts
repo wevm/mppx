@@ -17,22 +17,23 @@ describe('Tempo machine token', () => {
     expect(globalSession.defaults).not.toHaveProperty('machineTokenEnabled')
   })
 
-  test('accepts MACH as a direct charge currency, never routed through the swapper', async () => {
+  test('rejects MACH as a direct charge currency', async () => {
     const [method] = tempo.charge({
       getClient: () => ({ chain: { id: 42431 } }) as never,
-      machineTokenEnabled: true,
     })
 
-    const request = await method.request!({
-      request: {
-        amount: '1',
-        chainId: 42431,
-        currency: '0x20c000000000000000000000f37de3740ADec032',
-        decimals: 6,
-      },
-    })
-    expect(request.currency).toBe('0x20c000000000000000000000f37de3740ADec032')
-    expect(request.machineTokenEnabled).toBeFalsy()
+    await expect(
+      method.request!({
+        request: {
+          amount: '1',
+          chainId: 42431,
+          currency: '0x20c000000000000000000000f37de3740ADec032',
+          decimals: 6,
+        },
+      }),
+    ).rejects.toThrow(
+      'MACH cannot be listed as a currency. Use `acceptMachineToken: true` to accept it as the last offer.',
+    )
   })
 })
 

@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Tempo charges and sessions can now be paid in MACH straight to the recipient. List MACH after a stablecoin, such as `currencies: [usdc, mach]`, and older clients keep paying the stablecoin. Clients on this version prefer the MACH offer when the payer holds enough MACH and any access-key limit allows it, paying fees in a stablecoin. MACH can't be the first or only currency, and a MACH charge is never routed through the swapper.
+Added `acceptMachineToken` to the Tempo server. It adds MACH, paid straight to the recipient, as the last offer of every Tempo charge and session; older clients keep paying the currencies listed before it. Clients on this version prefer the MACH offer when the payer holds enough MACH and can pay its gas in a stablecoin, or the server sponsors gas. MACH can no longer be listed as a currency directly, including on a route, and the MACH offer is never routed through the swapper.

@@ -48,6 +48,7 @@ import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
+import * as MachineTokenOffer from '../internal/machine-token-offer.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
@@ -94,6 +95,8 @@ export function charge<const parameters extends charge.Parameters>(
     zoneCredentialGraceMs = 0,
     zones,
   } = parameters
+  // Set only on the MACH offer that `acceptMachineToken` adds.
+  const machineTokenOffer = MachineTokenOffer.isOffer(parameters)
   if (
     !Number.isFinite(zoneCredentialGraceMs) ||
     zoneCredentialGraceMs < 0 ||
@@ -630,10 +633,8 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
-      // A MACH-priced charge is paid straight to the recipient, never routed through the swapper.
-      machineTokenEnabled: MachineTokenCharge.isMachineTokenAddress(currency)
-        ? undefined
-        : machineTokenEnabled,
+      // The MACH offer is paid straight to the recipient, never routed through the swapper.
+      machineTokenEnabled: machineTokenOffer ? undefined : machineTokenEnabled,
       amount,
       currency,
       decimals,
@@ -695,6 +696,16 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
+      MachineTokenOffer.assertAllowed({
+        chainId,
+        currency: request.currency,
+        offer: machineTokenOffer,
+      })
+      // The MACH offer is paid straight to the recipient, never routed through the swapper.
+      if (
+        MachineTokenCharge.isMachineToken({ chainId, currency: request.currency as `0x${string}` })
+      )
+        request = { ...request, machineTokenEnabled: undefined }
       if (request.machineTokenEnabled && !MachineTokenCharge.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 

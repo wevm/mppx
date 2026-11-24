@@ -23,6 +23,7 @@ import * as Client from '../../../viem/Client.js'
 import * as Account from '../../internal/account.js'
 import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineTokenOffer from '../../internal/machine-token-offer.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
@@ -685,6 +686,11 @@ export function session<const parameters extends session.Parameters>(
         resolveChannelId: parameters.resolveChannelId,
         sseEnabled: Boolean(parameters.sse),
         store,
+      })
+      MachineTokenOffer.assertAllowed({
+        chainId: resolvedRequest.chainId,
+        currency: resolvedRequest.currency,
+        offer: MachineTokenOffer.isOffer(parameters),
       })
       // Verification honors only the server option, so a route cannot advertise TIP-1166
       // vouchers the server would reject.
