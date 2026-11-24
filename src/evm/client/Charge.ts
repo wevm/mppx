@@ -1,6 +1,7 @@
 import type { Account } from 'viem'
 import { getAddress, parseUnits } from 'viem'
 
+import * as SpendHooks from '../../client/internal/SpendHooks.js'
 import * as Credential from '../../Credential.js'
 import * as x402_ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
 import * as Method from '../../Method.js'
@@ -17,7 +18,7 @@ import * as Types from '../Types.js'
  * also keeps x402 exact signing for x402 compatibility challenges.
  */
 export function charge(parameters: charge.Parameters) {
-  return Method.toClient(Methods.charge, {
+  const method = Method.toClient(Methods.charge, {
     canHandleChallenge({ challenge }) {
       if (!isX402Challenge(challenge)) return true
       return x402_Exact.canHandleChallenge({
@@ -41,13 +42,7 @@ export function charge(parameters: charge.Parameters) {
         throw new Error('EVM authorization requires a typed-data signer.')
 
       const request = challenge.request as Types.ChargeRequest
-      assertPolicy(parameters, request)
-      if (!request.methodDetails.credentialTypes?.includes('authorization')) {
-        throw new Error('EVM authorization is not accepted by this challenge.')
-      }
-      if (request.methodDetails.splits?.length) {
-        throw new Error('EVM authorization does not support payment splits.')
-      }
+      assertOffer(parameters, request)
 
       const authorization = resolveAuthorization(parameters, request)
       const validBefore = challenge.expires
@@ -93,6 +88,13 @@ export function charge(parameters: charge.Parameters) {
       )
     },
   })
+  // The client's spending options refuse what this method refuses before any funder runs.
+  return SpendHooks.register(method, {
+    assert(challenge) {
+      if (!isX402Challenge(challenge))
+        assertOffer(parameters, challenge.request as Types.ChargeRequest)
+    },
+  })
 }
 
 export declare namespace charge {
@@ -126,6 +128,17 @@ function isX402Challenge(challenge: { request: Record<string, unknown> }) {
     challenge.request.scheme === 'exact' &&
     typeof challenge.request.network === 'string'
   )
+}
+
+/** Throws for a native offer this client would refuse to sign: its policy, or what it cannot pay. */
+function assertOffer(parameters: charge.Parameters, request: Types.ChargeRequest) {
+  assertPolicy(parameters, request)
+  if (!request.methodDetails.credentialTypes?.includes('authorization')) {
+    throw new Error('EVM authorization is not accepted by this challenge.')
+  }
+  if (request.methodDetails.splits?.length) {
+    throw new Error('EVM authorization does not support payment splits.')
+  }
 }
 
 function assertPolicy(parameters: charge.Parameters, request: Types.ChargeRequest) {

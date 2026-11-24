@@ -294,13 +294,18 @@ describe('keyPrefix', () => {
 })
 
 describe('tryClaim', () => {
-  test('retains custom optimized claims without ownership support', async () => {
+  test('rejects owned claims before using an unmigrated custom store', async () => {
     const backing = Store.memory()
     const { releaseClaim: _, ...store } = backing
     const expires = Date.now() + 60_000
-    expect(await Store.tryClaim(store, 'k', expires, 'attempt')).toBe(true)
-    await Store.releaseClaim(store, 'k', 'attempt')
-    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    expect(() => Store.tryClaim(store, 'k', expires, 'attempt')).toThrow(
+      'Migrate the store before use',
+    )
+    expect(await store.get('k')).toBeNull()
+    await expect(Store.releaseClaim(store, 'k', 'attempt')).rejects.toThrow(
+      'Migrate the store before use',
+    )
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
   })
 
   test('fallback releases only matching owners', async () => {

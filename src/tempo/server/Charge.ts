@@ -129,6 +129,10 @@ export function charge<const parameters extends charge.Parameters>(
     (relay
       ? Store.memory()
       : fallbackStore('tempo.charge'))) as Store.AtomicStore<charge.StoreItemMap>
+  if (!relay && rawStore.tryClaim && !rawStore.releaseClaim)
+    throw new Error(
+      'Tempo charge requires a custom store with atomic releaseClaim support. Migrate the store before use.',
+    )
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,

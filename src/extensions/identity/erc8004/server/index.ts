@@ -49,11 +49,23 @@ const abi = [
  *
  * @example
  * ```ts
- * const agents = Erc8004.Server.create({ store })
+ * const agents = Erc8004.Server.create({ origin: 'https://api.example', store })
  * mppx.charge({ amount: '0.01', identity: { request: [agents.verifier], payment: agents.paymentCheck } })
  * ```
  */
 export function create(config: create.Config = {}): Erc8004 {
+  const origin = config.origin === undefined ? undefined : new URL(config.origin)
+  if (
+    origin &&
+    (!['http:', 'https:'].includes(origin.protocol) ||
+      origin.username ||
+      origin.password ||
+      origin.pathname !== '/' ||
+      origin.search ||
+      origin.hash)
+  )
+    throw new TypeError('Pass an HTTP(S) origin without credentials, path, query, or fragment.')
+  const expectedOrigin = origin?.origin
   const chainId = config.chainId ?? Constants.chainId
   const registry = getAddress(config.registry ?? Constants.identityRegistry)
   if (!config.client && !config.rpcUrl && chainId !== Constants.chainId)
@@ -69,6 +81,8 @@ export function create(config: create.Config = {}): Erc8004 {
 
   /** Reads the request's agent and its wallet from the registry. */
   async function lookup(request: Request): Promise<Identity.Verification<Types.Agent>> {
+    if (expectedOrigin !== undefined && new URL(request.url).origin !== expectedOrigin)
+      return invalid('The request origin does not match this API.')
     const id = request.headers.get(Constants.idHeader)
     if (!id) return { status: 'missing', reason: 'Sign the request as an ERC-8004 agent.' }
     const agent = Agent.parse(id)
@@ -212,6 +226,12 @@ export declare namespace create {
     readonly chainId?: number | undefined
     /** A viem client for the registry's chain. @default an HTTP client for `rpcUrl` */
     readonly client?: Client | undefined
+    /**
+     * Trusted receiving origin, independent of request headers (for example, `https://api.example`).
+     * Configure this when an adapter derives URLs from Host. Without it, trusted ingress must
+     * reject foreign hosts to prevent signed requests for another service from being accepted.
+     */
+    readonly origin?: string | undefined
     /** The Identity Registry. @default '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432' */
     readonly registry?: Address | undefined
     /** RPC URL of the registry's chain. @default 'https://rpc.tempo.xyz' */

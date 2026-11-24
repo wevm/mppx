@@ -656,3 +656,14 @@ test('a duplicate whose receipt never appeared is not remembered as its own', as
   expect(retry).toMatchObject({ message: expect.stringContaining('not bound to this challenge') })
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
+
+test('rejects unmigrated custom replay stores before configuring a payment method', () => {
+  const { releaseClaim: _, ...store } = Store.memory()
+  expect(() =>
+    tempo.charge({
+      store,
+      currency: '0x20c0000000000000000000000000000000000000',
+      recipient: '0x0000000000000000000000000000000000000001',
+    }),
+  ).toThrow('Migrate the store before use')
+})

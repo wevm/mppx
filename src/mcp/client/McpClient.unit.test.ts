@@ -4,8 +4,151 @@ import { Challenge, Credential, Mcp as core_Mcp, Method } from 'mppx'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
-import { ZoneSettlementPendingError } from '../../Errors.js'
+import * as Budget from '../../client/Budget.js'
+import {
+  PaymentExpiredError,
+  PaymentLimitExceededError,
+  ZoneSettlementPendingError,
+} from '../../Errors.js'
 import * as McpClient from './McpClient.js'
+
+describe('MCP client spending options', () => {
+  const pathUsd = '0x20c0000000000000000000000000000000000000'
+  const offer = (amount: string, intent = 'charge', expires?: string) =>
+    Challenge.from({
+      id: `${intent}-${amount}`,
+      intent,
+      method: 'tempo',
+      realm: 'api.example.com',
+      ...(expires ? { expires } : {}),
+      request: {
+        amount,
+        currency: pathUsd,
+        recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+        methodDetails: { chainId: 4217 },
+      },
+    })
+  /** A server asking for `challenge` until a call carries a credential. */
+  const server = (challenge: Challenge.Challenge) =>
+    vi.fn(async (params: { _meta?: Record<string, unknown> }) => {
+      if (!params._meta?.[core_Mcp.credentialMetaKey])
+        throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          challenges: [challenge],
+          httpStatus: 402,
+        })
+      return { content: [{ type: 'text', text: 'ok' }] }
+    })
+  const setup = (
+    challenge: Challenge.Challenge,
+    options: Pick<
+      McpClient.wrap.Config,
+      'authorize' | 'funders' | 'maxPayment' | 'trustedTempoProofRealms'
+    > = {},
+  ) => {
+    const callTool = server(challenge)
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const mcp = McpClient.wrap({ callTool } as unknown as Pick<Client, 'callTool'>, {
+      ...options,
+      methods: [
+        Method.toClient(
+          Method.from({ name: 'tempo', intent: challenge.intent, schema: Methods.charge.schema }),
+          { createCredential },
+        ),
+      ],
+    })
+    return { callTool, createCredential, mcp }
+  }
+
+  test('error: refuses a payment over maxPayment before signing', async () => {
+    const { callTool, createCredential, mcp } = setup(offer('2000000'), {
+      maxPayment: { value: '1', currency: 'USD' },
+    })
+
+    const error = await mcp.callTool({ name: 'paid_tool' }).catch((error) => error)
+
+    expect(error).toBeInstanceOf(PaymentLimitExceededError)
+    expect(error).toMatchObject({ limit: 'maxPayment', reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(callTool).toHaveBeenCalledOnce()
+  })
+
+  test('behavior: counts payments against a budget and funds them before signing', async () => {
+    const steps: string[] = []
+    const budget = Budget.create({ total: { value: '1.5', currency: 'USD' } })
+    const { createCredential, mcp } = setup(offer('1000000'), {
+      authorize: budget,
+      funders: [{ fund: async () => void steps.push('fund') }],
+    })
+    createCredential.mockImplementation(async ({ challenge }) => {
+      steps.push('sign')
+      return Credential.serialize({ challenge, payload: { signature: '0x', type: 'transaction' } })
+    })
+
+    expect((await mcp.callTool({ name: 'paid_tool' })).content).toEqual([
+      { type: 'text', text: 'ok' },
+    ])
+    await expect(mcp.callTool({ name: 'paid_tool' })).rejects.toMatchObject({
+      limit: 'budget',
+      reason: 'amount',
+    })
+
+    expect(steps).toEqual(['fund', 'sign'])
+    expect(budget.spent()).toEqual({ value: '1', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+  })
+
+  test('error: refuses sessions and a challenge that expires while authorize runs', async () => {
+    const authorize = vi.fn()
+    const session = setup(offer('1', 'session'), {
+      authorize,
+      trustedTempoProofRealms: ['api.example.com'],
+    })
+    await expect(session.mcp.callTool({ name: 'paid_tool' })).rejects.toMatchObject({
+      reason: 'intent',
+    })
+    expect(session.createCredential).not.toHaveBeenCalled()
+    expect(authorize).not.toHaveBeenCalled()
+
+    const expires = new Date(Date.now() + 60_000).toISOString()
+    const release = vi.fn()
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+    try {
+      const expiring = setup(offer('1', 'charge', expires), {
+        authorize: async () => {
+          vi.setSystemTime(new Date(expires).getTime() + 1)
+          return { commit: vi.fn(), release }
+        },
+      })
+      await expect(expiring.mcp.callTool({ name: 'paid_tool' })).rejects.toBeInstanceOf(
+        PaymentExpiredError,
+      )
+      expect(expiring.createCredential).not.toHaveBeenCalled()
+      expect(release).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('default: without spending options, any amount is paid as before', async () => {
+    const { callTool, createCredential, mcp } = setup(offer('5000000000'))
+
+    await mcp.callTool({ name: 'paid_tool' })
+
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(callTool).toHaveBeenCalledTimes(2)
+  })
+
+  test('error: rejects invalid spending options at wrap()', () => {
+    expect(() =>
+      setup(offer('1'), { maxPayment: { value: 'one', currency: 'USD' } as never }),
+    ).toThrow(TypeError)
+  })
+})
 
 describe('MCP client payment approval', () => {
   test('stops resuming a pending Zone settlement once the call is aborted', async () => {
