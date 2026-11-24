@@ -669,3 +669,54 @@ test('ignores a claims challenge body over 64 KiB', async () => {
   expect(await prover.retry!(rejection(JSON.stringify(challenge)), { request })).toEqual({})
   expect(present).toHaveBeenCalledOnce()
 })
+
+test('gives up on a claims challenge body that never ends', async () => {
+  const present = vi.fn(async () => 'presentation')
+  const prover = Link.Client.claims({
+    claims: ['email'],
+    issuers: ['https://issuer.example'],
+    present,
+    scope: ['https://api.example'],
+  })
+  const challenge = JSON.stringify({
+    aud: 'https://api.example',
+    claims: ['email'],
+    formats: [Link.Constants.format],
+    nonce: 'n1',
+    trusted_issuers: ['https://issuer.example'],
+    type: Link.Constants.claimsRequiredType,
+  })
+  // The whole challenge arrives, but the body stays open.
+  const stalled = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(challenge))
+        },
+      }),
+      {
+        headers: {
+          'Content-Type': 'application/problem+json',
+          'WWW-Authenticate': Link.Constants.presentationHeader,
+        },
+        status: 401,
+      },
+    )
+
+  vi.useFakeTimers()
+  try {
+    const timedOut = prover.retry!(stalled(), { request: new Request('https://api.example') })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await timedOut).toBeUndefined()
+  } finally {
+    vi.useRealTimers()
+  }
+
+  const controller = new AbortController()
+  const aborted = prover.retry!(stalled(), {
+    request: new Request('https://api.example', { signal: controller.signal }),
+  })
+  controller.abort()
+  expect(await aborted).toBeUndefined()
+  expect(present).not.toHaveBeenCalled()
+})
