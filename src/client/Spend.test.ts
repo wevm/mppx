@@ -1,0 +1,568 @@
+import { Challenge, Credential, Errors, Method, Receipt } from 'mppx'
+import { Budget, Fetch, Mppx, Spend } from 'mppx/client'
+import { Methods } from 'mppx/tempo'
+import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
+import { usdc } from 'viem/tokens'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
+
+const realm = 'api.example.com'
+const url = 'https://api.example.com/resource'
+const pathUsd = '0x20c0000000000000000000000000000000000000'
+const baseUsdc = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+const unknownToken = '0x1111111111111111111111111111111111111111'
+const recipient = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
+const transaction = `0x${'ab'.repeat(32)}`
+
+afterEach(() => {
+  Mppx.restore()
+  vi.unstubAllGlobals()
+})
+
+function method(name: string, steps: string[] = []) {
+  const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) => {
+    steps.push('sign')
+    return Credential.serialize({ challenge, payload: { signature: '0xsignature' } })
+  })
+  return {
+    createCredential,
+    method: Method.toClient(
+      Method.from({ name, intent: 'charge', schema: Methods.charge.schema }),
+      { createCredential },
+    ),
+  }
+}
+
+function challenge(name: string, request: Record<string, unknown>, id = 'paid') {
+  return Challenge.from({ id, intent: 'charge', method: name, realm, request })
+}
+
+function tempoChallenge(amount: string, currency = pathUsd, id = 'paid') {
+  return challenge('tempo', { amount, currency, recipient, methodDetails: { chainId: 4217 } }, id)
+}
+
+function paymentRequired(...challenges: Challenge.Challenge[]) {
+  return new Response(null, {
+    headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
+    status: 402,
+  })
+}
+
+/** A server that asks for \`offer\` until a request carries a credential, then returns a receipt. */
+function server(offer: () => Response, headers: Record<string, string> = {}) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const paid =
+      request.headers.get('Authorization')?.startsWith('Payment ') ||
+      request.headers.has(x402_Types.paymentSignatureHeader)
+    if (!paid) return offer()
+    return new Response('OK', { headers, status: 200 })
+  })
+}
+
+function receiptHeader() {
+  return Receipt.serialize(
+    Receipt.from({
+      method: 'tempo',
+      reference: transaction,
+      status: 'success',
+      timestamp: new Date().toISOString(),
+    }),
+  )
+}
+
+function x402Response(
+  amount: string,
+  network: `eip155:${number}` = 'eip155:8453',
+  asset = baseUsdc,
+) {
+  const required = {
+    accepts: [
+      {
+        amount,
+        asset,
+        maxTimeoutSeconds: 60,
+        network,
+        payTo: recipient,
+        scheme: x402_Types.schemes[0],
+      },
+    ],
+    resource: { url },
+    x402Version: 2,
+  } satisfies PaymentRequired
+  return new Response(null, {
+    headers: { 'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(required) },
+    status: 402,
+  })
+}
+
+function create(fetch: typeof globalThis.fetch, methods: Mppx.Methods, config = {}) {
+  return Mppx.create({ fetch, methods, polyfill: false, ...config })
+}
+
+describe('maxPayment', () => {
+  test('default: without spending options, unknown assets pay as before', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('5000000000', unknownToken)))
+    const mppx = create(fetch as never, [tempo])
+
+    const response = await mppx.fetch(url)
+
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  test('behavior: allows a Tempo payment within a USD limit', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('1500000')))
+    const mppx = create(fetch as never, [tempo], {
+      maxPayment: { value: '1.5', currency: 'usd' },
+    })
+
+    expect((await mppx.fetch(url)).status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: refuses a Tempo payment over a USD limit before signing', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('1500001')))
+    const mppx = create(fetch as never, [tempo], {
+      maxPayment: { value: '1.5', currency: 'USD' },
+    })
+
+    const error = await mppx.fetch(url).catch((error) => error)
+
+    expect(error).toBeInstanceOf(Errors.PaymentLimitExceededError)
+    expect(error).toMatchObject({ limit: 'maxPayment', reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: fails closed for a USD limit on a token the client does not configure', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    // The server's own currency and decimals claims are never trusted.
+    const fetch = server(() =>
+      paymentRequired(
+        challenge('tempo', {
+          amount: '1',
+          currency: unknownToken,
+          currencyCode: 'USD',
+          decimals: 6,
+          methodDetails: { chainId: 4217, decimals: 6 },
+        }),
+      ),
+    )
+    const mppx = create(fetch as never, [tempo], {
+      maxPayment: { value: '100', currency: 'USD' },
+    })
+
+    await expect(mppx.fetch(url)).rejects.toMatchObject({
+      name: 'PaymentLimitExceededError',
+      reason: 'asset',
+    })
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('error: server decimals cannot shrink an EVM payment', async () => {
+    const { createCredential, method: evm } = method('evm')
+    for (const decimals of [0, 18]) {
+      const fetch = server(() =>
+        paymentRequired(
+          challenge('evm', {
+            amount: '5000000',
+            currency: baseUsdc,
+            methodDetails: { chainId: 8453, decimals },
+            recipient,
+          }),
+        ),
+      )
+      const mppx = create(fetch as never, [evm], {
+        maxPayment: { value: '1', currency: 'USD' },
+        tokens: [usdc],
+      })
+
+      await expect(mppx.fetch(url)).rejects.toMatchObject({ reason: 'amount' })
+    }
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('behavior: a configured token prices an EVM payment', async () => {
+    const { createCredential, method: evm } = method('evm')
+    const fetch = server(() =>
+      paymentRequired(
+        challenge('evm', {
+          amount: '990000',
+          currency: baseUsdc.toLowerCase(),
+          methodDetails: { chainId: 8453, decimals: 18 },
+          recipient,
+        }),
+      ),
+    )
+    const mppx = create(fetch as never, [evm], {
+      maxPayment: { value: '1', currency: 'USD' },
+      tokens: [{ address: baseUsdc, chainId: 8453, currency: 'USD', decimals: 6 }],
+    })
+
+    expect((await mppx.fetch(url)).status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('behavior: per-asset limits compare atomic amounts for Stripe', async () => {
+    const { createCredential, method: stripe } = method('stripe')
+    const offer = (amount: string) => () =>
+      paymentRequired(challenge('stripe', { amount, currency: 'usd' }))
+    const maxPayment = [{ network: 'stripe', asset: 'USD', amount: 500n }] as const
+
+    expect(
+      (await create(server(offer('500')) as never, [stripe], { maxPayment }).fetch(url)).status,
+    ).toBe(200)
+    await expect(
+      create(server(offer('501')) as never, [stripe], { maxPayment }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'amount' })
+    await expect(
+      create(server(offer('1')) as never, [stripe], {
+        maxPayment: [{ network: 'stripe', asset: 'eur', amount: 500n }],
+      }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'asset' })
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('behavior: Stripe USD charges count against a USD limit in cents', async () => {
+    const { method: stripe } = method('stripe')
+    const offer = (amount: string) => () =>
+      paymentRequired(challenge('stripe', { amount, currency: 'usd', decimals: 6 }))
+    const maxPayment = { value: '5', currency: 'USD' }
+
+    expect(
+      (await create(server(offer('500')) as never, [stripe], { maxPayment }).fetch(url)).status,
+    ).toBe(200)
+    await expect(
+      create(server(offer('501')) as never, [stripe], { maxPayment }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'amount' })
+  })
+
+  test('behavior: limits x402 payments by asset and by configured token', async () => {
+    const { createCredential, method: evm } = method(x402_Types.paymentMethod)
+    const asset = { network: 'eip155:8453', asset: baseUsdc.toLowerCase(), amount: 1000n }
+
+    expect(
+      (
+        await create(server(() => x402Response('1000')) as never, [evm], {
+          maxPayment: [asset],
+        }).fetch(url)
+      ).status,
+    ).toBe(200)
+    await expect(
+      create(server(() => x402Response('1001')) as never, [evm], {
+        maxPayment: [asset],
+      }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'amount' })
+    await expect(
+      create(server(() => x402Response('2000000')) as never, [evm], {
+        maxPayment: { value: '1', currency: 'USD' },
+        tokens: [usdc(8453)],
+      }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'amount' })
+    await expect(
+      create(server(() => x402Response('1')) as never, [evm], {
+        maxPayment: { value: '1', currency: 'USD' },
+      }).fetch(url),
+    ).rejects.toMatchObject({ reason: 'asset' })
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: checks a credential onChallenge made itself before sending it', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('2000000')))
+    const mppx = create(fetch as never, [tempo], {
+      maxPayment: { value: '1', currency: 'USD' },
+      onChallenge: async (challenge: Challenge.Challenge) =>
+        Credential.serialize({ challenge, payload: { signature: '0xother' } }),
+    })
+
+    await expect(mppx.fetch(url)).rejects.toMatchObject({ reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: createCredential and prepared payments enforce maxPayment', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const mppx = create(vi.fn() as never, [tempo], {
+      maxPayment: { value: '1', currency: 'USD' },
+    })
+
+    await expect(
+      mppx.createCredential(paymentRequired(tempoChallenge('2000000'))),
+    ).rejects.toBeInstanceOf(Errors.PaymentLimitExceededError)
+    const prepared = await mppx.preparePayment(paymentRequired(tempoChallenge('2000000')))
+    await expect(prepared.createCredential()).rejects.toMatchObject({ reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(await mppx.createCredential(paymentRequired(tempoChallenge('1000000')))).toMatch(
+      /^Payment /,
+    )
+  })
+
+  test('behavior: Fetch.from enforces maxPayment', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = Fetch.from({
+      fetch: server(() => paymentRequired(tempoChallenge('2000000'))) as never,
+      maxPayment: { value: '1', currency: 'USD' },
+      methods: [tempo],
+    })
+
+    await expect(fetch(url)).rejects.toMatchObject({ reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('behavior: the polyfilled global fetch enforces maxPayment', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const upstream = server(() => paymentRequired(tempoChallenge('2000000')))
+    vi.stubGlobal('fetch', upstream)
+    Mppx.create({ maxPayment: { value: '1', currency: 'USD' }, methods: [tempo] })
+
+    expect(globalThis.fetch).not.toBe(upstream)
+    await expect(globalThis.fetch(url)).rejects.toMatchObject({ reason: 'amount' })
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(upstream).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: rejects invalid options at creation', () => {
+    const { method: tempo } = method('tempo')
+    for (const config of [
+      { maxPayment: { value: '-1', currency: 'USD' } },
+      { maxPayment: { value: '1', currency: '' } },
+      { maxPayment: [{ network: 'stripe', asset: 'usd', amount: 1 }] },
+      {
+        maxPayment: [
+          { network: 'eip155:1', asset: baseUsdc, amount: 1n },
+          { network: 'eip155:1', asset: baseUsdc.toLowerCase(), amount: 2n },
+        ],
+      },
+      { tokens: [{ address: baseUsdc, chainId: 8453, decimals: 6 }] },
+      { funders: [{}] },
+    ])
+      expect(() => create(vi.fn() as never, [tempo], config)).toThrow(TypeError)
+  })
+})
+
+describe('authorize', () => {
+  test('behavior: concurrent payments cannot overspend a budget', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const budget = Budget.create({ total: { value: '1.5', currency: 'USD' } })
+    const fetch = server(() => paymentRequired(tempoChallenge('1000000')))
+    const mppx = create(fetch as never, [tempo], { authorize: budget })
+
+    const results = await Promise.allSettled([mppx.fetch(url), mppx.fetch(url)])
+
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected'])
+    const rejected = results.find((result) => result.status === 'rejected')
+    expect((rejected as PromiseRejectedResult).reason).toMatchObject({
+      limit: 'budget',
+      reason: 'amount',
+    })
+    expect(createCredential).toHaveBeenCalledTimes(1)
+    expect(budget.spent()).toEqual({ value: '1', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+    expect(budget.remaining()).toEqual({ value: '0.5', currency: 'USD' })
+  })
+
+  test('behavior: commits a created credential and releases a failed one', async () => {
+    const steps: string[] = []
+    const authorize = vi.fn(() => ({
+      commit: () => steps.push('commit'),
+      release: () => steps.push('release'),
+    }))
+    const failing = Method.toClient(
+      Method.from({ name: 'tempo', intent: 'charge', schema: Methods.charge.schema }),
+      {
+        async createCredential() {
+          throw new Error('signing failed')
+        },
+      },
+    )
+    const offer = () => paymentRequired(tempoChallenge('1'))
+
+    await expect(
+      create(server(offer) as never, [failing], { authorize }).fetch(url),
+    ).rejects.toThrow('signing failed')
+    expect(steps).toEqual(['release'])
+
+    steps.length = 0
+    const { method: tempo } = method('tempo', steps)
+    await create(server(offer) as never, [tempo], { authorize }).fetch(url)
+    expect(steps).toEqual(['sign', 'commit'])
+    const [plan, context] = authorize.mock.calls[1] as unknown as [Spend.Plan, Spend.Context]
+    expect(plan.requirement).toMatchObject({
+      amount: 1n,
+      asset: pathUsd,
+      currency: 'USD',
+      decimals: 6,
+      intent: 'charge',
+      method: 'tempo',
+      network: 'eip155:4217',
+      protocol: 'mpp',
+      recipient,
+    })
+    expect(context.challenge.id).toBe('paid')
+  })
+
+  test('behavior: a budget refuses assets it cannot count and plans it did not get from mppx', async () => {
+    const { method: tempo } = method('tempo')
+    const budget = Budget.create({
+      total: { network: 'eip155:4217', asset: pathUsd, amount: 10n },
+    })
+    const offer = (currency: string) => () => paymentRequired(tempoChallenge('4', currency))
+
+    await create(server(offer(pathUsd)) as never, [tempo], { authorize: budget }).fetch(url)
+    await expect(
+      create(server(offer(unknownToken)) as never, [tempo], { authorize: budget }).fetch(url),
+    ).rejects.toMatchObject({ limit: 'budget', reason: 'asset' })
+    expect(budget.remaining()).toEqual({ network: 'eip155:4217', asset: pathUsd, amount: 6n })
+
+    const usd = Budget.create({ total: { value: '1', currency: 'USD' } })
+    await expect(
+      create(server(offer(unknownToken)) as never, [tempo], { authorize: usd }).fetch(url),
+    ).rejects.toMatchObject({ limit: 'budget', reason: 'asset' })
+    expect(() =>
+      usd({
+        requirement: {
+          amount: 1n,
+          asset: unknownToken,
+          currency: 'USD',
+          decimals: 18,
+          intent: 'charge',
+          method: 'tempo',
+          network: 'eip155:4217',
+          protocol: 'mpp',
+        },
+      }),
+    ).toThrow(TypeError)
+    expect(usd.total).toEqual({ value: '1', currency: 'USD' })
+  })
+  test('behavior: prepared payments count each credential once', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const budget = Budget.create({ total: { value: '1', currency: 'USD' } })
+    const fetch = server(() => paymentRequired(tempoChallenge('300000')))
+    const mppx = create(fetch as never, [tempo], { authorize: budget })
+
+    const prepared = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    expect((await prepared.payment.pay()).status).toBe(200)
+    expect(budget.spent()).toEqual({ value: '0.3', currency: 'USD' })
+
+    // A credential a handler makes itself is counted instead of mppx's own.
+    const unsubscribe = mppx.onChallengeReceived(async ({ challenge }) =>
+      Credential.serialize({ challenge, payload: { signature: '0xother' } }),
+    )
+    const substituted = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    expect((await substituted.payment.pay()).status).toBe(200)
+    unsubscribe()
+    expect(budget.spent()).toEqual({ value: '0.6', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+    expect(createCredential).toHaveBeenCalledTimes(1)
+
+    await expect(
+      mppx.createCredential(paymentRequired(tempoChallenge('500000'))),
+    ).rejects.toMatchObject({ limit: 'budget', reason: 'amount' })
+    expect(budget.remaining()).toEqual({ value: '0.4', currency: 'USD' })
+  })
+})
+
+describe('funders', () => {
+  test('behavior: run in order after authorize and before signing', async () => {
+    const steps: string[] = []
+    const { method: tempo } = method('tempo', steps)
+    const mppx = create(server(() => paymentRequired(tempoChallenge('1'))) as never, [tempo], {
+      authorize: () => {
+        steps.push('authorize')
+        return { commit: () => steps.push('commit'), release: () => steps.push('release') }
+      },
+      funders: [
+        { fund: async () => void steps.push('fund:1') },
+        {
+          fund: async (requirement: Spend.Requirement) =>
+            void steps.push(`fund:2:${requirement.amount}`),
+        },
+      ],
+    })
+
+    await mppx.fetch(url)
+
+    expect(steps).toEqual(['authorize', 'fund:1', 'fund:2:1', 'sign', 'commit'])
+  })
+
+  test('error: a failing funder releases the authorization and stops signing', async () => {
+    const steps: string[] = []
+    const { createCredential, method: tempo } = method('tempo', steps)
+    const budget = Budget.create({ total: { value: '1', currency: 'USD' } })
+    const later = vi.fn(async () => {})
+    const mppx = create(server(() => paymentRequired(tempoChallenge('1'))) as never, [tempo], {
+      authorize: budget,
+      funders: [
+        {
+          fund: async () => {
+            throw new Error('swap failed')
+          },
+        },
+        { fund: later },
+      ],
+    })
+
+    await expect(mppx.fetch(url)).rejects.toThrow('swap failed')
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(later).not.toHaveBeenCalled()
+    expect(budget.remaining()).toEqual({ value: '1', currency: 'USD' })
+  })
+})
+
+describe('receipts', () => {
+  test('behavior: payment.response carries the receipt, amount and requirement', async () => {
+    const { method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('25')), {
+      'Payment-Receipt': receiptHeader(),
+    })
+    const mppx = create(fetch as never, [tempo])
+    const payloads: Pick<Fetch.PaymentResponsePayload, 'amount' | 'receipt' | 'requirement'>[] = []
+    mppx.onPaymentResponse(({ amount, receipt, requirement }) => {
+      payloads.push({ amount, receipt, requirement })
+    })
+
+    await mppx.fetch(url)
+
+    expect(payloads[0]?.amount).toBe(25n)
+    expect(payloads[0]?.requirement).toMatchObject({ currency: 'USD', network: 'eip155:4217' })
+    expect(payloads[0]?.receipt).toMatchObject({
+      protocol: 'mpp',
+      reference: transaction,
+      transactionHash: transaction,
+    })
+  })
+
+  test('behavior: readReceipt decodes MPP and x402 receipts', () => {
+    const x402 = (body: unknown) =>
+      new Response(null, { headers: { 'PAYMENT-RESPONSE': btoa(JSON.stringify(body)) } })
+    const settle = { network: 'eip155:8453', success: true, transaction }
+
+    expect(
+      Spend.readReceipt(new Response(null, { headers: { 'Payment-Receipt': receiptHeader() } })),
+    ).toMatchObject({ protocol: 'mpp', transactionHash: transaction, raw: { method: 'tempo' } })
+    expect(Spend.readReceipt(x402(settle))).toEqual({
+      protocol: 'x402',
+      raw: settle,
+      reference: transaction,
+      transactionHash: transaction,
+    })
+    expect(Spend.readReceipt(x402({ ...settle, transaction: 'ref-1' }))).toEqual({
+      protocol: 'x402',
+      raw: { ...settle, transaction: 'ref-1' },
+      reference: 'ref-1',
+    })
+    expect(Spend.readReceipt(x402({ ...settle, success: false }))).toBeUndefined()
+    expect(
+      Spend.readReceipt(new Response(null, { headers: { 'PAYMENT-RESPONSE': 'not base64!' } })),
+    ).toBeUndefined()
+    expect(
+      Spend.readReceipt(new Response(null, { headers: { 'Payment-Receipt': 'e30' } })),
+    ).toBeUndefined()
+    expect(Spend.readReceipt(new Response(null))).toBeUndefined()
+  })
+})

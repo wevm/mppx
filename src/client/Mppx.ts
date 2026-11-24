@@ -12,6 +12,7 @@ import * as Fetch from './internal/Fetch.js'
 import * as MethodChallenge from './internal/MethodChallenge.js'
 import * as MethodResponse from './internal/MethodResponse.js'
 import * as ProofRealm from './internal/ProofRealm.js'
+import * as SpendGate from './internal/SpendGate.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
@@ -19,6 +20,8 @@ type EventResponseOf<transport extends Transport.AnyTransport> =
   | Response
   | Transport.ResponseOf<transport>
 const preparedPaymentMethods = new WeakMap<object, Method.AnyClient>()
+/** Runs a prepared payment's spending checks once, before any of its signing work. */
+const preparedPaymentSpend = new WeakMap<object, () => Promise<SpendGate.Settlement | undefined>>()
 
 /**
  * A selected payment that can be inspected before its credential is created.
@@ -208,7 +211,10 @@ export function create<
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    authorize,
+    funders,
     identity,
+    maxPayment,
     maxPaymentRetries,
     onChallenge,
     orderChallenges,
@@ -216,6 +222,7 @@ export function create<
     acceptPaymentPolicy = polyfill && typeof globalThis.location !== 'undefined'
       ? 'same-origin'
       : 'always',
+    tokens,
     transport = Transport.http() as transport,
     trustedTempoProofRealms,
   } = config
@@ -230,6 +237,7 @@ export function create<
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
   const events = Fetch.createEventDispatcher<FlattenMethods<methods>, EventResponseOf<transport>>()
+  const spender = SpendGate.from(config)
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
     FlattenMethods<methods>
@@ -237,6 +245,10 @@ export function create<
   const config_fetch = {
     acceptPayment,
     acceptPaymentPolicy,
+    ...(authorize && { authorize }),
+    ...(funders && { funders }),
+    ...(maxPayment !== undefined && { maxPayment }),
+    ...(tokens && { tokens }),
     ...(config.fetch && { fetch: rawFetch }),
     ...(identityClient && { identity: identityClient }),
     eventDispatcher: events,
@@ -367,20 +379,30 @@ export function create<
 
       const selectedChallenge = challenge
       const selectedMethod = mi
+      let spend: Promise<SpendGate.Settlement | undefined> | undefined
+      const prepareSpend = () => (spend ??= Promise.resolve(spender.prepare?.(selectedChallenge)))
       const createPreparedCredential = memoizeCreateCredential<FlattenMethods<methods>>(
         async (context) => {
           try {
             if (selectedChallenge.expires)
               Expires.assert(selectedChallenge.expires, selectedChallenge.id)
 
+            let checkedCredential: Promise<string> | undefined
             const createCredential = memoizeCreateCredential<FlattenMethods<methods>>(
-              (overrideContext) =>
-                createCredentialForMethod(
-                  selectedChallenge,
-                  selectedMethod,
-                  overrideContext ?? context,
-                  responseUrl?.origin,
-                ),
+              async (overrideContext) => {
+                // Spending limits, authorization and funding run before signing.
+                const settlement = await prepareSpend()
+                checkedCredential = SpendGate.track(
+                  createCredentialForMethod(
+                    selectedChallenge,
+                    selectedMethod,
+                    overrideContext ?? context,
+                    responseUrl?.origin,
+                  ),
+                  settlement,
+                )
+                return checkedCredential
+              },
             )
             const eventCredential = await events.emit(
               'challenge.received',
@@ -394,6 +416,16 @@ export function create<
             )
             const credential = eventCredential ?? (await createCredential())
             Fetch.validateCredentialHeaderValue(credential)
+            // A credential an event handler made itself is checked before it is returned, and
+            // frees a reservation made for mppx's own credential, which goes unused.
+            if (
+              spender.prepare &&
+              (!checkedCredential ||
+                (await checkedCredential.catch(() => undefined)) !== credential)
+            ) {
+              ;(await spend?.catch(() => undefined))?.release()
+              ;(await spender.prepare(selectedChallenge)).commit()
+            }
             await events.emit(
               'credential.created',
               createCredentialCreatedPayload({
@@ -430,6 +462,7 @@ export function create<
         },
       })
       preparedPaymentMethods.set(prepared, selectedMethod)
+      if (spender.prepare) preparedPaymentSpend.set(prepared, prepareSpend)
       return prepared
     } catch (error) {
       await events.emit(
@@ -489,23 +522,34 @@ export function create<
     )
 
     const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
+    const prepareSpend = preparedPaymentSpend.get(payment)
     const createRequestCredential = memoizeCreateCredential(async (context) => {
       await identityClient?.challenge(
         preparedHttp.response as Response,
         { challenge: payment.challenge },
         preparedHttp.replayRequest.url,
       )
-      if (MethodChallenge.has(paymentMethod))
-        await MethodChallenge.handle(paymentMethod, {
-          challenge: payment.challenge,
-          context,
-          fetch: identityClient
-            ? IdentityClient.wrapFetch(rawFetch, identityClient, { challenge: payment.challenge })
-            : rawFetch,
-          input: preparedHttp.replayRequest,
-          signal: preparedHttp.replayRequest.signal,
-        })
-      return payment.createCredential(context)
+      // Method preparation can sign (such as opening a channel), so limits run first.
+      const settlement = await prepareSpend?.()
+      try {
+        if (MethodChallenge.has(paymentMethod))
+          await MethodChallenge.handle(paymentMethod, {
+            challenge: payment.challenge,
+            context,
+            fetch: identityClient
+              ? IdentityClient.wrapFetch(rawFetch, identityClient, {
+                  challenge: payment.challenge,
+                })
+              : rawFetch,
+            input: preparedHttp.replayRequest,
+            signal: preparedHttp.replayRequest.signal,
+          })
+        return await payment.createCredential(context)
+      } catch (error) {
+        // A no-op once the created credential committed it.
+        settlement?.release()
+        throw error
+      }
     })
 
     const preparedPayment = Object.freeze({
@@ -620,7 +664,7 @@ export declare namespace create {
   type Config<
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Transport,
-  > = {
+  > = SpendGate.Config & {
     /**
      * Identity provers applied to every in-scope HTTP attempt, in order.
      * List request signers last so they cover headers added by earlier provers.

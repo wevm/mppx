@@ -657,6 +657,51 @@ export declare namespace ZoneSettlementPendingError {
 }
 
 /**
+ * A payment is over the client's `maxPayment` or its budget, or it cannot be checked against
+ * them, so the client did not create or sign a credential.
+ *
+ * `reason` is `amount` when the payment is larger than the limit allows, and `asset` when the
+ * limit cannot count it: no per-asset limit names its asset, or a currency limit meets a token
+ * whose currency and decimals the client did not configure. Currency limits never trust the
+ * currency or decimals a server sends, so add the token to the client's `tokens`, set a
+ * per-asset limit, or raise the limit.
+ */
+export class PaymentLimitExceededError extends Error {
+  override readonly name = 'PaymentLimitExceededError'
+
+  /** The limit that refused the payment. */
+  readonly limit: PaymentLimitExceededError.Limit
+  /** Why the limit refused it. */
+  readonly reason: PaymentLimitExceededError.Reason
+
+  constructor(options: PaymentLimitExceededError.Options) {
+    const { limit, reason } = options
+    const name = limit === 'budget' ? 'the remaining budget' : 'maxPayment'
+    super(
+      reason === 'amount'
+        ? `Payment exceeds ${name}, so no credential was created.`
+        : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
+    )
+    this.limit = limit
+    this.reason = reason
+  }
+}
+
+export declare namespace PaymentLimitExceededError {
+  /** `maxPayment`: the per-payment limit. `budget`: a `Budget` passed as `authorize`. */
+  type Limit = 'maxPayment' | 'budget'
+  /** `amount`: over the limit. `asset`: the limit cannot count the payment's asset. */
+  type Reason = 'amount' | 'asset'
+
+  type Options = {
+    /** The limit that refused the payment. */
+    limit: Limit
+    /** Why the limit refused it. */
+    reason: Reason
+  }
+}
+
+/**
  * No credential was provided but payment is required.
  */
 export class PaymentRequiredError extends PaymentError {

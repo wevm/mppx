@@ -10,12 +10,14 @@ import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
+import * as Spend from '../Spend.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as PendingSettlement from './PendingSettlement.js'
 import * as ProofRealm from './ProofRealm.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
+import * as SpendGate from './SpendGate.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -202,11 +204,17 @@ export type PaymentResponsePayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
   response = Response,
 > = Readonly<{
+  /** Atomic amount of the paid challenge, when it names one. */
+  amount?: bigint | undefined
   challenge: Challenge.Challenge
   credential: string
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
+  /** The response's MPP or x402 receipt, when it carries one. */
+  receipt?: Spend.PaymentReceipt | undefined
+  /** The paid challenge, normalized; see `Spend.Requirement`. */
+  requirement?: Spend.Requirement | undefined
   response: response
 }>
 
@@ -277,6 +285,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const identity = config.identity ?? (config.fetch && identityOf(config.fetch))
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
+  const spender = SpendGate.from(config)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
   const baseFetch = unwrapFetch(fetch)
@@ -410,9 +419,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           canReusePrevious = sameAttempt && !settled
         }
         preparedCredential = canReusePrevious ? previousCredential : undefined
+        // Credential this round's spending limits already cover.
+        let checkedCredential: Promise<string> | undefined
         const createCredential = memoizeCreateCredential(
           async (overrideContext?: AnyContextFor<methods>) => {
             if (overrideContext === undefined && canReusePrevious && previousCredential) {
+              checkedCredential = previousCredential.promise
               return previousCredential.promise
             }
             if (canReusePrevious && previousCredential) {
@@ -423,18 +435,28 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             // A new payment must not start for a request the caller already aborted.
             resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
-            if (!MethodChallenge.has(selected.method))
-              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
-              return PendingSettlement.resume(
-                () =>
-                  resolveCredential(
-                    selectedChallenge,
-                    selected.method,
-                    credentialContext,
-                    requestOrigin(paymentInput),
-                  ),
-                { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+            if (!MethodChallenge.has(selected.method)) {
+              // Spending limits, authorization and funding run before any signing work.
+              const settlement = await spender.prepare?.(
+                selectedChallenge,
+                resolveRequestSignal(input, init),
               )
+              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+              checkedCredential = SpendGate.track(
+                PendingSettlement.resume(
+                  () =>
+                    resolveCredential(
+                      selectedChallenge,
+                      selected.method,
+                      credentialContext,
+                      requestOrigin(paymentInput),
+                    ),
+                  { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+                ),
+                settlement,
+              )
+              return checkedCredential
+            }
             const attempt: MethodResponse.Attempt = {
               origin: resolveRequestUrl(paymentInput).origin,
               prepare: () =>
@@ -451,11 +473,20 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                   signal: resolveRequestSignal(input, init),
                 }),
             }
-            const promise = attempt
-              .prepare()
-              .then(() =>
-                resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
-              )
+            // Spending limits, authorization and funding run before any signing work.
+            const settlement = await spender.prepare?.(
+              selectedChallenge,
+              resolveRequestSignal(input, init),
+            )
+            const promise = SpendGate.track(
+              attempt
+                .prepare()
+                .then(() =>
+                  resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
+                ),
+              settlement,
+            )
+            checkedCredential = promise
             preparedCredential = {
               context: credentialContext,
               attempt,
@@ -493,6 +524,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         }
         const effectiveContext = preparedCredential ? preparedCredential.context : context
         validateCredentialHeaderValue(credential)
+        // A credential an event handler or `onChallenge` made itself is checked before it is sent.
+        if (
+          spender.prepare &&
+          (!checkedCredential || (await checkedCredential.catch(() => undefined)) !== credential)
+        )
+          (await spender.prepare(selectedChallenge, resolveRequestSignal(input, init))).commit()
         // Identity proofs bind to the Challenge the credential pays, which can be an earlier one
         // (a resumed Zone withdrawal) rather than the one just selected.
         const paidChallenge = credentialChallenge(credential, selectedChallenge)
@@ -563,6 +600,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               init,
               input,
               method: selected.method,
+              requirement: spender.resolve(selectedChallenge),
               response,
             }),
           )
@@ -704,7 +742,7 @@ export declare namespace from {
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
      */
     trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined
-  }
+  } & SpendGate.Config
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (
     input: RequestInfo | URL,
@@ -982,9 +1020,14 @@ function createPaymentResponsePayload<
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
+  requirement?: Spend.Requirement | undefined
   response: response
 }): PaymentResponsePayload<methods, response> {
+  const { requirement, response } = parameters
+  const receipt = response instanceof Response ? Spend.readReceipt(response) : undefined
   return Object.freeze({
+    ...(requirement ? { amount: requirement.amount, requirement } : {}),
+    ...(receipt ? { receipt } : {}),
     challenge: snapshotValue(parameters.challenge),
     credential: parameters.credential,
     init: snapshotInit(parameters.init),
