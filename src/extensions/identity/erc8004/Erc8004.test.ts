@@ -239,3 +239,50 @@ test('marks the agent headers as bearer identity headers, so a proxy does not fo
   expect(Identity.Headers.request).toContain('agent-id')
   expect(Identity.Headers.request).toContain('agent-signature')
 })
+
+test('accepts signed requests for the configured receiving origin', async () => {
+  const { handler } = setup({ origin: 'https://API.example:443/' })
+  expect((await client(handler).fetch(url)).status).toBe(200)
+})
+
+test('rejects a relayed signature at another receiving origin', async () => {
+  const { handler } = setup({ origin: 'https://other.example' })
+  const response = await client(handler).fetch(url)
+  expect(response.status).toBe(401)
+  expect(await response.text()).toContain('The request origin does not match this API.')
+})
+
+test.each(['https://api.example:8443', 'http://api.example'])(
+  'rejects a signed request with a different origin from %s',
+  async (origin) => {
+    const { handler } = setup({ origin })
+    expect((await client(handler).fetch(url)).status).toBe(401)
+  },
+)
+
+test.each([
+  'ftp://api.example',
+  'https://user:pass@api.example',
+  'https://api.example/path',
+  'https://api.example?x=1',
+  'https://api.example#fragment',
+  '',
+])('rejects invalid configured origin %s', (origin) => {
+  expect(() => setup({ origin })).toThrow()
+})
+
+test.each(['transaction', 'proof', 'hash', 'zone'])(
+  'rejects foreign origins in payment checks for %s credentials',
+  async (type) => {
+    const { agents } = setup({ origin: 'https://other.example' })
+    const result = await agents.paymentCheck.verify({
+      challenge: { intent: 'charge', method: 'tempo' },
+      credential: { payload: { type }, source: `did:pkh:eip155:4217:${agentKey.address}` },
+      request: new Request(url, { headers: { 'Agent-Id': `eip155:4217:${registry}:1` } }),
+    } as never)
+    expect(result).toEqual({
+      status: 'invalid',
+      reason: 'The request origin does not match this API.',
+    })
+  },
+)
