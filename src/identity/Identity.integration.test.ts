@@ -889,6 +889,55 @@ test('the paid attempt carries the headers a retry returned on the unpaid attemp
   ])
 })
 
+test('a paid retry rejected with 401 is resent with refreshed identity and the same credential', async () => {
+  const route = createPayments().charge({
+    ...charge,
+    identity: [
+      {
+        verify(request) {
+          const token = request.headers.get('X-Token')
+          if (token === 'fresh' || (token === 'stale' && !paidWith.length))
+            return { status: 'valid', value: token }
+          return { status: 'invalid', reason: 'The token has expired.' }
+        },
+      },
+    ],
+  })
+  const paidWith: { token: string | null; credential: string }[] = []
+  const settledBefore = settlements
+  const base = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const credential = request.headers.get('Authorization')
+    if (credential) paidWith.push({ token: request.headers.get('X-Token'), credential })
+    const result = await route(request)
+    if (result.status === 402) return result.challenge as Response
+    return result.withReceipt(new Response('ok'))
+  }
+  const client = ClientMppx.create({
+    fetch: base as never,
+    identity: [
+      {
+        scope: '*',
+        prove(request) {
+          if (request.headers.has('X-Token')) return request
+          const headers = new Headers(request.headers)
+          headers.set('X-Token', 'stale')
+          return new Request(request, { headers })
+        },
+        retry: (response) => (response.status === 401 ? { 'X-Token': 'fresh' } : undefined),
+      },
+    ],
+    methods: [clientMethod],
+    polyfill: false,
+  })
+  const response = await client.fetch('https://merchant.example/resource')
+  expect(await response.text()).toBe('ok')
+  expect(paidWith.map(({ token }) => token)).toEqual(['stale', 'fresh'])
+  expect(paidWith[0]!.credential).toBe(paidWith[1]!.credential)
+  // The rejected paid attempt settled nothing; the resent credential settled once.
+  expect(settlements - settledBefore).toBe(1)
+})
+
 test('rewrapping an identity-enabled fetch keeps its provers', async () => {
   const seen: (string | null)[] = []
   const base = async (input: RequestInfo | URL, init?: RequestInit) => {

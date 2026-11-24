@@ -140,7 +140,7 @@ export function claims(config: claims.Config): Identity.Prover {
       if (attached && !owns(sent, presentations, attached)) return undefined
       const origin = new URL(request.url).origin
       presentations.delete(origin)
-      const challenge = await claimsChallenge(response)
+      const challenge = await readChallenge(response, request.signal)
       if (!challenge) return undefined
       // Bound to this origin only: a server can't relay another audience's challenge.
       if (challenge.aud.replace(/\/+$/, '') !== origin) return undefined
@@ -178,10 +178,17 @@ export declare namespace claims {
 export async function claimsChallenge(
   response: Response,
 ): Promise<Types.ClaimsChallenge | undefined> {
-  const body = (await response
-    .clone()
-    .json()
-    .catch(() => undefined)) as Partial<Types.ClaimsChallenge> | undefined
+  return readChallenge(response)
+}
+
+/** {@link claimsChallenge}, giving up when `signal` aborts. */
+async function readChallenge(
+  response: Response,
+  signal?: AbortSignal | undefined,
+): Promise<Types.ClaimsChallenge | undefined> {
+  const body = (await readJson(response.clone(), signal)) as
+    | Partial<Types.ClaimsChallenge>
+    | undefined
   if (!body || body.type !== Constants.claimsRequiredType) return undefined
   const strings = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -225,5 +232,54 @@ function track(sent: Set<string>, current: Map<string, string>, value: string) {
   for (const old of sent) {
     if (sent.size <= 64) break
     if (!live.has(old)) sent.delete(old)
+  }
+}
+
+/** Largest claims challenge body read; a larger one is not a claims challenge. */
+const maxChallengeBytes = 64 * 1024
+/** Longest wait for a claims challenge body; a slower one is not a claims challenge. */
+const challengeTimeoutMs = 2_000
+
+/**
+ * Parses a response body as JSON, reading at most {@link maxChallengeBytes} within
+ * {@link challengeTimeoutMs} and until `signal` aborts; `undefined` otherwise.
+ */
+async function readJson(response: Response, signal?: AbortSignal | undefined): Promise<unknown> {
+  const length = Number(response.headers.get('content-length'))
+  if (!response.body || length > maxChallengeBytes || signal?.aborted) {
+    void response.body?.cancel().catch(() => {})
+    return undefined
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  let size = 0
+  // Not awaited: a cloned body's cancel waits for its unread sibling.
+  let stopped = false
+  const stop = () => {
+    stopped = true
+    void reader.cancel().catch(() => {})
+  }
+  const timeout = setTimeout(stop, challengeTimeoutMs)
+  signal?.addEventListener('abort', stop, { once: true })
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      // A cancelled read ends as done: what arrived before the deadline is not the whole body.
+      if (stopped) return undefined
+      if (done) break
+      size += value.byteLength
+      // Not awaited: a cloned body's cancel waits for its unread sibling.
+      if (size > maxChallengeBytes) {
+        void reader.cancel().catch(() => {})
+        return undefined
+      }
+      chunks.push(value as Uint8Array<ArrayBuffer>)
+    }
+    return JSON.parse(await new Blob(chunks).text())
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', stop)
   }
 }

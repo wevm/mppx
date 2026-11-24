@@ -28,8 +28,10 @@ export type Client = {
    * Requests that carry proofs do not follow redirects: a redirect rejects
    * (`redirect: 'error'`), so proofs never reach another URL. Requests with no
    * prover in scope are sent unchanged. If a prover asks to retry a rejected
-   * (non-402) response, the request is proved again and resent once, except for
-   * paid attempts, which are never resent.
+   * (non-402) response, the request is proved again and resent once. A paid
+   * attempt is resent only after a 401 with no receipt, with the same Payment
+   * credential and while its Challenge has not expired: servers check other authentication
+   * before verifying a Payment credential, so a 401 means nothing settled.
    */
   readonly send: (
     fetch: typeof globalThis.fetch,
@@ -69,7 +71,8 @@ const credentialHeaders: ReadonlySet<string> = new Set([
  *
  * - `unproved`: nothing sent yet.
  * - `sent`: an unpaid attempt was sent; it may be resent once.
- * - `paid`: a paid attempt was sent; it is never resent, since its payment may have settled.
+ * - `paid`: a paid attempt was sent; it is resent once, with the same credential, only after a 401
+ *   while its Challenge has not expired, since any other response may follow settlement.
  * - `resent`: the request is proved again and resent once, with `headers` set.
  * - `done`: the last response is final.
  *
@@ -101,6 +104,7 @@ export const initial: Attempt = Object.freeze({ phase: 'unproved' })
  * | `unproved`         | `send` (paid)          | `paid`     |
  * | `unproved`         | `send` (unpaid)        | `sent`     |
  * | `sent`             | `response` with resend | `resent`   |
+ * | `paid` (after a 401) | `response` with resend | `resent`   |
  * | `sent`, `paid`, `resent` | `response` without   | `done`     |
  *
  * @internal
@@ -115,7 +119,7 @@ export function transition(attempt: Attempt, event: AttemptEvent): Attempt {
         if (attempt.phase === 'unproved' || attempt.phase === 'done') break
         return Object.freeze({ phase: 'done' })
       }
-      if (attempt.phase !== 'sent') break
+      if (attempt.phase !== 'sent' && attempt.phase !== 'paid') break
       return Object.freeze({ phase: 'resent', headers: event.resend })
   }
   const resend = event.type === 'response' && event.resend !== undefined ? ' with resend' : ''
@@ -161,13 +165,21 @@ export function from(provers: readonly Types.Prover[]): Client {
     context: SendContext
     keepReadable: boolean
     headers: ResendHeaders
-  }): Promise<{ request: Request; response: Response }> {
-    const { context, fetch, headers, keepReadable, request } = parameters
+    /** Runs after the provers, right before the fetch; returning `false` sends nothing. */
+    proceed?: (() => boolean) | undefined
+  }): Promise<{ request: Request; response: Response } | undefined> {
+    const { context, fetch, headers, keepReadable, proceed, request } = parameters
     // Keep the original readable only when it may be resent; otherwise a clone would tee
     // (and buffer) a streamed body that is never read again.
     const source = keepReadable ? request.clone() : request
     const scoped = inScope(request.url)
-    if (scoped.length === 0) return { request: source, response: await fetch(source) }
+    if (scoped.length === 0) {
+      if (proceed && !proceed()) {
+        discard(source)
+        return undefined
+      }
+      return { request: source, response: await fetch(source) }
+    }
     const attempt: Types.ProveContext = Object.freeze({
       ...SigningContext.create(),
       ...(context.challenge && { challenge: context.challenge }),
@@ -187,7 +199,16 @@ export function from(provers: readonly Types.Prover[]): Client {
       headers: merged,
       redirect: request.redirect === 'follow' ? 'error' : request.redirect,
     })
-    for (const prover of scoped) sent = await prover.prove(sent, attempt)
+    try {
+      for (const prover of scoped) sent = await prover.prove(sent, attempt)
+    } catch (error) {
+      discard(sent)
+      throw error
+    }
+    if (proceed && !proceed()) {
+      discard(sent)
+      return undefined
+    }
     return { request: sent, response: await fetch(sent) }
   }
 
@@ -199,20 +220,67 @@ export function from(provers: readonly Types.Prover[]): Client {
         payment: isPaid(request, context) ? 'paid' : 'unpaid',
       })
       const retriers = inScope(request.url).filter((prover) => prover.retry)
-      const keepReadable = attempt.phase === 'sent' && retriers.length > 0
+      // A paid attempt may be resent only with the Payment credential for the transport's Challenge.
+      const paidChallenge =
+        attempt.phase === 'paid' ? resendableChallenge(request, context) : undefined
+      // A paid attempt whose Challenge already expired can never be resent, so it is not cloned.
+      const keepReadable =
+        retriers.length > 0 &&
+        (attempt.phase === 'sent' || (paidChallenge !== undefined && isUnexpired(paidChallenge)))
       const carried = context.headers ?? []
-      const result = await sendOnce({ context, fetch, headers: carried, keepReadable, request })
+      const result = (await sendOnce({ context, fetch, headers: carried, keepReadable, request }))!
       const { response } = result
-      const resend =
-        keepReadable && response.status >= 400 && response.status !== 402
-          ? await resendHeaders(retriers, response, result.request)
-          : undefined
+      let resend: ResendHeaders | undefined
+      if (keepReadable && canResend(attempt, response, paidChallenge))
+        try {
+          resend = await resendHeaders(retriers, response, result.request)
+        } catch (error) {
+          // The server's 401 to a paid attempt was received and nothing was resent, so a failing
+          // retry hook returns that 401 rather than leaving the payment's outcome unknown.
+          if (attempt.phase !== 'paid') {
+            discard(request)
+            throw error
+          }
+        }
       attempt = transition(attempt, { type: 'response', resend })
-      if (attempt.phase !== 'resent') return { ...result, headers: carried }
-      release([response])
+      if (attempt.phase !== 'resent') {
+        // The copy kept for a resend is never sent: release it so the upload source is cancelled.
+        if (keepReadable) discard(request)
+        return { ...result, headers: carried }
+      }
+      // The rejected response is released before the provers run again, so a prover that awaits
+      // a request through the same connection pool is not blocked by it. A paid attempt keeps a
+      // bounded copy to return if it is not resent.
+      const fallback = paidChallenge ? await detach(response) : (release([response]), undefined)
+      const rejected = () => {
+        discard(request)
+        return { request: result.request, response: fallback!, headers: carried }
+      }
       const headers = mergeHeaders(carried, attempt.headers)
-      const resent = await sendOnce({ context, fetch, headers, keepReadable: false, request })
+      let started = false
+      let resent: Awaited<ReturnType<typeof sendOnce>>
+      try {
+        resent = await sendOnce({
+          context,
+          fetch,
+          headers,
+          keepReadable: false,
+          // The Challenge may expire while provers refresh identity: a paid attempt is checked
+          // again right before the resend, and an expired one returns the 401 instead.
+          proceed() {
+            if (paidChallenge && !isUnexpired(paidChallenge)) return false
+            started = true
+            return true
+          },
+          request,
+        })
+      } catch (error) {
+        // A prover failing before the paid resend was sent: the 401 stands.
+        if (fallback && !started) return rejected()
+        throw error
+      }
       transition(attempt, { type: 'response', resend: undefined })
+      if (!resent) return rejected()
       return { ...resent, headers }
     },
     async challenge(response, { challenge }, url) {
@@ -231,6 +299,55 @@ export function from(provers: readonly Types.Prover[]): Client {
       }
     },
   }
+}
+
+/** Response headers that report a settled payment (MPP receipt, x402 settlement response). */
+const settlementHeaders = ['payment-receipt', 'payment-response', 'x-payment-response'] as const
+
+/**
+ * Whether a rejected response may be resent. An unpaid attempt may be resent after any non-402
+ * rejection. A paid attempt only after a 401, which never follows settlement, that carries no
+ * receipt or other settlement header, and only while the credential's Challenge has not expired,
+ * so the server processes the same credential afresh. A 403 can follow a settled payment, so it is
+ * never resent.
+ */
+function canResend(
+  attempt: Attempt,
+  response: Response,
+  challenge: Challenge.Challenge | undefined,
+): boolean {
+  if (attempt.phase === 'sent') return response.status >= 400 && response.status !== 402
+  if (attempt.phase !== 'paid' || response.status !== 401 || !challenge) return false
+  if (settlementHeaders.some((name) => response.headers.has(name))) return false
+  return isUnexpired(challenge)
+}
+
+/** Whether a Challenge has an `expires` still in the future. */
+function isUnexpired(challenge: Challenge.Challenge): boolean {
+  return challenge.expires !== undefined && Date.parse(challenge.expires) > Date.now()
+}
+
+/**
+ * Returns the Challenge a paid attempt may be resent for: the transport's Challenge (or, without
+ * one, the Challenge of the request's Payment credential), when a header holds a Payment credential
+ * for it. A request carrying an x402 credential header is never resent, nor one whose Payment
+ * credential answers another Challenge.
+ */
+function resendableChallenge(
+  request: Request,
+  context: SendContext,
+): Challenge.Challenge | undefined {
+  if (x402CredentialHeaders.some((name) => request.headers.has(name))) return undefined
+  const challenge = context.challenge ?? credentialChallenge(request.headers)
+  if (!challenge) return undefined
+  for (const [, value] of request.headers) {
+    const payment = Credential.extractPaymentScheme(value)
+    if (!payment) continue
+    try {
+      if (Credential.deserialize(payment).challenge.id === challenge.id) return challenge
+    } catch {}
+  }
+  return undefined
 }
 
 /**
@@ -279,6 +396,57 @@ async function resendHeaders(
   }
   if (!resend) return undefined
   return Object.freeze([...headers].map(([name, value]) => Object.freeze([name, value] as const)))
+}
+
+/** Releases a request's unsent body, so a streamed upload source is cancelled. */
+function discard(request: Request) {
+  if (request.body && !request.bodyUsed && !request.body.locked)
+    void request.body.cancel().catch(() => {})
+}
+
+const maxFallbackBytes = 64 * 1024
+const fallbackTimeoutMs = 2_000
+
+/**
+ * Reads a rejected response into a copy, within a size and time bound, and releases its
+ * connection. A body larger than 64 KiB, or still arriving after 2 seconds, is cut off to what
+ * arrived, marked with an `Mppx-Body-Truncated: true` header.
+ */
+async function detach(response: Response): Promise<Response> {
+  const headers = new Headers(response.headers)
+  const init = { headers, status: response.status, statusText: response.statusText }
+  if (!response.body) return new Response(null, init)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  let received = 0
+  let truncated = false
+  const timeout = setTimeout(() => {
+    truncated = true
+    void reader.cancel().catch(() => {})
+  }, fallbackTimeoutMs)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value as Uint8Array<ArrayBuffer>)
+      received += value.byteLength
+      if (received > maxFallbackBytes) {
+        truncated = true
+        break
+      }
+    }
+  } catch {
+    truncated = true
+  } finally {
+    clearTimeout(timeout)
+    // A tee's cancellation can wait for the other branch; do not await it.
+    void reader.cancel().catch(() => {})
+  }
+  if (truncated) {
+    headers.delete('content-length')
+    headers.set('Mppx-Body-Truncated', 'true')
+  }
+  return new Response(new Blob(chunks).slice(0, maxFallbackBytes), init)
 }
 
 /** Releases unread response copies without waiting, so they neither buffer the body nor block a resend. */
