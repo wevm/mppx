@@ -8,7 +8,7 @@ describe('Credential', () => {
       challenge: fc.record({
         id: fc.string({ minLength: 1 }).filter((s) => /^[A-Za-z0-9_-]+$/.test(s)),
         realm: fc.string({ minLength: 1 }).filter((s) => /^[^\x00-\x1f]+$/.test(s)),
-        method: fc.string({ minLength: 1 }).filter((s) => /^[a-z][a-z0-9:_-]*$/.test(s)),
+        method: fc.stringMatching(/^[a-z]{1,16}$/),
         intent: fc.string({ minLength: 1 }).filter((s) => /^[a-z][a-z0-9_-]*$/.test(s)),
         request: fc.constant({ amount: '1000' }),
       }),

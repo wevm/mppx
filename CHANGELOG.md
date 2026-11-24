@@ -1,5 +1,35 @@
 # mppx
 
+## 0.21.4
+
+### Patch Changes
+
+- 8b6b501: Required an explicit host allowlist or fixed Node host before accepting signed identity headers in Node and Express adapters. Unconfigured adapters now return 421 for those requests.
+
+## 0.21.3
+
+### Patch Changes
+
+- 8e4cd5f: Preserved configured plugin payment policies when using persistent Tempo session accounts.
+- ad2a467: Fixed `Challenge.deserialize` and `Challenge.serialize` to follow the MPP core grammar: payment method identifiers must be `1*LOWERALPHA` (a-z only), and a backslash in a quoted-string is a quoted-pair, so `\u2014` parses to the text `u2014` instead of being decoded. `Challenge.serialize` now throws for characters above U+00FF in any parameter except `description`, which keeps its `\uXXXX` escape so a 402 never fails on an em dash or emoji.
+
+  `Mppx.create` now throws at startup for a method name outside a-z, or for a `realm` above U+00FF on a transport that sends the Challenge in a header, instead of failing on every 402. `Challenge.deserializeList` skips an offer whose method id is outside a-z rather than rejecting the whole header, and the client keys payment retries without building a header or reading the display-only `description`.
+
+  The client now refuses a challenge from a server that escaped a parameter bound into the Challenge ID (such as `realm`) as `\uXXXX`, as servers before quoted-pair parsing did for characters above U+00FF: it skips such an offer when another is payable, and otherwise throws `Errors.LegacyUnicodeEscapedChallengeError` before creating, signing or broadcasting anything, since the server would reject the credential.
+
+## 0.21.2
+
+### Patch Changes
+
+- 60f265c: Fixed `mppx/validation` so it no longer imports the CLI, which pulled in the CLI's bundled `incur` dependency and failed to load from npm. `validate()` and `validateStream()` now take an optional `payment` validator; without one, payment checks are reported as skipped. `mppx validate` passes its own.
+
+  Moved shared modules so lower layers no longer import higher ones: the HTML payment-page infrastructure and x402 wire helpers now live under `src/internal`, and the MCP SDK server transport lives under `src/server`. Public entry points are unchanged.
+
+- 6056a5b: Added `mppx/client/core`, `mppx/tempo/client` and `mppx/tempo/server` entrypoints, so apps can load the client primitives or only the Tempo method without the other payment methods. `mppx/client` and `mppx/server` export the same API as before.
+- db173d9: Fixed Tempo session voucher, close authorization and subscription key authorization verification to reject secp256k1 signatures with a high `s` value, which Tempo does not accept onchain. Voucher and close authorization signing now normalize a signer's high-`s` signature to its low-`s` equivalent.
+- 98d110b: Added TIP-1166 configurable account voucher signers to `tempo/session`. Servers accept configurable account (`0x05`) vouchers and close authorizations when `configurableVouchers` is set (default `false`), advertise it in the challenge, and check each voucher against the signer config commitment recorded at open (`OpeningCommitmentRecorded`). Configurable account clients open channels with their config commitment as the salt, sign vouchers with configurable account signatures, refuse to open against servers that do not advertise `configurableVouchers` (`ConfigurableVouchersUnsupportedError`), and surface top-ups that revert because the signer config changed as `SignerConfigChangedError`. `Voucher.verifyVoucher` and `Voucher.verifyCloseAuthorization` take optional `{ configurable, openingCommitment }` options; without them they accept only primitive signatures, as before.
+- bd9dac5: Fixed `validateStream` to pass its synthesized `Payment: failed` check to `onPaymentResults`, and fixed `validate()` to promise automatic Tempo wallet provisioning only when a payment validator is configured.
+
 ## 0.21.1
 
 ### Patch Changes

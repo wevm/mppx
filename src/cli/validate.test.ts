@@ -1578,6 +1578,53 @@ describe('validateStream: custom payment validator', () => {
     )
   })
 
+  test('forwards a synthesized payment failure to onPaymentResults', async () => {
+    const { validateStream } = await import('../validation/index.js')
+    const server = await mppServer(makeChallenge())
+    const streamed: import('../validation/index.js').CheckResult[] = []
+    for await (const _ of validateStream({
+      url: server.url,
+      payment: async () => ({ results: [], succeeded: false }),
+      onPaymentResults: (results) => streamed.push(...results),
+    }));
+    expect(streamed).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+  })
+
+  test('onPaymentResults cannot erase a synthesized payment failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const result = await validate({
+      url: (await mppServer(makeChallenge())).url,
+      payment: async () => ({ results: [], succeeded: false }),
+      onPaymentResults: (results) => {
+        for (const r of results) r.severity = 'warn'
+      },
+    })
+    expect(result.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(result.summary.failed).toBeGreaterThan(0)
+  })
+
+  test('only promises wallet provisioning when a payment validator is configured', async () => {
+    const { validate } = await import('../validation/index.js')
+    const run = async (payment?: import('../validation/index.js').PaymentValidator) => {
+      const challenge = makeChallenge()
+      challenge.request.methodDetails = { chainId: 4217 }
+      return validate({ url: (await mppServer(challenge)).url, ...(payment && { payment }) })
+    }
+    const testnet = (s: string) => s.startsWith('Validate your testnet server')
+
+    const without = (await run()).suggestions.find(testnet)
+    expect(without).toBeDefined()
+    expect(without).not.toContain('are automatically provisioned')
+    expect(without).toContain('mppx validate')
+
+    const withValidator = await run(async () => ({ results: [], succeeded: true }))
+    expect(withValidator.suggestions.find(testnet)).toContain('are automatically provisioned')
+  })
+
   test('validate() keeps the succeeded flag and counts a reported failure', async () => {
     const { validate } = await import('../validation/index.js')
     const run = async (succeeded: boolean) =>

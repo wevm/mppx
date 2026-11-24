@@ -1,3 +1,5 @@
+import { Json } from 'ox'
+
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
@@ -8,12 +10,15 @@ import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
+import * as Spend from '../Spend.js'
 import * as Transport from '../Transport.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as PendingSettlement from './PendingSettlement.js'
 import * as ProofRealm from './ProofRealm.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
+import * as SpendGate from './SpendGate.js'
+import * as SpendHooks from './SpendHooks.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -21,6 +26,8 @@ import { adapterOwnsPayment } from './protocols/Mcp.js'
 const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
 /** Identity runner of an mppx fetch wrapper, inherited when that wrapper is wrapped again. */
 const MPPX_FETCH_IDENTITY = Symbol.for('mppx.fetch.identity')
+/** Spending options of an mppx fetch wrapper, kept when that wrapper is wrapped again. */
+const MPPX_FETCH_SPEND = Symbol.for('mppx.fetch.spend')
 /** Per-request payment opt-out preserved by forwarding fetch layers. @internal */
 export const skipPayment = Symbol.for('mppx.fetch.skipPayment')
 /**
@@ -40,6 +47,7 @@ const bodyTruncatedHeader = 'Mppx-Body-Truncated'
 type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
   [MPPX_FETCH_IDENTITY]?: IdentityClient.Client | undefined
+  [MPPX_FETCH_SPEND]?: SpendGate.Config | undefined
 }
 
 /** Credential state retained between payment retries until its method settles it. */
@@ -200,11 +208,23 @@ export type PaymentResponsePayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
   response = Response,
 > = Readonly<{
+  /**
+   * Atomic amount of the paid `charge` challenge as a decimal string, such as `'25'`, when it
+   * names one. A string, so the payload stays JSON-serializable.
+   */
+  amount?: string | undefined
   challenge: Challenge.Challenge
   credential: string
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
+  /** The response's MPP or x402 receipt, when it carries one. */
+  receipt?: Spend.PaymentReceipt | undefined
+  /**
+   * The paid `charge` challenge, normalized; see `Spend.Requirement`. Its bigint amounts
+   * serialize to decimal strings with `JSON.stringify`.
+   */
+  requirement?: Spend.Requirement | undefined
   response: response
 }>
 
@@ -275,6 +295,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const identity = config.identity ?? (config.fetch && identityOf(config.fetch))
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
+  // Rewrapping an mppx fetch keeps its spending options, so its limits still apply.
+  const spendConfig = SpendGate.inherit(config, config.fetch && spendConfigOf(config.fetch))
+  const spender = SpendGate.from(spendConfig)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
   const baseFetch = unwrapFetch(fetch)
@@ -305,7 +328,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const callerHeaders = getCallerHeaders(input, init?.headers)
     const hasExplicitAcceptPayment = callerHeaders.has(Constants.Headers.acceptPayment)
     const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
-    const capturedBody = captureRequestBody(input, init, callerHeaders)
+    const signal = resolveRequestSignal(input, init)
+    // Under spending options the body is read before sending (below), so an abort must stop it.
+    const capturedBody = captureRequestBody(
+      input,
+      init,
+      callerHeaders,
+      spender.prepare ? signal : undefined,
+    )
     const initialRequest = prepareInitialRequest(
       input,
       init,
@@ -314,6 +344,17 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
+    // `McpClient.wrap` pays the tool calls it tags itself, outside this fetch, so this fetch's
+    // spending options would not bound them: refuse to send one instead.
+    if (spender.prepare) {
+      const body = await capturedBody
+      // A canceled request is never sent, even when its body was cut short to stop reading it.
+      signal?.throwIfAborted()
+      if (adapterOwnsPayment(withCapturedBody(initialRequest.init, body)))
+        throw new TypeError(
+          'This fetch has spending options (maxPayment, authorize or funders), but McpClient.wrap pays MCP tool calls itself. Set them on McpClient.wrap and give its transport a fetch without them.',
+        )
+    }
     const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     let response = first.response
     // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
@@ -395,7 +436,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           trustedTempoProofRealms,
         )
         const previousCredential = preparedCredential
-        const key = Challenge.serialize(selectedChallenge)
+        const key = retryKey(selectedChallenge)
         const sameAttempt =
           previousCredential?.method === selected.method && previousCredential?.key === key
         let canReusePrevious = false
@@ -408,9 +449,18 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           canReusePrevious = sameAttempt && !settled
         }
         preparedCredential = canReusePrevious ? previousCredential : undefined
+        // This round's payment, and the credential its spending checks already cover.
+        const spend = SpendGate.payment(
+          spender,
+          selectedChallenge,
+          resolveRequestSignal(input, init),
+          selected.method,
+        )
+        let checkedCredential: Promise<string> | undefined
         const createCredential = memoizeCreateCredential(
           async (overrideContext?: AnyContextFor<methods>) => {
             if (overrideContext === undefined && canReusePrevious && previousCredential) {
+              checkedCredential = previousCredential.promise
               return previousCredential.promise
             }
             if (canReusePrevious && previousCredential) {
@@ -421,18 +471,24 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             // A new payment must not start for a request the caller already aborted.
             resolveRequestSignal(input, init)?.throwIfAborted()
             const credentialContext = overrideContext ?? context
-            if (!MethodChallenge.has(selected.method))
-              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
-              return PendingSettlement.resume(
-                () =>
-                  resolveCredential(
-                    selectedChallenge,
-                    selected.method,
-                    credentialContext,
-                    requestOrigin(paymentInput),
-                  ),
-                { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+            if (!MethodChallenge.has(selected.method)) {
+              // Spending limits, authorization and funding run before any signing work.
+              checkedCredential = spend.track((constraints) =>
+                // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+                PendingSettlement.resume(
+                  () =>
+                    resolveCredential(
+                      selectedChallenge,
+                      selected.method,
+                      credentialContext,
+                      requestOrigin(paymentInput),
+                      constraints,
+                    ),
+                  { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
+                ),
               )
+              return checkedCredential
+            }
             const attempt: MethodResponse.Attempt = {
               origin: resolveRequestUrl(paymentInput).origin,
               prepare: () =>
@@ -449,11 +505,21 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                   signal: resolveRequestSignal(input, init),
                 }),
             }
-            const promise = attempt
-              .prepare()
-              .then(() =>
-                resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
-              )
+            // Spending limits, authorization and funding run before any signing work.
+            const promise = spend.track((constraints) =>
+              attempt
+                .prepare()
+                .then(() =>
+                  resolveCredential(
+                    selectedChallenge,
+                    selected.method,
+                    credentialContext,
+                    attempt,
+                    constraints,
+                  ),
+                ),
+            )
+            checkedCredential = promise
             preparedCredential = {
               context: credentialContext,
               attempt,
@@ -464,33 +530,52 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             return promise
           },
         )
-        const eventCredential = await events.emit(
-          'challenge.received',
-          createChallengeReceivedPayload({
-            challenge: selectedChallenge,
-            challenges,
-            createCredential,
-            init,
-            input,
-            method: selected.method,
-            response,
-          }),
-        )
-        const onChallengeCredential =
-          eventCredential ??
-          (onChallenge
-            ? await onChallenge(challenge, {
-                createCredential,
-              })
-            : undefined)
-        const credential = onChallengeCredential ?? (await createCredential())
-        const prepared = preparedCredential
-        if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
-          await settleAttempt(prepared, { status: 'rejected' })
-          preparedCredential = undefined
+        let credential: string
+        let prepared: typeof preparedCredential
+        // The offer a credential mppx did not create pays, once spending checks bound it.
+        let paidOffer: Challenge.Challenge | undefined
+        // Whether the credential is the one mppx created for the selected offer.
+        let ownCredential = false
+        try {
+          const eventCredential = await events.emit(
+            'challenge.received',
+            createChallengeReceivedPayload({
+              challenge: selectedChallenge,
+              challenges,
+              createCredential,
+              init,
+              input,
+              method: selected.method,
+              response,
+            }),
+          )
+          const onChallengeCredential =
+            eventCredential ??
+            (onChallenge
+              ? await onChallenge(challenge, {
+                  createCredential,
+                })
+              : undefined)
+          credential = onChallengeCredential ?? (await createCredential())
+          prepared = preparedCredential
+          if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
+            await settleAttempt(prepared, { status: 'rejected' })
+            preparedCredential = undefined
+          }
+          validateCredentialHeaderValue(credential)
+          // A credential an event handler or `onChallenge` made itself is checked against the
+          // offer it pays before it is sent. For the selected offer it takes the reservation
+          // already prepared, so funders run once.
+          ownCredential =
+            checkedCredential !== undefined &&
+            (await checkedCredential.catch(() => undefined)) === credential
+          if (!ownCredential) paidOffer = await spend.commitReplacement(credential, challenges)
+        } catch (error) {
+          // A no-op once a credential committed it.
+          await spend.release()
+          throw error
         }
         const effectiveContext = preparedCredential ? preparedCredential.context : context
-        validateCredentialHeaderValue(credential)
         // Identity proofs bind to the Challenge the credential pays, which can be an earlier one
         // (a resumed Zone withdrawal) rather than the one just selected.
         const paidChallenge = credentialChallenge(credential, selectedChallenge)
@@ -523,7 +608,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                   headers: initialRequest.headers,
                 },
                 credential,
-                { challenge: selectedChallenge },
+                // Attached in the protocol of the offer it pays, such as an x402 payload.
+                { challenge: paidOffer ?? selectedChallenge },
               ),
               // Runtimes do not strip custom payment headers on cross-origin redirects.
               redirect: 'manual',
@@ -552,7 +638,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           preparedCredential = undefined
         }
         // Cloning an unobserved stream would tee and buffer it indefinitely.
-        if (response.ok && hasEventObservers(events, 'payment.response'))
+        if (response.ok && hasEventObservers(events, 'payment.response')) {
+          // A handler's credential can pay another offer than the selected one: report the terms
+          // of the offer it pays, and none when it cannot be bound to exactly one.
+          const reportedOffer = ownCredential
+            ? selectedChallenge
+            : (paidOffer ?? SpendGate.replacedChallenge(credential, challenges))
           await events.emit(
             'payment.response',
             createPaymentResponsePayload({
@@ -561,9 +652,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               init,
               input,
               method: selected.method,
+              requirement: reportedOffer && spender.resolve(reportedOffer),
               response,
             }),
           )
+        }
         if (!paymentRequired) {
           // The server may have settled before failing: report the credential for
           // reconciliation and return the response. Retrying could pay twice.
@@ -651,6 +744,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   // and safely unwrap only mppx-installed wrappers.
   ;(wrappedFetch as WrappedFetch)[MPPX_FETCH_WRAPPER] = baseFetch
   if (identity) (wrappedFetch as WrappedFetch)[MPPX_FETCH_IDENTITY] = identity
+  if (SpendGate.configured(spendConfig))
+    (wrappedFetch as WrappedFetch)[MPPX_FETCH_SPEND] = spendConfig
   return wrappedFetch as from.Fetch<methods>
 }
 
@@ -702,7 +797,7 @@ export declare namespace from {
      * hostname, mapped to that realm, such as `{ 'https://api.example.com': 'MPP Payment' }`.
      */
     trustedTempoProofRealms?: ProofRealm.TrustedRealms | undefined
-  }
+  } & SpendGate.Config
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (
     input: RequestInfo | URL,
@@ -980,9 +1075,14 @@ function createPaymentResponsePayload<
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
+  requirement?: Spend.Requirement | undefined
   response: response
 }): PaymentResponsePayload<methods, response> {
+  const { requirement, response } = parameters
+  const receipt = response instanceof Response ? Spend.readReceipt(response) : undefined
   return Object.freeze({
+    ...(requirement ? { amount: requirement.amount.toString(), requirement } : {}),
+    ...(receipt ? { receipt } : {}),
     challenge: snapshotValue(parameters.challenge),
     credential: parameters.credential,
     init: snapshotInit(parameters.init),
@@ -1126,6 +1226,7 @@ function captureRequestBody<methods extends readonly Method.AnyClient[]>(
   input: RequestInfo | URL,
   init: from.RequestInit<methods> | undefined,
   headers: Headers,
+  signal?: AbortSignal | undefined,
 ): Promise<string | undefined> | undefined {
   if (!(input instanceof Request) || init?.body !== undefined || !input.body || input.bodyUsed)
     return undefined
@@ -1135,10 +1236,13 @@ function captureRequestBody<methods extends readonly Method.AnyClient[]>(
       return undefined
   }
   try {
-    return input
-      .clone()
-      .text()
-      .catch(() => undefined)
+    const copy = input.clone()
+    // A stream its producer leaves open never ends: with `signal`, an abort cancels the read.
+    const body =
+      signal && copy.body
+        ? new Response(copy.body.pipeThrough(new TransformStream(), { signal }))
+        : copy
+    return body.text().catch(() => undefined)
   } catch {
     return undefined
   }
@@ -1161,6 +1265,11 @@ function getCallerHeaders(input: RequestInfo | URL, headers: HeadersInit | undef
 /** Returns the identity runner of an mppx fetch wrapper, if it has one. @internal */
 export function identityOf(fetch: typeof globalThis.fetch): IdentityClient.Client | undefined {
   return (fetch as WrappedFetch)[MPPX_FETCH_IDENTITY]
+}
+
+/** Returns the spending options of an mppx fetch wrapper, if it sets any. @internal */
+export function spendConfigOf(fetch: typeof globalThis.fetch): SpendGate.Config | undefined {
+  return (fetch as WrappedFetch)[MPPX_FETCH_SPEND]
 }
 
 /** @internal */
@@ -1227,10 +1336,12 @@ async function resolveCredential(
   mi: Method.AnyClient,
   context: unknown,
   attempt?: MethodResponse.Attempt | { origin: string } | undefined,
+  constraints?: SpendHooks.Constraints | undefined,
 ): Promise<string> {
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+  if (constraints) SpendHooks.constrain(parameters, constraints)
   if (attempt?.origin) MethodResponse.attachOrigin(parameters, attempt.origin)
   if (attempt && 'prepare' in attempt) MethodResponse.attachAttempt(mi, parameters, attempt)
   return mi.createCredential(parameters as never)
@@ -1399,4 +1510,16 @@ export function skippedChallengeCount(response: unknown): number {
   return Challenge.countUnsupportedCredentialHeaders(
     response.headers.get(Constants.Headers.wwwAuthenticate),
   )
+}
+
+/**
+ * Keys a payment retry by its Challenge. Not `Challenge.serialize`: an MCP Challenge carried as JSON
+ * may hold values a header can't, and its display-only `description` reads differently from a
+ * header (`\u2014` is the text `u2014`) than from JSON.
+ *
+ * @internal
+ */
+export function retryKey(challenge: Challenge.Challenge): string {
+  const { description: _description, ...rest } = challenge
+  return Json.canonicalize(rest)
 }

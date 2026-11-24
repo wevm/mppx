@@ -9,7 +9,17 @@ export function isAllowed(
   urlAuthority: string | undefined,
   allowNormalizedOnly = false,
 ): boolean {
-  if (allowedHosts === undefined) return true
+  if (allowedHosts === undefined) {
+    // Identity signatures bind the URL; an attacker-controlled Host cannot establish its audience.
+    return (
+      allowNormalizedOnly ||
+      !Object.keys(request.headers).some((name) =>
+        ['agent-id', 'agent-signature', 'signature', 'signature-input'].includes(
+          name.toLowerCase(),
+        ),
+      )
+    )
+  }
   if (typeof urlAuthority !== 'string' || urlAuthority.length === 0) return false
   const authorities: string[] = [urlAuthority]
   const names = new Set<string>()

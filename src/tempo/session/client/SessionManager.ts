@@ -244,6 +244,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return origin
   }
 
+  // Spending options accept only charges, so a fetch that sets them cannot pay for sessions.
+  if (Fetch.spendConfigOf(config.fetch))
+    throw new TypeError(
+      'SessionManager: the fetch sets spending options (maxPayment, authorize, funders or tokens), which accept only charges. Pass a fetch without them.',
+    )
   const inheritedIdentity = Fetch.identityOf(config.fetch)
   const rawFetch = Fetch.unwrapFetch(config.fetch)
   config.fetch = async (input, init) => {
@@ -470,7 +475,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         use && use.challengesReceived > 0 && challenge.id === runtime.lastChallenge?.id
       const isSameRetryChallenge =
         isRepeatedRetryChallenge &&
-        Challenge.serialize(challenge) === Challenge.serialize(runtime.lastChallenge!)
+        Fetch.retryKey(challenge) === Fetch.retryKey(runtime.lastChallenge!)
       if (use) use.challengesReceived++
       if (isSameRetryChallenge) return undefined
       if (!commitReferencedChannel(challenge)) {

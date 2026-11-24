@@ -1,4 +1,4 @@
-import { Rlp } from 'ox'
+import { Rlp, Signature } from 'ox'
 import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
@@ -174,6 +174,64 @@ describe('tempo subscription key authorization', () => {
       )
     },
   )
+
+  test('normalizes high-s authorization signatures when signing', async () => {
+    const request = parseRequest()
+    const keyAuthorization = await signSubscriptionKeyAuthorization({
+      accessKey,
+      account: {
+        async sign({ hash }) {
+          const { r, s, yParity } = Signature.fromHex(await rootAccount.sign({ hash }))
+          return Signature.toHex({
+            r,
+            s: 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n - s,
+            yParity: yParity === 0 ? 1 : 0,
+          })
+        },
+      },
+      challengeId,
+      chainId: 4217,
+      request,
+    })
+    if (!keyAuthorization) throw new Error('expected key authorization')
+
+    const result = verifySubscriptionKeyAuthorization({
+      accessKey,
+      challengeId,
+      chainId: 4217,
+      payload: {
+        signature: KeyAuthorization.serialize(keyAuthorization),
+        type: 'keyAuthorization',
+      },
+      request,
+    })
+    expect(result.source.address.toLowerCase()).toBe(rootAccount.address.toLowerCase())
+  })
+
+  test('rejects high-s authorization signatures', async () => {
+    const request = parseRequest()
+    const payload = await createPayload(request)
+    const authorization = KeyAuthorization.deserialize(payload.signature)
+    const [authorizationTuple] = KeyAuthorization.toTuple(authorization)
+    if (authorization.signature?.type !== 'secp256k1')
+      throw new Error('Expected a secp256k1 authorization signature')
+    const { r, s, yParity } = authorization.signature.signature
+    const highS = Signature.toHex({
+      r,
+      s: 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n - s,
+      yParity: yParity === 0 ? 1 : 0,
+    })
+
+    expect(() =>
+      verifySubscriptionKeyAuthorization({
+        accessKey,
+        challengeId,
+        chainId: 4217,
+        payload: { ...payload, signature: Rlp.fromHex([authorizationTuple, highS]) },
+        request,
+      }),
+    ).toThrow('keyAuthorization signature is invalid')
+  })
 
   test('builds wallet allowed calls from the subscription request', () => {
     const request = parseRequest()

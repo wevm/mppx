@@ -5,6 +5,8 @@ import * as Challenge from '../../Challenge.js'
 import * as PendingSettlement from '../../client/internal/PendingSettlement.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
+import * as SpendGate from '../../client/internal/SpendGate.js'
+import * as SpendHooks from '../../client/internal/SpendHooks.js'
 import * as Credential from '../../Credential.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
@@ -47,6 +49,10 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  * Payment challenges are handled whether they arrive as payment-required
  * errors or as tool results carrying payment-required metadata. Calling
  * `wrap()` again replaces the payment configuration.
+ *
+ * `maxPayment`, `authorize`, `funders` and `tokens` limit its payments as they do on
+ * `Mppx.create`. Set them here: an mppx fetch with spending options refuses the tool calls this
+ * client pays itself.
  *
  * @example
  * ```ts
@@ -130,7 +136,7 @@ export declare namespace wrap {
      * own a realm, so these signatures are refused unless their realm is listed here.
      */
     trustedTempoProofRealms?: readonly string[] | undefined
-  }
+  } & SpendGate.Config
 
   type McpClient<
     client extends Pick<Client, 'callTool'> = Pick<Client, 'callTool'>,
@@ -170,13 +176,15 @@ export function isPaymentRequiredError(
 async function createCredential(
   challenge: Challenge.Challenge,
   config: {
+    /** What the client's spending options let the method do, when they checked this payment. */
+    constraints?: SpendHooks.Constraints | undefined
     context?: unknown
     method: Method.AnyClient
     /** Stops resuming a pending Zone settlement once the call is aborted. */
     signal?: AbortSignal | undefined
   },
 ): Promise<string> {
-  const { context, method, signal } = config
+  const { constraints, context, method, signal } = config
 
   if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
@@ -184,12 +192,12 @@ async function createCredential(
     method.context && context !== undefined ? method.context.parse(context) : undefined
   // A Zone withdrawal still settling is resumed for this challenge, not paid again.
   return PendingSettlement.resume(
-    () =>
-      method.createCredential(
-        parsedContext !== undefined
-          ? { challenge, context: parsedContext }
-          : ({ challenge } as never),
-      ),
+    () => {
+      const parameters =
+        parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+      if (constraints) SpendHooks.constrain(parameters, constraints)
+      return method.createCredential(parameters as never)
+    },
     { attempts: maxPaymentAttempts, signal },
   )
 }
@@ -208,6 +216,8 @@ function createPaymentAwareCallTool<methods extends Methods>(
 ): (params: CallToolParams, call: CallToolCall) => Promise<CallToolResult> {
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const paymentPreferences = AcceptPayment.resolve(methods, config.paymentPreferences)
+  // Validated here, so invalid spending options fail at `wrap()`.
+  const spender = SpendGate.from(SpendGate.pick(config))
 
   const retryWithPayment = async (
     params: CallToolParams,
@@ -250,11 +260,24 @@ function createPaymentAwareCallTool<methods extends Methods>(
       if (!approved) throw new Error('Payment declined.', { cause })
     }
 
-    const credential = await createCredential(selected.challenge, {
-      context: call.context,
-      method: selected.method,
-      signal: call.requestOptions?.signal,
-    })
+    const signal = call.requestOptions?.signal
+    // Spending limits, authorization and funding run before any signing work.
+    const spend = SpendGate.payment(spender, selected.challenge, signal, selected.method)
+    let credential: string
+    try {
+      credential = await spend.track((constraints) =>
+        createCredential(selected.challenge, {
+          constraints,
+          context: call.context,
+          method: selected.method,
+          signal,
+        }),
+      )
+    } catch (error) {
+      // A no-op once the credential committed it.
+      await spend.release()
+      throw error
+    }
     const parsed = Credential.deserialize(credential)
 
     try {

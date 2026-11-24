@@ -418,6 +418,51 @@ describe('precompile client session', () => {
     expect(paidRequests).toEqual([{ body: 'request-body', header: 'preserved', method: 'POST' }])
   })
 
+  test('refuses session challenges while spending options are set', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '100' })
+    const credentials: (string | null)[] = []
+    const rawFetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      credentials.push(authorization)
+      return authorization ? new Response('opened') : paymentRequired(challenge)
+    }
+    const signTransaction = vi.spyOn(account, 'signTransaction')
+    const signTypedData = vi.spyOn(account, 'signTypedData')
+    const authorize = vi.fn()
+    const fund = vi.fn(async () => {})
+    const pay = (options: Pick<Fetch.from.Config, 'authorize' | 'funders' | 'maxPayment'>) =>
+      Fetch.from({
+        ...options,
+        fetch: rawFetch,
+        methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '300' })],
+      })('https://example.com/resource')
+    try {
+      for (const options of [
+        { maxPayment: [{ network: `eip155:${chainId}`, asset: descriptor.token, amount: 1_000n }] },
+        { authorize },
+        { funders: [{ fund }] },
+      ])
+        await expect(pay(options)).rejects.toMatchObject({
+          name: 'PaymentLimitExceededError',
+          reason: 'intent',
+        })
+      // No channel was opened, signed or sent.
+      expect(credentials).toEqual([null, null, null])
+      expect(signTransaction).not.toHaveBeenCalled()
+      expect(signTypedData).not.toHaveBeenCalled()
+      expect(authorize).not.toHaveBeenCalled()
+      expect(fund).not.toHaveBeenCalled()
+
+      // Without spending options, the session opens as before.
+      expect(await (await pay({})).text()).toBe('opened')
+      expect(deserialize(credentials.at(-1)!).action).toBe('open')
+      expect(signTransaction.mock.calls.length + signTypedData.mock.calls.length).toBeGreaterThan(0)
+    } finally {
+      signTransaction.mockRestore()
+      signTypedData.mockRestore()
+    }
+  })
+
   test('retries an open rejected by a replacement challenge', async () => {
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
     const replacement = { ...challenge, id: 'replacement-id' }
