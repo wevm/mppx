@@ -584,3 +584,14 @@ test('failed replay cleanup preserves the settlement error and its claim', async
     log.mockRestore()
   }
 })
+
+test('rejects unmigrated custom replay stores before configuring a payment method', () => {
+  const { releaseClaim: _, ...store } = Store.memory()
+  expect(() =>
+    tempo.charge({
+      store,
+      currency: '0x20c0000000000000000000000000000000000000',
+      recipient: '0x0000000000000000000000000000000000000001',
+    }),
+  ).toThrow('Migrate the store before use')
+})
