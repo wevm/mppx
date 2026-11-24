@@ -155,7 +155,7 @@ export function readReceipt(response: Response): PaymentReceipt | undefined {
   const x402 = response.headers.get(x402_Types.paymentResponseHeader)
   if (x402 === null || x402.length > maxReceiptHeaderLength) return undefined
   try {
-    const binary = atob(x402.trim().replaceAll('-', '+').replaceAll('_', '/'))
+    const binary = atob(x402.trim().replace(/-/g, '+').replace(/_/g, '/'))
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
     const json: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
     const parsed = x402_Types.SettleResponseSchema.safeParse(json)
