@@ -33,7 +33,8 @@ updates:
       day: monday
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 1
+    # Majors wait for a person; leave room for the minor/patch group beside them.
+    open-pull-requests-limit: 5
     groups:
       github-actions:
         patterns:
