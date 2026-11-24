@@ -26,6 +26,26 @@ export function withNonce(
 }
 
 /**
+ * Whether the challenge carries a per-issuance nonce (`_mpp_nonce`, or `_mppx_nonce` from
+ * earlier releases). Reads `opaque` when present, the value the challenge HMAC covers, and
+ * `meta` only otherwise.
+ */
+export function hasNonce(challenge: {
+  meta?: Record<string, string> | undefined
+  opaque?: string | undefined
+}): boolean {
+  const { meta, opaque } = challenge
+  const has = (value: Record<string, unknown> | undefined) =>
+    typeof value?.[nonceKey] === 'string' || typeof value?.[legacyNonceKey] === 'string'
+  if (opaque === undefined) return has(meta)
+  try {
+    return has(PaymentRequest.deserialize(opaque) as Record<string, unknown>)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Reserved metadata key marking a challenge whose method accepts some of its credentials for a
  * while after it expires. Bound by the challenge HMAC, so a challenge issued without it, by an
  * earlier release or with no grace configured, never gets that grace.

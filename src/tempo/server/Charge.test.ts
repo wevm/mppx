@@ -1,4 +1,4 @@
-import { Challenge, Credential, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempoOffers } from 'mppx/server'
 import { P256, type Hex, WebAuthnP256 } from 'ox'
@@ -403,7 +403,6 @@ describe('tempo', () => {
 
     test('a pull-settled transaction cannot be redeemed again as a hash credential', async () => {
       const handler = Mppx_server.create({
-        challengeNonce: false,
         methods: [
           tempo_server.charge({
             getClient: () => client,
@@ -415,19 +414,15 @@ describe('tempo', () => {
         realm,
         secretKey,
       })
-      // Without a nonce, the same route and expires give the same Challenge ID.
-      const expires = new Date(Date.now() + 60_000).toISOString()
-      const issue = async (expiresAt = expires) => {
-        const result = await handler.charge({ amount: '1', decimals: 6, expires: expiresAt })(
+      const issue = async () => {
+        const result = await handler.charge({ amount: '1', decimals: 6 })(
           new Request('https://example.com'),
         )
         if (result.status !== 402) throw new Error('expected payment challenge')
         return Challenge.fromResponse(result.challenge, { methods: [tempo_client.charge()] })
       }
       const challenge = await issue()
-      const same = await issue()
-      const other = await issue(new Date(Date.now() + 120_000).toISOString())
-      expect(same.id).toBe(challenge.id)
+      const other = await issue()
       expect(other.id).not.toBe(challenge.id)
 
       const prepared = await prepareTransactionRequest(client, {
@@ -456,7 +451,7 @@ describe('tempo', () => {
       await expect(
         handler.verifyCredential(
           Credential.serialize(
-            Credential.from({ challenge: same, payload: { type: 'hash' as const, hash } }),
+            Credential.from({ challenge, payload: { type: 'hash' as const, hash } }),
           ),
         ),
       ).rejects.toThrow('Transaction hash has already been used')
@@ -467,6 +462,74 @@ describe('tempo', () => {
           ),
         ),
       ).rejects.toThrow('memo is not bound to this challenge')
+    })
+
+    test('a challenge without a nonce accepts only pull credentials', async () => {
+      const handler = Mppx_server.create({
+        challengeNonce: false,
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      // Without a nonce, the same route and expires give every requester the same Challenge ID.
+      const expires = new Date(Date.now() + 60_000).toISOString()
+      const issue = async () => {
+        const result = await handler.charge({ amount: '1', decimals: 6, expires })(
+          new Request('https://example.com'),
+        )
+        if (result.status !== 402) throw new Error('expected payment challenge')
+        return Challenge.fromResponse(result.challenge, { methods: [tempo_client.charge()] })
+      }
+      const challenge = await issue()
+      expect((await issue()).id).toBe(challenge.id)
+
+      const sign = async () => {
+        const prepared = await prepareTransactionRequest(client, {
+          account: accounts[1],
+          calls: [
+            tokenTransferCall({
+              amount: 1_000_000n,
+              to: accounts[0].address,
+              token: asset,
+              memo: Attribution.encode({ challengeId: challenge.id, serverId: realm }),
+            }),
+          ],
+          nonceKey: 'expiring',
+        } as never)
+        prepared.gas = prepared.gas! + 5_000n
+        return signTransaction(client, prepared as never)
+      }
+
+      // Anyone holding the shared Challenge could present this push payment's hash.
+      const { transactionHash: hash } = await sendRawTransactionSync(client, {
+        serializedTransaction: await sign(),
+      })
+      const rejected = await handler
+        .verifyCredential(
+          Credential.serialize(
+            Credential.from({ challenge, payload: { type: 'hash' as const, hash } }),
+          ),
+        )
+        .catch((error: unknown) => error)
+      expect(rejected).toBeInstanceOf(Errors.InvalidChallengeError)
+      expect((rejected as Error).message).toContain('need a challenge with a nonce')
+
+      const receipt = await handler.verifyCredential(
+        Credential.serialize(
+          Credential.from({
+            challenge,
+            payload: { type: 'transaction' as const, signature: await sign() },
+          }),
+        ),
+      )
+      expect(receipt.status).toBe('success')
     })
 
     test('rejects a split payment for both challenges across replay-marker expiry', async () => {

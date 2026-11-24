@@ -1112,9 +1112,9 @@ export declare namespace create {
      * Challenge gets a unique ID. Route matching ignores it.
      *
      * With `false`, requests for the same route with the same `expires` get the same Challenge
-     * ID, so a payment bound to that ID (such as a Tempo push payment's attribution memo) can be
-     * redeemed by whichever requester presents it first. Turn it off only when each Challenge
-     * is otherwise unique (for example, a per-request `expires` or `meta`).
+     * ID, so a payment bound to that ID could be redeemed by whichever requester presents it
+     * first. Tempo charge then accepts only pull (`transaction`) credentials and rejects push
+     * (`hash`, Zone) and proof credentials, so set its `supportedModes` to `['pull']`.
      * @default true
      */
     challengeNonce?: boolean | undefined

@@ -27,6 +27,7 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 import {
   BroadcastOutcomeUnknownError,
   CredentialReplayedError,
+  InvalidChallengeError,
   PaymentError,
   PaymentExpiredError,
   VerificationFailedError,
@@ -571,6 +572,13 @@ export function charge<const parameters extends charge.Parameters>(
     request: Method.VerifyContext<typeof Methods.charge>['request'],
     context: CredentialContext,
   ) {
+    // Push and proof credentials are bound only to the Challenge ID. Without a per-issuance
+    // nonce, every requester of the route can hold that ID and redeem someone else's payment.
+    if (context.payload.type !== 'transaction' && !ChallengeMeta.hasNonce(credential.challenge))
+      throw new InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: `${context.payload.type} credentials need a challenge with a nonce`,
+      })
     switch (context.payload.type) {
       case 'hash': {
         const { payer, receipt, sender, transfers } = await validateHashCredential(
