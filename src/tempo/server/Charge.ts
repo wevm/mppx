@@ -27,6 +27,7 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 import {
   BroadcastOutcomeUnknownError,
   CredentialReplayedError,
+  InvalidChallengeError,
   PaymentError,
   PaymentExpiredError,
   VerificationFailedError,
@@ -132,6 +133,10 @@ export function charge<const parameters extends charge.Parameters>(
     (relay
       ? Store.memory()
       : fallbackStore('tempo.charge'))) as Store.AtomicStore<charge.StoreItemMap>
+  if (!relay && rawStore.tryClaim && !rawStore.releaseClaim)
+    throw new Error(
+      'Tempo charge requires a custom store with atomic releaseClaim support. Migrate the store before use.',
+    )
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
   const {
     maxInFlightReservations: legacyMaxInFlightReservations,
@@ -326,9 +331,11 @@ export function charge<const parameters extends charge.Parameters>(
       transfers,
       validateSender,
     })
+    // A push payment (hash credential) must carry the challenge-bound attribution memo.
     assertChallengeBoundMemo(matchedLogs, {
       challengeId: challenge.id,
       realm: challenge.realm,
+      required: true,
     })
     // The payer is the account the matched transfers debited, not the submitter.
     // Settlement-contract transfers are funded by the transaction sender.
@@ -399,8 +406,18 @@ export function charge<const parameters extends charge.Parameters>(
       throw new MismatchError('Payment verification failed: Zone withdrawal not found.', {
         senderTag,
       })
-    if (!isChallengeBound([withdrawal.memo], { challengeId: challenge.id, realm: challenge.realm }))
-      throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+    // A push payment (Zone withdrawal) must carry the challenge-bound attribution memo.
+    if (
+      !isChallengeBound([withdrawal.memo], {
+        challengeId: challenge.id,
+        realm: challenge.realm,
+        required: true,
+      })
+    )
+      throw new MismatchError(
+        'Payment verification failed: memo is not bound to this challenge.',
+        {},
+      )
 
     // A credential presented after its challenge expired is accepted only for a withdrawal
     // that settled before then; see `zoneCredentialGraceMs`.
@@ -558,6 +575,13 @@ export function charge<const parameters extends charge.Parameters>(
     request: Method.VerifyContext<typeof Methods.charge>['request'],
     context: CredentialContext,
   ) {
+    // Push and proof credentials are bound only to the Challenge ID. Without a per-issuance
+    // nonce, every requester of the route can hold that ID and redeem someone else's payment.
+    if (context.payload.type !== 'transaction' && !ChallengeMeta.hasNonce(credential.challenge))
+      throw new InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: `${context.payload.type} credentials need a challenge with a nonce`,
+      })
     switch (context.payload.type) {
       case 'hash': {
         const { payer, receipt, sender, transfers } = await validateHashCredential(
@@ -855,6 +879,9 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           let broadcastAttempted = false
+          // Set when the node already held the transaction from someone else,
+          // so an unknown outcome is not remembered as this server's own.
+          let duplicateElsewhere = false
           let finalHash: `0x${string}` | undefined
           // Set only after this request claims the final hash, so cleanup never
           // releases a marker that another request holds.
@@ -1027,6 +1054,11 @@ export function charge<const parameters extends charge.Parameters>(
                   ? Number.POSITIVE_INFINITY
                   : transaction.validBefore * 1_000 + 2_000
               let receipt: TransactionReceipt
+              // Set when the node already held the transaction this server
+              // sent: someone else (another server, or anyone who saw it
+              // pending) may have submitted it, so its receipt pays this
+              // challenge only with an attribution memo bound to it.
+              let submittedElsewhere = false
               try {
                 receipt = await withDeadline(
                   sendRawTransactionSync(client, {
@@ -1038,6 +1070,12 @@ export function charge<const parameters extends charge.Parameters>(
                 )
               } catch (broadcastError) {
                 if (!isAmbiguousBroadcastError(broadcastError)) throw broadcastError
+                // A duplicate of this server's own earlier broadcast for this
+                // challenge, whose outcome was unknown, is not someone else's.
+                submittedElsewhere =
+                  isDuplicateBroadcastError(broadcastError) &&
+                  !(await isOwnBroadcast(store, finalHash, challenge.id))
+                duplicateElsewhere = submittedElsewhere
                 // The node may have accepted the transaction, so poll for its receipt.
                 const timeout = Math.min(deadline, validUntil) - Date.now()
                 let recovered: TransactionReceipt | undefined
@@ -1062,6 +1100,10 @@ export function charge<const parameters extends charge.Parameters>(
                     validBefore: transaction.validBefore,
                   })
                 receipt = recovered
+                // The record of this server's own broadcast may have landed while
+                // polling, written by the request whose outcome was unknown.
+                if (submittedElsewhere && (await isOwnBroadcast(store, finalHash, challenge.id)))
+                  submittedElsewhere = duplicateElsewhere = false
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
@@ -1073,11 +1115,15 @@ export function charge<const parameters extends charge.Parameters>(
               assertChallengeBoundMemo(matchedLogs, {
                 challengeId: challenge.id,
                 realm: challenge.realm,
+                required: submittedElsewhere && !isFeePayerTx,
               })
               if (receipt.transactionHash.toLowerCase() !== finalHash.toLowerCase())
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
+              // The transfer has settled: a marker left behind expires on its own and
+              // must not fail the payment.
+              await store.delete(getBroadcastStoreKey(finalHash)).catch(() => {})
               return toReceipt(receipt.transactionHash, fundingCurrency)
             }
 
@@ -1122,6 +1168,25 @@ export function charge<const parameters extends charge.Parameters>(
                 console.error('mppx: sponsor budget cleanup error', budgetError)
               }
             }
+            // Remember a broadcast of this server's own whose outcome is
+            // unknown, for this challenge only, so a retry that finds the node
+            // already holding it recovers it as this server's own. It is written
+            // before the claims are released, so a concurrent retry that takes a
+            // released claim already sees it.
+            // A duplicate of someone else's submission leaves no record: this
+            // server has no evidence it sent the transaction.
+            if (error instanceof BroadcastOutcomeUnknownError && finalHash && !duplicateElsewhere)
+              await store
+                .put(getBroadcastStoreKey(finalHash), {
+                  challengeId: challenge.id,
+                  expires:
+                    Math.max(
+                      expires ? Date.parse(expires) : Date.now() + 3_600_000,
+                      (transaction.validBefore ?? 0) * 1_000,
+                    ) + 60_000,
+                  type: 'mppx:broadcast',
+                })
+                .catch(() => {})
             // Only a successful settlement consumes the credential. A signed
             // transaction can be mined at most once, so a retry re-broadcasts it
             // and recovers the receipt instead of being rejected as a replay.
@@ -1152,7 +1217,11 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]: number | SponsorBudget.State | Store.ReplayMarker
+    [key: `mppx:charge:${string}`]:
+      | number
+      | SponsorBudget.State
+      | Store.ReplayMarker
+      | BroadcastMarker
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -1771,6 +1840,30 @@ async function tryClaimHash(
   return Store.tryClaim(store, getHashStoreKey(hash), expires, owner)
 }
 
+/** A broadcast this server sent for a challenge whose outcome was unknown. */
+type BroadcastMarker = { challengeId: string; expires: number; type: 'mppx:broadcast' }
+
+function getBroadcastStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
+  return `mppx:charge:broadcast:${hash.toLowerCase()}`
+}
+
+/** Whether this server broadcast `hash` for `challengeId` on an earlier attempt. */
+async function isOwnBroadcast(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  hash: `0x${string}`,
+  challengeId: string,
+): Promise<boolean> {
+  const marker: unknown = await store.get(getBroadcastStoreKey(hash)).catch(() => null)
+  if (typeof marker !== 'object' || marker === null) return false
+  const { challengeId: recorded, expires, type } = marker as Partial<BroadcastMarker>
+  return (
+    type === 'mppx:broadcast' &&
+    recorded === challengeId &&
+    typeof expires === 'number' &&
+    expires > Date.now()
+  )
+}
+
 /** Whether a live replay marker holds `hash`, read without claiming it. */
 async function isHashUsed(
   store: Store.AtomicStore<charge.StoreItemMap>,
@@ -1917,6 +2010,24 @@ function isAmbiguousBroadcastError(error: unknown): boolean {
   return false
 }
 
+/**
+ * Whether a failed synchronous broadcast says the node already holds the
+ * transaction ("already known", "known transaction" or Tempo's
+ * `ExpiringNonceReplay`), matched anywhere in the `cause` chain.
+ */
+function isDuplicateBroadcastError(error: unknown): boolean {
+  for (let cause = error; cause; cause = (cause as { cause?: unknown }).cause) {
+    if (typeof cause !== 'object') return false
+    const { message } = cause as Record<string, unknown>
+    if (
+      typeof message === 'string' &&
+      /\balready ?known\b|\bknown transaction\b|\bExpiringNonceReplay\b/i.test(message)
+    )
+      return true
+  }
+  return false
+}
+
 /** Rejects with `error` if `promise` has not settled by `deadline` (epoch ms). */
 async function withDeadline<value>(
   promise: Promise<value>,
@@ -1949,45 +2060,58 @@ function toReceipt(reference: string, fundingCurrency?: string) {
 
 function assertChallengeBoundMemo(
   matchedLogs: readonly TransferLog[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ) {
   const memos = matchedLogs.map((log) => (log.kind === 'memo' ? log.args.memo : undefined))
-  // The transfer already settled to the recipient, so another payment would not help.
   if (!isChallengeBound(memos, parameters))
-    throw new CredentialReplayedError({ reason: 'memo is not bound to this challenge' })
+    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
 function assertChallengeBoundCallMemo(
   matchedCalls: readonly { memo?: string | undefined }[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ) {
   const memos = matchedCalls.map((call) => call.memo as `0x${string}` | undefined)
   if (!isChallengeBound(memos, parameters))
     throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
+/** The challenge a payment's attribution memo binds to. */
+type ChallengeBinding = {
+  challengeId: string
+  realm: string
+  /**
+   * Whether the payment must carry an attribution memo bound to this challenge. Push payments
+   * (hash and Zone credentials) are already settled, so only the memo ties them to one
+   * challenge: without it, the same settlement could pay for another challenge. Pull
+   * payments (transaction credentials) are broadcast by the server from the client's own
+   * signed transaction, which the chain accepts once, so their memo is optional.
+   */
+  required?: boolean | undefined
+}
+
 /**
- * Whether matched payment transfers carry a challenge-bound attribution memo and
- * no conflicting attribution. Otherwise, a split payment could authorize another
- * challenge after the first challenge's replay marker expires. Unmatched transfers
- * cannot establish the binding; plain transfers and non-MPP memos remain allowed.
+ * Whether the matched payment transfers are bound to this challenge. Any attribution memo
+ * that is not for this challenge's realm and ID is rejected, whatever the credential type:
+ * a pull payment carrying another realm's attribution memo could later be presented to that
+ * realm as a push payment, and that realm keeps no record of it. With required (push
+ * payments), at least one matched transfer must also carry an attribution memo bound to this
+ * challenge. Otherwise (pull payments) plain transfers and memos not in attribution format
+ * are accepted.
  * @internal
  */
 function isChallengeBound(
   memos: readonly (`0x${string}` | undefined)[],
-  parameters: { challengeId: string; realm: string },
+  parameters: ChallengeBinding,
 ): boolean {
   let bound = false
   for (const memo of memos) {
     if (!memo || !Attribution.isMppMemo(memo)) continue
-    if (
-      !Attribution.verifyServer(memo, parameters.realm) ||
-      !Attribution.verifyChallengeBinding(memo, parameters.challengeId)
-    )
-      return false
+    if (!Attribution.verifyServer(memo, parameters.realm)) return false
+    if (!Attribution.verifyChallengeBinding(memo, parameters.challengeId)) return false
     bound = true
   }
-  return bound
+  return bound || !parameters.required
 }
 
 /** @internal */

@@ -16,6 +16,7 @@ import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 import * as PendingSettlement from './PendingSettlement.js'
 import * as ProofRealm from './ProofRealm.js'
+import * as Mcp_protocol from './protocols/Mcp.js'
 import { adapterOwnsPayment } from './protocols/Mcp.js'
 import * as SpendGate from './SpendGate.js'
 import * as SpendHooks from './SpendHooks.js'
@@ -357,8 +358,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     }
     const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     let response = first.response
-    // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
-    const identityHeaders = first.headers
+    // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too,
+    // replaced by those a paid attempt was resent with, so a later paid attempt carries them.
+    let identityHeaders = first.headers
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
     if ((init as (RequestInit & { [skipPayment]?: boolean }) | undefined)?.[skipPayment])
@@ -374,6 +376,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       ...fetchInit
     } = (transportRequest ?? {}) as Record<string, unknown>
 
+    // Whether the first request already carried a Payment credential the caller attached.
+    const initialCredentialSent =
+      hasPaymentCredential(callerHeaders) ||
+      Mcp_protocol.hasCredential(transportRequest as RequestInit | undefined)
     let challenge: Challenge.Challenge | undefined
     let challenges: readonly Challenge.Challenge[] | undefined
     let mi: methods[number] | undefined
@@ -384,6 +390,16 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
         challenges = await transport.getChallenges(response, transportRequest as never)
+        // invalid-challenge answering a sent credential can mean it was already settled
+        // (a replay): paying the fresh Challenge would pay twice, so the 402 is final. That
+        // holds for a credential the caller attached to the first request too.
+        if (
+          (retry > 0 || initialCredentialSent) &&
+          (await isInvalidChallengeResponse(response, transportRequest as RequestInit | undefined))
+        ) {
+          await settleAttempt(preparedCredential, { challenges, response, status: 'rejected' })
+          return response
+        }
 
         const candidates = AcceptPayment.selectChallengeCandidates(
           challenges,
@@ -556,6 +572,13 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                   createCredential,
                 })
               : undefined)
+          // `onChallenge` declined the payment: pay nothing and hand back the 402.
+          if (onChallengeCredential === false) {
+            await spend.release()
+            await settleAttempt(preparedCredential, { challenges, response, status: 'rejected' })
+            preparedCredential = undefined
+            return response
+          }
           credential = onChallengeCredential ?? (await createCredential())
           prepared = preparedCredential
           if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
@@ -599,7 +622,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             transactionHash: MethodResponse.getTransactionHash(selected.method, credential),
           })
         try {
-          ;({ response } = await send(
+          ;({ response, headers: identityHeaders } = await send(
             paymentInput,
             {
               ...transport.setCredential(
@@ -779,14 +802,18 @@ export declare namespace from {
     maxPaymentRetries?: number | undefined
     /** Array of methods to use. */
     methods: methods
-    /** Called when a 402 challenge is received and no event handler supplies a credential. */
+    /**
+     * Called when a 402 challenge is received and no event handler supplies a credential, before
+     * paying. Return a credential to send it, `undefined` to pay with the method's default
+     * credential, or `false` to decline: nothing is paid and the 402 response is returned.
+     */
     onChallenge?:
       | ((
           challenge: Challenge.Challenge,
           helpers: {
             createCredential: (context?: AnyContextFor<methods>) => Promise<string>
           },
-        ) => Promise<string | undefined>)
+        ) => Promise<string | undefined | false>)
       | undefined
     /** Filters and sorts supported challenges before credential creation. */
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
@@ -1522,4 +1549,29 @@ export function skippedChallengeCount(response: unknown): number {
 export function retryKey(challenge: Challenge.Challenge): string {
   const { description: _description, ...rest } = challenge
   return Json.canonicalize(rest)
+}
+
+/**
+ * Whether a payment-required response carries an `invalid-challenge` problem, as an HTTP
+ * problem document or in an MCP payment-required error, read without consuming it.
+ */
+async function isInvalidChallengeResponse(
+  response: unknown,
+  request: RequestInit | undefined,
+): Promise<boolean> {
+  if (!(response instanceof globalThis.Response)) return false
+  if (await Mcp_protocol.isInvalidChallenge(response, request)) return true
+  if (!response.headers.get('Content-Type')?.includes('application/problem+json')) return false
+  try {
+    const problem = (await response.clone().json()) as { type?: unknown }
+    return problem.type === 'https://paymentauth.org/problems/invalid-challenge'
+  } catch {
+    return false
+  }
+}
+
+/** Whether request headers carry a Payment credential (`Authorization: Payment` or `Payment-Authorization`). */
+function hasPaymentCredential(headers: Headers): boolean {
+  if (headers.get(Constants.Headers.paymentAuthorization)) return true
+  return /(^|,)\s*Payment\s+\S/i.test(headers.get(Constants.Headers.authorization) ?? '')
 }

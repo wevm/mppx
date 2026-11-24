@@ -1,5 +1,6 @@
 import { Challenge, Credential, Method, PaymentRequest, z } from 'mppx'
 import { Mppx } from 'mppx/server'
+import { Base64 } from 'ox'
 import { expect, test, vi } from 'vp/test'
 
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -42,9 +43,45 @@ test.each([undefined, options.expires])('fresh IDs even with expiration %s', asy
   )
   expect(new Set(challenges.map((challenge) => challenge.id)).size).toBe(10)
   for (const challenge of challenges) {
-    expect(challenge.meta?._mppx_nonce).toBeTypeOf('string')
+    expect(challenge.meta?._mpp_nonce).toBeTypeOf('string')
     expect(Challenge.verify(challenge, { secretKey })).toBe(true)
   }
+})
+
+test('nonce is 16 random bytes, base64url without padding', async () => {
+  const { mppx } = setup()
+  const challenge = await mppx.challenge.mock.charge(options)
+  expect(challenge.meta?._mpp_nonce).toMatch(/^[A-Za-z0-9_-]{22}$/)
+  expect(Base64.toBytes(challenge.meta!._mpp_nonce!)).toHaveLength(16)
+})
+
+test('challengeNonce: false issues challenges without a nonce', async () => {
+  const { method, verify } = setup()
+  const mppx = Mppx.create({ challengeNonce: false, methods: [method], realm, secretKey })
+  const first = await mppx.challenge.mock.charge(options)
+  const second = await mppx.challenge.mock.charge(options)
+  expect(first.meta).toBeUndefined()
+  expect(first.opaque).toBeUndefined()
+  expect(first.id).toBe(second.id)
+  expect((await mppx.charge(options)(request(first))).status).toBe(200)
+  expect(verify).toHaveBeenCalledTimes(1)
+})
+
+test('legacy _mppx_nonce in echoed metadata is ignored for route matching', async () => {
+  const { mppx, verify } = setup()
+  const challenge = Challenge.from({
+    ...options,
+    method: 'mock',
+    intent: 'charge',
+    meta: { order: 'one', _mppx_nonce: 'legacy' },
+    realm,
+    request: { amount: '1', currency: 'USD' },
+    secretKey,
+  })
+  expect(
+    (await mppx.charge({ ...options, meta: { order: 'one' } })(request(challenge))).status,
+  ).toBe(200)
+  expect(verify).toHaveBeenCalledTimes(1)
 })
 
 test('HTTP issuance preserves metadata and accepts echoed credentials', async () => {
@@ -79,7 +116,7 @@ test('nonce changes invalidate the challenge HMAC', async () => {
   const modified = Challenge.from({
     ...challenge,
     opaque: undefined,
-    meta: { ...challenge.meta, _mppx_nonce: 'changed' },
+    meta: { ...challenge.meta, _mpp_nonce: 'changed' },
   })
   expect(Challenge.verify(modified, { secretKey })).toBe(false)
   expect((await mppx.charge(options)(request(modified))).status).toBe(402)

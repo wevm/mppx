@@ -4094,11 +4094,11 @@ describe('compose', () => {
     expect(challenges).toHaveLength(2)
     expect(PaymentRequest.deserialize(challenges[0]!.opaque!)).toEqual({
       route: 'a',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
     expect(PaymentRequest.deserialize(challenges[1]!.opaque!)).toEqual({
       route: 'b',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
 
     const secondChallenge = challenges[1]!
@@ -4888,11 +4888,11 @@ describe('cross-route credential replay via scope binding flaw', () => {
 
     expect(PaymentRequest.deserialize(routeAChallenge.opaque!)).toEqual({
       route: 'a',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
     expect(PaymentRequest.deserialize(routeBChallenge.opaque!)).toEqual({
       route: 'b',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
 
     const credential = Credential.from({
@@ -4975,7 +4975,7 @@ describe('cross-route credential replay via scope binding flaw', () => {
     const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
     expect(PaymentRequest.deserialize(routeAChallenge.opaque!)).toEqual({
       _mppx_scope: 'GET /a',
-      _mppx_nonce: expect.any(String),
+      _mpp_nonce: expect.any(String),
     })
 
     const credential = Credential.from({
@@ -6239,7 +6239,7 @@ describe('challenge', () => {
     })
 
     expect(challenge.description).toBe('Order #123')
-    expect(challenge.meta).toEqual({ checkout_id: 'chk_abc', _mppx_nonce: expect.any(String) })
+    expect(challenge.meta).toEqual({ checkout_id: 'chk_abc', _mpp_nonce: expect.any(String) })
   })
 
   test('challenge binds scope via reserved opaque metadata', async () => {
@@ -6254,7 +6254,7 @@ describe('challenge', () => {
       scope: 'GET /premium',
     })
 
-    expect(challenge.meta).toEqual({ _mppx_scope: 'GET /premium', _mppx_nonce: expect.any(String) })
+    expect(challenge.meta).toEqual({ _mppx_scope: 'GET /premium', _mpp_nonce: expect.any(String) })
   })
 
   test('scope throws when it conflicts with reserved meta scope', async () => {
