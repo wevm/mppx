@@ -124,6 +124,51 @@ test('a body digest mismatch gets 402 invalid-challenge with a fresh challenge',
   expect(verify).toHaveBeenCalledTimes(1)
 })
 
+test('a body digest mismatch answers with the problem, not the payment page', async () => {
+  const method = Method.toServer(
+    Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string(), currency: z.string() }),
+      },
+    }),
+    {
+      html: {
+        config: {},
+        content: '<script></script>',
+        formatAmount: (request: Record<string, unknown>) => `$${request.amount}`,
+        text: undefined,
+        theme: undefined,
+      },
+      verify: vi.fn() as never,
+    },
+  )
+  const handler = Mppx.create({ methods: [method], realm, secretKey }).charge(options)
+  const challenge = Challenge.from({
+    ...options,
+    digest: BodyDigest.compute('{"prompt":"hello"}'),
+    intent: 'charge',
+    method: 'mock',
+    realm,
+    request: { amount: '1', currency: 'USD' },
+    secretKey,
+  })
+  const result = await handler(
+    new Request(url, {
+      body: '{"prompt":"other"}',
+      headers: { Accept: 'text/html', Authorization: authorization(challenge) },
+      method: 'POST',
+    }),
+  )
+  if (result.status !== 402) throw new Error('expected a challenge')
+  expect(result.challenge.headers.get('Content-Type')).toBe('application/problem+json')
+  expect((await problem(result.challenge)).type).toBe(
+    'https://paymentauth.org/problems/invalid-challenge',
+  )
+})
+
 test('a body digest is checked against the raw request bytes', async () => {
   const { handler, verify } = setup()
   const body = '\ufeff{"prompt":"hello"}'

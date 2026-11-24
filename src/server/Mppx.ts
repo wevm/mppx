@@ -1695,12 +1695,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           retryChallenge: challenge,
           submittedChallenge: credential.challenge,
         })
+        // No payment page: the credential may already have paid, so clients need the
+        // machine-readable problem to stop rather than pay the fresh Challenge.
         const response = await emitChallenge({
           challenge,
           credential,
           request: parsedRequest,
           error,
-          html: method.html,
         })
         return { challenge: response, status: 402 }
       }
