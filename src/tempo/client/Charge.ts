@@ -22,6 +22,7 @@ import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as FundsMoved from '../../client/internal/FundsMoved.js'
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
+import * as SpendHooks from '../../client/internal/SpendHooks.js'
 import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
@@ -127,6 +128,13 @@ export function charge(parameters: charge.Parameters = {}) {
 
     async createCredential(credentialParameters) {
       const { challenge, context } = credentialParameters
+      // Set when the client's spending options checked this payment.
+      const spend = SpendHooks.of(credentialParameters)
+      // Spending checks were skipped to resume an outstanding withdrawal: never pay anew.
+      const notResumable = () =>
+        new Error(
+          'The Zone withdrawal this challenge resumes is no longer outstanding. Retry the request to pay it.',
+        )
       assertChallengePolicy(parameters, caps, challenge.request)
       // Sign on the pinned chain when the challenge omits a chain ID.
       const challengeChainId = challenge.request.methodDetails?.chainId
@@ -187,12 +195,14 @@ export function charge(parameters: charge.Parameters = {}) {
         // challenge expires; an expired challenge would invite another payment.
         const outstanding = findZoneWithdrawal(options)
         if (outstanding) return resumeZoneCredential(options, outstanding)
+        if (spend?.resume) throw notResumable()
         // With nothing outstanding, an expired challenge can't be paid: its server refuses any
         // credential for it, so a payment on Tempo would be lost.
         if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
         if (settlesBeforeExpiry(challenge.expires, parameters.zone.settlementTimeoutMs))
           return createZoneCredential(options)
       }
+      if (spend?.resume) throw notResumable()
 
       const defaultAccount = getAccount(client, context)
       const resolveAccount = async (operation: AccountResolution.ResolveAccountOperation) =>
@@ -251,7 +261,9 @@ export function charge(parameters: charge.Parameters = {}) {
         context?.autoSwap ?? parameters.autoSwap,
         AutoSwap.defaultCurrencies,
       )
-      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
+      // Spending options checked the charge currency, so under them the payment debits only that
+      // currency, never MACH.
+      const machineTokenEnabled = methodDetails?.machineTokenEnabled === true && !spend
 
       const machineTokenCandidate = machineTokenEnabled
         ? MachineTokenCharge.getRoute({ chainId, currency, transfers })
@@ -301,6 +313,13 @@ export function charge(parameters: charge.Parameters = {}) {
               maxAmountIn: autoSwap.maxAmountIn,
             })
           : undefined
+        // A swap debits another token, by up to its slippage, which spending options never
+        // checked: refuse it. A funder can swap into the charge currency beforehand.
+        if (spend && swapCalls)
+          throw new Errors.PaymentLimitExceededError({
+            limit: spend.limit,
+            reason: 'asset',
+          })
 
         // Without MACH or the charge currency the payment can only revert, so say where to buy MACH.
         if (machineTokenUnpayable && !autoSwap) {
@@ -451,7 +470,22 @@ export function charge(parameters: charge.Parameters = {}) {
     }
     return promise
   }
-  return MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash)
+  return SpendHooks.register(
+    MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash),
+    {
+      // The client's spending options refuse what this policy refuses before any funder runs.
+      assert: (challenge) =>
+        assertChallengePolicy(parameters, caps, challenge.request as ChargeRequest),
+      // A withdrawal already sent for this challenge was counted when it started.
+      resumes: (challenge) =>
+        hasZoneWithdrawal(
+          pendingZoneWithdrawals,
+          challenge as ZoneCredentialOptions['challenge'],
+          parameters.zone &&
+            (parameters.zone.zoneId ?? Zone.idFromChainId(parameters.zone.client.chain?.id ?? 0)),
+        ),
+    },
+  )
 }
 
 /**
@@ -594,6 +628,30 @@ function findZoneWithdrawal(options: ZoneCredentialOptions): PendingZoneWithdraw
     return entry
   }
   return undefined
+}
+
+/**
+ * Whether creating this challenge's credential resumes a withdrawal already started, as
+ * {@link findZoneWithdrawal} would find, rather than paying: its own, or one with the same terms
+ * that can still be redeemed and no call is waiting on. It only reads `pending`.
+ */
+function hasZoneWithdrawal(
+  pending: Map<string, PendingZoneWithdrawal>,
+  challenge: ZoneCredentialOptions['challenge'],
+  zoneId: number | undefined,
+): boolean {
+  if (zoneId === undefined || pending.size === 0) return false
+  if (pending.has(zoneWithdrawalKey(challenge))) return true
+  const terms = zoneTermsKey(challenge, zoneId)
+  if (terms === undefined) return false
+  for (const entry of pending.values())
+    if (
+      entry.terms === terms &&
+      isRedeemable(entry.challenge.expires) &&
+      (entry.redeemedLate || entry.waiters === 0)
+    )
+      return true
+  return false
 }
 
 /**

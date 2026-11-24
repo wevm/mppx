@@ -247,6 +247,53 @@ describe('tempo.charge client zone selection', () => {
     expect(budget.reserved().amount).toBe(0n)
   })
 
+  test.each([1_500_000n, 3_000_000n])(
+    'resumes an outstanding withdrawal on a later payment without counting it again (budget %s)',
+    async (total) => {
+      const calls: string[] = []
+      const budget = Budget.create({
+        total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: total },
+      })
+      const mppx = Mppx_client.create({
+        authorize: budget,
+        fetch: vi.fn() as never,
+        methods: [
+          tempo_client.charge({
+            getClient: () => l1,
+            zone: { client: failingZoneClient(calls, 'send') },
+          }),
+        ],
+        polyfill: false,
+      })
+      const c = await challenge()
+      const pay = async () => {
+        const response = new Response(null, {
+          headers: { 'WWW-Authenticate': Challenge.serialize(c) },
+          status: 402,
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+        try {
+          const result = mppx.createCredential(response).catch((error: unknown) => error)
+          await vi.advanceTimersByTimeAsync(30_000)
+          return await result
+        } finally {
+          vi.useRealTimers()
+        }
+      }
+
+      expect(await pay()).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+      const sent = calls.length
+      expect(budget.spent().amount).toBe(1_000_000n)
+
+      // The retry resumes the same withdrawal: the budget it is counted in neither blocks it
+      // nor counts it twice.
+      expect(await pay()).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+      expect(calls).toHaveLength(sent)
+      expect(budget.spent().amount).toBe(1_000_000n)
+      expect(budget.reserved().amount).toBe(0n)
+    },
+  )
+
   test('keeps a mined withdrawal charged to the budget when its sender tag cannot be read', async () => {
     const calls: string[] = []
     let sent = false

@@ -45,7 +45,7 @@ export type Requirement = Readonly<{
   protocol: 'mpp' | 'x402'
   /** Payment method, such as `tempo`, `evm` or `stripe`. */
   method: string
-  /** Payment intent, such as `charge`. */
+  /** Payment intent: `charge`, the only intent spending options accept. */
   intent: string
   /**
    * Network the payment is on: `eip155:<chainId>` when the challenge's `methodDetails.chainId`
@@ -54,14 +54,18 @@ export type Requirement = Readonly<{
   network: string
   /** Asset on `network`: a token address, or a Stripe currency such as `usd`. */
   asset: string
-  /**
-   * Atomic amount the credential pays. For `tempo/session` it is the per-request amount, or
-   * the increment of a voucher a streamed response asks for, and for `tempo/subscription` the
-   * amount per period.
-   */
+  /** Atomic amount the credential pays in all, `splits` included. */
   amount: bigint
-  /** Recipient named by the challenge. */
+  /**
+   * Payee the credential pays: the challenge's `recipient`, or for Stripe the Business Network
+   * profile (`methodDetails.networkId`) its Shared Payment Token is created for.
+   */
   recipient?: string | undefined
+  /**
+   * Other payees and their atomic shares, which the credential pays out of `amount`; `recipient`
+   * gets the rest.
+   */
+  splits?: readonly Readonly<{ recipient: string; amount: bigint }>[] | undefined
   /** Reference currency of `asset`, only when the client configures the token. */
   currency?: string | undefined
   /** Decimals of `asset`, only when the client configures the token. */
@@ -76,7 +80,10 @@ export type Plan = Readonly<{
 
 /** The paid request a hook runs for. */
 export type Context = Readonly<{
-  /** The selected challenge. Server data: never trust it for limits. */
+  /**
+   * A frozen copy of the selected challenge. Server data: never trust it for limits. The
+   * credential is signed only if the challenge is unchanged once every hook ran.
+   */
   challenge: Challenge.Challenge
   /** The request's abort signal, when it has one. */
   signal?: AbortSignal | undefined

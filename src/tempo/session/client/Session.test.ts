@@ -5,7 +5,6 @@ import { defineToken } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
-import * as Budget from '../../../client/Budget.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
@@ -350,138 +349,6 @@ describe('precompile client session', () => {
     expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
   })
 
-  test('counts streamed voucher increments against the spending options', async () => {
-    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
-    /** Opens with an SSE stream that asks for vouchers of 200, then 300. */
-    function stream(posted: bigint[]): typeof globalThis.fetch {
-      return async (_input, init) => {
-        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-        if (!authorization) return paymentRequired(challenge)
-        const payload = deserialize(authorization)
-        if (init?.method === 'POST') {
-          if (payload.action !== 'voucher') throw new Error('expected voucher')
-          posted.push(BigInt(payload.cumulativeAmount))
-          return new Response(null, { status: 204 })
-        }
-        if (payload.action !== 'open') throw new Error('expected open')
-        const needVoucher = (requiredCumulative: string) =>
-          Types.formatNeedVoucherEvent({
-            acceptedCumulative: '0',
-            channelId: payload.channelId,
-            deposit: '1000',
-            requiredCumulative,
-          })
-        return new Response(
-          [
-            Types.formatMessageEvent('first'),
-            needVoucher('200'),
-            Types.formatMessageEvent('second'),
-            needVoucher('300'),
-            Types.formatMessageEvent('third'),
-          ].join(''),
-          { headers: { 'content-type': 'text/event-stream' } },
-        )
-      }
-    }
-    const pay = (posted: bigint[], options: Pick<Fetch.from.Config, 'authorize' | 'maxPayment'>) =>
-      Fetch.from({
-        ...options,
-        fetch: stream(posted),
-        methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '1000' })],
-      })('https://example.com/stream', { headers: { accept: 'text/event-stream' } })
-
-    // The open pays 100, the first voucher 100 more, and the second would pass the budget.
-    const budget = Budget.create({
-      total: { network: `eip155:${chainId}`, asset: descriptor.token, amount: 250n },
-    })
-    const posted: bigint[] = []
-    const response = await pay(posted, { authorize: budget })
-    await expect(response.text()).rejects.toMatchObject({
-      name: 'PaymentLimitExceededError',
-      limit: 'budget',
-    })
-    expect(posted).toEqual([200n])
-    expect(budget.spent()).toMatchObject({ amount: 200n })
-    expect(budget.reserved()).toMatchObject({ amount: 0n })
-
-    // `maxPayment` applies to each increment.
-    const limited: bigint[] = []
-    const asset = { network: `eip155:${chainId}`, asset: descriptor.token }
-    const small = await pay(limited, { maxPayment: [{ ...asset, amount: 100n }] })
-    expect(await small.text()).toBe(
-      ['first', 'second', 'third'].map((data) => Types.formatMessageEvent(data)).join(''),
-    )
-    expect(limited).toEqual([200n, 300n])
-
-    // Without spending options, the stream pays every voucher as before.
-    const unlimited: bigint[] = []
-    await (await pay(unlimited, {})).text()
-    expect(unlimited).toEqual([200n, 300n])
-  })
-
-  test('a canceled stream body stops a voucher its spending options are still checking', async () => {
-    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
-    const posted: bigint[] = []
-    /** Opens with an SSE stream that asks for a voucher of 200 after its first message. */
-    const fetch: typeof globalThis.fetch = async (_input, init) => {
-      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-      if (!authorization) return paymentRequired(challenge)
-      const payload = deserialize(authorization)
-      if (init?.method === 'POST') {
-        if (payload.action !== 'voucher') throw new Error('expected voucher')
-        posted.push(BigInt(payload.cumulativeAmount))
-        return new Response(null, { status: 204 })
-      }
-      return new Response(
-        [
-          Types.formatMessageEvent('first'),
-          Types.formatNeedVoucherEvent({
-            acceptedCumulative: '0',
-            channelId: payload.channelId,
-            deposit: '1000',
-            requiredCumulative: '200',
-          }),
-          Types.formatMessageEvent('second'),
-        ].join(''),
-        { headers: { 'content-type': 'text/event-stream' } },
-      )
-    }
-    const budget = Budget.create({
-      total: { network: `eip155:${chainId}`, asset: descriptor.token, amount: 1000n },
-    })
-    const amounts: bigint[] = []
-    let resume!: () => void
-    const paused = new Promise<void>((resolve) => {
-      resume = resolve
-    })
-    const fund = vi.fn(async () => {})
-    const response = await Fetch.from({
-      // The voucher's authorization waits until the body is canceled.
-      async authorize(plan, context) {
-        if (amounts.push(plan.requirement.amount) > 1) await paused
-        return budget(plan, context)
-      },
-      fetch,
-      funders: [{ fund }],
-      methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '1000' })],
-    })('https://example.com/stream', { headers: { accept: 'text/event-stream' } })
-
-    const reader = response.body!.getReader()
-    await reader.read()
-    const next = reader.read()
-    await vi.waitFor(() => expect(amounts).toEqual([100n, 100n]))
-    const canceled = reader.cancel()
-    resume()
-    await canceled
-    await next
-
-    // Only the open was funded and counted: the voucher was neither signed nor sent.
-    expect(fund).toHaveBeenCalledTimes(1)
-    expect(posted).toEqual([])
-    expect(budget.spent()).toMatchObject({ amount: 100n })
-    expect(budget.reserved()).toMatchObject({ amount: 0n })
-  })
-
   test('tops up before signing plain HTTP vouchers through Fetch.from', async () => {
     const challenge = makeChallenge({
       suggestedDeposit: '100',
@@ -549,6 +416,51 @@ describe('precompile client session', () => {
     expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
     expect(new Set(vouchers).size).toBe(1)
     expect(paidRequests).toEqual([{ body: 'request-body', header: 'preserved', method: 'POST' }])
+  })
+
+  test('refuses session challenges while spending options are set', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '100' })
+    const credentials: (string | null)[] = []
+    const rawFetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      credentials.push(authorization)
+      return authorization ? new Response('opened') : paymentRequired(challenge)
+    }
+    const signTransaction = vi.spyOn(account, 'signTransaction')
+    const signTypedData = vi.spyOn(account, 'signTypedData')
+    const authorize = vi.fn()
+    const fund = vi.fn(async () => {})
+    const pay = (options: Pick<Fetch.from.Config, 'authorize' | 'funders' | 'maxPayment'>) =>
+      Fetch.from({
+        ...options,
+        fetch: rawFetch,
+        methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '300' })],
+      })('https://example.com/resource')
+    try {
+      for (const options of [
+        { maxPayment: [{ network: `eip155:${chainId}`, asset: descriptor.token, amount: 1_000n }] },
+        { authorize },
+        { funders: [{ fund }] },
+      ])
+        await expect(pay(options)).rejects.toMatchObject({
+          name: 'PaymentLimitExceededError',
+          reason: 'intent',
+        })
+      // No channel was opened, signed or sent.
+      expect(credentials).toEqual([null, null, null])
+      expect(signTransaction).not.toHaveBeenCalled()
+      expect(signTypedData).not.toHaveBeenCalled()
+      expect(authorize).not.toHaveBeenCalled()
+      expect(fund).not.toHaveBeenCalled()
+
+      // Without spending options, the session opens as before.
+      expect(await (await pay({})).text()).toBe('opened')
+      expect(deserialize(credentials.at(-1)!).action).toBe('open')
+      expect(signTransaction.mock.calls.length + signTypedData.mock.calls.length).toBeGreaterThan(0)
+    } finally {
+      signTransaction.mockRestore()
+      signTypedData.mockRestore()
+    }
   })
 
   test('retries an open rejected by a replacement challenge', async () => {

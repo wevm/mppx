@@ -13,6 +13,7 @@ import * as MethodChallenge from './internal/MethodChallenge.js'
 import * as MethodResponse from './internal/MethodResponse.js'
 import * as ProofRealm from './internal/ProofRealm.js'
 import * as SpendGate from './internal/SpendGate.js'
+import * as SpendHooks from './internal/SpendHooks.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
@@ -211,10 +212,7 @@ export function create<
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    authorize,
-    funders,
     identity,
-    maxPayment,
     maxPaymentRetries,
     onChallenge,
     orderChallenges,
@@ -222,7 +220,6 @@ export function create<
     acceptPaymentPolicy = polyfill && typeof globalThis.location !== 'undefined'
       ? 'same-origin'
       : 'always',
-    tokens,
     transport = Transport.http() as transport,
     trustedTempoProofRealms,
   } = config
@@ -237,7 +234,9 @@ export function create<
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
   const events = Fetch.createEventDispatcher<FlattenMethods<methods>, EventResponseOf<transport>>()
-  const spender = SpendGate.from(config)
+  // Rewrapping a limited mppx fetch keeps its spending options, so its limits still apply.
+  const spendConfig = SpendGate.inherit(config, config.fetch && Fetch.spendConfigOf(config.fetch))
+  const spender = SpendGate.from(spendConfig)
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
     FlattenMethods<methods>
@@ -245,10 +244,7 @@ export function create<
   const config_fetch = {
     acceptPayment,
     acceptPaymentPolicy,
-    ...(authorize && { authorize }),
-    ...(funders && { funders }),
-    ...(maxPayment !== undefined && { maxPayment }),
-    ...(tokens && { tokens }),
+    ...spendConfig,
     ...(config.fetch && { fetch: rawFetch }),
     ...(identityClient && { identity: identityClient }),
     eventDispatcher: events,
@@ -380,7 +376,12 @@ export function create<
       const selectedChallenge = challenge
       const selectedMethod = mi
       // A canceled request starts no authorization, funding or signing for this payment.
-      const spend = SpendGate.payment(spender, selectedChallenge, requestSignal(options?.request))
+      const spend = SpendGate.payment(
+        spender,
+        selectedChallenge,
+        requestSignal(options?.request),
+        selectedMethod,
+      )
       const createPreparedCredential = memoizeCreateCredential<FlattenMethods<methods>>(
         async (context) => {
           try {
@@ -391,12 +392,13 @@ export function create<
             const createCredential = memoizeCreateCredential<FlattenMethods<methods>>(
               (overrideContext) =>
                 // Spending limits, authorization and funding run before signing.
-                (checkedCredential = spend.track(() =>
+                (checkedCredential = spend.track((constraints) =>
                   createCredentialForMethod(
                     selectedChallenge,
                     selectedMethod,
                     overrideContext ?? context,
                     responseUrl?.origin,
+                    constraints,
                   ),
                 )),
             )
@@ -1039,10 +1041,12 @@ async function createCredentialForMethod(
   mi: Method.AnyClient,
   context: unknown,
   origin?: string,
+  constraints?: SpendHooks.Constraints | undefined,
 ): Promise<string> {
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   const parameters =
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
+  if (constraints) SpendHooks.constrain(parameters, constraints)
   if (origin) MethodResponse.attachOrigin(parameters, origin)
   return mi.createCredential(parameters as never)
 }

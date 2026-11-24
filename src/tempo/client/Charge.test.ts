@@ -665,6 +665,97 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('pays only the charge currency under spending options, never MACH or a swap', async () => {
+    vi.resetModules()
+    mockMachFeeSelection()
+    const chainId = 42431
+    const machineTokenCalls = [{ data: '0x1234', to: '0x4444444444444444444444444444444444444444' }]
+    let swapCalls: readonly object[] | undefined = [
+      { data: '0x5678', to: '0x5555555555555555555555555555555555555555' },
+    ]
+    const findMachineTokenRoute = vi.fn(async () => ({ calls: machineTokenCalls }))
+    const prepareTransactionRequest = vi.fn(
+      async (_client: unknown, _parameters: { calls: readonly unknown[] }) => ({}),
+    )
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+    vi.doMock('../internal/machine-token-charge.js', () => ({
+      findRoute: findMachineTokenRoute,
+      getRoute: vi.fn(() => ({ calls: machineTokenCalls })),
+      isMachineToken: vi.fn(() => false),
+    }))
+    vi.doMock('../internal/auto-swap.js', () => ({
+      defaultCurrencies: [currency],
+      findCalls: vi.fn(async () => swapCalls),
+      resolve: vi.fn(() => ({ tokenIn: [otherCurrency], slippage: 1 })),
+    }))
+
+    try {
+      // Imported after the mocks, so the client and the method share one module graph.
+      const { charge: chargeWithMockedFunding } = await import('./Charge.js')
+      const { create } = await import('../../client/Mppx.js')
+      const client = createClient({
+        account,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedFunding({ account, autoSwap: true, getClient: () => client })
+      const offer = createChallenge({
+        amount: '1',
+        chainId,
+        feePayer: true,
+        machineTokenEnabled: true,
+        supportedModes: ['pull', 'push'],
+      })
+      const response = () =>
+        new Response(null, {
+          headers: { 'WWW-Authenticate': Challenge.serialize(offer) },
+          status: 402,
+        })
+      const limited = create({
+        fetch: vi.fn() as never,
+        maxPayment: [{ network: `eip155:${chainId}`, asset: currency, amount: 1_000_000n }],
+        methods: [method],
+        polyfill: false,
+      })
+
+      // A swap would debit another token, which the limit never checked.
+      await expect(limited.createCredential(response())).rejects.toMatchObject({
+        name: 'PaymentLimitExceededError',
+        reason: 'asset',
+      })
+      expect(signTransaction).not.toHaveBeenCalled()
+
+      // With the currency held, it pays in that currency.
+      swapCalls = undefined
+      await limited.createCredential(response())
+      expect(findMachineTokenRoute).not.toHaveBeenCalled()
+      expect(prepareTransactionRequest.mock.calls[0]?.[1].calls).toEqual([
+        expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+      ])
+
+      // Without spending options, the MACH route comes first as before.
+      await create({
+        fetch: vi.fn() as never,
+        methods: [method],
+        polyfill: false,
+      }).createCredential(response())
+      expect(findMachineTokenRoute).toHaveBeenCalledOnce()
+      expect(prepareTransactionRequest.mock.calls[1]?.[1].calls).toEqual(machineTokenCalls)
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.doUnmock('../internal/machine-token-charge.js')
+      vi.doUnmock('../internal/auto-swap.js')
+      vi.resetModules()
+    }
+  })
+
   test('passes machine-token calls to a scoped account resolver', async () => {
     vi.resetModules()
     const chainId = 42431

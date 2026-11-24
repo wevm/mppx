@@ -671,8 +671,12 @@ export declare namespace ZoneSettlementPendingError {
  * per-asset limit, or raise the limit.
  *
  * `reason` is `credential` when a credential an event handler or `onChallenge` returned cannot
- * be read or pays a challenge the response did not offer, so it was not used; `limit` is then
- * `maxPayment` when it is set, else `budget`.
+ * be read or bound to exactly one challenge the response offered, so it was not used; `limit` is
+ * then `maxPayment` when it is set, else `budget`.
+ *
+ * `reason` is `intent` when the selected challenge is not a `charge`: spending options bound one
+ * payment, while a session or subscription keeps paying after it is checked, so the client refuses
+ * every other intent while `maxPayment`, `authorize` or `funders` is set.
  */
 export class PaymentLimitExceededError extends Error {
   override readonly name = 'PaymentLimitExceededError'
@@ -689,8 +693,10 @@ export class PaymentLimitExceededError extends Error {
       reason === 'amount'
         ? `Payment exceeds ${name}, so no credential was created.`
         : reason === 'credential'
-          ? `Credential cannot be checked against ${name}: it is unreadable or pays a challenge the response did not offer, so it was not used.`
-          : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
+          ? `Credential cannot be checked against ${name}: it is unreadable or pays no single challenge the response offered, so it was not used.`
+          : reason === 'intent'
+            ? `Payment intent cannot be checked against ${name}: spending options accept only charges, so no credential was created.`
+            : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
     )
     this.limit = limit
     this.reason = reason
@@ -702,10 +708,11 @@ export declare namespace PaymentLimitExceededError {
   type Limit = 'maxPayment' | 'budget'
   /**
    * `amount`: over the limit. `asset`: the limit cannot count the payment's asset. `credential`:
-   * a credential an event handler or `onChallenge` returned cannot be read, or pays a challenge
-   * the response did not offer, so its payment cannot be checked.
+   * a credential an event handler or `onChallenge` returned cannot be read, or pays no single
+   * challenge the response offered, so its payment cannot be checked. `intent`: the challenge is
+   * not a `charge`, such as a session or subscription, which a limit cannot bound.
    */
-  type Reason = 'amount' | 'asset' | 'credential'
+  type Reason = 'amount' | 'asset' | 'credential' | 'intent'
 
   type Options = {
     /** The limit that refused the payment. */
