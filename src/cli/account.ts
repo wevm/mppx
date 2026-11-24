@@ -35,14 +35,35 @@ function assertSecretToolAvailable(
   if (error && isMissingCommand(error, 'secret-tool')) throw keyringUnavailableError(error)
 }
 
+/**
+ * Formats one command line for `security -i`, which splits stdin lines into arguments with
+ * quote and backslash escaping. Rejects newlines, which would end the command line early.
+ */
+function securityCommandLine(args: string[]) {
+  return args
+    .map((arg) => {
+      if (/[\r\n]/.test(arg)) throw new Error('Keychain values cannot contain line breaks.')
+      return `"${arg.replace(/["\\]/g, '\\$&')}"`
+    })
+    .join(' ')
+}
+
+/** Runs a command without a shell, optionally writing `input` to its stdin. */
 export function execCommand(
   command: string,
   args: string[],
+  input?: string,
 ): Promise<{ stdout: string; stderr: string; error: Error | null }> {
   return new Promise((resolve) => {
-    child.execFile(command, args, { timeout: commandTimeoutMs() }, (error, stdout, stderr) => {
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
-    })
+    const proc = child.execFile(
+      command,
+      args,
+      { timeout: commandTimeoutMs() },
+      (error, stdout, stderr) => {
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
+      },
+    )
+    if (input !== undefined) proc.stdin?.end(input)
   })
 }
 
@@ -144,15 +165,12 @@ export function createKeychain(account = 'main') {
       const platform = os.platform()
       if (platform === 'darwin') {
         await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
-        const { error } = await execCommand('security', [
-          'add-generic-password',
-          '-s',
-          service,
-          '-a',
-          account,
-          '-w',
-          value,
-        ])
+        // Send the command on stdin (`security -i`) so the secret never appears in process arguments.
+        const { error } = await execCommand(
+          'security',
+          ['-i'],
+          `${securityCommandLine(['add-generic-password', '-s', service, '-a', account, '-w', value])}\n`,
+        )
         if (error) throw error
         return
       }
