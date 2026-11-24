@@ -164,13 +164,11 @@ export function createKeychain(account = 'main') {
     async set(value: string): Promise<void> {
       const platform = os.platform()
       if (platform === 'darwin') {
-        await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
         // Send the command on stdin (`security -i`) so the secret never appears in process arguments.
-        const { error } = await execCommand(
-          'security',
-          ['-i'],
-          `${securityCommandLine(['add-generic-password', '-s', service, '-a', account, '-w', value])}\n`,
-        )
+        // Build it before deleting so a rejected value leaves the existing item in place.
+        const input = `${securityCommandLine(['add-generic-password', '-s', service, '-a', account, '-w', value])}\n`
+        await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
+        const { error } = await execCommand('security', ['-i'], input)
         if (error) throw error
         return
       }

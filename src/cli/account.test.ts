@@ -87,3 +87,16 @@ test('macOS keychain stores the private key without passing it in process argume
   expect(argv).not.toContain(privateKey.slice(2))
   expect((await resolveAccount(accountName)).address).toBe(privateKeyToAccount(privateKey).address)
 })
+
+test('macOS keychain rejects line breaks before touching an existing item', async () => {
+  const accountName = 'main\nadd-generic-password -s mppx -a other -w 0x00'
+  const item = path.join(dir, `item-${Buffer.from(accountName).toString('hex')}`)
+  fs.writeFileSync(item, 'existing')
+
+  await expect(createKeychain(accountName).set(generatePrivateKey())).rejects.toThrow(
+    'Keychain values cannot contain line breaks.',
+  )
+
+  expect(fs.readFileSync(item, 'utf8')).toBe('existing')
+  expect(fs.existsSync(path.join(dir, 'argv.log'))).toBe(false)
+})
