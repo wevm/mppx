@@ -1,4 +1,8 @@
 version: 2
+
+# Patch and minor updates are grouped; a major update opens its own pull
+# request, so a breaking release holds back only itself. Security updates are
+# grouped separately and are not held to the weekly schedule.
 updates:
   - package-ecosystem: npm
     directory: /
@@ -11,8 +15,13 @@ updates:
     groups:
       npm-production:
         dependency-type: production
+        update-types: [minor, patch]
       npm-development:
         dependency-type: development
+        update-types: [minor, patch]
+      npm-security:
+        applies-to: security-updates
+        patterns: ['*']
 
   - package-ecosystem: github-actions
     directories:
@@ -28,3 +37,4 @@ updates:
       github-actions:
         patterns:
           - '*'
+        update-types: [minor, patch]
