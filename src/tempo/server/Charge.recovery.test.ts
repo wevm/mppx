@@ -657,6 +657,59 @@ test('a duplicate whose receipt never appeared is not remembered as its own', as
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
 
+test('an unknown outcome records its own broadcast before releasing its replay claims', async () => {
+  const { broadcast, state, store } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  const order: string[] = []
+  const originalPut = store.put
+  const originalRelease = store.releaseClaim
+  store.put = vi.fn(async (...args: Parameters<typeof store.put>) => {
+    if (String(args[0]).includes(':broadcast:')) order.push('record')
+    return originalPut.apply(store, args)
+  }) as typeof store.put
+  store.releaseClaim = vi.fn(async (...args: Parameters<typeof store.releaseClaim>) => {
+    order.push('release')
+    return originalRelease.apply(store, args)
+  }) as typeof store.releaseClaim
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  expect(order[0]).toBe('record')
+  expect(order).toContain('release')
+})
+
+test('a duplicate whose own broadcast record appears while polling settles as its own', async () => {
+  // A concurrent retry can see "already known" before the first attempt's broadcast record is
+  // visible; once its receipt arrives, the record written meanwhile makes it this server's own.
+  const { broadcast, finalHash, state, store } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  await broadcast().catch(() => {})
+  const key = `mppx:charge:broadcast:${finalHash().toLowerCase()}`
+  const record = await store.get(key)
+  expect(record).toMatchObject({ type: 'mppx:broadcast' })
+  await store.delete(key)
+  const originalGet = store.get
+  let reads = 0
+  store.get = vi.fn(async (...args: Parameters<typeof store.get>) => {
+    if (args[0] === key && reads++ === 0) {
+      await store.put(key, record as never)
+      return null
+    }
+    return originalGet.apply(store, args)
+  }) as typeof store.get
+  state.error = alreadyKnown
+  state.outcome = 'pending'
+  const receipt = await broadcast()
+  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+})
+
 test('a failed broadcast record delete does not fail a settled payment', async () => {
   const { broadcast, finalHash, onPaymentSuccess, signatureHashKey, store } = await setup({
     sponsored: false,

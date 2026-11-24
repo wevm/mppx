@@ -1095,6 +1095,10 @@ export function charge<const parameters extends charge.Parameters>(
                     validBefore: transaction.validBefore,
                   })
                 receipt = recovered
+                // The record of this server's own broadcast may have landed while
+                // polling, written by the request whose outcome was unknown.
+                if (submittedElsewhere && (await isOwnBroadcast(store, finalHash, challenge.id)))
+                  submittedElsewhere = duplicateElsewhere = false
               }
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
@@ -1159,20 +1163,11 @@ export function charge<const parameters extends charge.Parameters>(
                 console.error('mppx: sponsor budget cleanup error', budgetError)
               }
             }
-            // Only a successful settlement consumes the credential. A signed
-            // transaction can be mined at most once, so a retry re-broadcasts it
-            // and recovers the receipt instead of being rejected as a replay.
-            const cleanup = await Promise.allSettled([
-              ...(claimedFinalHash ? [releaseHashUse(store, claimedFinalHash, owner)] : []),
-              releaseHashUse(store, hash, owner),
-            ])
-            if (cleanup.some((result) => result.status === 'rejected'))
-              console.error(
-                'mppx: replay claim cleanup failed; claims remain consumed until expiry',
-              )
             // Remember a broadcast of this server's own whose outcome is
             // unknown, for this challenge only, so a retry that finds the node
-            // already holding it recovers it as this server's own.
+            // already holding it recovers it as this server's own. It is written
+            // before the claims are released, so a concurrent retry that takes a
+            // released claim already sees it.
             // A duplicate of someone else's submission leaves no record: this
             // server has no evidence it sent the transaction.
             if (error instanceof BroadcastOutcomeUnknownError && finalHash && !duplicateElsewhere)
@@ -1187,6 +1182,17 @@ export function charge<const parameters extends charge.Parameters>(
                   type: 'mppx:broadcast',
                 })
                 .catch(() => {})
+            // Only a successful settlement consumes the credential. A signed
+            // transaction can be mined at most once, so a retry re-broadcasts it
+            // and recovers the receipt instead of being rejected as a replay.
+            const cleanup = await Promise.allSettled([
+              ...(claimedFinalHash ? [releaseHashUse(store, claimedFinalHash, owner)] : []),
+              releaseHashUse(store, hash, owner),
+            ])
+            if (cleanup.some((result) => result.status === 'rejected'))
+              console.error(
+                'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+              )
             if (broadcastAttempted) throw error
             throw await explainMachineTokenFailure(error, {
               amount,
