@@ -48,15 +48,16 @@ export type Requirement = Readonly<{
   /** Payment intent, such as `charge`. */
   intent: string
   /**
-   * Network the payment is on: `eip155:<chainId>` when the challenge names a chain, otherwise
-   * the method name (such as `stripe`).
+   * Network the payment is on: `eip155:<chainId>` when the challenge's `methodDetails.chainId`
+   * names the chain the method signs on, otherwise the method name (such as `stripe`).
    */
   network: string
   /** Asset on `network`: a token address, or a Stripe currency such as `usd`. */
   asset: string
   /**
-   * Atomic amount the credential pays. For `tempo/session` it is the per-request amount, and
-   * for `tempo/subscription` the amount per period.
+   * Atomic amount the credential pays. For `tempo/session` it is the per-request amount, or
+   * the increment of a voucher a streamed response asks for, and for `tempo/subscription` the
+   * amount per period.
    */
   amount: bigint
   /** Recipient named by the challenge. */

@@ -419,7 +419,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           canReusePrevious = sameAttempt && !settled
         }
         preparedCredential = canReusePrevious ? previousCredential : undefined
-        // Credential this round's spending limits already cover.
+        // This round's payment, and the credential its spending checks already cover.
+        const spend = SpendGate.payment(
+          spender,
+          selectedChallenge,
+          resolveRequestSignal(input, init),
+        )
         let checkedCredential: Promise<string> | undefined
         const createCredential = memoizeCreateCredential(
           async (overrideContext?: AnyContextFor<methods>) => {
@@ -437,12 +442,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             const credentialContext = overrideContext ?? context
             if (!MethodChallenge.has(selected.method)) {
               // Spending limits, authorization and funding run before any signing work.
-              const settlement = await spender.prepare?.(
-                selectedChallenge,
-                resolveRequestSignal(input, init),
-              )
-              // A Zone withdrawal still settling is resumed for this challenge, not paid again.
-              checkedCredential = SpendGate.track(
+              checkedCredential = spend.track(() =>
+                // A Zone withdrawal still settling is resumed for this challenge, not paid again.
                 PendingSettlement.resume(
                   () =>
                     resolveCredential(
@@ -453,7 +454,6 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                     ),
                   { attempts: maxPaymentRetries, signal: resolveRequestSignal(input, init) },
                 ),
-                settlement,
               )
               return checkedCredential
             }
@@ -474,17 +474,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
                 }),
             }
             // Spending limits, authorization and funding run before any signing work.
-            const settlement = await spender.prepare?.(
-              selectedChallenge,
-              resolveRequestSignal(input, init),
-            )
-            const promise = SpendGate.track(
+            const promise = spend.track(() =>
               attempt
                 .prepare()
                 .then(() =>
                   resolveCredential(selectedChallenge, selected.method, credentialContext, attempt),
                 ),
-              settlement,
             )
             checkedCredential = promise
             preparedCredential = {
@@ -497,39 +492,45 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             return promise
           },
         )
-        const eventCredential = await events.emit(
-          'challenge.received',
-          createChallengeReceivedPayload({
-            challenge: selectedChallenge,
-            challenges,
-            createCredential,
-            init,
-            input,
-            method: selected.method,
-            response,
-          }),
-        )
-        const onChallengeCredential =
-          eventCredential ??
-          (onChallenge
-            ? await onChallenge(challenge, {
-                createCredential,
-              })
-            : undefined)
-        const credential = onChallengeCredential ?? (await createCredential())
-        const prepared = preparedCredential
-        if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
-          await settleAttempt(prepared, { status: 'rejected' })
-          preparedCredential = undefined
+        let credential: string
+        let prepared: typeof preparedCredential
+        try {
+          const eventCredential = await events.emit(
+            'challenge.received',
+            createChallengeReceivedPayload({
+              challenge: selectedChallenge,
+              challenges,
+              createCredential,
+              init,
+              input,
+              method: selected.method,
+              response,
+            }),
+          )
+          const onChallengeCredential =
+            eventCredential ??
+            (onChallenge
+              ? await onChallenge(challenge, {
+                  createCredential,
+                })
+              : undefined)
+          credential = onChallengeCredential ?? (await createCredential())
+          prepared = preparedCredential
+          if (prepared && (await prepared.promise.catch(() => undefined)) !== credential) {
+            await settleAttempt(prepared, { status: 'rejected' })
+            preparedCredential = undefined
+          }
+          validateCredentialHeaderValue(credential)
+          // A credential an event handler or `onChallenge` made itself is checked before it is
+          // sent. It takes the reservation already prepared for this payment, so funders run once.
+          if (!checkedCredential || (await checkedCredential.catch(() => undefined)) !== credential)
+            await spend.commit()
+        } catch (error) {
+          // A no-op once a credential committed it.
+          await spend.release()
+          throw error
         }
         const effectiveContext = preparedCredential ? preparedCredential.context : context
-        validateCredentialHeaderValue(credential)
-        // A credential an event handler or `onChallenge` made itself is checked before it is sent.
-        if (
-          spender.prepare &&
-          (!checkedCredential || (await checkedCredential.catch(() => undefined)) !== credential)
-        )
-          (await spender.prepare(selectedChallenge, resolveRequestSignal(input, init))).commit()
         // Identity proofs bind to the Challenge the credential pays, which can be an earlier one
         // (a resumed Zone withdrawal) rather than the one just selected.
         const paidChallenge = credentialChallenge(credential, selectedChallenge)
@@ -635,6 +636,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             )
           }
           if (!response.ok) return response
+          const prepareSpend = spender.prepare
           return MethodResponse.handle(selected.method, {
             context: effectiveContext,
             challenge: selectedChallenge,
@@ -649,6 +651,18 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               : {}),
             response,
             signal: resolveRequestSignal(input, init),
+            // Payments the method makes while handling the response, such as streamed session
+            // vouchers, pass the same spending checks as the one that paid for it.
+            ...(prepareSpend && {
+              async spend(amount: bigint, create: () => Promise<string>) {
+                const settlement = await prepareSpend(
+                  selectedChallenge,
+                  resolveRequestSignal(input, init),
+                  amount,
+                )
+                return SpendGate.track(create(), settlement)
+              },
+            }),
           })
         }
       }

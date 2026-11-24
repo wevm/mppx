@@ -20,8 +20,8 @@ type EventResponseOf<transport extends Transport.AnyTransport> =
   | Response
   | Transport.ResponseOf<transport>
 const preparedPaymentMethods = new WeakMap<object, Method.AnyClient>()
-/** Runs a prepared payment's spending checks once, before any of its signing work. */
-const preparedPaymentSpend = new WeakMap<object, () => Promise<SpendGate.Settlement | undefined>>()
+/** A prepared payment's spending checks, run once before any of its signing work. */
+const preparedPaymentSpend = new WeakMap<object, SpendGate.Payment>()
 
 /**
  * A selected payment that can be inspected before its credential is created.
@@ -379,8 +379,7 @@ export function create<
 
       const selectedChallenge = challenge
       const selectedMethod = mi
-      let spend: Promise<SpendGate.Settlement | undefined> | undefined
-      const prepareSpend = () => (spend ??= Promise.resolve(spender.prepare?.(selectedChallenge)))
+      const spend = SpendGate.payment(spender, selectedChallenge)
       const createPreparedCredential = memoizeCreateCredential<FlattenMethods<methods>>(
         async (context) => {
           try {
@@ -389,20 +388,16 @@ export function create<
 
             let checkedCredential: Promise<string> | undefined
             const createCredential = memoizeCreateCredential<FlattenMethods<methods>>(
-              async (overrideContext) => {
+              (overrideContext) =>
                 // Spending limits, authorization and funding run before signing.
-                const settlement = await prepareSpend()
-                checkedCredential = SpendGate.track(
+                (checkedCredential = spend.track(() =>
                   createCredentialForMethod(
                     selectedChallenge,
                     selectedMethod,
                     overrideContext ?? context,
                     responseUrl?.origin,
                   ),
-                  settlement,
-                )
-                return checkedCredential
-              },
+                )),
             )
             const eventCredential = await events.emit(
               'challenge.received',
@@ -416,16 +411,13 @@ export function create<
             )
             const credential = eventCredential ?? (await createCredential())
             Fetch.validateCredentialHeaderValue(credential)
-            // A credential an event handler made itself is checked before it is returned, and
-            // frees a reservation made for mppx's own credential, which goes unused.
+            // A credential an event handler made itself is checked before it is returned. It
+            // takes the reservation already prepared for this payment, so funders run once.
             if (
-              spender.prepare &&
-              (!checkedCredential ||
-                (await checkedCredential.catch(() => undefined)) !== credential)
-            ) {
-              ;(await spend?.catch(() => undefined))?.release()
-              ;(await spender.prepare(selectedChallenge)).commit()
-            }
+              !checkedCredential ||
+              (await checkedCredential.catch(() => undefined)) !== credential
+            )
+              await spend.commit()
             await events.emit(
               'credential.created',
               createCredentialCreatedPayload({
@@ -437,6 +429,8 @@ export function create<
             )
             return credential
           } catch (error) {
+            // A no-op once a credential committed it.
+            await spend.release()
             await events.emit(
               'payment.failed',
               createPaymentFailedPayload({
@@ -462,7 +456,7 @@ export function create<
         },
       })
       preparedPaymentMethods.set(prepared, selectedMethod)
-      if (spender.prepare) preparedPaymentSpend.set(prepared, prepareSpend)
+      if (spender.prepare) preparedPaymentSpend.set(prepared, spend)
       return prepared
     } catch (error) {
       await events.emit(
@@ -522,7 +516,7 @@ export function create<
     )
 
     const paymentMethod = preparedPaymentMethods.get(payment) ?? payment.method
-    const prepareSpend = preparedPaymentSpend.get(payment)
+    const spend = preparedPaymentSpend.get(payment)
     const createRequestCredential = memoizeCreateCredential(async (context) => {
       await identityClient?.challenge(
         preparedHttp.response as Response,
@@ -530,7 +524,7 @@ export function create<
         preparedHttp.replayRequest.url,
       )
       // Method preparation can sign (such as opening a channel), so limits run first.
-      const settlement = await prepareSpend?.()
+      await spend?.prepare()
       try {
         if (MethodChallenge.has(paymentMethod))
           await MethodChallenge.handle(paymentMethod, {
@@ -547,7 +541,7 @@ export function create<
         return await payment.createCredential(context)
       } catch (error) {
         // A no-op once the created credential committed it.
-        settlement?.release()
+        await spend?.release()
         throw error
       }
     })

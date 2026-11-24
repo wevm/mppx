@@ -42,9 +42,16 @@ export type Spender = {
   /**
    * Checks `maxPayment`, runs `authorize` and the funders, and returns the settlement to commit
    * or release. `undefined` when no spending option is set, so payments run unchanged.
+   *
+   * `amount` replaces the challenge's amount for a payment the method makes on its own while
+   * handling a paid response, such as the increment of a streamed session voucher.
    */
   prepare:
-    | ((challenge: Challenge.Challenge, signal?: AbortSignal | undefined) => Promise<Settlement>)
+    | ((
+        challenge: Challenge.Challenge,
+        signal?: AbortSignal | undefined,
+        amount?: bigint | undefined,
+      ) => Promise<Settlement>)
     | undefined
 }
 
@@ -78,8 +85,10 @@ export function from(config: Config): Spender {
       }
     },
     prepare: enabled
-      ? async (challenge, signal) => {
-          const requirement = resolve(challenge)
+      ? async (challenge, signal, amount) => {
+          const resolved = resolve(challenge)
+          const requirement =
+            amount === undefined ? resolved : Object.freeze({ ...resolved, amount })
           if (maxPayment !== undefined) assertWithin(requirement, maxPayment)
           const context: Spend.Context = Object.freeze({
             challenge,
@@ -133,6 +142,63 @@ export function track(
       throw error
     },
   )
+}
+
+/** One payment's spending checks while its credential is chosen. */
+export type Payment = {
+  /** Runs the spending checks and funders, once. */
+  prepare(): Promise<Settlement | undefined>
+  /**
+   * Prepares the payment, then tracks the credential mppx creates for it, as {@link track} does,
+   * except that a failure keeps the reservation for a credential a handler returns instead.
+   */
+  track(create: () => Promise<string>): Promise<string>
+  /**
+   * Commits the payment for a credential mppx did not create. It reuses the prepared reservation,
+   * so funders run once, unless mppx's own credential already committed it.
+   */
+  commit(): Promise<void>
+  /** Frees the reservation when no credential is sent. A no-op once committed. */
+  release(): Promise<void>
+}
+
+/**
+ * Starts one payment for `challenge`. Its credential is mppx's own or one an event handler or
+ * `onChallenge` returns instead; either way `authorize` and the funders run at most once for it.
+ */
+export function payment(
+  spender: Spender,
+  challenge: Challenge.Challenge,
+  signal?: AbortSignal | undefined,
+): Payment {
+  let prepared: Promise<Settlement | undefined> | undefined
+  // Whether mppx's own credential committed the reservation.
+  let used = false
+  const prepare = () => (prepared ??= Promise.resolve(spender.prepare?.(challenge, signal)))
+  return {
+    prepare,
+    async track(create) {
+      const settlement = await prepare()
+      return track(
+        create(),
+        settlement && {
+          commit() {
+            used = true
+            settlement.commit()
+          },
+          release() {},
+        },
+      )
+    },
+    async commit() {
+      if (!spender.prepare) return
+      if (used) (await spender.prepare(challenge, signal)).commit()
+      else (await prepare())?.commit()
+    },
+    async release() {
+      ;(await prepared?.catch(() => undefined))?.release()
+    },
+  }
 }
 
 /** Key identifying an asset on a network; EVM addresses and Stripe currencies match in any case. */
@@ -242,18 +308,21 @@ function mppFields(challenge: Challenge.Challenge) {
       ? request.methodDetails
       : {}
   ) as Record<string, unknown>
-  const chainIds = [details.chainId, request.chainId].filter((id) => id !== undefined)
-  for (const id of chainIds)
-    if (!Number.isSafeInteger(id) || (id as number) <= 0)
-      throw new Error('Cannot check spending limits: invalid challenge chain ID.')
-  if (chainIds.some((id) => id !== chainIds[0]))
-    throw new Error('Cannot check spending limits: challenge names conflicting chains.')
+  // Methods sign on `methodDetails.chainId` and ignore a top-level `chainId`, so only the former
+  // names the network. A top-level one it does not match could mean another chain: refuse it.
+  const chainId = details.chainId
+  if (chainId !== undefined && (!Number.isSafeInteger(chainId) || (chainId as number) <= 0))
+    throw new Error('Cannot check spending limits: invalid challenge chain ID.')
+  if (request.chainId !== undefined && request.chainId !== chainId)
+    throw new Error(
+      'Cannot check spending limits: challenge names a chain outside methodDetails.chainId.',
+    )
   const asset = request.currency
   if (typeof asset !== 'string' || !asset)
     throw new Error('Cannot check spending limits: challenge names no currency.')
   return {
     protocol: 'mpp' as const,
-    network: chainIds[0] === undefined ? challenge.method : `eip155:${chainIds[0]}`,
+    network: chainId === undefined ? challenge.method : `eip155:${chainId}`,
     asset,
     amount: atomicAmount(request.amount),
     ...(typeof request.recipient === 'string' ? { recipient: request.recipient } : {}),

@@ -1,5 +1,5 @@
 import { Challenge } from 'mppx'
-import { tempo as tempo_client } from 'mppx/client'
+import { Budget, Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx, tempo } from 'mppx/server'
 import { createClient, custom, defineChain } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -206,6 +206,45 @@ describe('tempo.charge client zone selection', () => {
       'Zone withdrawal outcome is unknown',
     )
     expect(calls).toHaveLength(sent)
+  })
+
+  test('keeps a withdrawal with an unknown outcome charged to the budget', async () => {
+    const calls: string[] = []
+    const budget = Budget.create({
+      total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: 1_500_000n },
+    })
+    const mppx = Mppx_client.create({
+      authorize: budget,
+      fetch: vi.fn() as never,
+      methods: [
+        tempo_client.charge({
+          getClient: () => l1,
+          zone: { client: failingZoneClient(calls, 'send') },
+        }),
+      ],
+      polyfill: false,
+    })
+    const c = await challenge()
+    const response = new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(c) },
+      status: 402,
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    let error: unknown
+    try {
+      const result = mppx.createCredential(response).catch((error: unknown) => error)
+      await vi.advanceTimersByTimeAsync(30_000)
+      error = await result
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The message is unchanged; the type tells spending limits that funds may have moved.
+    expect(error).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+    expect(String(error)).toMatch(/Zone withdrawal outcome is unknown: transaction 0x/)
+    expect(calls).toContain('eth_sendRawTransactionSync')
+    expect(budget.spent().amount).toBe(1_000_000n)
+    expect(budget.reserved().amount).toBe(0n)
   })
 
   describe('a new challenge for a payment whose withdrawal is outstanding', () => {

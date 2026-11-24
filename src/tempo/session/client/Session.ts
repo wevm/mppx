@@ -580,6 +580,7 @@ export function session(parameters: session.Parameters = {}) {
       refetch,
       response,
       signal,
+      spend,
     }) => {
       if (!isTip1034SessionChallenge(challenge)) return response
       if (!isEventStream(response)) {
@@ -604,14 +605,27 @@ export function session(parameters: session.Parameters = {}) {
         })
       ).key
       let channel = await store.get(channelKey)
+      // Highest cumulative amount the client's spending options counted: the paid credential's.
+      let counted = signedCumulativeAmount(credential) ?? channel?.cumulativeAmount ?? 0n
       const driver = {
         assertVoucherWithinLocalLimit: (cumulativeAmount) =>
           assertWithinMaxDeposit(
             cumulativeAmount,
             resolveAmounts(challenge.request, channel?.chainId).maxDeposit,
           ),
-        createSessionCredential: (challenge, context) =>
-          createSessionCredential(challenge, context, input),
+        createSessionCredential: async (challenge, context) => {
+          const create = () => createSessionCredential(challenge, context, input)
+          if (!spend || context.action !== 'voucher') return create()
+          // A voucher the stream asks for pays its increment over what the client already counted,
+          // so it passes `maxPayment` and `authorize` (such as a budget) like any payment.
+          if (context.cumulativeAmountRaw === undefined)
+            throw new Error('Cannot check spending limits: session voucher has no raw amount.')
+          const cumulative = BigInt(context.cumulativeAmountRaw)
+          if (cumulative <= counted) return create()
+          const voucher = await spend(cumulative - counted, create)
+          if (cumulative > counted) counted = cumulative
+          return voucher
+        },
         fetch,
         getChannel: () => channel ?? null,
         async topUpIfNeeded({ deposit, requiredCumulative, signal: topUpSignal }) {
@@ -716,6 +730,18 @@ export declare namespace session {
       /** Selects the account that signs this session credential after the challenge is known. */
       resolveAccount?: ResolveAccount | undefined
     }
+}
+
+/** Reads the cumulative amount a session credential signs, when it carries one. */
+function signedCumulativeAmount(credential: string): bigint | undefined {
+  try {
+    const { cumulativeAmount } = Credential.deserialize(credential).payload as {
+      cumulativeAmount?: unknown
+    }
+    return typeof cumulativeAmount === 'string' ? BigInt(cumulativeAmount) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function resolveInputOrigin(input: RequestInfo | URL): string {

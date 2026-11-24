@@ -87,19 +87,20 @@ export function create<const total extends Total>(options: create.Options<total>
     )
       throw refuse('asset')
     rescale(decimals)
-    const cost = requirement.amount * 10n ** BigInt(scale - decimals)
-    if (cost > limit - spent - reserved) throw refuse('amount')
-    reserved += cost
+    // Read at the current scale, which a later payment with more decimals can raise.
+    const cost = () => requirement.amount * 10n ** BigInt(scale - decimals)
+    if (cost() > limit - spent - reserved) throw refuse('amount')
+    reserved += cost()
     let open = true
     const close = () => {
       if (!open) return false
       open = false
-      reserved -= cost
+      reserved -= cost()
       return true
     }
     return Object.freeze({
       commit() {
-        if (close()) spent += cost
+        if (close()) spent += cost()
       },
       release() {
         close()

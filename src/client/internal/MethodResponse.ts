@@ -34,6 +34,13 @@ export type HandlerParameters = {
   refetch?: (() => Promise<Response>) | undefined
   response: Response
   signal?: AbortSignal | undefined
+  /**
+   * Runs the client's spending options for `amount`, an atomic amount the method pays on its own
+   * while handling the response (such as a streamed session voucher's increment), then creates
+   * that credential with `create`. Rejects without calling `create` when the options refuse it.
+   * Absent when the client sets no spending option.
+   */
+  spend?: ((amount: bigint, create: () => Promise<string>) => Promise<string>) | undefined
 }
 
 /** Derives the on-chain hash a credential's payment will have, when it is final before settlement. */

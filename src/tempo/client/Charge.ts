@@ -848,11 +848,9 @@ async function requestZoneWithdrawal(
         hash,
         timeout: zoneReceiptRecoveryTimeoutMs,
       }).catch(() => {
-        const error = new Error(
-          `Zone withdrawal outcome is unknown: transaction ${hash} may have been sent. Retrying this challenge does not withdraw again.`,
-        )
-        // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
-        Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
+        // Typed so spending limits keep counting a payment that may have moved funds.
+        const error = new Errors.BroadcastOutcomeUnknownError({ cause, transactionHash: hash })
+        error.message = `Zone withdrawal outcome is unknown: transaction ${hash} may have been sent. Retrying this challenge does not withdraw again.`
         throw error
       }),
   )

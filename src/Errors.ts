@@ -316,6 +316,10 @@ export declare namespace PaymentOutcomeUnknownError {
  * the node accepted it, and no receipt appeared before settlement stopped polling. The transaction
  * may still be included until `validBefore`.
  *
+ * A `tempo.charge` client also throws it when a Zone withdrawal it sent to pay a challenge has no
+ * send response or receipt: the withdrawal may have moved funds, so the client's spending limits
+ * keep counting the payment, and retrying the challenge resumes it rather than withdrawing again.
+ *
  * Settle it by looking up the receipt for `transactionHash`: once `validBefore` has passed, the
  * transaction can no longer be included, so one lookup after it is final. This is not a
  * `PaymentError`: HTTP handlers still answer with a generic 500 `InternalPaymentError`, whose

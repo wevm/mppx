@@ -285,6 +285,51 @@ describe('maxPayment', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  test('error: a top-level chainId the signer ignores cannot satisfy a chain limit', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fund = vi.fn(async () => {})
+    // Tempo signs on `methodDetails.chainId` or its own configured chain, never this field.
+    const offer = () =>
+      paymentRequired(
+        challenge('tempo', { amount: '1', chainId: 42431, currency: pathUsd, recipient }),
+      )
+    const testnet = { network: 'eip155:42431', asset: pathUsd, amount: 10n }
+
+    for (const config of [
+      { maxPayment: [testnet] },
+      { authorize: Budget.create({ total: testnet }) },
+      { funders: [{ fund }] },
+    ])
+      await expect(create(server(offer) as never, [tempo], config).fetch(url)).rejects.toThrow(
+        'Cannot check spending limits',
+      )
+    expect(fund).not.toHaveBeenCalled()
+    expect(createCredential).not.toHaveBeenCalled()
+
+    // Without spending options, the payment runs as before.
+    expect((await create(server(offer) as never, [tempo]).fetch(url)).status).toBe(200)
+    // A top-level chainId that matches `methodDetails.chainId` names the same chain.
+    expect(
+      (
+        await create(
+          server(() =>
+            paymentRequired(
+              challenge('tempo', {
+                amount: '1',
+                chainId: 42431,
+                currency: pathUsd,
+                methodDetails: { chainId: 42431 },
+                recipient,
+              }),
+            ),
+          ) as never,
+          [tempo],
+          { maxPayment: [testnet] },
+        ).fetch(url)
+      ).status,
+    ).toBe(200)
+  })
+
   test('error: createCredential and prepared payments enforce maxPayment', async () => {
     const { createCredential, method: tempo } = method('tempo')
     const mppx = create(vi.fn() as never, [tempo], {
@@ -467,7 +512,87 @@ describe('authorize', () => {
   })
 })
 
+describe('Budget', () => {
+  test('behavior: reservations settle at the scale the budget has when they settle', async () => {
+    const { method: stripe } = method('stripe')
+    const { method: tempo } = method('tempo')
+    const usd = { value: '5', currency: 'USD' }
+    /** Reserves $1 in Stripe cents, then $1 in a six-decimal token, which raises the scale. */
+    async function reserve(budget: Budget.Budget) {
+      const authorizations: Spend.Authorization[] = []
+      // Returns nothing, so mppx leaves settling them to the test.
+      const authorize = (plan: Spend.Plan) => void authorizations.push(budget(plan))
+      const mppx = create(vi.fn() as never, [stripe, tempo], { authorize })
+      await mppx.createCredential(
+        paymentRequired(challenge('stripe', { amount: '100', currency: 'usd' })),
+      )
+      await mppx.createCredential(paymentRequired(tempoChallenge('1000000')))
+      expect(budget.reserved()).toEqual({ value: '2', currency: 'USD' })
+      return authorizations as [Spend.Authorization, Spend.Authorization]
+    }
+
+    const released = Budget.create({ total: usd })
+    for (const authorization of await reserve(released)) authorization.release()
+    expect(released.remaining()).toEqual(usd)
+    expect(released.reserved()).toEqual({ value: '0', currency: 'USD' })
+
+    const mixed = Budget.create({ total: usd })
+    const [cents, micros] = await reserve(mixed)
+    cents.release()
+    micros.commit()
+    expect(mixed.remaining()).toEqual({ value: '4', currency: 'USD' })
+    expect(mixed.spent()).toEqual({ value: '1', currency: 'USD' })
+    expect(mixed.reserved()).toEqual({ value: '0', currency: 'USD' })
+  })
+})
+
 describe('funders', () => {
+  test('behavior: run once when a handler supplies the credential for a prepared request', async () => {
+    const fund = vi.fn(async () => {})
+    const budget = Budget.create({ total: { value: '1', currency: 'USD' } })
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(() => paymentRequired(tempoChallenge('300000')))
+    const mppx = create(fetch as never, [tempo], { authorize: budget, funders: [{ fund }] })
+    mppx.onChallengeReceived(async ({ challenge }) =>
+      Credential.serialize({ challenge, payload: { signature: '0xother' } }),
+    )
+
+    const prepared = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    expect((await prepared.payment.pay()).status).toBe(200)
+
+    expect(fund).toHaveBeenCalledTimes(1)
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(budget.spent()).toEqual({ value: '0.3', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+  })
+
+  test('behavior: run once when a handler replaces a credential mppx failed to create', async () => {
+    const fund = vi.fn(async () => {})
+    const budget = Budget.create({ total: { value: '1', currency: 'USD' } })
+    const failing = Method.toClient(
+      Method.from({ name: 'tempo', intent: 'charge', schema: Methods.charge.schema }),
+      {
+        async createCredential() {
+          throw new Error('signing failed')
+        },
+      },
+    )
+    const fetch = server(() => paymentRequired(tempoChallenge('300000')))
+    const mppx = create(fetch as never, [failing], { authorize: budget, funders: [{ fund }] })
+    mppx.onChallengeReceived(async ({ challenge, createCredential }) => {
+      await expect(createCredential()).rejects.toThrow('signing failed')
+      return Credential.serialize({ challenge, payload: { signature: '0xother' } })
+    })
+
+    expect((await mppx.fetch(url)).status).toBe(200)
+    const prepared = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    expect((await prepared.payment.pay()).status).toBe(200)
+
+    expect(fund).toHaveBeenCalledTimes(2)
+    expect(budget.spent()).toEqual({ value: '0.6', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+  })
+
   test('behavior: run in order after authorize and before signing', async () => {
     const steps: string[] = []
     const { method: tempo } = method('tempo', steps)

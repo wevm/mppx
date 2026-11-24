@@ -5,6 +5,7 @@ import { defineToken } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
+import * as Budget from '../../../client/Budget.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
@@ -347,6 +348,75 @@ describe('precompile client session', () => {
       `${Types.formatMessageEvent('first')}${Types.formatMessageEvent('second')}`,
     )
     expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
+  })
+
+  test('counts streamed voucher increments against the spending options', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
+    /** Opens with an SSE stream that asks for vouchers of 200, then 300. */
+    function stream(posted: bigint[]): typeof globalThis.fetch {
+      return async (_input, init) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return paymentRequired(challenge)
+        const payload = deserialize(authorization)
+        if (init?.method === 'POST') {
+          if (payload.action !== 'voucher') throw new Error('expected voucher')
+          posted.push(BigInt(payload.cumulativeAmount))
+          return new Response(null, { status: 204 })
+        }
+        if (payload.action !== 'open') throw new Error('expected open')
+        const needVoucher = (requiredCumulative: string) =>
+          Types.formatNeedVoucherEvent({
+            acceptedCumulative: '0',
+            channelId: payload.channelId,
+            deposit: '1000',
+            requiredCumulative,
+          })
+        return new Response(
+          [
+            Types.formatMessageEvent('first'),
+            needVoucher('200'),
+            Types.formatMessageEvent('second'),
+            needVoucher('300'),
+            Types.formatMessageEvent('third'),
+          ].join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+    }
+    const pay = (posted: bigint[], options: Pick<Fetch.from.Config, 'authorize' | 'maxPayment'>) =>
+      Fetch.from({
+        ...options,
+        fetch: stream(posted),
+        methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '1000' })],
+      })('https://example.com/stream', { headers: { accept: 'text/event-stream' } })
+
+    // The open pays 100, the first voucher 100 more, and the second would pass the budget.
+    const budget = Budget.create({
+      total: { network: `eip155:${chainId}`, asset: descriptor.token, amount: 250n },
+    })
+    const posted: bigint[] = []
+    const response = await pay(posted, { authorize: budget })
+    await expect(response.text()).rejects.toMatchObject({
+      name: 'PaymentLimitExceededError',
+      limit: 'budget',
+    })
+    expect(posted).toEqual([200n])
+    expect(budget.spent()).toMatchObject({ amount: 200n })
+    expect(budget.reserved()).toMatchObject({ amount: 0n })
+
+    // `maxPayment` applies to each increment.
+    const limited: bigint[] = []
+    const asset = { network: `eip155:${chainId}`, asset: descriptor.token }
+    const small = await pay(limited, { maxPayment: [{ ...asset, amount: 100n }] })
+    expect(await small.text()).toBe(
+      ['first', 'second', 'third'].map((data) => Types.formatMessageEvent(data)).join(''),
+    )
+    expect(limited).toEqual([200n, 300n])
+
+    // Without spending options, the stream pays every voucher as before.
+    const unlimited: bigint[] = []
+    await (await pay(unlimited, {})).text()
+    expect(unlimited).toEqual([200n, 300n])
   })
 
   test('tops up before signing plain HTTP vouchers through Fetch.from', async () => {
