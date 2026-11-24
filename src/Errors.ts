@@ -669,6 +669,10 @@ export declare namespace ZoneSettlementPendingError {
  * whose currency and decimals the client did not configure. Currency limits never trust the
  * currency or decimals a server sends, so add the token to the client's `tokens`, set a
  * per-asset limit, or raise the limit.
+ *
+ * `reason` is `credential` when a credential an event handler or `onChallenge` returned cannot
+ * be read or pays a challenge the response did not offer, so it was not used; `limit` is then
+ * `maxPayment` when it is set, else `budget`.
  */
 export class PaymentLimitExceededError extends Error {
   override readonly name = 'PaymentLimitExceededError'
@@ -684,7 +688,9 @@ export class PaymentLimitExceededError extends Error {
     super(
       reason === 'amount'
         ? `Payment exceeds ${name}, so no credential was created.`
-        : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
+        : reason === 'credential'
+          ? `Credential cannot be checked against ${name}: it is unreadable or pays a challenge the response did not offer, so it was not used.`
+          : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
     )
     this.limit = limit
     this.reason = reason
@@ -694,8 +700,12 @@ export class PaymentLimitExceededError extends Error {
 export declare namespace PaymentLimitExceededError {
   /** `maxPayment`: the per-payment limit. `budget`: a `Budget` passed as `authorize`. */
   type Limit = 'maxPayment' | 'budget'
-  /** `amount`: over the limit. `asset`: the limit cannot count the payment's asset. */
-  type Reason = 'amount' | 'asset'
+  /**
+   * `amount`: over the limit. `asset`: the limit cannot count the payment's asset. `credential`:
+   * a credential an event handler or `onChallenge` returned cannot be read, or pays a challenge
+   * the response did not offer, so its payment cannot be checked.
+   */
+  type Reason = 'amount' | 'asset' | 'credential'
 
   type Options = {
     /** The limit that refused the payment. */

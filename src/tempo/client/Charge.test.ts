@@ -410,6 +410,42 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('keeps push calls without a receipt counted by spending limits', async () => {
+    vi.resetModules()
+    // The wallet accepts the calls but reports no receipt for them.
+    vi.doMock('viem/actions', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('viem/actions')>()),
+      sendCallsSync: vi.fn(async () => ({ receipts: [] })),
+    }))
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const SpendGate = await import('../../client/internal/SpendGate.js')
+      const chainId = 42431
+      const rpcClient = createClient({
+        account: account.address,
+        chain: { ...tempoLocalnet, id: chainId },
+        transport: http('http://127.0.0.1'),
+      })
+      const settlement = { commit: vi.fn(), release: vi.fn() }
+      const credential = chargeWithMockedActions({
+        account: account.address,
+        getClient: () => rpcClient,
+      }).createCredential({
+        challenge: createChallenge({ amount: '1', chainId, supportedModes: ['push'] }),
+        context: {},
+      })
+
+      await expect(SpendGate.track(credential, settlement)).rejects.toThrow(
+        'No transaction receipt returned.',
+      )
+      expect(settlement.commit).toHaveBeenCalledTimes(1)
+      expect(settlement.release).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   test('resolveAccount selects the transaction account from executable calls', async () => {
     vi.resetModules()
     const selectedAccount = privateKeyToAccount(

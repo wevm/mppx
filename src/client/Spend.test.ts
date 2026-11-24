@@ -639,6 +639,154 @@ describe('funders', () => {
   })
 })
 
+describe('replacement credentials', () => {
+  /** A server offering a cheap and a pricey payment, the cheap one first. */
+  const offers = () =>
+    paymentRequired(
+      tempoChallenge('1000000', pathUsd, 'cheap'),
+      tempoChallenge('2000000', pathUsd, 'pricey'),
+    )
+  /** Returns a credential for the pricey offer, whichever one mppx selected. */
+  const pricey = async ({ challenges }: { challenges: readonly Challenge.Challenge[] }) =>
+    Credential.serialize({
+      challenge: challenges.find((challenge) => challenge.id === 'pricey')!,
+      payload: { signature: '0xother' },
+    })
+
+  test('error: checks the offer a handler credential pays, not the selected one', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const fetch = server(offers)
+    const mppx = create(fetch as never, [tempo], { maxPayment: { value: '1.5', currency: 'USD' } })
+    const selected: string[] = []
+    mppx.onChallengeReceived(async (payload) => {
+      selected.push(payload.challenge.id)
+      return pricey(payload)
+    })
+
+    await expect(mppx.fetch(url)).rejects.toMatchObject({ limit: 'maxPayment', reason: 'amount' })
+    await expect(mppx.createCredential(offers())).rejects.toMatchObject({ reason: 'amount' })
+    const prepared = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    await expect(prepared.payment.pay()).rejects.toMatchObject({ reason: 'amount' })
+    expect(selected).toEqual(['cheap', 'cheap', 'cheap'])
+    expect(createCredential).not.toHaveBeenCalled()
+    // Only the unpaid requests reached the server.
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    // Without spending options, the handler's credential is sent as before.
+    const unlimited = create(server(offers) as never, [tempo])
+    unlimited.onChallengeReceived(pricey)
+    expect((await unlimited.fetch(url)).status).toBe(200)
+  })
+
+  test('error: fails closed for a credential that cannot be read or echoes no offer', async () => {
+    const { method: tempo } = method('tempo')
+    const authorize = vi.fn()
+    const forged = Credential.serialize({
+      challenge: tempoChallenge('1', pathUsd, 'forged'),
+      payload: { signature: '0xother' },
+    })
+    // The offered ID with other terms.
+    const altered = Credential.serialize({
+      challenge: tempoChallenge('1', pathUsd, 'pricey'),
+      payload: { signature: '0xother' },
+    })
+    for (const credential of [forged, altered, 'Payment not-a-credential']) {
+      const fetch = server(offers)
+      const mppx = create(fetch as never, [tempo], {
+        authorize,
+        onChallenge: async () => credential,
+      })
+      const error = await mppx.fetch(url).catch((error) => error)
+      expect(error).toBeInstanceOf(Errors.PaymentLimitExceededError)
+      expect(error).toMatchObject({ limit: 'budget', reason: 'credential' })
+      expect(fetch).toHaveBeenCalledTimes(1)
+    }
+    expect(authorize).not.toHaveBeenCalled()
+
+    const unlimited = server(offers)
+    await create(unlimited as never, [tempo], { onChallenge: async () => forged }).fetch(url)
+    expect(unlimited).toHaveBeenCalledTimes(2)
+  })
+
+  test('behavior: authorizes and funds the offer a handler credential pays', async () => {
+    const { method: tempo } = method('tempo')
+    const fund = vi.fn(async (_requirement: Spend.Requirement) => {})
+    const budget = Budget.create({ total: { value: '5', currency: 'USD' } })
+    const mppx = create(server(offers) as never, [tempo], {
+      authorize: budget,
+      funders: [{ fund }],
+    })
+    mppx.onChallengeReceived(pricey)
+
+    expect((await mppx.fetch(url)).status).toBe(200)
+    const prepared = await mppx.prepareRequest(url, undefined, { requirePayment: true })
+    expect((await prepared.payment.pay()).status).toBe(200)
+
+    // A prepared request funds the selected offer before its handler runs, then frees it and
+    // funds the offer the handler's credential pays.
+    expect(fund.mock.calls.map(([requirement]) => requirement.amount)).toEqual([
+      2000000n,
+      1000000n,
+      2000000n,
+    ])
+    expect(budget.spent()).toEqual({ value: '4', currency: 'USD' })
+    expect(budget.reserved()).toEqual({ value: '0', currency: 'USD' })
+  })
+})
+
+describe('cancellation', () => {
+  test('error: a canceled prepared payment starts no authorization, funding or signing', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const authorize = vi.fn()
+    const fund = vi.fn(async () => {})
+    const fetch = server(() => paymentRequired(tempoChallenge('1')))
+    const mppx = create(fetch as never, [tempo], { authorize, funders: [{ fund }] })
+
+    const controller = new AbortController()
+    const prepared = await mppx.prepareRequest(
+      url,
+      { signal: controller.signal },
+      { requirePayment: true },
+    )
+    controller.abort()
+    await expect(prepared.payment.pay()).rejects.toMatchObject({ name: 'AbortError' })
+
+    const payment = await mppx.preparePayment(paymentRequired(tempoChallenge('1')), {
+      request: { signal: controller.signal },
+    })
+    await expect(payment.createCredential()).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(authorize).not.toHaveBeenCalled()
+    expect(fund).not.toHaveBeenCalled()
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('error: canceling while a funder runs stops the rest and releases the budget', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const budget = Budget.create({ total: { value: '1', currency: 'USD' } })
+    const controller = new AbortController()
+    const later = vi.fn(async () => {})
+    const fetch = server(() => paymentRequired(tempoChallenge('1')))
+    const mppx = create(fetch as never, [tempo], {
+      authorize: budget,
+      funders: [{ fund: async () => controller.abort() }, { fund: later }],
+    })
+
+    const prepared = await mppx.prepareRequest(
+      url,
+      { signal: controller.signal },
+      { requirePayment: true },
+    )
+    await expect(prepared.payment.pay()).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(later).not.toHaveBeenCalled()
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(budget.remaining()).toEqual({ value: '1', currency: 'USD' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('receipts', () => {
   test('behavior: payment.response carries the receipt, amount and requirement', async () => {
     const { method: tempo } = method('tempo')

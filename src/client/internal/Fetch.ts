@@ -521,10 +521,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             preparedCredential = undefined
           }
           validateCredentialHeaderValue(credential)
-          // A credential an event handler or `onChallenge` made itself is checked before it is
-          // sent. It takes the reservation already prepared for this payment, so funders run once.
+          // A credential an event handler or `onChallenge` made itself is checked against the
+          // offer it pays before it is sent. For the selected offer it takes the reservation
+          // already prepared, so funders run once.
           if (!checkedCredential || (await checkedCredential.catch(() => undefined)) !== credential)
-            await spend.commit()
+            await spend.commitReplacement(credential, challenges)
         } catch (error) {
           // A no-op once a credential committed it.
           await spend.release()
@@ -654,10 +655,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             // Payments the method makes while handling the response, such as streamed session
             // vouchers, pass the same spending checks as the one that paid for it.
             ...(prepareSpend && {
-              async spend(amount: bigint, create: () => Promise<string>) {
+              async spend(amount: bigint, create: () => Promise<string>, signal?: AbortSignal) {
+                // The method's own signal, such as a canceled stream body's, stops it too.
+                const signals = [resolveRequestSignal(input, init), signal].filter(
+                  (signal): signal is AbortSignal => signal !== undefined,
+                )
                 const settlement = await prepareSpend(
                   selectedChallenge,
-                  resolveRequestSignal(input, init),
+                  signals.length > 1 ? AbortSignal.any(signals) : signals[0],
                   amount,
                 )
                 return SpendGate.track(create(), settlement)

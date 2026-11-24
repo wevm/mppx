@@ -20,6 +20,7 @@ import {
 import { Abis, Actions, Addresses } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
+import * as FundsMoved from '../../client/internal/FundsMoved.js'
 import * as MethodResponse from '../../client/internal/MethodResponse.js'
 import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
@@ -374,7 +375,8 @@ export function charge(parameters: charge.Parameters = {}) {
                 forceAtomic: calls.length > 1,
               })
         const hash = receipts?.[0]?.transactionHash
-        if (!hash) throw new Error('No transaction receipt returned.')
+        // The calls were sent and may have paid, so spending limits keep counting them.
+        if (!hash) throw FundsMoved.mark(new Error('No transaction receipt returned.'))
         return Credential.serialize({
           challenge,
           payload: { hash, type: 'hash' },
@@ -638,7 +640,8 @@ async function waitForZoneCredential(options: ZoneCredentialOptions, entry: Pend
       )
       // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
       Object.defineProperty(error, 'cause', { configurable: true, value: cause, writable: true })
-      throw error
+      // The withdrawal was mined, so spending limits keep counting it.
+      throw FundsMoved.mark(error)
     }))
 
   let settled: { hash: Hex.Hex; senderTag: Hex.Hex }

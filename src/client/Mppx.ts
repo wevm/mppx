@@ -379,7 +379,8 @@ export function create<
 
       const selectedChallenge = challenge
       const selectedMethod = mi
-      const spend = SpendGate.payment(spender, selectedChallenge)
+      // A canceled request starts no authorization, funding or signing for this payment.
+      const spend = SpendGate.payment(spender, selectedChallenge, requestSignal(options?.request))
       const createPreparedCredential = memoizeCreateCredential<FlattenMethods<methods>>(
         async (context) => {
           try {
@@ -411,13 +412,14 @@ export function create<
             )
             const credential = eventCredential ?? (await createCredential())
             Fetch.validateCredentialHeaderValue(credential)
-            // A credential an event handler made itself is checked before it is returned. It
-            // takes the reservation already prepared for this payment, so funders run once.
+            // A credential an event handler made itself is checked against the offer it pays
+            // before it is returned. For the selected offer it takes the reservation already
+            // prepared, so funders run once.
             if (
               !checkedCredential ||
               (await checkedCredential.catch(() => undefined)) !== credential
             )
-              await spend.commit()
+              await spend.commitReplacement(credential, challengeSnapshots)
             await events.emit(
               'credential.created',
               createCredentialCreatedPayload({
@@ -1043,6 +1045,12 @@ async function createCredentialForMethod(
     parsedContext !== undefined ? { challenge, context: parsedContext } : { challenge }
   if (origin) MethodResponse.attachOrigin(parameters, origin)
   return mi.createCredential(parameters as never)
+}
+
+/** Returns the abort signal of an HTTP request init, when it has one. */
+function requestSignal(request: unknown): AbortSignal | undefined {
+  const signal = (request as { signal?: unknown } | undefined)?.signal
+  return typeof AbortSignal !== 'undefined' && signal instanceof AbortSignal ? signal : undefined
 }
 
 /** Returns the URL of the HTTP server that sent `response`, or `undefined` when it has none. */

@@ -1,6 +1,7 @@
 import { ousd, pathusd, usdce } from 'viem/tokens'
 
 import type * as Challenge from '../../Challenge.js'
+import * as Credential from '../../Credential.js'
 import {
   BroadcastOutcomeUnknownError,
   PaymentLimitExceededError,
@@ -8,7 +9,9 @@ import {
 } from '../../Errors.js'
 import * as x402_ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
 import * as x402_Types from '../../internal/x402/Types.js'
+import * as PaymentRequest from '../../PaymentRequest.js'
 import type * as Spend from '../Spend.js'
+import * as FundsMoved from './FundsMoved.js'
 
 /** Spending options shared by `Mppx.create` and `Fetch.from`. */
 export type Config = {
@@ -53,6 +56,8 @@ export type Spender = {
         amount?: bigint | undefined,
       ) => Promise<Settlement>)
     | undefined
+  /** The limit a refused credential names: `maxPayment` when it is set, else `budget`. */
+  limit: PaymentLimitExceededError.Limit
 }
 
 type TokenMetadata = Readonly<{ currency: string; decimals: number }>
@@ -77,6 +82,7 @@ export function from(config: Config): Spender {
   const resolve = (challenge: Challenge.Challenge) => requirement(challenge, metadata)
   const enabled = maxPayment !== undefined || authorize !== undefined || funders.length > 0
   return {
+    limit: maxPayment === undefined ? 'budget' : 'maxPayment',
     resolve(challenge) {
       try {
         return resolve(challenge)
@@ -86,6 +92,8 @@ export function from(config: Config): Spender {
     },
     prepare: enabled
       ? async (challenge, signal, amount) => {
+          // A canceled request starts no authorization or funding.
+          signal?.throwIfAborted()
           const resolved = resolve(challenge)
           const requirement =
             amount === undefined ? resolved : Object.freeze({ ...resolved, amount })
@@ -135,7 +143,8 @@ export function track(
     (error) => {
       if (
         error instanceof ZoneSettlementPendingError ||
-        error instanceof BroadcastOutcomeUnknownError
+        error instanceof BroadcastOutcomeUnknownError ||
+        FundsMoved.has(error)
       )
         settlement.commit()
       else settlement.release()
@@ -158,6 +167,14 @@ export type Payment = {
    * so funders run once, unless mppx's own credential already committed it.
    */
   commit(): Promise<void>
+  /**
+   * Checks and commits a credential mppx did not create against the challenge it pays: the one
+   * its echo names among `offered`, the challenges of the same response. That challenge's terms
+   * pass `maxPayment`, `authorize` and the funders, reusing the prepared reservation when it is
+   * the selected challenge. Throws {@link PaymentLimitExceededError} when the credential cannot be
+   * read or echoes a challenge the response did not offer.
+   */
+  commitReplacement(credential: string, offered: readonly Challenge.Challenge[]): Promise<void>
   /** Frees the reservation when no credential is sent. A no-op once committed. */
   release(): Promise<void>
 }
@@ -175,10 +192,25 @@ export function payment(
   // Whether mppx's own credential committed the reservation.
   let used = false
   const prepare = () => (prepared ??= Promise.resolve(spender.prepare?.(challenge, signal)))
+  const commit = async () => {
+    if (!spender.prepare) return
+    // A canceled request sends nothing, so its reservation is released instead.
+    signal?.throwIfAborted()
+    if (used) (await spender.prepare(challenge, signal)).commit()
+    else (await prepare())?.commit()
+  }
+  const release = async () => {
+    ;(await prepared?.catch(() => undefined))?.release()
+  }
   return {
     prepare,
     async track(create) {
       const settlement = await prepare()
+      // The request may have been canceled since its payment was prepared: sign nothing.
+      if (settlement && signal?.aborted) {
+        settlement.release()
+        signal.throwIfAborted()
+      }
       return track(
         create(),
         settlement && {
@@ -190,15 +222,51 @@ export function payment(
         },
       )
     },
-    async commit() {
+    commit,
+    async commitReplacement(credential, offered) {
       if (!spender.prepare) return
-      if (used) (await spender.prepare(challenge, signal)).commit()
-      else (await prepare())?.commit()
+      const paid = replacedChallenge(credential, offered)
+      if (!paid) throw unbound(spender)
+      if (paid.id === challenge.id) return commit()
+      // It pays another offer: free the selected one's reservation and check that offer instead.
+      await release()
+      await payment(spender, paid, signal).commit()
     },
-    async release() {
-      ;(await prepared?.catch(() => undefined))?.release()
-    },
+    release,
   }
+}
+
+/**
+ * The offered challenge a credential echoes: the one with its ID whose method, intent and request
+ * it repeats. `undefined` when it cannot be read as an MPP credential or names no offer.
+ */
+function replacedChallenge(
+  credential: string,
+  offered: readonly Challenge.Challenge[],
+): Challenge.Challenge | undefined {
+  let echoed: Challenge.Challenge
+  try {
+    echoed = Credential.deserialize(credential).challenge
+  } catch {
+    return undefined
+  }
+  const match = offered.find((challenge) => challenge.id === echoed.id)
+  if (!match || match.method !== echoed.method || match.intent !== echoed.intent) return undefined
+  try {
+    if (PaymentRequest.serialize(match.request) !== PaymentRequest.serialize(echoed.request))
+      return undefined
+  } catch {
+    return undefined
+  }
+  return match
+}
+
+/** Refuses a credential whose payment cannot be bound to an offered challenge. */
+function unbound(spender: Spender) {
+  return new PaymentLimitExceededError({
+    limit: spender.limit,
+    reason: 'credential',
+  })
 }
 
 /** Key identifying an asset on a network; EVM addresses and Stripe currencies match in any case. */

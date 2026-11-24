@@ -247,6 +247,54 @@ describe('tempo.charge client zone selection', () => {
     expect(budget.reserved().amount).toBe(0n)
   })
 
+  test('keeps a mined withdrawal charged to the budget when its sender tag cannot be read', async () => {
+    const calls: string[] = []
+    let sent = false
+    // Mines the withdrawal with a receipt that hides the outbox event, then fails every read.
+    const zone = createClient({
+      account: payer,
+      chain: defineChain({ ...tempoModerato, id: 1_424_310_003, name: 'Zone' }),
+      transport: custom(
+        {
+          async request({ method }) {
+            calls.push(method)
+            if (method === 'eth_chainId') return `0x${(1_424_310_003).toString(16)}`
+            if (sent) throw new Error('connection lost')
+            if (method === 'eth_call') return `0x${'00'.repeat(32)}`
+            if (method === 'eth_sendRawTransactionSync') {
+              sent = true
+              return { ...revertedReceipt, status: '0x1' }
+            }
+            if (method === 'eth_getBlockByNumber')
+              return { baseFeePerGas: '0x1', number: '0x1', timestamp: '0x1' }
+            return '0x1'
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const budget = Budget.create({
+      total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: 1_500_000n },
+    })
+    const mppx = Mppx_client.create({
+      authorize: budget,
+      fetch: vi.fn() as never,
+      methods: [tempo_client.charge({ getClient: () => l1, zone: { client: zone } })],
+      polyfill: false,
+    })
+    const response = new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(await challenge()) },
+      status: 402,
+    })
+
+    await expect(mppx.createCredential(response)).rejects.toThrow(
+      /was sent, but its sender tag could not be read/,
+    )
+    expect(calls).toContain('eth_sendRawTransactionSync')
+    expect(budget.spent().amount).toBe(1_000_000n)
+    expect(budget.reserved().amount).toBe(0n)
+  })
+
   describe('a new challenge for a payment whose withdrawal is outstanding', () => {
     /** Leaves a withdrawal for a first challenge with an unknown outcome. */
     async function outstanding(origin?: string) {

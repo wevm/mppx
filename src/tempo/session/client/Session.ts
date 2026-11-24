@@ -613,7 +613,12 @@ export function session(parameters: session.Parameters = {}) {
             cumulativeAmount,
             resolveAmounts(challenge.request, channel?.chainId).maxDeposit,
           ),
-        createSessionCredential: async (challenge, context) => {
+        createSessionCredential: async (
+          challenge: Parameters<SsePaymentDriver['createSessionCredential']>[0],
+          context: Parameters<SsePaymentDriver['createSessionCredential']>[1],
+          // The stream's signal, which a canceled body aborts: a voucher it asks for then stops.
+          signal?: AbortSignal | undefined,
+        ) => {
           const create = () => createSessionCredential(challenge, context, input)
           if (!spend || context.action !== 'voucher') return create()
           // A voucher the stream asks for pays its increment over what the client already counted,
@@ -622,7 +627,7 @@ export function session(parameters: session.Parameters = {}) {
             throw new Error('Cannot check spending limits: session voucher has no raw amount.')
           const cumulative = BigInt(context.cumulativeAmountRaw)
           if (cumulative <= counted) return create()
-          const voucher = await spend(cumulative - counted, create)
+          const voucher = await spend(cumulative - counted, create, signal)
           if (cumulative > counted) counted = cumulative
           return voucher
         },
@@ -646,7 +651,20 @@ export function session(parameters: session.Parameters = {}) {
 
       return wrapSseResponse({
         onNeedVoucher: (event, streamSignal) =>
-          handleSseNeedVoucher({ challenge, driver, headers, input, signal: streamSignal }, event),
+          handleSseNeedVoucher(
+            {
+              challenge,
+              driver: {
+                ...driver,
+                createSessionCredential: (challenge, context) =>
+                  driver.createSessionCredential(challenge, context, streamSignal),
+              },
+              headers,
+              input,
+              signal: streamSignal,
+            },
+            event,
+          ),
         onReceipt() {},
         response,
         signal,

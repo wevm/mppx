@@ -419,6 +419,69 @@ describe('precompile client session', () => {
     expect(unlimited).toEqual([200n, 300n])
   })
 
+  test('a canceled stream body stops a voucher its spending options are still checking', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
+    const posted: bigint[] = []
+    /** Opens with an SSE stream that asks for a voucher of 200 after its first message. */
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      if (!authorization) return paymentRequired(challenge)
+      const payload = deserialize(authorization)
+      if (init?.method === 'POST') {
+        if (payload.action !== 'voucher') throw new Error('expected voucher')
+        posted.push(BigInt(payload.cumulativeAmount))
+        return new Response(null, { status: 204 })
+      }
+      return new Response(
+        [
+          Types.formatMessageEvent('first'),
+          Types.formatNeedVoucherEvent({
+            acceptedCumulative: '0',
+            channelId: payload.channelId,
+            deposit: '1000',
+            requiredCumulative: '200',
+          }),
+          Types.formatMessageEvent('second'),
+        ].join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    const budget = Budget.create({
+      total: { network: `eip155:${chainId}`, asset: descriptor.token, amount: 1000n },
+    })
+    const amounts: bigint[] = []
+    let resume!: () => void
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const fund = vi.fn(async () => {})
+    const response = await Fetch.from({
+      // The voucher's authorization waits until the body is canceled.
+      async authorize(plan, context) {
+        if (amounts.push(plan.requirement.amount) > 1) await paused
+        return budget(plan, context)
+      },
+      fetch,
+      funders: [{ fund }],
+      methods: [session({ account, decimals: 0, getClient: () => client, maxDeposit: '1000' })],
+    })('https://example.com/stream', { headers: { accept: 'text/event-stream' } })
+
+    const reader = response.body!.getReader()
+    await reader.read()
+    const next = reader.read()
+    await vi.waitFor(() => expect(amounts).toEqual([100n, 100n]))
+    const canceled = reader.cancel()
+    resume()
+    await canceled
+    await next
+
+    // Only the open was funded and counted: the voucher was neither signed nor sent.
+    expect(fund).toHaveBeenCalledTimes(1)
+    expect(posted).toEqual([])
+    expect(budget.spent()).toMatchObject({ amount: 100n })
+    expect(budget.reserved()).toMatchObject({ amount: 0n })
+  })
+
   test('tops up before signing plain HTTP vouchers through Fetch.from', async () => {
     const challenge = makeChallenge({
       suggestedDeposit: '100',
