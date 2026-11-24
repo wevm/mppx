@@ -822,6 +822,45 @@ describe('receipts', () => {
     })
   })
 
+  test('behavior: payment.response reports the offer a handler credential pays', async () => {
+    const { method: tempo } = method('tempo')
+    const offers = () =>
+      paymentRequired(
+        tempoChallenge('1000000', pathUsd, 'cheap'),
+        tempoChallenge('2000000', pathUsd, 'pricey'),
+      )
+    const pricey = async ({ challenges }: { challenges: readonly Challenge.Challenge[] }) =>
+      Credential.serialize({
+        challenge: challenges.find((challenge) => challenge.id === 'pricey')!,
+        payload: { signature: '0xother' },
+      })
+    const forged = Credential.serialize({
+      challenge: tempoChallenge('1', pathUsd, 'forged'),
+      payload: { signature: '0xother' },
+    })
+    for (const [options, handler, amount] of [
+      [{}, pricey, '2000000'],
+      [{ authorize: Budget.create({ total: { value: '5', currency: 'USD' } }) }, pricey, '2000000'],
+      // Without spending options a credential that pays no offer is sent, with no terms reported.
+      [{}, async () => forged, undefined],
+    ] as const) {
+      const mppx = create(server(offers) as never, [tempo], options)
+      mppx.onChallengeReceived(handler)
+      const payloads: Pick<Fetch.PaymentResponsePayload, 'amount' | 'requirement'>[] = []
+      mppx.onPaymentResponse(({ amount, requirement }) => {
+        payloads.push({ amount, requirement })
+      })
+
+      expect((await mppx.fetch(url)).status).toBe(200)
+
+      expect(payloads).toHaveLength(1)
+      expect(payloads[0]?.amount).toBe(amount)
+      expect(payloads[0]?.requirement?.amount).toBe(
+        amount === undefined ? undefined : BigInt(amount),
+      )
+    }
+  })
+
   test('behavior: payment.response payloads serialize to JSON', async () => {
     const { method: tempo } = method('tempo')
     const mppx = create(server(() => paymentRequired(tempoChallenge('25'))) as never, [tempo])
@@ -1227,6 +1266,40 @@ describe('requirements', () => {
     expect(createCredential).not.toHaveBeenCalled()
   })
 
+  test('error: a challenge that expires while authorize and funders run is not signed', async () => {
+    const { createCredential, method: tempo } = method('tempo')
+    const expires = new Date(Date.now() + 60_000).toISOString()
+    const offer = Challenge.from({
+      id: 'expiring',
+      intent: 'charge',
+      method: 'tempo',
+      realm,
+      expires,
+      request: { amount: '1', currency: pathUsd, recipient, methodDetails: { chainId: 4217 } },
+    })
+    const elapse = () => vi.setSystemTime(new Date(expires).getTime() + 1)
+    const settlement = { commit: vi.fn(), release: vi.fn() }
+    for (const options of [
+      { authorize: vi.fn(async () => (elapse(), settlement)) },
+      { funders: [{ fund: vi.fn(async () => elapse()) }] },
+    ]) {
+      vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+      try {
+        const fetch = server(() => paymentRequired(offer))
+        const error = await create(fetch as never, [tempo], options)
+          .fetch(url)
+          .catch((error) => error)
+        expect(error).toBeInstanceOf(Errors.PaymentExpiredError)
+        expect(fetch).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(settlement.release).toHaveBeenCalledTimes(1)
+    expect(settlement.commit).not.toHaveBeenCalled()
+  })
+
   test('error: an offer native EVM charge refuses reaches no funder', async () => {
     const fund = vi.fn(async () => {})
     const offer = challenge('evm', {
@@ -1283,5 +1356,46 @@ describe('rewrapping', () => {
     expect(() => sessionManager({ account: recipient, fetch: inner })).toThrow(
       'accept only charges',
     )
+  })
+})
+
+describe('MCP', () => {
+  /** A `tools/call` request that `McpClient.wrap` tags as paying itself. */
+  const toolCall = () => ({
+    body: JSON.stringify({
+      id: 1,
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { _meta: { 'mppx/payment-client': true }, arguments: {}, name: 'paid_tool' },
+    }),
+    headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+    method: 'POST',
+  })
+
+  test('error: a fetch with spending options refuses tool calls McpClient.wrap pays itself', async () => {
+    const { method: tempo } = method('tempo')
+    for (const options of [
+      { maxPayment: { value: '1', currency: 'USD' } },
+      { authorize: Budget.create({ total: { value: '1', currency: 'USD' } }) },
+      { funders: [{ fund: async () => {} }] },
+    ]) {
+      const upstream = vi.fn(async () => Response.json({ id: 1, jsonrpc: '2.0', result: {} }))
+      const limited = Fetch.from({ ...options, fetch: upstream as never, methods: [tempo] })
+      await expect(limited(url, toolCall())).rejects.toThrow(TypeError)
+      // Rewrapping keeps the refusal.
+      await expect(
+        Fetch.from({ fetch: limited, methods: [tempo] })(url, toolCall()),
+      ).rejects.toThrow('McpClient.wrap')
+      expect(upstream).not.toHaveBeenCalled()
+    }
+
+    // Without spending options, the tagged call is sent and left to McpClient.wrap as before.
+    const upstream = vi.fn(async () => Response.json({ id: 1, jsonrpc: '2.0', result: {} }))
+    const response = await Fetch.from({ fetch: upstream as never, methods: [tempo] })(
+      url,
+      toolCall(),
+    )
+    expect(response.status).toBe(200)
+    expect(upstream).toHaveBeenCalledTimes(1)
   })
 })

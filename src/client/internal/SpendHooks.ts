@@ -28,6 +28,7 @@ export type Constraints = Readonly<{
 
 const hooks = new WeakMap<Method.AnyClient, Hooks>()
 const constraints = new WeakMap<object, Constraints>()
+const owners = new WeakMap<Constraints, Constraints>()
 
 /** Registers a method's spending hooks. */
 export function register<const method extends Method.AnyClient>(
@@ -51,4 +52,17 @@ export function constrain(parameters: object, value: Constraints): void {
 /** Returns the spending constraints of credential parameters, when spending options apply. */
 export function of(parameters: object): Constraints | undefined {
   return constraints.get(parameters)
+}
+
+/**
+ * Records that a credential checked under `joiner` shares a signing another credential, checked
+ * under `owner`, started: one payment, which the client's spending options count once.
+ */
+export function join(joiner: Constraints, owner: Constraints): void {
+  if (joiner !== owner) owners.set(joiner, owner)
+}
+
+/** The constraints of the credential whose signing one checked under `joiner` shares, if any. */
+export function owner(joiner: Constraints): Constraints | undefined {
+  return owners.get(joiner)
 }

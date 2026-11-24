@@ -337,6 +337,15 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
+    // `McpClient.wrap` pays the tool calls it tags itself, outside this fetch, so this fetch's
+    // spending options would not bound them: refuse to send one instead.
+    if (
+      spender.prepare &&
+      adapterOwnsPayment(withCapturedBody(initialRequest.init, await capturedBody))
+    )
+      throw new TypeError(
+        'This fetch has spending options (maxPayment, authorize or funders), but McpClient.wrap pays MCP tool calls itself. Set them on McpClient.wrap and give its transport a fetch without them.',
+      )
     const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     let response = first.response
     // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
@@ -516,6 +525,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         let prepared: typeof preparedCredential
         // The offer a credential mppx did not create pays, once spending checks bound it.
         let paidOffer: Challenge.Challenge | undefined
+        // Whether the credential is the one mppx created for the selected offer.
+        let ownCredential = false
         try {
           const eventCredential = await events.emit(
             'challenge.received',
@@ -546,8 +557,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           // A credential an event handler or `onChallenge` made itself is checked against the
           // offer it pays before it is sent. For the selected offer it takes the reservation
           // already prepared, so funders run once.
-          if (!checkedCredential || (await checkedCredential.catch(() => undefined)) !== credential)
-            paidOffer = await spend.commitReplacement(credential, challenges)
+          ownCredential =
+            checkedCredential !== undefined &&
+            (await checkedCredential.catch(() => undefined)) === credential
+          if (!ownCredential) paidOffer = await spend.commitReplacement(credential, challenges)
         } catch (error) {
           // A no-op once a credential committed it.
           await spend.release()
@@ -616,7 +629,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           preparedCredential = undefined
         }
         // Cloning an unobserved stream would tee and buffer it indefinitely.
-        if (response.ok && hasEventObservers(events, 'payment.response'))
+        if (response.ok && hasEventObservers(events, 'payment.response')) {
+          // A handler's credential can pay another offer than the selected one: report the terms
+          // of the offer it pays, and none when it cannot be bound to exactly one.
+          const reportedOffer = ownCredential
+            ? selectedChallenge
+            : (paidOffer ?? SpendGate.replacedChallenge(credential, challenges))
           await events.emit(
             'payment.response',
             createPaymentResponsePayload({
@@ -625,10 +643,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               init,
               input,
               method: selected.method,
-              requirement: spender.resolve(selectedChallenge),
+              requirement: reportedOffer && spender.resolve(reportedOffer),
               response,
             }),
           )
+        }
         if (!paymentRequired) {
           // The server may have settled before failing: report the credential for
           // reconciliation and return the response. Retrying could pay twice.

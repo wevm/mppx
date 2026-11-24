@@ -84,6 +84,11 @@ const stripeTokens = [{ network: 'stripe', asset: 'usd', currency: 'USD', decima
 /** The only intent spending options can bound: one payment of a known amount. */
 const chargeIntent = 'charge'
 const issued = new WeakSet<object>()
+/**
+ * The `authorize` each payment's constraints were issued under, so a signing that payments under
+ * one authorization share is counted once.
+ */
+const scopes = new WeakMap<SpendHooks.Constraints, Spend.Authorize | undefined>()
 const decimalPattern = /^(\d+)(?:\.(\d+))?$/
 const maxDecimalLength = 1_024
 
@@ -124,7 +129,7 @@ export function from(config: Config): Spender {
           if (hooks?.resumes?.(challenge))
             return Object.freeze({
               settlement: once(undefined),
-              constraints: Object.freeze({ limit, resume: true }),
+              constraints: constraints(true),
             })
           const key = identity(challenge)
           const requirement = resolve(challenge)
@@ -147,17 +152,34 @@ export function from(config: Config): Spender {
             signal?.throwIfAborted()
             if (identity(challenge) !== key)
               throw new Error('Cannot check spending limits: the challenge changed while checked.')
+            // `authorize` and the funders can outlast the challenge: never sign an expired one.
+            if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
           } catch (error) {
             settlement.release()
             throw error
           }
           return Object.freeze({
             settlement,
-            constraints: Object.freeze({ limit, resume: false }),
+            constraints: constraints(false),
           })
         }
       : undefined,
   }
+
+  function constraints(resume: boolean): SpendHooks.Constraints {
+    const value = Object.freeze({ limit, resume })
+    scopes.set(value, authorize)
+    return value
+  }
+}
+
+/**
+ * Whether a credential checked under `constraints` shares a signing that a payment under the
+ * same `authorize` started and counts, such as concurrent requests for one Tempo challenge.
+ */
+function sharesSigning(constraints: SpendHooks.Constraints): boolean {
+  const owner = SpendHooks.owner(constraints)
+  return owner !== undefined && scopes.has(owner) && scopes.get(owner) === scopes.get(constraints)
 }
 
 /** Whether a config sets any spending option. */
@@ -305,12 +327,22 @@ export function payment(
         own.settlement.release()
         signal.throwIfAborted()
       }
+      // A prepared payment can be signed long after its checks: never sign an expired challenge.
+      if (own && !own.constraints.resume && challenge.expires)
+        try {
+          Expires.assert(challenge.expires, challenge.id)
+        } catch (error) {
+          own.settlement.release()
+          throw error
+        }
       const credential = track(
         create(own?.constraints),
         own && {
           commit() {
             used = true
-            own.settlement.commit()
+            // A signing another payment under this authorization started is counted there.
+            if (sharesSigning(own.constraints)) own.settlement.release()
+            else own.settlement.commit()
           },
           release() {},
         },
@@ -371,7 +403,7 @@ function tryIdentity(challenge: Challenge.Challenge): string | undefined {
  * x402 offer whose requirements its x402 payload accepts and signs. `undefined` when it cannot be
  * read, or matches no offer or several.
  */
-function replacedChallenge(
+export function replacedChallenge(
   credential: string,
   offered: readonly Challenge.Challenge[],
 ): Challenge.Challenge | undefined {

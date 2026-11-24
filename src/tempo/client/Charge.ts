@@ -370,7 +370,14 @@ export function charge(parameters: charge.Parameters = {}) {
         return Math.min(defaultExpiry, challengeExpiry)
       })()
 
+      // The client's spending checks can outlast the challenge, and its server refuses a credential
+      // for an expired one: under them, never broadcast or sign for it.
+      const assertUnexpired = () => {
+        if (spend && challenge.expires) Expires.assert(challenge.expires, challenge.id)
+      }
+
       if (mode === 'push') {
+        assertUnexpired()
         const { receipts } =
           account.type === 'local'
             ? {
@@ -444,6 +451,7 @@ export function charge(parameters: charge.Parameters = {}) {
       }
       // Preparation is asynchronous: check again immediately before signing.
       assertSponsorable()
+      assertUnexpired()
       const signature = await signTransaction(client, prepared as never)
 
       return Credential.serialize({
@@ -456,18 +464,26 @@ export function charge(parameters: charge.Parameters = {}) {
 
   // Share an in-flight signing so concurrent calls for one challenge cannot yield
   // two independently settleable transactions. Settled signings are not reused.
-  const signing = new Map<string, Promise<string>>()
+  const signing = new Map<
+    string,
+    { constraints: SpendHooks.Constraints | undefined; promise: Promise<string> }
+  >()
   const createCredential: typeof method.createCredential = async (options) => {
     // Enforce client policy on every call, including ones joining a signing.
     assertChallengePolicy(parameters, caps, options.challenge.request)
     const account = options.context?.account ?? parameters.account
     const signer = (typeof account === 'string' ? account : account?.address)?.toLowerCase()
     const key = `${signer ?? ''}:${options.challenge.id}`
-    let promise = signing.get(key)
-    if (!promise) {
-      promise = method.createCredential(options).finally(() => signing.delete(key))
-      signing.set(key, promise)
+    const constraints = SpendHooks.of(options)
+    const shared = signing.get(key)
+    if (shared) {
+      // One signing is one payment: the client's spending options count it for the call that
+      // started it, not again for each call that joins it.
+      if (constraints && shared.constraints) SpendHooks.join(constraints, shared.constraints)
+      return shared.promise
     }
+    const promise = method.createCredential(options).finally(() => signing.delete(key))
+    signing.set(key, { constraints, promise })
     return promise
   }
   return SpendHooks.register(

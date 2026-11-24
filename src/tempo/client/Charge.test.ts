@@ -446,6 +446,72 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('under spending options, never broadcasts or signs a challenge that expired meanwhile', async () => {
+    vi.resetModules()
+    const sendCallsSync = vi.fn(async () => ({
+      receipts: [{ transactionHash: `0x${'ab'.repeat(32)}` }],
+    }))
+    const signTransaction = vi.fn(async () => '0x76')
+    vi.doMock('viem/actions', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('viem/actions')>()),
+      prepareTransactionRequest: vi.fn(async () => ({})),
+      sendCallsSync,
+      signTransaction,
+    }))
+    const start = Date.now()
+    const expires = new Date(start + 60_000).toISOString()
+    vi.useFakeTimers({ now: start, toFake: ['Date'] })
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const SpendHooks = await import('../../client/internal/SpendHooks.js')
+      const chainId = 42431
+      for (const mode of ['push', 'pull'] as const) {
+        // A JSON-RPC account pushes the payment; a local one signs it for the server.
+        const payer = mode === 'push' ? account.address : account
+        const client = createClient({
+          account: payer,
+          chain: { ...tempoLocalnet, id: chainId },
+          transport: http('http://127.0.0.1'),
+        })
+        const method = chargeWithMockedActions({
+          account: payer,
+          getClient: () => client,
+          // The challenge expires while the account is resolved.
+          resolveAccount: () => {
+            vi.setSystemTime(new Date(expires).getTime() + 1)
+            return undefined
+          },
+        })
+        const pay = (constrained: boolean) => {
+          vi.setSystemTime(start)
+          const parameters = {
+            challenge: {
+              ...createChallenge({ amount: '1', chainId, supportedModes: [mode] }),
+              expires,
+            },
+            context: {},
+          }
+          if (constrained) SpendHooks.constrain(parameters, { limit: 'budget', resume: false })
+          return method.createCredential(parameters)
+        }
+
+        await expect(pay(true)).rejects.toMatchObject({ name: 'PaymentExpiredError' })
+        expect(sendCallsSync).not.toHaveBeenCalled()
+        expect(signTransaction).not.toHaveBeenCalled()
+
+        // Without spending options, the method sends or signs as before.
+        await pay(false)
+        expect(mode === 'push' ? sendCallsSync : signTransaction).toHaveBeenCalledOnce()
+        sendCallsSync.mockClear()
+        signTransaction.mockClear()
+      }
+    } finally {
+      vi.useRealTimers()
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   test('resolveAccount selects the transaction account from executable calls', async () => {
     vi.resetModules()
     const selectedAccount = privateKeyToAccount(
@@ -1425,6 +1491,53 @@ describe('tempo.charge client', () => {
 
       expect(signTransaction).toHaveBeenCalledTimes(signings)
       expect(first === second).toBe(signings === 1)
+    })
+
+    test('counts a signing that concurrent paid requests share once', async () => {
+      const { method, signTransaction } = await setup()
+      // Imported after the reset, so they share the method's spending hooks.
+      const Budget = await import('../../client/Budget.js')
+      const Fetch = await import('../../client/internal/Fetch.js')
+      // The first signing waits until the second request has joined it.
+      let joined!: () => void
+      const ready = new Promise<void>((resolve) => {
+        joined = resolve
+      })
+      signTransaction.mockImplementationOnce(async () => {
+        await ready
+        return '0x760000'
+      })
+      let calls = 0
+      const counted = {
+        ...method,
+        createCredential: (options: Parameters<typeof method.createCredential>[0]) => {
+          const promise = method.createCredential(options)
+          if (++calls === 2) joined()
+          return promise
+        },
+      }
+      const upstream = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        new Request(input, init).headers.has('Authorization')
+          ? new Response('OK')
+          : new Response(null, {
+              headers: { 'WWW-Authenticate': Challenge.serialize(challenge()) },
+              status: 402,
+            }),
+      )
+      const budget = Budget.create({
+        total: { network: 'eip155:42431', asset: currency, amount: 5_000_000n },
+      })
+      const fetch = Fetch.from({ authorize: budget, fetch: upstream as never, methods: [counted] })
+
+      const responses = await Promise.all([
+        fetch('https://api.example.com/resource'),
+        fetch('https://api.example.com/resource'),
+      ])
+
+      expect(responses.map((response) => response.status)).toEqual([200, 200])
+      expect(signTransaction).toHaveBeenCalledOnce()
+      expect(budget.spent().amount).toBe(1_000_000n)
+      expect(budget.reserved().amount).toBe(0n)
     })
 
     test('does not share a failed signing with a later call', async () => {
