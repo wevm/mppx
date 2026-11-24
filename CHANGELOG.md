@@ -1,5 +1,25 @@
 # mppx
 
+## 0.22.0
+
+### Minor Changes
+
+- 0f6955d: Required custom replay stores to support atomic owner-aware cleanup before Tempo charge uses them. Protected owned replay claims against expiry-only replacements during shard rollback; shard upgrades require draining in-flight owned attempts.
+- 66dc9ff: The x402 middlewares now offer a native `solana/charge` MPP challenge beside a Solana `exact` requirement, as they already do for EVM `exact`. The client's partially signed transfer is verified and settled through the route's x402 facilitator, with the facilitator as fee payer, so one route takes x402 and MPP payments on Solana. Clients pay it with `@solana/mpp`'s `solana.charge`.
+
+### Patch Changes
+
+- 8a31e2d: Fixed `Challenge.deserialize` to reject auth-params that are not separated by commas, text after a quoted value, and unquoted values that are not tokens.
+- 54fc48d: Changed Tempo charge to reject push (hash, Zone) and proof credentials for a challenge issued without a per-issuance nonce (challengeNonce: false); only pull (transaction) credentials are accepted then. Kept a settled payment when deleting its broadcast record fails, and answered a body digest mismatch with the problem instead of the payment page.
+- 54fc48d: Fixed Tempo charge so a retry that overlaps an unknown broadcast outcome recovers the server's own transaction: the broadcast record is written before the replay claims are released, and ownership is checked again once the receipt arrives.
+- 4c32b2d: Added `maxPayment`, `authorize` (with `Budget.create`), `funders` and `tokens` options to the client and to `McpClient.wrap`, checked before any credential is created. They accept only `charge` challenges: while one is set, the client refuses sessions and subscriptions with `PaymentLimitExceededError` (`reason: 'intent'`). A credential an event handler or `onChallenge` returns, MPP or x402, is checked against the one offered challenge it pays, and a fetch built on a limited mppx fetch keeps its limits. A fetch with these options refuses the MCP tool calls `McpClient.wrap` pays itself with a `TypeError`. Added the decoded receipt, amount (a decimal string) and normalized requirement of the offer the credential pays to `payment.response` events.
+- 34e6d4c: Fixed `Transport.http().setCredential` sending a Payment credential in `Authorization` when called without `options.challenge` for a challenge that selects `Payment-Authorization`: it now reads the field from the challenge the credential echoes. It also clears a stale Payment credential from `Payment-Authorization` before attaching a new one.
+- 7c2c519: Fixed `Credential.deserialize` to reject credentials whose `payload` is not a JSON object or whose `source` is not a string.
+- 54fc48d: Aligned with the MPP core and Tempo charge specs: replayed credentials now get 402 with a fresh Challenge (`invalid-challenge`), Challenges carry an `_mpp_nonce` (`challengeNonce: false` turns it off), the Tempo attribution memo is optional on the server for pull (`transaction`) credentials, method identifiers are a-z only, requests with more than one Payment credential get 400, body digest mismatches get `invalid-challenge`, and `onChallenge` can return `false` to decline payment.
+- 54fc48d: Kept the challenge-bound attribution memo required for Tempo push payments (`hash` and Zone credentials); pull (`transaction`) credentials accept a plain transfer or a memo not in attribution format, and reject any attribution memo for another realm or Challenge. Clients no longer pay again when a credential they attached themselves, or one sent through the MCP client or MCP over HTTP, gets an `invalid-challenge` answer. The HTTP transport no longer counts commas inside another scheme's quoted parameters as extra Payment credentials and checks the 64 KiB limit before parsing, session bootstrap routes answer more than one Payment credential with 400, and EVM charge routes no longer attach an x402 offer to a rejection without a Challenge. A synchronous pull broadcast that the node already holds (`already known`, `known transaction` or `ExpiringNonceReplay`) now settles only a transfer that carries this Challenge's attribution memo, so a pending transaction someone else submitted can't pay it.
+- c1d91f6: Changed the identity client to resend a paid request once after a 401, when a prover's `retry` asks to, with refreshed identity and the same Payment credential while its Challenge has not expired, unless the 401 carries a receipt. A 401 never follows settlement, so this recovers from expired identity without paying twice. Paid requests are still never resent after a 403 or any other response. If a retry hook or re-proving fails, or the Challenge expires first, the 401 is returned without resending. The rejected response is released before re-proving, and the Link claims prover reads at most 64 KiB of a challenge body, giving up after 2 seconds or when the request aborts.
+- 813085d: Added trusted receiving-origin configuration for ERC-8004 verification to reject signed requests intended for another service.
+
 ## 0.21.4
 
 ### Patch Changes
