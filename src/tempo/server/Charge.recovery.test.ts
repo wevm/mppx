@@ -672,7 +672,7 @@ test('an unknown outcome records its own broadcast before releasing its replay c
   }) as typeof store.put
   store.releaseClaim = vi.fn(async (...args: Parameters<typeof store.releaseClaim>) => {
     order.push('release')
-    return originalRelease.apply(store, args)
+    return originalRelease!.apply(store, args)
   }) as typeof store.releaseClaim
   state.outcome = 'missing'
   const thrown = await broadcast().catch((e: unknown) => e)
