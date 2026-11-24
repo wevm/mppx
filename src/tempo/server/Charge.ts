@@ -1104,7 +1104,9 @@ export function charge<const parameters extends charge.Parameters>(
                 throw new VerificationFailedError({
                   reason: 'Broadcast transaction hash does not match the signed transaction',
                 })
-              await store.delete(getBroadcastStoreKey(finalHash))
+              // The transfer has settled: a marker left behind expires on its own and
+              // must not fail the payment.
+              await store.delete(getBroadcastStoreKey(finalHash)).catch(() => {})
               return toReceipt(receipt.transactionHash, fundingCurrency)
             }
 

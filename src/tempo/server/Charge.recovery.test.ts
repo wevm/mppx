@@ -657,6 +657,23 @@ test('a duplicate whose receipt never appeared is not remembered as its own', as
   expect(onPaymentSuccess).not.toHaveBeenCalled()
 })
 
+test('a failed broadcast record delete does not fail a settled payment', async () => {
+  const { broadcast, finalHash, onPaymentSuccess, signatureHashKey, store } = await setup({
+    sponsored: false,
+  })
+  const originalDelete = store.delete
+  store.delete = vi.fn().mockRejectedValue(new Error('store unavailable'))
+  try {
+    const receipt = await broadcast()
+    expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+    expect(store.delete).toHaveBeenCalled()
+    expect(await store.get(signatureHashKey)).toMatchObject({ type: 'mppx:replay' })
+    expect(onPaymentSuccess).toHaveBeenCalledOnce()
+  } finally {
+    store.delete = originalDelete
+  }
+})
+
 test('rejects unmigrated custom replay stores before configuring a payment method', () => {
   const { releaseClaim: _, ...store } = Store.memory()
   expect(() =>
