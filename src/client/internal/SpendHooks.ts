@@ -55,11 +55,13 @@ export function of(parameters: object): Constraints | undefined {
 }
 
 /**
- * Records that a credential checked under `joiner` shares a signing another credential, checked
- * under `owner`, started: one payment, which the client's spending options count once.
+ * Records which in-flight signing the latest call checked under `joiner` returns: one another
+ * call, checked under `owner`, started, which the client's spending options count once, or, with
+ * no `owner`, one it started itself, such as when it resumes a Zone payment, which it counts.
  */
-export function join(joiner: Constraints, owner: Constraints): void {
-  if (joiner !== owner) owners.set(joiner, owner)
+export function join(joiner: Constraints, owner: Constraints | undefined): void {
+  if (owner === undefined || owner === joiner) owners.delete(joiner)
+  else owners.set(joiner, owner)
 }
 
 /** The constraints of the credential whose signing one checked under `joiner` shares, if any. */

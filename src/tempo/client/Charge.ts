@@ -476,12 +476,11 @@ export function charge(parameters: charge.Parameters = {}) {
     const key = `${signer ?? ''}:${options.challenge.id}`
     const constraints = SpendHooks.of(options)
     const shared = signing.get(key)
-    if (shared) {
-      // One signing is one payment: the client's spending options count it for the call that
-      // started it, not again for each call that joins it.
-      if (constraints && shared.constraints) SpendHooks.join(constraints, shared.constraints)
-      return shared.promise
-    }
+    // One signing is one payment: the client's spending options count it for the call that
+    // started it, not again for each call that joins it. A retry that starts its own signing,
+    // such as one resuming a Zone payment, is counted for itself.
+    if (constraints) SpendHooks.join(constraints, shared?.constraints)
+    if (shared) return shared.promise
     const promise = method.createCredential(options).finally(() => signing.delete(key))
     signing.set(key, { constraints, promise })
     return promise

@@ -328,7 +328,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const callerHeaders = getCallerHeaders(input, init?.headers)
     const hasExplicitAcceptPayment = callerHeaders.has(Constants.Headers.acceptPayment)
     const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
-    const capturedBody = captureRequestBody(input, init, callerHeaders)
+    const signal = resolveRequestSignal(input, init)
+    // Under spending options the body is read before sending (below), so an abort must stop it.
+    const capturedBody = captureRequestBody(
+      input,
+      init,
+      callerHeaders,
+      spender.prepare ? signal : undefined,
+    )
     const initialRequest = prepareInitialRequest(
       input,
       init,
@@ -339,13 +346,15 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     )
     // `McpClient.wrap` pays the tool calls it tags itself, outside this fetch, so this fetch's
     // spending options would not bound them: refuse to send one instead.
-    if (
-      spender.prepare &&
-      adapterOwnsPayment(withCapturedBody(initialRequest.init, await capturedBody))
-    )
-      throw new TypeError(
-        'This fetch has spending options (maxPayment, authorize or funders), but McpClient.wrap pays MCP tool calls itself. Set them on McpClient.wrap and give its transport a fetch without them.',
-      )
+    if (spender.prepare) {
+      const body = await capturedBody
+      // A canceled request is never sent, even when its body was cut short to stop reading it.
+      signal?.throwIfAborted()
+      if (adapterOwnsPayment(withCapturedBody(initialRequest.init, body)))
+        throw new TypeError(
+          'This fetch has spending options (maxPayment, authorize or funders), but McpClient.wrap pays MCP tool calls itself. Set them on McpClient.wrap and give its transport a fetch without them.',
+        )
+    }
     const first = await send(cloneRequestInput(initialRequest.input), initialRequest.init)
     let response = first.response
     // Retry headers from the unpaid attempt (such as an attestation) go on the paid attempt too.
@@ -1217,6 +1226,7 @@ function captureRequestBody<methods extends readonly Method.AnyClient[]>(
   input: RequestInfo | URL,
   init: from.RequestInit<methods> | undefined,
   headers: Headers,
+  signal?: AbortSignal | undefined,
 ): Promise<string | undefined> | undefined {
   if (!(input instanceof Request) || init?.body !== undefined || !input.body || input.bodyUsed)
     return undefined
@@ -1226,10 +1236,13 @@ function captureRequestBody<methods extends readonly Method.AnyClient[]>(
       return undefined
   }
   try {
-    return input
-      .clone()
-      .text()
-      .catch(() => undefined)
+    const copy = input.clone()
+    // A stream its producer leaves open never ends: with `signal`, an abort cancels the read.
+    const body =
+      signal && copy.body
+        ? new Response(copy.body.pipeThrough(new TransformStream(), { signal }))
+        : copy
+    return body.text().catch(() => undefined)
   } catch {
     return undefined
   }

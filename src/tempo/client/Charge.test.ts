@@ -1540,6 +1540,61 @@ describe('tempo.charge client', () => {
       expect(budget.reserved().amount).toBe(0n)
     })
 
+    test('counts a retry that signs itself after sharing a signing whose payment was released', async () => {
+      const { method, signTransaction } = await setup()
+      // Imported after the reset, so they share the method's spending hooks and error classes.
+      const Budget = await import('../../client/Budget.js')
+      const Errors = await import('../../Errors.js')
+      const Fetch = await import('../../client/internal/Fetch.js')
+      const canceled = new AbortController()
+      // The first signing waits until the second request has joined it, then reports a Zone
+      // payment still settling, after the request that started it was canceled.
+      let joined!: () => void
+      const ready = new Promise<void>((resolve) => {
+        joined = resolve
+      })
+      signTransaction.mockImplementationOnce(async () => {
+        await ready
+        canceled.abort()
+        throw new Errors.ZoneSettlementPendingError({ challengeId: 'shared', zoneId: 1 })
+      })
+      let calls = 0
+      const counted = {
+        ...method,
+        createCredential: (options: Parameters<typeof method.createCredential>[0]) => {
+          const promise = method.createCredential(options)
+          if (++calls === 2) joined()
+          return promise
+        },
+      }
+      const upstream = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        new Request(input, init).headers.has('Authorization')
+          ? new Response('OK')
+          : new Response(null, {
+              headers: { 'WWW-Authenticate': Challenge.serialize(challenge()) },
+              status: 402,
+            }),
+      )
+      const budget = Budget.create({
+        total: { network: 'eip155:42431', asset: currency, amount: 5_000_000n },
+      })
+      const fetch = Fetch.from({ authorize: budget, fetch: upstream as never, methods: [counted] })
+
+      const [first, second] = await Promise.allSettled([
+        fetch('https://api.example.com/resource', { signal: canceled.signal }),
+        fetch('https://api.example.com/resource'),
+      ])
+
+      // The canceled request released its reservation; the retry that signed the payment itself
+      // is counted, not released as a share of the first signing.
+      expect(first.status).toBe('rejected')
+      expect(second.status === 'fulfilled' && second.value.status).toBe(200)
+      expect(signTransaction).toHaveBeenCalledTimes(2)
+      expect(calls).toBe(3)
+      expect(budget.spent().amount).toBe(1_000_000n)
+      expect(budget.reserved().amount).toBe(0n)
+    })
+
     test('does not share a failed signing with a later call', async () => {
       const { method, signTransaction } = await setup()
       signTransaction.mockRejectedValueOnce(new Error('rpc down'))

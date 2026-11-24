@@ -1398,4 +1398,44 @@ describe('MCP', () => {
     expect(response.status).toBe(200)
     expect(upstream).toHaveBeenCalledTimes(1)
   })
+
+  test('error: a canceled MCP request whose body stream stays open is rejected at once', async () => {
+    const { method: tempo } = method('tempo')
+    for (const headers of [
+      { 'content-type': 'application/json', 'mcp-method': 'tools/call' },
+      { accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+    ]) {
+      const upstream = vi.fn(async () => Response.json({ id: 1, jsonrpc: '2.0', result: {} }))
+      const limited = Fetch.from({
+        fetch: upstream as never,
+        maxPayment: { value: '1', currency: 'USD' },
+        methods: [tempo],
+      })
+      const controller = new AbortController()
+      // Its producer sends one byte and never closes the stream.
+      const body = new ReadableStream<Uint8Array>({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode('{'))
+        },
+      })
+      const request = new Request(url, {
+        body,
+        duplex: 'half',
+        headers,
+        method: 'POST',
+        signal: controller.signal,
+      } as RequestInit)
+      const reason = new Error('canceled')
+      const outcome = limited(request).then(
+        () => 'sent',
+        (error: unknown) => error,
+      )
+      controller.abort(reason)
+
+      // Settled by the abort alone, before the next turn of the event loop.
+      const next = new Promise((resolve) => setImmediate(() => resolve('pending')))
+      expect(await Promise.race([outcome, next])).toBe(reason)
+      expect(upstream).not.toHaveBeenCalled()
+    }
+  })
 })

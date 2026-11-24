@@ -89,6 +89,8 @@ const issued = new WeakSet<object>()
  * one authorization share is counted once.
  */
 const scopes = new WeakMap<SpendHooks.Constraints, Spend.Authorize | undefined>()
+/** Constraints of payments whose credential committed a reservation, so their signing is counted. */
+const counted = new WeakSet<SpendHooks.Constraints>()
 const decimalPattern = /^(\d+)(?:\.(\d+))?$/
 const maxDecimalLength = 1_024
 
@@ -175,11 +177,18 @@ export function from(config: Config): Spender {
 
 /**
  * Whether a credential checked under `constraints` shares a signing that a payment under the
- * same `authorize` started and counts, such as concurrent requests for one Tempo challenge.
+ * same `authorize` started and already counted, such as concurrent requests for one Tempo
+ * challenge. A payment that resumed, or released its reservation, counted nothing, so a
+ * credential sharing its signing is counted itself.
  */
 function sharesSigning(constraints: SpendHooks.Constraints): boolean {
   const owner = SpendHooks.owner(constraints)
-  return owner !== undefined && scopes.has(owner) && scopes.get(owner) === scopes.get(constraints)
+  return (
+    owner !== undefined &&
+    counted.has(owner) &&
+    scopes.has(owner) &&
+    scopes.get(owner) === scopes.get(constraints)
+  )
 }
 
 /** Whether a config sets any spending option. */
@@ -342,7 +351,10 @@ export function payment(
             used = true
             // A signing another payment under this authorization started is counted there.
             if (sharesSigning(own.constraints)) own.settlement.release()
-            else own.settlement.commit()
+            else {
+              own.settlement.commit()
+              if (!own.constraints.resume) counted.add(own.constraints)
+            }
           },
           release() {},
         },
