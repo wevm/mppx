@@ -132,6 +132,8 @@ export async function sign(
     parameters,
     tag: options.tag,
   }
+  if (!hasValidComponents(input.components))
+    throw new Error('Covered components must be unique and must not include "@signature-params".')
   // Check the existing signatures first, so a request this refuses never reaches a remote signer.
   const headers = new Headers(request.headers)
   const inputs = parseHeaderDictionary(headers, SignatureHeaders.signatureInput)
@@ -164,6 +166,8 @@ export async function verify(
     nonceStore: Store.AtomicStore
     requiredComponents: readonly string[]
     tag: string | readonly string[]
+    /** Algorithms this profile accepts. @default every algorithm in {@link Algorithms} */
+    algorithms?: readonly SignatureAlgorithm[] | undefined
     validate?: ((input: SignatureInput, request: Request) => string | undefined) | undefined
     validateKey?:
       | ((
@@ -180,6 +184,8 @@ export async function verify(
   if (!parsed.input || !parsed.signature)
     return { status: 'invalid', reason: 'The HTTP message signature is malformed.' }
   const { input, signature } = parsed
+  if (options.algorithms && !options.algorithms.includes(input.algorithm))
+    return { status: 'invalid', reason: 'The signature algorithm is not supported.' }
 
   if (!options.requiredComponents.every((component) => hasComponent(input.components, component)))
     return {
@@ -303,6 +309,7 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
     id: id as string,
     parameters,
   }))
+  if (!hasValidComponents(components)) return undefined
   const created = parameters.get('created')
   const expires = parameters.get('expires')
   const algorithm = parameters.get('alg')
@@ -417,6 +424,15 @@ function hasExpectedTag(entry: unknown, tags: ReadonlySet<string>): boolean {
   if (!isInnerList(value)) return false
   const tag = value[1].get('tag')
   return typeof tag === 'string' && tags.has(tag)
+}
+
+/** RFC 9421 §2.5: each component is covered at most once, and never `@signature-params`. */
+function hasValidComponents(components: readonly Component[]): boolean {
+  const identifiers = components.map(serializeComponent)
+  return (
+    new Set(identifiers).size === identifiers.length &&
+    !components.some((component) => component.id === Constants.components.signatureParams)
+  )
 }
 
 function serializeComponent(component: Component): string {

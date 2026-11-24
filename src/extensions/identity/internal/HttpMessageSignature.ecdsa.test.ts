@@ -152,7 +152,7 @@ describe.each([
       }).verify(signed),
     ).toMatchObject({
       status: 'invalid',
-      reason: 'The Web Bot Auth key must be an extractable Ed25519 or RSA public key.',
+      reason: 'The signature algorithm is not supported.',
     })
   })
 
