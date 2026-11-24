@@ -34,11 +34,25 @@ const algorithmDescriptors = {
   [Algorithms.ed25519]: {
     hash: undefined,
     keyAlgorithm: 'Ed25519',
+    namedCurve: undefined,
     webCryptoAlgorithm: 'Ed25519',
+  },
+  [Algorithms.ecdsaP256Sha256]: {
+    hash: undefined,
+    keyAlgorithm: 'ECDSA',
+    namedCurve: 'P-256',
+    webCryptoAlgorithm: { name: 'ECDSA', hash: 'SHA-256' },
+  },
+  [Algorithms.ecdsaP384Sha384]: {
+    hash: undefined,
+    keyAlgorithm: 'ECDSA',
+    namedCurve: 'P-384',
+    webCryptoAlgorithm: { name: 'ECDSA', hash: 'SHA-384' },
   },
   [Algorithms.rsaPssSha512]: {
     hash: 'SHA-512',
     keyAlgorithm: 'RSA-PSS',
+    namedCurve: undefined,
     webCryptoAlgorithm: { name: 'RSA-PSS', saltLength: 64 },
   },
 } as const satisfies Record<
@@ -46,7 +60,8 @@ const algorithmDescriptors = {
   {
     hash: string | undefined
     keyAlgorithm: string
-    webCryptoAlgorithm: AlgorithmIdentifier | RsaPssParams
+    namedCurve: string | undefined
+    webCryptoAlgorithm: AlgorithmIdentifier | RsaPssParams | EcdsaParams
   }
 >
 
@@ -325,14 +340,17 @@ function isSignatureAlgorithm(value: unknown): value is SignatureAlgorithm {
 }
 
 function keySupportsAlgorithm(key: CryptoKey, algorithm: SignatureAlgorithm): boolean {
-  const { hash, keyAlgorithm } = algorithmDescriptors[algorithm]
+  const { hash, keyAlgorithm, namedCurve } = algorithmDescriptors[algorithm]
   return (
     key.algorithm.name === keyAlgorithm &&
-    (!hash || (key.algorithm as RsaHashedKeyAlgorithm).hash.name === hash)
+    (!hash || (key.algorithm as RsaHashedKeyAlgorithm).hash.name === hash) &&
+    (!namedCurve || (key.algorithm as EcKeyAlgorithm).namedCurve === namedCurve)
   )
 }
 
-function webCryptoAlgorithm(algorithm: SignatureAlgorithm): AlgorithmIdentifier | RsaPssParams {
+function webCryptoAlgorithm(
+  algorithm: SignatureAlgorithm,
+): AlgorithmIdentifier | RsaPssParams | EcdsaParams {
   return algorithmDescriptors[algorithm].webCryptoAlgorithm
 }
 

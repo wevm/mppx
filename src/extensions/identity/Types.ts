@@ -14,15 +14,17 @@ export type SignatureAlgorithm = (typeof Algorithms)[keyof typeof Algorithms]
  */
 export type Signer = {
   /**
-   * The public key of the remote private key: Ed25519 or RSA-PSS SHA-512, with the `verify`
-   * usage. Its algorithm is the signature algorithm, and identifiers that derive from the key
-   * (such as a Web Bot Auth `keyid`) are computed from it.
+   * The public key of the remote private key: Ed25519, ECDSA P-256/P-384, or RSA-PSS SHA-512,
+   * with the `verify` usage. Its algorithm is the signature algorithm, and identifiers that
+   * derive from the key (such as a Web Bot Auth `keyid`) are computed from it.
    */
   readonly publicKey: CryptoKey
   /**
    * Signs `payload` (the complete message, not a digest: the RFC 9421 signature base or the JWS
-   * signing input) and resolves with the raw signature bytes: 64 bytes for Ed25519, or the RSA
-   * modulus length for RSA-PSS SHA-512 (SHA-512, MGF1 with SHA-512, 64-byte salt).
+   * signing input) and resolves with the raw signature bytes: 64 bytes for Ed25519, 64 or 96
+   * bytes of fixed-width `r || s` for ECDSA P-256/SHA-256 or P-384/SHA-384, or the RSA modulus
+   * length for RSA-PSS SHA-512 (SHA-512, MGF1 with SHA-512, 64-byte salt). Individual profiles
+   * can restrict which algorithms they accept.
    */
   readonly sign: (parameters: { readonly payload: Uint8Array }) => Promise<Uint8Array>
 }

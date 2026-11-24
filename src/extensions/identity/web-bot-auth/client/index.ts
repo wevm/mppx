@@ -2,6 +2,7 @@ import { parseDictionary, serializeDictionary } from 'structured-headers'
 import type { Dictionary } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
+import { Algorithms } from '../../Constants.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
 import * as JwkThumbprint from '../../internal/JwkThumbprint.js'
 import * as Signer from '../../internal/Signer.js'
@@ -23,7 +24,7 @@ export function prover(config: prover.Config): Identity.Prover {
   const signatureAgentKey = config.signatureAgentKey ?? label
   const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime
   const signatureAgent = SignatureAgent.directoryOrigin(config.signatureAgent)
-  const { publicKey } = Signer.resolve(config.key)
+  const { publicKey } = Signer.resolve(config.key, [Algorithms.ed25519, Algorithms.rsaPssSha512])
   let keyId: Promise<string> | undefined
   if (!signatureAgent) throw new TypeError('Signature-Agent must identify a valid HTTPS origin.')
   if (!Number.isInteger(expiresIn) || expiresIn <= 0)

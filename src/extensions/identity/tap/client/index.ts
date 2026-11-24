@@ -50,8 +50,8 @@ export declare namespace prover {
     /** TAP signature type for the request. */
     intent: (typeof Constants.intents)[keyof typeof Constants.intents]
     /**
-     * Ed25519 or RSA-PSS SHA-512 key pair, or a {@link SigningKey | Signer} for a remote key,
-     * provisioned to the agent provider.
+     * Ed25519, ECDSA P-256/SHA-256, ECDSA P-384/SHA-384, or RSA-PSS SHA-512 key pair,
+     * or a {@link SigningKey | Signer} for a remote key, provisioned to the agent provider.
      */
     key: SigningKey
     /** Identifier the merchant uses to resolve the signing public key. */

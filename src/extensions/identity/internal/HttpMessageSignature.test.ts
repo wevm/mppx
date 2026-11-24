@@ -361,7 +361,7 @@ describe('signing keys', () => {
     })
 
     test.each([
-      ['ECDSA P-256', { name: 'ECDSA', namedCurve: 'P-256' }],
+      ['ECDSA P-521', { name: 'ECDSA', namedCurve: 'P-521' }],
       [
         'RSA-PSS SHA-256',
         {
@@ -385,8 +385,12 @@ describe('signing keys', () => {
             return new Uint8Array(64)
           },
         }),
-      ).rejects.toThrow('Signing keys must be Ed25519 or RSA-PSS SHA-512.')
-      await expect(sign(keys)).rejects.toThrow('Signing keys must be Ed25519 or RSA-PSS SHA-512.')
+      ).rejects.toThrow(
+        'Signing keys must be Ed25519 or ECDSA P-256 SHA-256 or ECDSA P-384 SHA-384 or RSA-PSS SHA-512.',
+      )
+      await expect(sign(keys)).rejects.toThrow(
+        'Signing keys must be Ed25519 or ECDSA P-256 SHA-256 or ECDSA P-384 SHA-384 or RSA-PSS SHA-512.',
+      )
       expect(called).toBe(false)
     })
 
