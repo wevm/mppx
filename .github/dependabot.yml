@@ -22,6 +22,7 @@ updates:
       npm-security:
         applies-to: security-updates
         patterns: ['*']
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directories:
