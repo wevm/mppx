@@ -27,6 +27,8 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         keyResolver: config.keyResolver,
         maxAge: Constants.maximumSignatureLifetime,
         nonceNamespace: Constants.protocol,
+        // TAP blocks any nonce seen within the signature lifetime, whichever key signed it.
+        nonceScope: 'namespace',
         nonceStore: config.nonceStore,
         requiredComponents: Constants.requiredComponents,
         tag: [Constants.tags.browse, Constants.tags.payment],

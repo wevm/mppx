@@ -163,6 +163,11 @@ export async function verify(
     keyResolver: KeyResolver
     maxAge: number
     nonceNamespace: string
+    /**
+     * Whether a nonce is single-use per key ID (`'key'`) or across every key in the namespace
+     * (`'namespace'`). @default 'key'
+     */
+    nonceScope?: 'key' | 'namespace' | undefined
     nonceStore: Store.AtomicStore
     requiredComponents: readonly string[]
     tag: string | readonly string[]
@@ -239,7 +244,9 @@ export async function verify(
     if (
       !(await Store.tryClaim(
         options.nonceStore,
-        `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
+        options.nonceScope === 'namespace'
+          ? `${options.nonceNamespace}:${input.nonce}`
+          : `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
         input.expires * 1000,
       ))
     )
