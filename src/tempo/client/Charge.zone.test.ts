@@ -1,5 +1,5 @@
 import { Challenge } from 'mppx'
-import { tempo as tempo_client } from 'mppx/client'
+import { Budget, Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx, tempo } from 'mppx/server'
 import { createClient, custom, defineChain } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -206,6 +206,140 @@ describe('tempo.charge client zone selection', () => {
       'Zone withdrawal outcome is unknown',
     )
     expect(calls).toHaveLength(sent)
+  })
+
+  test('keeps a withdrawal with an unknown outcome charged to the budget', async () => {
+    const calls: string[] = []
+    const budget = Budget.create({
+      total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: 1_500_000n },
+    })
+    const mppx = Mppx_client.create({
+      authorize: budget,
+      fetch: vi.fn() as never,
+      methods: [
+        tempo_client.charge({
+          getClient: () => l1,
+          zone: { client: failingZoneClient(calls, 'send') },
+        }),
+      ],
+      polyfill: false,
+    })
+    const c = await challenge()
+    const response = new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(c) },
+      status: 402,
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    let error: unknown
+    try {
+      const result = mppx.createCredential(response).catch((error: unknown) => error)
+      await vi.advanceTimersByTimeAsync(30_000)
+      error = await result
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // The message is unchanged; the type tells spending limits that funds may have moved.
+    expect(error).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+    expect(String(error)).toMatch(/Zone withdrawal outcome is unknown: transaction 0x/)
+    expect(calls).toContain('eth_sendRawTransactionSync')
+    expect(budget.spent().amount).toBe(1_000_000n)
+    expect(budget.reserved().amount).toBe(0n)
+  })
+
+  test.each([1_500_000n, 3_000_000n])(
+    'resumes an outstanding withdrawal on a later payment without counting it again (budget %s)',
+    async (total) => {
+      const calls: string[] = []
+      const budget = Budget.create({
+        total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: total },
+      })
+      const mppx = Mppx_client.create({
+        authorize: budget,
+        fetch: vi.fn() as never,
+        methods: [
+          tempo_client.charge({
+            getClient: () => l1,
+            zone: { client: failingZoneClient(calls, 'send') },
+          }),
+        ],
+        polyfill: false,
+      })
+      const c = await challenge()
+      const pay = async () => {
+        const response = new Response(null, {
+          headers: { 'WWW-Authenticate': Challenge.serialize(c) },
+          status: 402,
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+        try {
+          const result = mppx.createCredential(response).catch((error: unknown) => error)
+          await vi.advanceTimersByTimeAsync(30_000)
+          return await result
+        } finally {
+          vi.useRealTimers()
+        }
+      }
+
+      expect(await pay()).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+      const sent = calls.length
+      expect(budget.spent().amount).toBe(1_000_000n)
+
+      // The retry resumes the same withdrawal: the budget it is counted in neither blocks it
+      // nor counts it twice.
+      expect(await pay()).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+      expect(calls).toHaveLength(sent)
+      expect(budget.spent().amount).toBe(1_000_000n)
+      expect(budget.reserved().amount).toBe(0n)
+    },
+  )
+
+  test('keeps a mined withdrawal charged to the budget when its sender tag cannot be read', async () => {
+    const calls: string[] = []
+    let sent = false
+    // Mines the withdrawal with a receipt that hides the outbox event, then fails every read.
+    const zone = createClient({
+      account: payer,
+      chain: defineChain({ ...tempoModerato, id: 1_424_310_003, name: 'Zone' }),
+      transport: custom(
+        {
+          async request({ method }) {
+            calls.push(method)
+            if (method === 'eth_chainId') return `0x${(1_424_310_003).toString(16)}`
+            if (sent) throw new Error('connection lost')
+            if (method === 'eth_call') return `0x${'00'.repeat(32)}`
+            if (method === 'eth_sendRawTransactionSync') {
+              sent = true
+              return { ...revertedReceipt, status: '0x1' }
+            }
+            if (method === 'eth_getBlockByNumber')
+              return { baseFeePerGas: '0x1', number: '0x1', timestamp: '0x1' }
+            return '0x1'
+          },
+        },
+        { retryCount: 0 },
+      ),
+    })
+    const budget = Budget.create({
+      total: { network: `eip155:${tempoModerato.id}`, asset: currency, amount: 1_500_000n },
+    })
+    const mppx = Mppx_client.create({
+      authorize: budget,
+      fetch: vi.fn() as never,
+      methods: [tempo_client.charge({ getClient: () => l1, zone: { client: zone } })],
+      polyfill: false,
+    })
+    const response = new Response(null, {
+      headers: { 'WWW-Authenticate': Challenge.serialize(await challenge()) },
+      status: 402,
+    })
+
+    await expect(mppx.createCredential(response)).rejects.toThrow(
+      /was sent, but its sender tag could not be read/,
+    )
+    expect(calls).toContain('eth_sendRawTransactionSync')
+    expect(budget.spent().amount).toBe(1_000_000n)
+    expect(budget.reserved().amount).toBe(0n)
   })
 
   describe('a new challenge for a payment whose withdrawal is outstanding', () => {

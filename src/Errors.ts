@@ -316,6 +316,10 @@ export declare namespace PaymentOutcomeUnknownError {
  * the node accepted it, and no receipt appeared before settlement stopped polling. The transaction
  * may still be included until `validBefore`.
  *
+ * A `tempo.charge` client also throws it when a Zone withdrawal it sent to pay a challenge has no
+ * send response or receipt: the withdrawal may have moved funds, so the client's spending limits
+ * keep counting the payment, and retrying the challenge resumes it rather than withdrawing again.
+ *
  * Settle it by looking up the receipt for `transactionHash`: once `validBefore` has passed, the
  * transaction can no longer be included, so one lookup after it is final. This is not a
  * `PaymentError`: HTTP handlers still answer with a generic 500 `InternalPaymentError`, whose
@@ -653,6 +657,68 @@ export declare namespace ZoneSettlementPendingError {
     senderTags?: readonly `0x${string}`[] | undefined
     /** ID of the Zone the withdrawal left. */
     zoneId: number
+  }
+}
+
+/**
+ * A payment is over the client's `maxPayment` or its budget, or it cannot be checked against
+ * them, so the client did not create or sign a credential.
+ *
+ * `reason` is `amount` when the payment is larger than the limit allows, and `asset` when the
+ * limit cannot count it: no per-asset limit names its asset, or a currency limit meets a token
+ * whose currency and decimals the client did not configure. Currency limits never trust the
+ * currency or decimals a server sends, so add the token to the client's `tokens`, set a
+ * per-asset limit, or raise the limit.
+ *
+ * `reason` is `credential` when a credential an event handler or `onChallenge` returned cannot
+ * be read or bound to exactly one challenge the response offered, so it was not used; `limit` is
+ * then `maxPayment` when it is set, else `budget`.
+ *
+ * `reason` is `intent` when the selected challenge is not a `charge`: spending options bound one
+ * payment, while a session or subscription keeps paying after it is checked, so the client refuses
+ * every other intent while `maxPayment`, `authorize` or `funders` is set.
+ */
+export class PaymentLimitExceededError extends Error {
+  override readonly name = 'PaymentLimitExceededError'
+
+  /** The limit that refused the payment. */
+  readonly limit: PaymentLimitExceededError.Limit
+  /** Why the limit refused it. */
+  readonly reason: PaymentLimitExceededError.Reason
+
+  constructor(options: PaymentLimitExceededError.Options) {
+    const { limit, reason } = options
+    const name = limit === 'budget' ? 'the remaining budget' : 'maxPayment'
+    super(
+      reason === 'amount'
+        ? `Payment exceeds ${name}, so no credential was created.`
+        : reason === 'credential'
+          ? `Credential cannot be checked against ${name}: it is unreadable or pays no single challenge the response offered, so it was not used.`
+          : reason === 'intent'
+            ? `Payment intent cannot be checked against ${name}: spending options accept only charges, so no credential was created.`
+            : `Payment asset cannot be checked against ${name}: no limit names it, or the client does not configure its currency and decimals. No credential was created.`,
+    )
+    this.limit = limit
+    this.reason = reason
+  }
+}
+
+export declare namespace PaymentLimitExceededError {
+  /** `maxPayment`: the per-payment limit. `budget`: a `Budget` passed as `authorize`. */
+  type Limit = 'maxPayment' | 'budget'
+  /**
+   * `amount`: over the limit. `asset`: the limit cannot count the payment's asset. `credential`:
+   * a credential an event handler or `onChallenge` returned cannot be read, or pays no single
+   * challenge the response offered, so its payment cannot be checked. `intent`: the challenge is
+   * not a `charge`, such as a session or subscription, which a limit cannot bound.
+   */
+  type Reason = 'amount' | 'asset' | 'credential' | 'intent'
+
+  type Options = {
+    /** The limit that refused the payment. */
+    limit: Limit
+    /** Why the limit refused it. */
+    reason: Reason
   }
 }
 

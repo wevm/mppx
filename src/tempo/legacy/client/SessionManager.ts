@@ -117,6 +117,11 @@ export type PaymentResponse = Response & {
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const fetchFn = parameters.fetch ?? globalThis.fetch
+  // Spending options accept only charges, so a fetch that sets them cannot pay for sessions.
+  if (Fetch.spendConfigOf(fetchFn))
+    throw new TypeError(
+      'SessionManager: the fetch sets spending options (maxPayment, authorize, funders or tokens), which accept only charges. Pass a fetch without them.',
+    )
   const WebSocketImpl =
     parameters.webSocket ??
     (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructor }).WebSocket
