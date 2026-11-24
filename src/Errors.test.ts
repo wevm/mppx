@@ -14,6 +14,7 @@ import {
   InvalidPayloadError,
   InvalidSignatureError,
   MalformedCredentialError,
+  MultipleCredentialsError,
   PaymentActionRequiredError,
   PaymentExpiredError,
   PaymentInsufficientError,
@@ -166,26 +167,39 @@ describe('CredentialReplayedError', () => {
   test('default', () => {
     expect(errorSnapshot(new CredentialReplayedError())).toMatchInlineSnapshot(`
       {
-        "message": "Payment verification failed: Credential has already been used.",
+        "message": "Challenge is invalid: Credential has already been used.",
         "name": "CredentialReplayedError",
-        "status": 403,
-        "type": "https://paymentauth.org/problems/verification-failed",
+        "status": 402,
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })
 
-  test.each([
-    'Transaction hash has already been used',
-    'Proof credential has already been used',
-    'memo is not bound to this challenge',
-  ])('differs from VerificationFailedError problem details only in status: %s', (reason) => {
-    const error = new CredentialReplayedError({ reason })
+  test.each(['Transaction hash has already been used', 'Proof credential has already been used'])(
+    'matches InvalidChallengeError problem details: %s',
+    (reason) => {
+      const error = new CredentialReplayedError({ reason })
 
-    expect(error).toBeInstanceOf(VerificationFailedError)
-    expect(error.toProblemDetails('challenge-id')).toEqual({
-      ...new VerificationFailedError({ reason }).toProblemDetails('challenge-id'),
-      status: 403,
-    })
+      expect(error).toBeInstanceOf(InvalidChallengeError)
+      expect(error.toProblemDetails('challenge-id')).toEqual(
+        new InvalidChallengeError({ reason }).toProblemDetails('challenge-id'),
+      )
+    },
+  )
+})
+
+describe('MultipleCredentialsError', () => {
+  test('default', () => {
+    const error = new MultipleCredentialsError()
+    expect(error).toBeInstanceOf(BadRequestError)
+    expect(errorSnapshot(error)).toMatchInlineSnapshot(`
+      {
+        "message": "Bad request: request carries more than one Payment credential.",
+        "name": "MultipleCredentialsError",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/bad-request",
+      }
+    `)
   })
 })
 

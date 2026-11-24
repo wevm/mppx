@@ -3294,6 +3294,20 @@ describe('precompile server session unit guardrails', () => {
       },
     )
 
+    test('HEAD with more than one Payment credential gets 400 without a challenge', async () => {
+      const route = createBootstrapRoute({ rawStore: Store.memory() })
+      const challenge = Challenge.fromResponse(await bootstrapResponse(route))
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { type: 'transaction' },
+      } as never)
+
+      const response = await bootstrapResponse(route, authorization + ', ' + authorization)
+
+      expect(response.status).toBe(400)
+      expect(response.headers.has('WWW-Authenticate')).toBe(false)
+    })
+
     test('malformed bootstrap payload returns an invalid-payload challenge', async () => {
       const route = createBootstrapRoute({ rawStore: Store.memory() })
       const challenge = Challenge.fromResponse(await bootstrapResponse(route))
@@ -3404,8 +3418,11 @@ describe('precompile server session unit guardrails', () => {
       expect((await bootstrapResponse(route, authorization)).status).toBe(204)
       const replay = await bootstrapResponse(route, authorization)
 
-      expect(replay.status).toBe(403)
-      expect(replay.headers.has('WWW-Authenticate')).toBe(false)
+      expect(replay.status).toBe(402)
+      expect(replay.headers.has('WWW-Authenticate')).toBe(true)
+      expect(((await replay.json()) as { type: string }).type).toBe(
+        'https://paymentauth.org/problems/invalid-challenge',
+      )
       expect(resolveChannelId).toHaveBeenCalledOnce()
     })
   })

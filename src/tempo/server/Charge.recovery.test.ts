@@ -71,6 +71,8 @@ function causedBy(error: unknown, expected: unknown): boolean {
 
 async function setup(parameters: {
   confirmationTimeoutMs?: number | undefined
+  /** Whether the transfer carries this challenge's attribution memo (default) or a memo that binds nothing. */
+  bound?: boolean | undefined
   /** Thrown by broadcasts unless the outcome is `normal`; `hang` never settles. */
   error?: unknown
   sponsorBudgetStore?: Store.AtomicStore | undefined
@@ -81,6 +83,7 @@ async function setup(parameters: {
   waitForConfirmation?: boolean | undefined
 }) {
   const {
+    bound = true,
     confirmationTimeoutMs = 200,
     error = gateway,
     sponsorBudgetStore,
@@ -100,7 +103,9 @@ async function setup(parameters: {
   let syncParams: unknown[] = []
   const onPaymentSuccess = vi.fn()
   // `gate` holds broadcasts in flight until it resolves.
-  const state: { gate?: Promise<void> | undefined; outcome: Outcome } = { outcome: 'normal' }
+  const state: { error?: unknown; gate?: Promise<void> | undefined; outcome: Outcome } = {
+    outcome: 'normal',
+  }
   let finalHash: `0x${string}` | undefined
   let memo: `0x${string}`
 
@@ -128,7 +133,7 @@ async function setup(parameters: {
             await state.gate
             if (outcome === 'normal') {
             } else if (error === 'hang') return new Promise(() => {})
-            else throw error
+            else throw state.error ?? error
           } else if (method === 'eth_getTransactionReceipt') {
             lookupHashes.push(params[0])
             if (outcome === 'missing' || outcome === 'expired' || outcome === 'expiring')
@@ -203,7 +208,9 @@ async function setup(parameters: {
   )
   if (challengeResponse.status !== 402) throw new Error('Expected challenge')
   const challenge = Challenge.fromResponse(challengeResponse.challenge)
-  memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+  memo = bound
+    ? Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+    : `0x${'ab'.repeat(32)}`
   const signature = await signTransaction(client, {
     account: payer,
     calls: [
@@ -246,9 +253,9 @@ async function expectReplayed(promise: Promise<unknown>) {
   const replay = await promise.catch((error: unknown) => error)
   expect(replay).toBeInstanceOf(Errors.CredentialReplayedError)
   expect(replay).toMatchObject({
-    message: 'Payment verification failed: Transaction hash has already been used.',
-    status: 403,
-    type: 'https://paymentauth.org/problems/verification-failed',
+    message: 'Challenge is invalid: Transaction hash has already been used.',
+    status: 402,
+    type: 'https://paymentauth.org/problems/invalid-challenge',
   })
 }
 
@@ -582,6 +589,141 @@ test('failed replay cleanup preserves the settlement error and its claim', async
   } finally {
     store.releaseClaim = originalRelease
     log.mockRestore()
+  }
+})
+
+test.each([
+  { name: 'already known', error: alreadyKnown, settles: false },
+  { name: 'known transaction', error: knownTransaction, settles: false },
+  { name: 'expiring nonce replay', error: expiringNonceReplay, settles: false },
+  { name: 'transport timeout', error: transportTimeout, settles: true },
+  { name: 'sync timeout', error: syncTimeout, settles: true },
+] as const)(
+  'unbound pull recovered after a duplicate submission is not settled: $name',
+  async ({ error, settles }) => {
+    // A node that already holds the transaction may hold it from someone else (another server,
+    // or anyone who saw it pending), so a transfer without this challenge's attribution memo
+    // does not pay this challenge. A timeout of this server's own send still recovers it.
+    const { broadcast, finalHash, onPaymentSuccess, state } = await setup({
+      bound: false,
+      error,
+      sponsored: false,
+    })
+    state.outcome = 'pending'
+    if (settles) {
+      const receipt = await broadcast()
+      expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+      return
+    }
+    const thrown = await broadcast().catch((e: unknown) => e)
+    expect(thrown).toMatchObject({
+      message: expect.stringContaining('not bound to this challenge'),
+    })
+    expect(onPaymentSuccess).not.toHaveBeenCalled()
+  },
+)
+test('unbound pull retried after an unknown outcome recovers its own duplicate broadcast', async () => {
+  // The first attempt's own send timed out with an unknown outcome, so the server remembers its
+  // broadcast for this challenge; the retry that finds the node already holding it settles it.
+  const { broadcast, finalHash, state } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  state.error = alreadyKnown
+  state.outcome = 'pending'
+  const receipt = await broadcast()
+  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+})
+
+test('a duplicate whose receipt never appeared is not remembered as its own', async () => {
+  // A first attempt that found the node already holding the transaction has no evidence this
+  // server sent it, so its unknown outcome leaves no broadcast record and a retry still needs
+  // this challenge's attribution memo.
+  const { broadcast, onPaymentSuccess, state } = await setup({
+    bound: false,
+    error: alreadyKnown,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  state.outcome = 'pending'
+  const retry = await broadcast().catch((e: unknown) => e)
+  expect(retry).toMatchObject({ message: expect.stringContaining('not bound to this challenge') })
+  expect(onPaymentSuccess).not.toHaveBeenCalled()
+})
+
+test('an unknown outcome records its own broadcast before releasing its replay claims', async () => {
+  const { broadcast, state, store } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  const order: string[] = []
+  const originalPut = store.put
+  const originalRelease = store.releaseClaim
+  store.put = vi.fn(async (...args: Parameters<typeof store.put>) => {
+    if (String(args[0]).includes(':broadcast:')) order.push('record')
+    return originalPut.apply(store, args)
+  }) as typeof store.put
+  store.releaseClaim = vi.fn(async (key: string, owner: string) => {
+    order.push('release')
+    return originalRelease!.call(store, key as never, owner)
+  }) as typeof store.releaseClaim
+  state.outcome = 'missing'
+  const thrown = await broadcast().catch((e: unknown) => e)
+  expect(thrown).toBeInstanceOf(Errors.BroadcastOutcomeUnknownError)
+  expect(order[0]).toBe('record')
+  expect(order).toContain('release')
+})
+
+test('a duplicate whose own broadcast record appears while polling settles as its own', async () => {
+  // A concurrent retry can see "already known" before the first attempt's broadcast record is
+  // visible; once its receipt arrives, the record written meanwhile makes it this server's own.
+  const { broadcast, finalHash, state, store } = await setup({
+    bound: false,
+    error: transportTimeout,
+    sponsored: false,
+  })
+  state.outcome = 'missing'
+  await broadcast().catch(() => {})
+  const key = `mppx:charge:broadcast:${finalHash().toLowerCase()}`
+  const record = await store.get(key)
+  expect(record).toMatchObject({ type: 'mppx:broadcast' })
+  await store.delete(key)
+  const originalGet = store.get
+  let reads = 0
+  store.get = vi.fn(async (...args: Parameters<typeof store.get>) => {
+    if (args[0] === key && reads++ === 0) {
+      await store.put(key, record as never)
+      return null
+    }
+    return originalGet.apply(store, args)
+  }) as typeof store.get
+  state.error = alreadyKnown
+  state.outcome = 'pending'
+  const receipt = await broadcast()
+  expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+})
+
+test('a failed broadcast record delete does not fail a settled payment', async () => {
+  const { broadcast, finalHash, onPaymentSuccess, signatureHashKey, store } = await setup({
+    sponsored: false,
+  })
+  const originalDelete = store.delete
+  store.delete = vi.fn().mockRejectedValue(new Error('store unavailable'))
+  try {
+    const receipt = await broadcast()
+    expect(receipt).toMatchObject({ status: 'success', reference: finalHash() })
+    expect(store.delete).toHaveBeenCalled()
+    expect(await store.get(signatureHashKey)).toMatchObject({ type: 'mppx:replay' })
+    expect(onPaymentSuccess).toHaveBeenCalledOnce()
+  } finally {
+    store.delete = originalDelete
   }
 })
 
