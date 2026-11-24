@@ -35,7 +35,7 @@
   "devDependencies": {
     "@changesets/cli": "^3.0.0",
     "@electric-sql/pglite": "^0.5.15",
-    "@hono/node-server": "2.1.1",
+    "@hono/node-server": "2.1.6",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@playwright/test": "^1.62.1",
     "@stripe/agent-identity": "0.3.0",
@@ -60,11 +60,11 @@
     "fast-check": "^4.9.0",
     "file-type": "catalog:",
     "frog": "^1.1.0",
-    "hono": "4.13.11",
+    "hono": "4.13.16",
     "incur": "^0.5.1",
     "isows": "^1.0.7",
     "miniflare": "^4.20260730.0",
-    "next": "16.4.3",
+    "next": "16.4.5",
     "pg": "^8.23.1",
     "pkg-pr-new": "0.0.88",
     "playwright": "^1.62.1",
@@ -75,7 +75,7 @@
     "tsx": "^4.23.15",
     "typescript": "catalog:",
     "undici": "7.30.1",
-    "viem": "2.57.1",
+    "viem": "2.57.19",
     "vite": "^8.3.3",
     "vp": "npm:vite-plus@1.3.0",
     "ws": "^8.21.3",
@@ -85,7 +85,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.18.0",
+  "version": "0.21.4",
   "main": "./dist/index.js",
   "license": "MIT",
   "homepage": "https://github.com/wevm/mppx#readme",
@@ -117,6 +117,11 @@
       "src": "./src/client/index.ts",
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
+    },
+    "./client/core": {
+      "src": "./src/client/core.ts",
+      "types": "./dist/client/core.d.ts",
+      "default": "./dist/client/core.js"
     },
     "./client/node": {
       "src": "./src/client/node.ts",
@@ -233,10 +238,25 @@
       "types": "./dist/x402/mcp.d.ts",
       "default": "./dist/x402/mcp.js"
     },
+    "./x402/tempo": {
+      "src": "./src/x402/tempo.ts",
+      "types": "./dist/x402/tempo.d.ts",
+      "default": "./dist/x402/tempo.js"
+    },
     "./tempo": {
       "src": "./src/tempo/index.ts",
       "types": "./dist/tempo/index.d.ts",
       "default": "./dist/tempo/index.js"
+    },
+    "./tempo/client": {
+      "src": "./src/tempo/client/index.ts",
+      "types": "./dist/tempo/client/index.d.ts",
+      "default": "./dist/tempo/client/index.js"
+    },
+    "./tempo/server": {
+      "src": "./src/tempo/server/index.ts",
+      "types": "./dist/tempo/server/index.d.ts",
+      "default": "./dist/tempo/server/index.js"
     },
     "./extensions/identity": {
       "src": "./src/extensions/identity/index.ts",
@@ -258,6 +278,11 @@
       "types": "./dist/extensions/identity/tap/index.d.ts",
       "default": "./dist/extensions/identity/tap/index.js"
     },
+    "./extensions/identity/erc8004": {
+      "src": "./src/extensions/identity/erc8004/index.ts",
+      "types": "./dist/extensions/identity/erc8004/index.d.ts",
+      "default": "./dist/extensions/identity/erc8004/index.js"
+    },
     "./extensions/identity/email-otp": {
       "src": "./src/extensions/identity/email-otp/index.ts",
       "types": "./dist/extensions/identity/email-otp/index.d.ts",
@@ -268,10 +293,25 @@
       "types": "./dist/extensions/identity/link/index.d.ts",
       "default": "./dist/extensions/identity/link/index.js"
     },
+    "./extensions/identity/poppy": {
+      "src": "./src/extensions/identity/poppy/index.ts",
+      "types": "./dist/extensions/identity/poppy/index.d.ts",
+      "default": "./dist/extensions/identity/poppy/index.js"
+    },
+    "./extensions/identity/tempo": {
+      "src": "./src/extensions/identity/tempo/index.ts",
+      "types": "./dist/extensions/identity/tempo/index.d.ts",
+      "default": "./dist/extensions/identity/tempo/index.js"
+    },
     "./extensions/identity/web-bot-auth": {
       "src": "./src/extensions/identity/web-bot-auth/index.ts",
       "types": "./dist/extensions/identity/web-bot-auth/index.d.ts",
       "default": "./dist/extensions/identity/web-bot-auth/index.js"
+    },
+    "./extensions/identity/world": {
+      "src": "./src/extensions/identity/world/index.ts",
+      "types": "./dist/extensions/identity/world/index.d.ts",
+      "default": "./dist/extensions/identity/world/index.js"
     },
     "./html": {
       "src": "./src/Html.ts",
@@ -308,6 +348,7 @@
     "@modelcontextprotocol/sdk": ">=1.25.0",
     "@stripe/agent-identity": ">=0.3.0",
     "@x402/core": ">=2.22.0",
+    "@x402/evm": ">=2.22.0",
     "@x402/express": ">=2.22.0",
     "@x402/hono": ">=2.22.0",
     "@x402/mcp": ">=2.22.0",
@@ -316,7 +357,7 @@
     "express": ">=5",
     "hono": ">=4.12.25",
     "next": ">=16.2.6",
-    "viem": ">=2.57.1"
+    "viem": ">=2.57.19"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
@@ -326,6 +367,9 @@
       "optional": true
     },
     "@x402/core": {
+      "optional": true
+    },
+    "@x402/evm": {
       "optional": true
     },
     "@x402/express": {

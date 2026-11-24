@@ -4,10 +4,10 @@ import { tokens } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Chains from '../../evm/Chains.js'
+import * as Header from '../../internal/x402/Header.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as Assets from '../Assets.js'
-import * as Header from '../Header.js'
 import * as RouteBinding from '../internal/RouteBinding.js'
-import * as Types from '../Types.js'
 import { canHandleChallenge, createCredential } from './Exact.js'
 
 type X402Challenge = Parameters<typeof createCredential>[0]['challenge']
@@ -161,6 +161,32 @@ describe('x402 exact credential helper', () => {
       }),
     ).rejects.toThrow('x402 exact amount exceeds maxAmount.')
     expect(signTypedData).not.toHaveBeenCalled()
+  })
+
+  test('uses known asset decimals for maxAmount without a currencies allowlist', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const config = {
+      account: { ...account, signTypedData } as unknown as Account,
+      maxAmount: '1',
+    }
+
+    await expect(
+      createCredential({ challenge: challenge({ amount: '1000001' }), config, context: {} }),
+    ).rejects.toThrow('x402 exact amount exceeds maxAmount.')
+    expect(signTypedData).not.toHaveBeenCalled()
+
+    await createCredential({ challenge: challenge({ amount: '1000000' }), config, context: {} })
+    expect(signTypedData).toHaveBeenCalledOnce()
+  })
+
+  test('still requires decimals for maxAmount on an unknown asset', async () => {
+    await expect(
+      createCredential({
+        challenge: challenge({ asset: '0x3333333333333333333333333333333333333333' }),
+        config: { account, maxAmount: '1' },
+        context: {},
+      }),
+    ).rejects.toThrow('x402 exact maxAmount requires currency decimals.')
   })
 
   test('accepts viem token sets through legacy assets policy', async () => {

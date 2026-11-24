@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 
-import type * as Types from '../Types.js'
+import { FacilitatorResponseError } from '../../Errors.js'
+import type * as Types from '../../internal/x402/Types.js'
 import * as Facilitator from './Facilitator.js'
 
 const paymentRequirements = {
@@ -89,6 +90,29 @@ describe('x402 facilitator http client', () => {
     })
   })
 
+  test('returns settle extensions shaped by the facilitator', async () => {
+    const extensions = { tempoSettlement: { payoutId: 'payout_1', status: 'submitted' } }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              extensions,
+              network: paymentRequirements.network,
+              success: true,
+              transaction: '0x' + '1'.repeat(64),
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+      ),
+    )
+
+    const facilitator = Facilitator.http('https://facilitator.example')
+    const settled = await facilitator.settle(paymentPayload, paymentRequirements)
+    expect(settled.extensions).toEqual(extensions)
+  })
+
   test('unwraps mppx fetch wrappers', async () => {
     const rawFetch = vi.fn(async () => {
       return new Response(JSON.stringify({ isValid: true }), {
@@ -109,3 +133,424 @@ describe('x402 facilitator http client', () => {
     expect(rawFetch).toHaveBeenCalledOnce()
   })
 })
+
+describe('x402 facilitator supported and payTo', () => {
+  test('http() reads GET /supported', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        kinds: [
+          {
+            x402Version: 2,
+            scheme: 'exact',
+            network: 'eip155:8453',
+            extra: { payTo: paymentRequirements.payTo },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const supported = await Facilitator.http('https://facilitator.example/').supported!()
+    expect(fetchMock).toHaveBeenCalledWith('https://facilitator.example/supported', {
+      method: 'GET',
+    })
+    expect(supported.kinds[0]!.extra?.payTo).toBe(paymentRequirements.payTo)
+  })
+
+  test('payTo() picks the v2 kind for the scheme and network', async () => {
+    const supported = vi.fn(async () => ({
+      kinds: [
+        {
+          x402Version: 1,
+          scheme: 'exact',
+          network: 'eip155:8453',
+          extra: { payTo: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          x402Version: 2,
+          scheme: 'upto',
+          network: 'eip155:8453',
+          extra: { payTo: '0x2222222222222222222222222222222222222222' },
+        },
+        {
+          x402Version: 2,
+          scheme: 'exact',
+          network: 'eip155:8453',
+          extra: { payTo: paymentRequirements.payTo.toLowerCase() },
+        },
+      ],
+    }))
+    const facilitator = { ...facilitatorStub, supported }
+    expect(await Facilitator.payTo(facilitator, { network: 'eip155:8453' })).toBe(
+      paymentRequirements.payTo,
+    )
+    expect(await Facilitator.payTo(facilitator, { network: 'eip155:8453', scheme: 'upto' })).toBe(
+      '0x2222222222222222222222222222222222222222',
+    )
+  })
+
+  test('payTo() accepts a facilitator URL', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        kinds: [
+          {
+            x402Version: 2,
+            scheme: 'exact',
+            network: 'eip155:8453',
+            extra: { payTo: paymentRequirements.payTo },
+          },
+        ],
+      }),
+    )
+    expect(
+      await Facilitator.payTo('https://facilitator.example', {
+        fetch: fetchMock as never,
+        network: 'eip155:8453',
+      }),
+    ).toBe(paymentRequirements.payTo)
+    expect(fetchMock).toHaveBeenCalledWith('https://facilitator.example/supported', {
+      method: 'GET',
+    })
+  })
+
+  test('payTo() needs supported()', async () => {
+    await expect(Facilitator.payTo(facilitatorStub, { network: 'eip155:8453' })).rejects.toThrow(
+      /does not implement/,
+    )
+  })
+
+  test('payTo() fails on a missing kind or bad address', async () => {
+    const supported = async () => ({
+      kinds: [
+        { x402Version: 2, scheme: 'exact', network: 'eip155:8453', extra: { payTo: 'nope' } },
+      ],
+    })
+    await expect(
+      Facilitator.payTo({ ...facilitatorStub, supported }, { network: 'eip155:8453' }),
+    ).rejects.toThrow(/publishes no payTo/)
+    await expect(
+      Facilitator.payTo({ ...facilitatorStub, supported }, { network: 'eip155:1' }),
+    ).rejects.toThrow(/publishes no payTo/)
+  })
+})
+
+describe('x402 facilitator auth headers', () => {
+  const supportedBody = {
+    kinds: [
+      {
+        x402Version: 2,
+        scheme: 'exact',
+        network: 'eip155:8453',
+        extra: { payTo: paymentRequirements.payTo },
+      },
+    ],
+  }
+
+  function recordingFetch() {
+    const calls: { headers: Headers; url: string }[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ headers: new Headers(init?.headers), url })
+      if (url.endsWith('/supported')) return Response.json(supportedBody)
+      if (url.endsWith('/verify')) return Response.json({ isValid: true })
+      return Response.json({
+        network: paymentRequirements.network,
+        success: true,
+        transaction: `0x${'1'.repeat(64)}`,
+      })
+    })
+    return { calls, fetch: fetch as unknown as typeof globalThis.fetch }
+  }
+
+  test('http() sends each path its own headers, calling headers per request', async () => {
+    const { calls, fetch } = recordingFetch()
+    let n = 0
+    const headers = vi.fn(async () => {
+      n++
+      return {
+        settle: { Authorization: `Bearer settle-${n}` },
+        supported: { 'X-Api-Key': `supported-${n}` },
+        verify: { Authorization: `Bearer verify-${n}` },
+      }
+    })
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers,
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.settle(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(headers).toHaveBeenCalledTimes(3)
+    expect(calls.map((call) => Object.fromEntries(call.headers))).toEqual([
+      { authorization: 'Bearer verify-1', 'content-type': 'application/json' },
+      { authorization: 'Bearer settle-2', 'content-type': 'application/json' },
+      { 'x-api-key': 'supported-3' },
+    ])
+  })
+
+  test('http() sends no extra headers for a path headers leaves out', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: () => ({ settle: { Authorization: 'Bearer key' } }),
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+
+    expect(Object.fromEntries(calls[0]!.headers)).toEqual({ 'content-type': 'application/json' })
+  })
+
+  test('http() sends a flat headers record on every path', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: { Authorization: 'Bearer key' },
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.settle(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => call.headers.get('authorization'))).toEqual([
+      'Bearer key',
+      'Bearer key',
+      'Bearer key',
+    ])
+  })
+
+  test('http() accepts a function returning a flat record', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: async () => ({ 'X-Api-Key': 'key' }),
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => call.headers.get('x-api-key'))).toEqual(['key', 'key'])
+  })
+
+  test('http() accepts a per-path object, not a function', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.http('https://facilitator.example', {
+      headers: { verify: { Authorization: 'Bearer verify' }, supported: { 'X-Api-Key': 'k' } },
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+    await facilitator.settle(paymentPayload, paymentRequirements)
+    await facilitator.supported!()
+
+    expect(calls.map((call) => Object.fromEntries(call.headers))).toEqual([
+      { authorization: 'Bearer verify', 'content-type': 'application/json' },
+      { 'content-type': 'application/json' },
+      { 'x-api-key': 'k' },
+    ])
+  })
+
+  test('http() treats a record with a non-path key or a string value as flat', async () => {
+    const { calls, fetch } = recordingFetch()
+    const mixed = Facilitator.http('https://facilitator.example', {
+      headers: { verify: 'x', Authorization: 'Bearer key' },
+      fetch,
+    })
+    const named = Facilitator.http('https://facilitator.example', {
+      headers: { verify: 'Bearer verify-as-header' },
+      fetch,
+    })
+
+    await mixed.settle(paymentPayload, paymentRequirements)
+    await named.settle(paymentPayload, paymentRequirements)
+
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
+    expect(calls[0]!.headers.get('verify')).toBe('x')
+    expect(calls[1]!.headers.get('verify')).toBe('Bearer verify-as-header')
+  })
+
+  test('resolve() accepts a { url, headers } config', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.resolve(
+      {
+        url: 'https://facilitator.example/',
+        headers: () => ({ verify: { Authorization: 'Bearer key' } }),
+      },
+      undefined,
+      { fetch },
+    )
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+
+    expect(calls[0]!.url).toBe('https://facilitator.example/verify')
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
+  })
+
+  test("resolve() prefers a config's headers over options", async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.resolve(
+      {
+        url: 'https://facilitator.example',
+        headers: () => ({ verify: { Authorization: 'Bearer config' } }),
+      },
+      undefined,
+      { headers: () => ({ verify: { Authorization: 'Bearer options' } }), fetch },
+    )
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer config')
+  })
+
+  test('resolve() applies options.headers to a URL', async () => {
+    const { calls, fetch } = recordingFetch()
+    const facilitator = Facilitator.resolve('https://facilitator.example', undefined, {
+      headers: () => ({ verify: { Authorization: 'Bearer options' } }),
+      fetch,
+    })
+
+    await facilitator.verify(paymentPayload, paymentRequirements)
+
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer options')
+  })
+
+  test('resolve() keeps a client that has a url field', () => {
+    const client = { ...facilitatorStub, url: 'https://facilitator.example' }
+    expect(Facilitator.resolve(client)).toBe(client)
+  })
+
+  test('payTo() sends headers with GET /supported', async () => {
+    const { calls, fetch } = recordingFetch()
+
+    expect(
+      await Facilitator.payTo('https://facilitator.example', {
+        headers: () => ({ supported: { Authorization: 'Bearer key' } }),
+        fetch,
+        network: 'eip155:8453',
+      }),
+    ).toBe(paymentRequirements.payTo)
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
+  })
+
+  test('payTo() accepts a { url, headers } config', async () => {
+    const { calls, fetch } = recordingFetch()
+
+    await Facilitator.payTo(
+      {
+        url: 'https://facilitator.example',
+        headers: () => ({ supported: { Authorization: 'Bearer key' } }),
+      },
+      { fetch, network: 'eip155:8453' },
+    )
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer key')
+  })
+})
+
+describe('x402 facilitator error responses', () => {
+  const unauthorized = () =>
+    vi.fn(async () =>
+      Response.json({ error: 'missing or invalid API key' }, { status: 401 }),
+    ) as unknown as typeof globalThis.fetch
+
+  test('verify() throws FacilitatorResponseError on a 401', async () => {
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch: unauthorized() })
+
+    const error = await facilitator.verify(paymentPayload, paymentRequirements).catch((e) => e)
+
+    expect(error).toBeInstanceOf(FacilitatorResponseError)
+    expect(error).toMatchObject({
+      body: '{"error":"missing or invalid API key"}',
+      path: 'verify',
+      status: 401,
+    })
+    expect(error.message).toBe(
+      'x402 facilitator /verify failed (401): {"error":"missing or invalid API key"}',
+    )
+  })
+
+  test('settle() throws FacilitatorResponseError on a 503 with a text body', async () => {
+    const fetch = vi.fn(
+      async () => new Response('upstream unavailable', { status: 503 }),
+    ) as unknown as typeof globalThis.fetch
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch })
+
+    await expect(facilitator.settle(paymentPayload, paymentRequirements)).rejects.toMatchObject({
+      name: 'FacilitatorResponseError',
+      body: 'upstream unavailable',
+      path: 'settle',
+      status: 503,
+    })
+  })
+
+  test('supported() throws FacilitatorResponseError on a non-2xx', async () => {
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch: unauthorized() })
+
+    await expect(facilitator.supported!()).rejects.toMatchObject({
+      path: 'supported',
+      status: 401,
+    })
+  })
+
+  test('truncates long bodies to 200 characters', async () => {
+    const fetch = vi.fn(
+      async () => new Response('x'.repeat(1000), { status: 500 }),
+    ) as unknown as typeof globalThis.fetch
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch })
+
+    const error = await facilitator.verify(paymentPayload, paymentRequirements).catch((e) => e)
+
+    expect(error.body).toBe(`${'x'.repeat(197)}...`)
+  })
+
+  test('reads a 400 with a failed verify result as that result', async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({ invalidReason: 'insufficient_funds', isValid: false }, { status: 400 }),
+    ) as unknown as typeof globalThis.fetch
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch })
+
+    expect(await facilitator.verify(paymentPayload, paymentRequirements)).toEqual({
+      invalidReason: 'insufficient_funds',
+      isValid: false,
+    })
+  })
+
+  test('reads a 400 with a failed settle result as that result', async () => {
+    const body = {
+      errorReason: 'invalid_signature',
+      network: paymentRequirements.network,
+      success: false,
+      transaction: '',
+    }
+    const fetch = vi.fn(async () =>
+      Response.json(body, { status: 400 }),
+    ) as unknown as typeof globalThis.fetch
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch })
+
+    expect(await facilitator.settle(paymentPayload, paymentRequirements)).toMatchObject({
+      errorReason: 'invalid_signature',
+      success: false,
+    })
+  })
+
+  test('throws FacilitatorResponseError on a 2xx that is not a result', async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({ hello: 'world' }),
+    ) as unknown as typeof globalThis.fetch
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch })
+
+    const error = await facilitator.verify(paymentPayload, paymentRequirements).catch((e) => e)
+
+    expect(error).toBeInstanceOf(FacilitatorResponseError)
+    expect(error).toMatchObject({ path: 'verify', status: 200 })
+    expect(error.cause).toBeDefined()
+  })
+})
+
+const facilitatorStub: Types.Facilitator = {
+  async settle() {
+    throw new Error('unused')
+  },
+  async verify() {
+    throw new Error('unused')
+  },
+}

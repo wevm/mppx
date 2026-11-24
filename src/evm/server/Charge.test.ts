@@ -5,7 +5,7 @@ import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { privateKeyToAccount } from 'viem/accounts'
 import { usdc } from 'viem/tokens'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 const currency = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
 const recipient = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
@@ -154,6 +154,267 @@ describe('evm charge server', () => {
     ).toThrow('EVM authorization requires `authorization` metadata.')
   })
 
+  test('carries facilitator settle extensions on the Receipt', async () => {
+    const extensions = {
+      tempoSettlement: { payoutId: 'payout_1', status: 'confirmed', transaction },
+    }
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator: {
+              async verify() {
+                return { isValid: true }
+              },
+              async settle(_paymentPayload, paymentRequirements) {
+                return {
+                  extensions,
+                  network: paymentRequirements.network,
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+          },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [
+        evm_client({
+          account,
+          currencies: [evm_client.assets.baseSepolia.USDC],
+          maxAmount: '0.25',
+        }),
+      ],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    const authorization = await client.createCredential(first.challenge)
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    if (result.status !== 200) throw new Error()
+
+    const receipt = Receipt.fromResponse(result.withReceipt(Response.json({ ok: true })))
+    expect(receipt.reference).toBe(transaction)
+    expect(receipt.extensions).toEqual(extensions)
+  })
+
+  test('carries custom settle extensions on the Receipt', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          settle: async () => ({
+            extensions: { payout: { id: 'payout_1' } },
+            reference: transaction,
+          }),
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [
+        evm_client({
+          account,
+          currencies: [evm_client.assets.baseSepolia.USDC],
+          maxAmount: '0.25',
+        }),
+      ],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    const authorization = await client.createCredential(first.challenge)
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    if (result.status !== 200) throw new Error()
+
+    const receipt = Receipt.fromResponse(result.withReceipt(Response.json({ ok: true })))
+    expect(receipt.extensions).toEqual({ payout: { id: 'payout_1' } })
+  })
+
+  test('drops settle extensions that are not JSON, without failing the paid request', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          settle: async () => ({
+            extensions: { amount: 1n } as unknown as Record<string, unknown>,
+            reference: transaction,
+          }),
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [
+        evm_client({
+          account,
+          currencies: [evm_client.assets.baseSepolia.USDC],
+          maxAmount: '0.25',
+        }),
+      ],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    const authorization = await client.createCredential(first.challenge)
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+    if (result.status !== 200) throw new Error()
+
+    const receipt = Receipt.fromResponse(result.withReceipt(Response.json({ ok: true })))
+    expect(receipt.reference).toBe(transaction)
+    expect(receipt.extensions).toBeUndefined()
+  })
+
+  test('drops settle extensions that are too large or too deep', async () => {
+    let nested: Record<string, unknown> = { leaf: true }
+    for (let i = 0; i < 20; i++) nested = { n: nested }
+    for (const extensions of [{ blob: 'x'.repeat(5000) }, nested]) {
+      const mppx = Mppx.create({
+        methods: [
+          evm({
+            currency: evm.assets.baseSepolia.USDC,
+            recipient,
+            settle: async () => ({ extensions, reference: transaction }),
+          }),
+        ],
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const client = ClientMppx.create({
+        methods: [
+          evm_client({
+            account,
+            currencies: [evm_client.assets.baseSepolia.USDC],
+            maxAmount: '0.25',
+          }),
+        ],
+        polyfill: false,
+      })
+      const route = mppx.evm.charge({ amount: '0.25' })
+      const first = await route(new Request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const authorization = await client.createCredential(first.challenge)
+      const result = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+      )
+      if (result.status !== 200) throw new Error()
+      const receipt = Receipt.fromResponse(result.withReceipt(Response.json({ ok: true })))
+      expect(receipt.reference).toBe(transaction)
+      expect(receipt.extensions).toBeUndefined()
+    }
+  })
+
+  test('authenticates to a { url, headers } facilitator', async () => {
+    const seen: { authorization: string | null; url: string }[] = []
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      seen.push({ authorization: new Headers(init?.headers).get('authorization'), url })
+      if (url.endsWith('/verify')) return Response.json({ isValid: true })
+      return Response.json({ network: 'eip155:84532', success: true, transaction })
+    }) as unknown as typeof globalThis.fetch
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: {
+            facilitator: {
+              url: 'https://facilitator.example',
+              headers: async () => ({
+                settle: { Authorization: 'Bearer settle-key' },
+                verify: { Authorization: 'Bearer verify-key' },
+              }),
+            },
+            fetch,
+          },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '0.25' })],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+    if (first.status !== 402) throw new Error()
+    const authorization = await client.createCredential(first.challenge)
+    const result = await route(
+      new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+    )
+
+    expect(result.status).toBe(200)
+    expect(seen).toEqual([
+      { authorization: 'Bearer verify-key', url: 'https://facilitator.example/verify' },
+      { authorization: 'Bearer settle-key', url: 'https://facilitator.example/settle' },
+    ])
+  })
+
+  test('answers a facilitator auth failure with a 500 internal error, not a payment rejection', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetch = vi.fn(async () =>
+      Response.json({ error: 'missing or invalid API key' }, { status: 401 }),
+    ) as unknown as typeof globalThis.fetch
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient,
+          x402: { facilitator: 'https://facilitator.example', fetch },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const client = ClientMppx.create({
+      methods: [evm_client({ account, maxAmount: '0.25' })],
+      polyfill: false,
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    try {
+      const first = await route(new Request('https://example.com/paid'))
+      if (first.status !== 402) throw new Error()
+      const authorization = await client.createCredential(first.challenge)
+      const result = await route(
+        new Request('https://example.com/paid', { headers: { Authorization: authorization } }),
+      )
+      if (result.status !== 402) throw new Error()
+
+      expect(result.challenge.status).toBe(500)
+      const problem = await result.challenge.json()
+      expect(problem).toMatchObject({
+        status: 500,
+        type: 'https://paymentauth.org/problems/internal-payment-error',
+      })
+      expect(JSON.stringify(problem)).not.toContain('API key')
+      expect(consoleError).toHaveBeenCalledWith(
+        'mppx: internal verification error',
+        expect.objectContaining({ name: 'FacilitatorResponseError', path: 'verify', status: 401 }),
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
   test('settles native Payment-auth authorization credentials', async () => {
     let facilitated:
       | {
@@ -239,6 +500,7 @@ describe('evm charge server', () => {
       reference: transaction,
       status: 'success',
     })
+    expect(receipt).not.toHaveProperty('extensions')
     expect(facilitated?.paymentRequirements).toEqual({
       amount: '250000',
       asset: currency,

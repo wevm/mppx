@@ -9,13 +9,14 @@ import type * as Credential from '../../Credential.js'
 import * as Credential_ from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Types from '../../evm/Types.js'
+import * as ChallengeMeta from '../../internal/challengeMeta.js'
+import * as x402_Header from '../../internal/x402/Header.js'
+import * as Siwx from '../../internal/x402/Siwx.js'
+import * as x402_Types from '../../internal/x402/Types.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
-import * as ChallengeMeta from '../../server/internal/challengeMeta.js'
 import * as Scope from '../../server/internal/scope.js'
 import * as ServerTransport from '../../server/Transport.js'
-import * as x402_Header from '../Header.js'
 import * as x402_RouteBinding from '../internal/RouteBinding.js'
-import * as x402_Types from '../Types.js'
 import * as x402_Facilitator from './Facilitator.js'
 
 const pendingX402Credential = Symbol('mppx.evm.pendingX402Credential')
@@ -35,8 +36,23 @@ const mppxRouteBindingSchema = {
 }
 
 export type Options = {
-  /** Facilitator client or base URL used for x402-compatible settlement. */
-  facilitator?: string | x402_Types.Facilitator | undefined
+  /**
+   * Extra fields added to every x402 payment requirement's `extra`, for facilitators that read
+   * their own keys there. They can't override `assetTransferMethod`, `name` or `version`.
+   */
+  extra?: Record<string, unknown> | undefined
+  /**
+   * Headers to send with each request to a URL `facilitator`, such as an API key: a flat record,
+   * or an object keyed by `verify`, `settle` and `supported`; a function is called before every
+   * request. A `{ url, headers }` facilitator's own `headers` win.
+   */
+  headers?: x402_Types.FacilitatorConfig['headers']
+  /**
+   * Facilitator used for x402-compatible settlement: a base URL, a `{ url, headers }`
+   * config (the shape `@x402/core`'s `HTTPFacilitatorClient` takes) for one that needs
+   * authentication, or a client.
+   */
+  facilitator?: string | x402_Types.FacilitatorConfig | x402_Types.Facilitator | undefined
   /** Fetch implementation used for facilitator RPCs. */
   fetch?: typeof globalThis.fetch | undefined
   /** Maximum time in seconds allowed for x402-compatible payment completion. @default 300 */
@@ -60,6 +76,11 @@ export type Options = {
    * @default 'required'
    */
   routeBinding?: RouteBindingMode | undefined
+  /**
+   * Accepts x402 `sign-in-with-x` (SIWX) proofs: a wallet that signs the 402's
+   * challenge, and that `grant` approves, gets the resource without paying.
+   */
+  siwx?: Siwx.ServerOptions | undefined
 }
 
 /** How a route-scoped charge binds an x402 credential to its route. */
@@ -67,9 +88,11 @@ export type RouteBindingMode = 'required' | 'resource'
 
 export type ResolvedOptions = {
   authorization: Types.AuthorizationConfig
+  extra?: Record<string, unknown> | undefined
   facilitator?: x402_Types.Facilitator | undefined
   maxTimeoutSeconds: number
   routeBinding: RouteBindingMode
+  siwx?: Siwx.ServerOptions | undefined
 }
 
 export type Path = {
@@ -94,17 +117,27 @@ export function resolveOptions(parameters: {
 }): ResolvedOptions {
   return {
     authorization: parameters.authorization,
+    ...(parameters.options?.extra
+      ? {
+          // Normalize to the JSON the challenge carries, so credentials echoing it match exactly.
+          extra: JSON.parse(JSON.stringify(parameters.options.extra)) as Record<string, unknown>,
+        }
+      : {}),
     ...(parameters.options?.facilitator
       ? {
           facilitator: x402_Facilitator.resolve(
             parameters.options.facilitator,
             'EVM authorization x402 requires `facilitator`.',
-            { fetch: parameters.options.fetch },
+            {
+              headers: parameters.options.headers,
+              fetch: parameters.options.fetch,
+            },
           ),
         }
       : {}),
     maxTimeoutSeconds: parameters.options?.maxTimeoutSeconds ?? 300,
     routeBinding: parameters.options?.routeBinding ?? 'required',
+    ...(parameters.options?.siwx ? { siwx: parameters.options.siwx } : {}),
   }
 }
 
@@ -241,7 +274,18 @@ export function createPath(config: ResolvedOptions): Path {
           accepts: [toPaymentRequirements(request, config)],
           error:
             options.error?.message ?? `${x402_Types.paymentSignatureHeader} header is required`,
-          extensions: routeExtensions(options.challenge, options.input),
+          extensions: {
+            ...routeExtensions(options.challenge, options.input),
+            ...(config.siwx
+              ? {
+                  [Siwx.extensionKey]: Siwx.createExtension({
+                    chainId: request.methodDetails.chainId,
+                    origin: config.siwx.origin,
+                    url: options.input.url,
+                  }),
+                }
+              : {}),
+          },
           resource: { url: options.input.url },
           x402Version: 2,
         }),
@@ -266,6 +310,7 @@ export function createPath(config: ResolvedOptions): Path {
           payer: payload.from,
           success: true,
           transaction: options.receipt.reference,
+          ...(options.receipt.extensions ? { extensions: options.receipt.extensions } : {}),
         }),
       )
       return new Response(response.body, {
@@ -291,6 +336,7 @@ export function settleWithFacilitator(parameters: ResolvedOptions): SettleWithFa
       })
 
     return {
+      ...(settled.extensions ? { extensions: settled.extensions } : {}),
       reference: settled.transaction,
     }
   }
@@ -340,6 +386,7 @@ export type SettleWithFacilitator = (parameters: {
   request: Types.ChargeRequest
   source: ReturnType<typeof Types.toSource>
 }) => Promise<{
+  extensions?: Record<string, unknown> | undefined
   reference: string
   timestamp?: string | undefined
 }>
@@ -357,12 +404,13 @@ export function isPendingCredential(credential: Credential.Credential): boolean 
 /** Converts a native EVM charge request to x402 exact payment requirements. */
 export function toPaymentRequirements(
   request: Types.ChargeRequest,
-  config: Pick<ResolvedOptions, 'authorization' | 'maxTimeoutSeconds'>,
+  config: Pick<ResolvedOptions, 'authorization' | 'extra' | 'maxTimeoutSeconds'>,
 ): x402_Types.PaymentRequirements {
   return {
     amount: request.amount,
     asset: request.currency,
     extra: {
+      ...config.extra,
       assetTransferMethod: Types.eip3009,
       name: config.authorization.name,
       version: config.authorization.version,

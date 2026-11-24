@@ -439,14 +439,17 @@ test('retry headers never replace a payment credential header', async () => {
 })
 
 test('retry headers never replace the credential header a Challenge names', async () => {
-  const challenge = Challenge.from({
-    id: 'c',
-    intent: 'charge',
-    method: 'test',
-    realm: 'merchant.example',
-    request: { amount: '1' },
+  // Challenges may only select Payment-Authorization; a hand-built object still names another.
+  const challenge: Challenge.Challenge = {
+    ...Challenge.from({
+      id: 'c',
+      intent: 'charge',
+      method: 'test',
+      realm: 'merchant.example',
+      request: { amount: '1' },
+    }),
     header: 'X-Pay',
-  })
+  }
   const client = Identity.Client.from([{ scope: '*', prove: (request) => request }])
   const sent: Request[] = []
   const fetch = vi.fn(async (request: Request) => {

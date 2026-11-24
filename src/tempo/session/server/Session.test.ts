@@ -1,11 +1,13 @@
 import * as node_http from 'node:http'
+import { Readable } from 'node:stream'
 
 import { serve } from '@hono/node-server'
+import express from 'express'
 import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Secp256k1 } from 'ox'
-import { TxEnvelopeTempo } from 'ox/tempo'
+import { AccountConfig, SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   createClient,
@@ -19,15 +21,17 @@ import {
   HttpRequestError,
   maxUint256,
   RpcRequestError,
+  toFunctionSelector,
   zeroAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Transaction } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
 import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
+import { payment as expressPayment } from '../../../middlewares/express.js'
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
 import { charge as clientCharge } from '../../client/Charge.js'
@@ -302,13 +306,14 @@ async function createOpenPayload(
     operator?: Address | undefined
     authorizedSigner?: Address | undefined
     feeToken?: Address | undefined
+    salt?: Hex | undefined
   } = {},
 ): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
   const account = parameters.account ?? payer
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const initialAmount = Types.uint96(parameters.initialAmount ?? 100n)
   const deposit = Types.uint96(parameters.deposit ?? 1_000n)
-  const salt = `0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex
+  const salt = parameters.salt ?? (`0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex)
   const operator = parameters.operator ?? zeroAddress
   const authorizedSigner = parameters.authorizedSigner ?? account.address
   const data = encodeFunctionData({
@@ -317,12 +322,17 @@ async function createOpenPayload(
     args: [payee, operator, token, deposit, salt, authorizedSigner],
   })
   const signingClient = createSigningClient(account)
-  const transaction = (await Transaction.serialize({
+  const envelope = TxEnvelopeTempo.from({
     chainId,
     calls: [{ to: escrow, data }],
     feeToken: parameters.feeToken ?? token,
-    nonce: 0,
-  })) as Hex
+    nonce: 0n,
+  })
+  const transaction = TxEnvelopeTempo.serialize(envelope, {
+    signature: SignatureEnvelope.from(
+      await account.sign({ hash: TxEnvelopeTempo.getSignPayload(envelope) }),
+    ),
+  }) as Hex
   const expiringNonceHash = Channel.computeExpiringNonceHash(
     Transaction.deserialize(
       transaction as Transaction.TransactionSerializedTempo,
@@ -566,6 +576,50 @@ async function persistPrecompileChannel(
 }
 
 describe('precompile server session unit guardrails', () => {
+  test.each([payer.address, wrongPayer.address])(
+    'binds open source to the payer, not its delegated signer (%s)',
+    async (source) => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const payload = await createOpenPayload({ authorizedSigner: wrongPayer.address })
+      payload.signature = await Voucher.signVoucher(
+        createSigningClient(wrongPayer),
+        wrongPayer,
+        { channelId: payload.channelId, cumulativeAmount: 100n },
+        tip20ChannelEscrow,
+        chainId,
+      )
+      const method = session({
+        amount: '100',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () =>
+          createServerClient([], payer, payload.channelId, {
+            descriptor: payload.descriptor,
+            receipt: transactionReceipt([openedLog(payload)]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          }),
+      })
+      const verification = method.verify({
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload,
+          source: `did:pkh:eip155:${chainId}:${source}`,
+        },
+        request: verifyRequest(payload.channelId),
+      })
+      if (source === wrongPayer.address) {
+        await expect(verification).rejects.toThrow(
+          'credential source does not match transaction payer',
+        )
+        expect(await store.getChannel(payload.channelId)).toBeNull()
+      } else await expect(verification).resolves.toMatchObject({ channelId: payload.channelId })
+    },
+  )
   test('request marks TIP-1034 session challenges', async () => {
     const { method } = createServer()
 
@@ -1560,7 +1614,10 @@ describe('precompile server session unit guardrails', () => {
     expect(stored?.highestVoucherAmount).toBe(100n)
     if (!stored || !ChannelStore.isPrecompileState(stored))
       throw new Error('expected precompile state')
-    expect(stored.descriptor).toEqual(openPayload.descriptor)
+    expect(stored.descriptor).toEqual({
+      ...openPayload.descriptor,
+      payer: payer.address.toLowerCase(),
+    })
   })
 
   test('reopening existing precompile channel with higher voucher updates highest voucher only', async () => {
@@ -1728,7 +1785,7 @@ describe('precompile server session unit guardrails', () => {
 
     const stored = await store.getChannel(openPayload.channelId)
     expect(receipt.acceptedCumulative).toBe('100')
-    expect(stored?.authorizedSigner).toBe(payer.address)
+    expect(stored?.authorizedSigner?.toLowerCase()).toBe(payer.address.toLowerCase())
   })
 
   test('accepts precompile top-up and preserves spent accounting', async () => {
@@ -1837,6 +1894,36 @@ describe('precompile server session unit guardrails', () => {
       }),
     ).rejects.toThrow(/descriptor does not match/)
   })
+
+  test.each([payer.address, wrongPayer.address])(
+    'verifies delegated vouchers only with payer source %s',
+    async (source) => {
+      const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
+      const openPayload = await createOpenPayload({ authorizedSigner: wrongPayer.address })
+      await persistPrecompileChannel(store, openPayload, { highestVoucherAmount: 100n })
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(wrongPayer),
+        wrongPayer,
+        openPayload.descriptor,
+        Types.uint96(250n),
+        chainId,
+      )
+      const verification = method.verify({
+        credential: {
+          ...voucherCredential(voucher, openPayload.channelId),
+          source: `did:pkh:eip155:${chainId}:${source}`,
+        },
+        request: verifyRequest(openPayload.channelId),
+      })
+      if (source === payer.address) {
+        await expect(verification).resolves.toMatchObject({ acceptedCumulative: '250' })
+        expect((await store.getChannel(openPayload.channelId))?.highestVoucherAmount).toBe(250n)
+      } else {
+        await expect(verification).rejects.toThrow('credential source does not match channel payer')
+        expect((await store.getChannel(openPayload.channelId))?.highestVoucherAmount).toBe(100n)
+      }
+    },
+  )
 
   test('accepts increasing precompile voucher and stores accounting state', async () => {
     const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
@@ -2016,6 +2103,382 @@ describe('precompile server session unit guardrails', () => {
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/invalid voucher signature/)
+  })
+
+  describe('TIP-1166 configurable account vouchers', () => {
+    const owners = [
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey()),
+    ]
+    const signer = TempoAccount.fromConfig({ owners, threshold: 2 })
+    const rotated = TempoAccount.fromConfig({
+      address: signer.address,
+      owners: [owners[0]!],
+      salt: signer.config!.salt,
+      threshold: 1,
+      version: 1,
+    })
+    const recordedCommitment = AccountConfig.getCommitment(rotated.config!)
+
+    async function verifyConfigurableVoucher(
+      parameters: {
+        configurableVouchers?: boolean | undefined
+        openingCommitment?: Hex | undefined
+        retryUpdates?: boolean | undefined
+        voucherSigner?: typeof signer | undefined
+      } = {},
+    ) {
+      const { method, store } = createServer({
+        channelStateTtl: Number.MAX_SAFE_INTEGER,
+        ...(parameters.retryUpdates ? { voucherStateMaxAge: Number.MAX_SAFE_INTEGER } : {}),
+        ...(parameters.configurableVouchers !== undefined
+          ? { configurableVouchers: parameters.configurableVouchers }
+          : {}),
+      })
+      const openPayload = await createOpenPayload({
+        authorizedSigner: signer.address,
+        initialAmount: 100n,
+      })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 100n,
+        ...(parameters.openingCommitment
+          ? { openingCommitment: parameters.openingCommitment }
+          : {}),
+      })
+      if (parameters.retryUpdates) {
+        // Runs every update twice, as a compare-and-swap store does after a conflicting write.
+        const update = store.updateChannelResult!.bind(store)
+        store.updateChannelResult = ((channelId: Hex, fn: (current: never) => never) =>
+          update(channelId, (current) => {
+            fn(current as never)
+            return fn(current as never)
+          })) as NonNullable<typeof store.updateChannelResult>
+      }
+      const voucherSigner = parameters.voucherSigner ?? rotated
+      const signature = await Voucher.signVoucher(
+        createClient({
+          account: voucherSigner,
+          chain: testChain,
+          transport: custom({ request: async () => null }),
+        }),
+        voucherSigner,
+        { channelId: openPayload.channelId, cumulativeAmount: 250n },
+        tip20ChannelEscrow,
+        chainId,
+      )
+      return method.verify({
+        credential: voucherCredential(
+          {
+            action: 'voucher',
+            channelId: openPayload.channelId,
+            cumulativeAmount: '250',
+            descriptor: openPayload.descriptor,
+            signature,
+          },
+          openPayload.channelId,
+        ),
+        request: verifyRequest(openPayload.channelId),
+      })
+    }
+
+    function openingCommitmentLog(payload: Extract<SessionCredentialPayload, { action: 'open' }>) {
+      return {
+        address: tip20ChannelEscrow,
+        data: encodeAbiParameters([{ type: 'bytes32' }], [payload.descriptor.salt]),
+        topics: encodeEventTopics({
+          abi: escrowAbi,
+          eventName: 'OpeningCommitmentRecorded',
+          args: { channelId: payload.channelId, signer: payload.descriptor.authorizedSigner },
+        }),
+      }
+    }
+
+    async function verifyOpen(parameters: {
+      configurableVouchers?: boolean | undefined
+      configurableVoucher: boolean
+      withOpeningCommitmentLog: boolean
+    }) {
+      const rawStore = Store.memory()
+      let openPayload = await createOpenPayload(
+        parameters.configurableVoucher
+          ? { authorizedSigner: signer.address, initialAmount: 100n, salt: recordedCommitment }
+          : { initialAmount: 100n },
+      )
+      if (parameters.configurableVoucher)
+        openPayload = {
+          ...openPayload,
+          signature: await Voucher.signVoucher(
+            createClient({
+              account: rotated,
+              chain: testChain,
+              transport: custom({ request: async () => null }),
+            }),
+            rotated,
+            { channelId: openPayload.channelId, cumulativeAmount: 100n },
+            tip20ChannelEscrow,
+            chainId,
+          ),
+        }
+      const method = session({
+        amount: '1',
+        chainId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        ...(parameters.configurableVouchers ? { configurableVouchers: true } : {}),
+        getClient: () =>
+          createServerClient([], payer, openPayload.channelId, {
+            descriptor: openPayload.descriptor,
+            receipt: transactionReceipt([
+              openedLog(openPayload),
+              ...(parameters.withOpeningCommitmentLog ? [openingCommitmentLog(openPayload)] : []),
+            ]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          }),
+      })
+      await method.verify({
+        credential: { challenge: makeChallenge(openPayload.channelId), payload: openPayload },
+        request: verifyRequest(openPayload.channelId),
+      })
+      const stored = await channelStore(rawStore).getChannel(openPayload.channelId)
+      if (!stored || !ChannelStore.isPrecompileState(stored))
+        throw new Error('expected precompile state')
+      return stored
+    }
+
+    test('stores the opening commitment from an open with a configurable account voucher', async () => {
+      const stored = await verifyOpen({
+        configurableVouchers: true,
+        configurableVoucher: true,
+        withOpeningCommitmentLog: true,
+      })
+      expect(stored.openingCommitment).toBe(recordedCommitment)
+    })
+
+    test('rejects an open voucher that needs an opening commitment the escrow did not record', async () => {
+      await expect(
+        verifyOpen({
+          configurableVouchers: true,
+          configurableVoucher: true,
+          withOpeningCommitmentLog: false,
+        }),
+      ).rejects.toThrow(/invalid voucher signature for opening commitment/)
+    })
+
+    test('rejects a primitive open voucher when the escrow recorded an opening commitment', async () => {
+      await expect(
+        verifyOpen({ configurableVoucher: false, withOpeningCommitmentLog: true }),
+      ).rejects.toThrow(/invalid voucher signature for opening commitment/)
+    })
+
+    test('stores no opening commitment for a primitive open without OpeningCommitmentRecorded', async () => {
+      const stored = await verifyOpen({
+        configurableVoucher: false,
+        withOpeningCommitmentLog: false,
+      })
+      expect(stored.openingCommitment).toBeUndefined()
+    })
+
+    /**
+     * Opens a channel through the server whose payer, open transaction signer and voucher signer
+     * are one configurable account, with `commitment` as the account's on-chain commitment.
+     */
+    async function verifyConfigurableOpen(parameters: { account: typeof signer; commitment: Hex }) {
+      const rawStore = Store.memory()
+      const registered = BigInt(parameters.commitment) !== 0n
+      // An unregistered version-zero account registers its config in the open transaction, so the
+      // escrow records that commitment; the salt equals the opening commitment either way.
+      const recorded = registered
+        ? parameters.commitment
+        : AccountConfig.getCommitment(parameters.account.config!)
+      const openPayload = await createOpenPayload({
+        account: parameters.account as never,
+        initialAmount: 100n,
+        salt: recorded,
+      })
+      const commitmentSelector = toFunctionSelector('getConfigCommitment(address)')
+      const commitmentReads: Hex[] = []
+      const method = session({
+        amount: '1',
+        chainId,
+        configurableVouchers: true,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        store: rawStore,
+        unitType: 'request',
+        getClient: () => {
+          const inner = createServerClient([], payer, openPayload.channelId, {
+            descriptor: openPayload.descriptor,
+            receipt: transactionReceipt([
+              openedLog(openPayload),
+              openingCommitmentLog(openPayload),
+            ]),
+            state: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+          })
+          return createClient({
+            account: payer,
+            chain: testChain,
+            transport: custom(
+              {
+                async request(args) {
+                  const call = (args.params as [{ data?: Hex; to?: Hex }] | undefined)?.[0]
+                  if (args.method === 'eth_call' && call?.data?.startsWith(commitmentSelector)) {
+                    commitmentReads.push(call.data)
+                    return encodeAbiParameters([{ type: 'bytes32' }], [parameters.commitment])
+                  }
+                  return inner.request(args as never)
+                },
+              },
+              { retryCount: 0 },
+            ),
+          })
+        },
+      })
+      const result = await method.verify({
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload: openPayload,
+          source: `did:pkh:eip155:${chainId}:${parameters.account.address}`,
+        },
+        request: verifyRequest(openPayload.channelId),
+      })
+      const stored = await channelStore(rawStore).getChannel(openPayload.channelId)
+      return { commitmentReads, openPayload, result, stored }
+    }
+
+    test('opens a channel from an unregistered configurable account payer', async () => {
+      const { commitmentReads, openPayload, result, stored } = await verifyConfigurableOpen({
+        account: signer,
+        commitment: `0x${'00'.repeat(32)}`,
+      })
+      expect(SignatureEnvelope.deserialize(openPayload.signature).type).toBe('configurable')
+      expect(
+        TxEnvelopeTempo.deserialize(openPayload.transaction as TxEnvelopeTempo.Serialized).signature
+          ?.type,
+      ).toBe('configurable')
+      expect(commitmentReads.length).toBeGreaterThan(0)
+      expect(result).toMatchObject({ channelId: openPayload.channelId })
+      expect(stored?.payer.toLowerCase()).toBe(signer.address.toLowerCase())
+      expect(stored).toMatchObject({
+        openingCommitment: AccountConfig.getCommitment(signer.config!),
+      })
+    })
+
+    test('opens a channel from a registered configurable account payer with its current config', async () => {
+      const { openPayload, result, stored } = await verifyConfigurableOpen({
+        account: rotated,
+        commitment: recordedCommitment,
+      })
+      expect(result).toMatchObject({ channelId: openPayload.channelId })
+      expect(stored?.payer.toLowerCase()).toBe(rotated.address.toLowerCase())
+      expect(stored).toMatchObject({ openingCommitment: recordedCommitment })
+    })
+
+    test('rejects a configurable account open whose config does not match the on-chain commitment', async () => {
+      // A config other than the registered one does not authenticate the payer.
+      await expect(
+        verifyConfigurableOpen({
+          account: signer,
+          commitment: recordedCommitment,
+        }),
+      ).rejects.toThrow('credential source is not authenticated by transaction signature')
+      // Without a registered config, only the version-zero config that derives the payer does.
+      await expect(
+        verifyConfigurableOpen({
+          account: rotated,
+          commitment: `0x${'00'.repeat(32)}`,
+        }),
+      ).rejects.toThrow('credential source is not authenticated by transaction signature')
+    })
+
+    test('advertises configurableVouchers only when enabled', async () => {
+      const request = {
+        credential: null,
+        request: {
+          amount: '1',
+          currency: token,
+          decimals: 0,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never
+      expect(await createServer().method.request!(request)).not.toHaveProperty(
+        'configurableVouchers',
+      )
+      expect(
+        await createServer({ configurableVouchers: true }).method.request!(request),
+      ).toMatchObject({ configurableVouchers: true })
+    })
+
+    test('does not advertise configurableVouchers a route sets when the server has them off', async () => {
+      const request = {
+        credential: null,
+        request: {
+          amount: '1',
+          configurableVouchers: true,
+          currency: token,
+          decimals: 0,
+          recipient: payee,
+          unitType: 'request',
+        },
+      } as never
+      expect(await createServer().method.request!(request)).not.toHaveProperty(
+        'configurableVouchers',
+      )
+    })
+
+    test('rejects configurable account vouchers by default', async () => {
+      await expect(
+        verifyConfigurableVoucher({ openingCommitment: recordedCommitment }),
+      ).rejects.toThrow(/invalid voucher signature/)
+    })
+
+    test('accepts a configurable account voucher matching the stored opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({
+          configurableVouchers: true,
+          openingCommitment: recordedCommitment,
+        }),
+      ).resolves.toBeDefined()
+    })
+
+    test('verifies a configurable account voucher once across store update retries', async () => {
+      const verify = vi.spyOn(Voucher, 'verifyVoucher')
+      try {
+        const options = { configurableVouchers: true, openingCommitment: recordedCommitment }
+        await verifyConfigurableVoucher(options)
+        const once = verify.mock.calls.length
+        verify.mockClear()
+        await expect(
+          verifyConfigurableVoucher({ ...options, retryUpdates: true }),
+        ).resolves.toBeDefined()
+        expect(verify.mock.calls.length).toBe(once)
+      } finally {
+        verify.mockRestore()
+      }
+    })
+
+    test('rejects a configurable account voucher from a config other than the opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({
+          configurableVouchers: true,
+          openingCommitment: recordedCommitment,
+          voucherSigner: signer,
+        }),
+      ).rejects.toThrow(/invalid voucher signature/)
+    })
+
+    test('accepts the version-zero config when the channel has no opening commitment', async () => {
+      await expect(
+        verifyConfigurableVoucher({ configurableVouchers: true, voucherSigner: signer }),
+      ).resolves.toBeDefined()
+      await expect(verifyConfigurableVoucher({ configurableVouchers: true })).rejects.toThrow(
+        /invalid voucher signature/,
+      )
+    })
   })
 
   test('rejects precompile voucher exceeding deposit', async () => {
@@ -2256,6 +2719,84 @@ describe('precompile server session unit guardrails', () => {
       expect((result as Response).status).toBe(204)
     })
   })
+
+  test.each(['json', 'send', 'end', 'write', 'pipe'] as const)(
+    'Express %s charges SSE non-request POST output and rejects exhausted vouchers',
+    async (output) => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const open = await createOpenPayload({ initialAmount: 2n })
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        open.descriptor,
+        Types.uint96(2n),
+        chainId,
+      )
+      await persistPrecompileChannel(store, open)
+      const mppx = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            chainId,
+            currency: token,
+            decimals: 0,
+            recipient: payee,
+            store: rawStore,
+            unitType: 'token',
+            sse: true,
+            getClient: () =>
+              createStateClient(payer, { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 }),
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'test-secret-key-test-secret-key-32',
+      })
+      const app = express()
+      app.use(express.text())
+      app.post(
+        '/resource',
+        expressPayment(mppx.session, { amount: '1', decimals: 0, unitType: 'token' }),
+        (_req, res) => {
+          if (output === 'json') res.json({ content: 'protected' })
+          else if (output === 'send') res.send('protected')
+          else if (output === 'end') res.end('protected')
+          else if (output === 'write') {
+            res.writeHead(200, { 'Content-Type': 'text/plain' })
+            res.write('protected')
+            res.end()
+          } else Readable.from(['protected']).pipe(res)
+        },
+      )
+      const server = await Http.createServer(app)
+      const call = (authorization?: string) =>
+        fetch(server.url + '/resource', {
+          method: 'POST',
+          body: 'work',
+          headers: authorization ? { Authorization: authorization } : {},
+        })
+      try {
+        const challenge = Challenge.fromResponse(await call())
+        const authorization = Credential.serialize({
+          challenge,
+          payload: voucher,
+          source: sourceFor(),
+        })
+        for (let count = 1; count <= 2; count++) {
+          const paid = await call(authorization)
+          expect(paid.status).toBe(200)
+          expect(await paid.text()).toContain('protected')
+          expect(paid.headers.has('Payment-Receipt')).toBe(true)
+          expect((await store.getChannel(open.channelId))?.spent).toBe(BigInt(count))
+        }
+        const rejected = await call(authorization)
+        expect(rejected.status).toBe(402)
+        expect(await rejected.text()).not.toContain('protected')
+        expect((await store.getChannel(open.channelId))?.spent).toBe(2n)
+      } finally {
+        server.close()
+      }
+    },
+  )
 
   describe('default HTTP auto-billing', () => {
     function createRoute(rawStore: Store.AtomicStore) {
@@ -2506,6 +3047,68 @@ describe('precompile server session unit guardrails', () => {
         }
 
         expect(await store.getChannel(openPayload.channelId)).toMatchObject({ spent: 1n, units: 1 })
+      },
+    )
+
+    test.each([
+      { freshChallenge: false, idempotencyKey: undefined },
+      { freshChallenge: false, idempotencyKey: 'reused-request' },
+      { freshChallenge: true, idempotencyKey: undefined },
+    ])(
+      'concurrent copied vouchers authorize one handler invocation (%j)',
+      async ({ freshChallenge, idempotencyKey }) => {
+        const rawStore = Store.memory()
+        const store = channelStore(rawStore)
+        const openPayload = await createOpenPayload({ initialAmount: 1n })
+        await persistPrecompileChannel(store, openPayload, { spent: 0n, units: 0 })
+        const route = createRoute(rawStore)
+        const voucher = await ClientOps.createVoucherPayload(
+          createSigningClient(),
+          payer,
+          openPayload.descriptor,
+          Types.uint96(10n),
+          chainId,
+        )
+        const authorizations: string[] = []
+        for (let i = 0; i < 10; i++) {
+          if (!freshChallenge && authorizations.length) {
+            authorizations.push(authorizations[0]!)
+            continue
+          }
+          const result = await route(new Request('https://api.example.com/resource'))
+          if (result.status !== 402) throw new Error('expected challenge')
+          authorizations.push(
+            Credential.serialize({
+              challenge: Challenge.fromResponse(result.challenge),
+              payload: voucher,
+              source: sourceFor(),
+            }),
+          )
+        }
+        let calls = 0
+        const responses = await Promise.all(
+          authorizations.map(async (authorization) => {
+            const result = await route(
+              new Request('https://api.example.com/resource', {
+                headers: {
+                  Authorization: authorization,
+                  ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+                },
+              }),
+            )
+            if (result.status === 402) return result.challenge
+            calls++
+            return result.withReceipt(new Response('paid-content'))
+          }),
+        )
+        expect(responses.filter((response) => response.status === 200)).toHaveLength(1)
+        expect(responses.filter((response) => response.status === 402)).toHaveLength(9)
+        expect(calls).toBe(1)
+        expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+          highestVoucherAmount: 10n,
+          spent: 1n,
+          units: 1,
+        })
       },
     )
 

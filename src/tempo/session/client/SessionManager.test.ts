@@ -2783,6 +2783,48 @@ describe('allowedChainIds', () => {
     },
   )
 
+  test.each<{
+    name: string
+    options: Pick<sessionManager.Parameters, 'allowCustomEscrow' | 'escrow'>
+  }>([
+    { name: 'default policy', options: {} },
+    { name: 'escrow pin', options: { escrow: tip20ChannelEscrow, allowCustomEscrow: true } },
+  ])('rejects a bootstrap snapshot from a noncanonical escrow ($name)', async ({ options }) => {
+    const getClient = vi.fn(() => client)
+    const store = makeChannelStore()
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== 'HEAD') return makeOkResponse()
+      return new Response(null, {
+        status: 204,
+        headers: {
+          [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+            acceptedCumulative: '0',
+            chainId: 4217,
+            channelId: storedChannelId,
+            deposit: '10000000',
+            descriptor: storedDescriptor,
+            escrow: '0x000000000000000000000000000000000000dEaD',
+            requiredCumulative: '0',
+            settled: '0',
+            spent: '0',
+            units: 0,
+          }),
+        },
+      })
+    })
+    const manager = sessionManager({
+      account,
+      bootstrap: true,
+      getClient,
+      fetch,
+      channelStore: store.store,
+      ...options,
+    })
+    expect((await manager.fetch('https://api.example.com')).status).toBe(200)
+    expect(getClient).not.toHaveBeenCalled()
+    expect(store.set).not.toHaveBeenCalled()
+  })
+
   test.each([4217, undefined])(
     'signs vouchers on the allowed chain when advertised chain is %s',
     async (chainId) => {
@@ -2820,4 +2862,103 @@ test('rejects an unchanged foreign session challenge before account resolution',
   await expect(manager.fetch('https://relay.example/data')).rejects.toThrow('Refusing to sign')
   expect(resolveAccount).not.toHaveBeenCalled()
   expect(fetch).toHaveBeenCalledOnce()
+})
+
+test.each(['bootstrap', 'active-channel'] as const)(
+  'payment opt-out bypasses session management: %s',
+  async (mode) => {
+    const entry = channelEntry()
+    const challenge = makeChallenge({
+      methodDetails: {
+        escrowContract: tip20ChannelEscrow,
+        chainId: 4217,
+        sessionProtocol: Constants.SessionProtocols.v2,
+        sessionSnapshot: {
+          acceptedCumulative: '1000000',
+          chainId: 4217,
+          channelId: entry.channelId,
+          deposit: '10000000',
+          descriptor: entry.descriptor,
+          escrow: tip20ChannelEscrow,
+          requiredCumulative: '2000000',
+          settled: '0',
+          spent: '1000000',
+          units: 1,
+        },
+      },
+    })
+    const fetch = vi
+      .fn()
+      .mockImplementation(async (_input, init?: RequestInit) =>
+        new Headers(init?.headers).has('Authorization')
+          ? makeOkResponse()
+          : make402Response(challenge),
+      )
+    const manager = sessionManager({ account, fetch, client, bootstrap: mode === 'bootstrap' })
+    if (mode === 'active-channel') {
+      if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+      getSessionManagerInternals(manager).rehydrate({
+        channel: entry,
+        challenge,
+        input: 'https://api.example.com/data',
+        spent: 0n,
+      })
+    }
+    const before = {
+      opened: manager.opened,
+      channelId: manager.channelId,
+      cumulative: manager.cumulative,
+    }
+    const response = await manager.fetch('https://api.example.com/otp', Fetch.withoutPayment())
+    expect(response.status).toBe(402)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect({
+      opened: manager.opened,
+      channelId: manager.channelId,
+      cumulative: manager.cumulative,
+    }).toEqual(before)
+  },
+)
+
+test('an unpaid response cannot change shared session receipt accounting', async () => {
+  const entry = channelEntry()
+  const challenge = makeChallenge()
+  if (!isTempoSessionChallenge(challenge)) throw new Error('expected session challenge')
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(null, {
+      headers: {
+        'Payment-Receipt': serializeSessionReceipt(
+          createSessionReceipt({
+            channelId: entry.channelId,
+            challengeId: challenge.id,
+            acceptedCumulative: entry.cumulativeAmount,
+            spent: 500_000n,
+            units: 1,
+          }),
+        ),
+      },
+    }),
+  )
+  const manager = sessionManager({ account, client, fetch })
+  getSessionManagerInternals(manager).rehydrate({
+    channel: entry,
+    challenge,
+    input: 'https://api.example.com/data',
+    spent: 0n,
+  })
+  const before = structuredClone(manager.state)
+  await manager.fetch('https://api.example.com/issuer', Fetch.withoutPayment())
+  expect(manager.state).toEqual(before)
+})
+
+test('refuses payment-driving SSE sessions when payment is disabled', async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response('event: payment-need-voucher\ndata: {}\n\n'))
+  const manager = sessionManager({ account, client, fetch })
+  await expect(
+    manager.sse('https://api.example.com/events', {
+      ...Fetch.withoutPayment(),
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow('requires payment')
+  expect(fetch).not.toHaveBeenCalled()
 })

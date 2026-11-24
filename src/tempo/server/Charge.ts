@@ -1,3 +1,4 @@
+import { Secp256k1 } from 'ox'
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   type Address,
@@ -11,6 +12,7 @@ import {
 } from 'viem'
 import {
   getTransaction,
+  getBlock,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -26,12 +28,15 @@ import {
   BroadcastOutcomeUnknownError,
   CredentialReplayedError,
   PaymentError,
+  PaymentExpiredError,
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as ChallengeMeta from '../../internal/challengeMeta.js'
+import * as CredentialExpiry from '../../internal/CredentialExpiry.js'
+import type * as Html from '../../internal/html/config.ts'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import type * as Html from '../../server/internal/html/config.ts'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import type * as z from '../../zod.js'
@@ -86,8 +91,35 @@ export function charge<const parameters extends charge.Parameters>(
     supportedModes,
     validateSender,
     waitForConfirmation = true,
+    zoneCredentialGraceMs = 0,
     zones,
   } = parameters
+  if (
+    !Number.isFinite(zoneCredentialGraceMs) ||
+    zoneCredentialGraceMs < 0 ||
+    zoneCredentialGraceMs > Zone.redemptionGraceMs
+  )
+    throw new Error(
+      `\`zoneCredentialGraceMs\` must be between 0 and ${Zone.redemptionGraceMs} milliseconds.`,
+    )
+  // A relay verifies credentials itself, without the local check that a late `zone` credential
+  // settled before its challenge expired, so it can't honor the grace safely.
+  if (relay && zoneCredentialGraceMs > 0)
+    throw new Error('`zoneCredentialGraceMs` is not supported with `relay`.')
+  /**
+   * Grace for a credential presented after its challenge expired: only a `zone` credential gets
+   * one, and only for a challenge issued with the grace on. A challenge issued without it (by an
+   * earlier release, whose replay claims end at the expiry, or with no grace) gets none.
+   */
+  const graceMsFor = (credential: {
+    challenge: Parameters<typeof ChallengeMeta.hasExpiryGrace>[0]
+    payload: unknown
+  }) =>
+    zoneCredentialGraceMs > 0 &&
+    isZoneCredential(credential) &&
+    ChallengeMeta.hasExpiryGrace(credential.challenge)
+      ? zoneCredentialGraceMs
+      : undefined
   if (configuredAllowedFeeTokens?.length === 0)
     throw new Error('`allowedFeeTokens` must contain at least one token.')
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
@@ -170,7 +202,7 @@ export function charge<const parameters extends charge.Parameters>(
       : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
-    Expires.assert(challenge.expires, challenge.id)
+    CredentialExpiry.assert(credential, graceMsFor(credential))
 
     if (isZeroAmount && payload.type !== 'proof')
       throw new MismatchError('Zero-amount challenges require a proof credential.', {})
@@ -378,6 +410,15 @@ export function charge<const parameters extends charge.Parameters>(
         'Payment verification failed: memo is not bound to this challenge.',
         {},
       )
+
+    // A credential presented after its challenge expired is accepted only for a withdrawal
+    // that settled before then; see `zoneCredentialGraceMs`.
+    const expiresAt = Date.parse(challenge.expires!)
+    if (expiresAt <= Date.now()) {
+      const block = await getBlock(client, { blockNumber: receipt.blockNumber })
+      if (Number(block.timestamp) * 1000 >= expiresAt)
+        throw new PaymentExpiredError({ expires: challenge.expires! })
+    }
 
     return { hash, portal, receipt, senderTag }
   }
@@ -741,8 +782,8 @@ export function charge<const parameters extends charge.Parameters>(
             ? request.feePayer
             : feePayer
           : undefined
-      const expires = challenge.expires
-      Expires.assert(expires, challenge.id)
+      CredentialExpiry.assert(credential, graceMsFor(credential))
+      const expires = challenge.expires!
       const replayExpires = Date.parse(expires)
 
       switch (validated.type) {
@@ -773,7 +814,16 @@ export function charge<const parameters extends charge.Parameters>(
 
         case 'zone': {
           const { portal, receipt, senderTag } = validated
-          if (!(await tryClaimZoneWithdrawal(store, portal, senderTag, replayExpires))) {
+          // Held through the longest grace any server may grant, not only this one's, so an
+          // instance with a longer grace on the same store can't redeem the credential again.
+          if (
+            !(await tryClaimZoneWithdrawal(
+              store,
+              portal,
+              senderTag,
+              replayExpires + Zone.redemptionGraceMs,
+            ))
+          ) {
             throw new CredentialReplayedError({
               reason: 'Zone withdrawal has already been used',
             })
@@ -804,7 +854,8 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          if (!(await tryClaimHash(store, hash, replayExpires))) {
+          const owner = Secp256k1.randomPrivateKey()
+          if (!(await tryClaimHash(store, hash, replayExpires, owner))) {
             throw new CredentialReplayedError({
               reason: 'Transaction hash has already been used',
             })
@@ -903,7 +954,7 @@ export function charge<const parameters extends charge.Parameters>(
             finalHash = keccak256(serializedTransaction_final)
 
             if (finalHash.toLowerCase() !== hash.toLowerCase()) {
-              if (!(await tryClaimHash(store, finalHash, replayExpires)))
+              if (!(await tryClaimHash(store, finalHash, replayExpires, owner)))
                 throw new CredentialReplayedError({
                   reason: 'Transaction hash has already been used',
                 })
@@ -1097,8 +1148,14 @@ export function charge<const parameters extends charge.Parameters>(
             // Only a successful settlement consumes the credential. A signed
             // transaction can be mined at most once, so a retry re-broadcasts it
             // and recovers the receipt instead of being rejected as a replay.
-            if (claimedFinalHash) await releaseHashUse(store, claimedFinalHash)
-            await releaseHashUse(store, hash)
+            const cleanup = await Promise.allSettled([
+              ...(claimedFinalHash ? [releaseHashUse(store, claimedFinalHash, owner)] : []),
+              releaseHashUse(store, hash, owner),
+            ])
+            if (cleanup.some((result) => result.status === 'rejected'))
+              console.error(
+                'mppx: replay claim cleanup failed; claims remain consumed until expiry',
+              )
             // Remember a broadcast of this server's own whose outcome is
             // unknown, for this challenge only, so a retry that finds the node
             // already holding it recovers it as this server's own.
@@ -1129,6 +1186,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
   })
+  CredentialExpiry.register(method, graceMsFor, { issue: zoneCredentialGraceMs > 0 })
   return relay ? (Relay.configure(method, relay) as typeof method) : method
 }
 
@@ -1272,6 +1330,25 @@ export declare namespace charge {
      * polling for a receipt.
      */
     waitForConfirmation?: boolean | undefined
+    /**
+     * How long, in milliseconds, after its challenge expires a `zone` credential is still
+     * accepted, for a withdrawal that settled on Tempo before the challenge expired. Lets a
+     * payer whose withdrawal settled late in the challenge's lifetime redeem it on retry.
+     * At most 5 minutes (`300_000`).
+     *
+     * Only a Challenge issued while the grace is on gets it: issuance marks the Challenge in its
+     * HMAC-bound `opaque` metadata (`_mppx_expiry_grace`). A Challenge issued without the mark,
+     * by an earlier release or with no grace, is rejected at its expiry as before, since an
+     * earlier release records a redeemed withdrawal only until then.
+     *
+     * Enable it once no instance of an earlier release verifies credentials from the same store:
+     * such an instance could redeem a marked Challenge and record it only until its expiry.
+     *
+     * Not supported with `relay`, which verifies credentials without the settled-before-expiry check.
+     *
+     * @default 0
+     */
+    zoneCredentialGraceMs?: number | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults &
@@ -1558,6 +1635,9 @@ async function assertTransferLogs(
         return log.kind === 'transfer'
       })()
       if (!memoMatches) continue
+      // A Zone portal's payout settles a Zone withdrawal, which pays only through its `zone`
+      // credential, so the same settlement can't also be redeemed by transaction hash.
+      if (Zone.isPortalAddress(log.args.from)) continue
       if (
         !(await isValidTransferSender({
           expectedSender: parameters.sender,
@@ -1709,6 +1789,14 @@ function getZoneWithdrawalStoreKey(
   return `mppx:charge:zone:${portal.toLowerCase()}:${senderTag.toLowerCase()}`
 }
 
+/** Whether a credential pays with a Zone withdrawal. */
+function isZoneCredential(credential: { payload: unknown }) {
+  const { payload } = credential
+  return (
+    typeof payload === 'object' && payload !== null && 'type' in payload && payload.type === 'zone'
+  )
+}
+
 async function tryClaimZoneWithdrawal(
   store: Store.AtomicStore<charge.StoreItemMap>,
   portal: `0x${string}`,
@@ -1722,8 +1810,9 @@ async function tryClaimHash(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
   expires: number,
+  owner?: string,
 ): Promise<boolean> {
-  return Store.tryClaim(store, getHashStoreKey(hash), expires)
+  return Store.tryClaim(store, getHashStoreKey(hash), expires, owner)
 }
 
 /** A broadcast this server sent for a challenge whose outcome was unknown. */
@@ -1765,8 +1854,9 @@ async function isHashUsed(
 async function releaseHashUse(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
+  owner: string,
 ): Promise<void> {
-  await store.delete(getHashStoreKey(hash))
+  await Store.releaseClaim(store, getHashStoreKey(hash), owner)
 }
 
 function parseHashCredentialSource(parameters: {

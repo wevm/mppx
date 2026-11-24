@@ -1,3 +1,5 @@
+import { request as httpRequest } from 'node:http'
+
 import { x402ResourceServer } from '@x402/core/server'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import express from 'express'
@@ -8,8 +10,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
-import * as ChallengeBrand from '../internal/ChallengeBrand.js'
-import * as Types from '../Types.js'
+import * as ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
+import * as Types from '../../internal/x402/Types.js'
 
 const network = 'eip155:84532' as const
 const recipient = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as const
@@ -84,6 +86,29 @@ const method = evm.charge({
 })
 
 describe('x402 Express compatibility', () => {
+  test('rejects malformed absolute targets before negotiation', async () => {
+    const { server, calls, getHandlerCalls } = await createServer()
+    try {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const req = httpRequest(
+          server.url,
+          { path: 'http://trusted.example:99999/api/data' },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolve(res.statusCode))
+          },
+        )
+        req.on('error', reject)
+        req.end()
+      })
+      expect(status).toBe(400)
+      expect(calls).toEqual([])
+      expect(getHandlerCalls()).toBe(0)
+    } finally {
+      await server.close()
+    }
+  })
+
   test('rejects combined MPP and legacy x402 credentials', async () => {
     const { server } = await createServer()
     try {

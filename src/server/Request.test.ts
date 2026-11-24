@@ -37,6 +37,89 @@ function createMockRequest(options: {
 }
 
 describe('fromNodeListener', () => {
+  test.each(['Agent-Id', 'Agent-Signature', 'Signature', 'Signature-Input'])(
+    'requires an independent receiving host for %s',
+    (header) => {
+      const make = () =>
+        createMockRequest({ rawHeaders: ['Host', 'relay.example', header, 'proof'] })
+      expect(() => Request.fromNodeListener(...make())).toThrow(Request.UntrustedHostError)
+      expect(
+        Request.fromNodeListener(...make(), { host: 'service.example', protocol: 'https:' }).url,
+      ).toBe('https://service.example/')
+      expect(() =>
+        Request.fromNodeListener(...make(), { allowedHosts: ['service.example'] }),
+      ).toThrow(Request.UntrustedHostError)
+      expect(Request.fromNodeListener(...make(), { allowedHosts: ['relay.example'] }).url).toBe(
+        'http://relay.example/',
+      )
+    },
+  )
+
+  test.each([
+    { host: 'api.example.com', allowedHosts: ['api.example.com'], accepted: true },
+    { host: 'API.EXAMPLE.COM', allowedHosts: ['api.example.com'], accepted: true },
+    { host: 'api.example.com:443', allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'attacker.example', allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'api.example.com', allowedHosts: [], accepted: false },
+    { host: undefined, allowedHosts: ['api.example.com'], accepted: false },
+    { host: 'legacy.example', allowedHosts: undefined, accepted: true },
+  ])(
+    'validates incoming hosts before applying a fixed host: $host',
+    ({ host, allowedHosts, accepted }) => {
+      const [req, res] = createMockRequest({ rawHeaders: host ? ['Host', host] : [] })
+      const convert = () =>
+        Request.fromNodeListener(req, res, { allowedHosts, host: 'fixed.example' })
+      if (accepted) expect(convert().url).toBe('http://fixed.example/')
+      else expect(convert).toThrow('Incoming host is not allowed')
+    },
+  )
+
+  test.each([
+    ['Host', 'trusted.example', 'Host', ''],
+    ['Host', 'trusted.example', 'Host', 'denied.example'],
+    ['Host', 'trusted.example', 'Host', 'trusted.example'],
+    [':authority', 'denied.example', 'Host', 'trusted.example'],
+    [':authority', 'trusted.example', 'Host', 'denied.example'],
+  ])('rejects ambiguous raw authorities %j', (...rawHeaders) => {
+    const [req, res] = createMockRequest({ rawHeaders })
+    expect(() =>
+      Request.fromNodeListener(req, res, {
+        allowedHosts: ['trusted.example'],
+        host: 'fixed.example',
+      }),
+    ).toThrow(Request.UntrustedHostError)
+  })
+
+  test('rejects hostless requests even when localhost is allowlisted', () => {
+    const [req, res] = createMockRequest({ rawHeaders: [] })
+    expect(() => Request.fromNodeListener(req, res, { allowedHosts: ['localhost'] })).toThrow(
+      Request.UntrustedHostError,
+    )
+  })
+
+  test.each(['trusted.example', undefined])(
+    'fixed host preserves normalized-only input while rejecting hostless input: %s',
+    (host) => {
+      const [req, res] = createMockRequest({ rawHeaders: [] })
+      if (host !== undefined) req.headers.host = host
+      const convert = () =>
+        Request.fromNodeListener(req, res, {
+          allowedHosts: ['trusted.example', 'localhost'],
+          host: 'fixed.example',
+        })
+      if (host) expect(convert().url).toBe('http://fixed.example/')
+      else expect(convert).toThrow(Request.UntrustedHostError)
+    },
+  )
+
+  test('rejects normalized-only Host when the URL would fall back to localhost', () => {
+    const [req, res] = createMockRequest({ rawHeaders: [] })
+    req.headers.host = 'trusted.example'
+    expect(() => Request.fromNodeListener(req, res, { allowedHosts: ['trusted.example'] })).toThrow(
+      Request.UntrustedHostError,
+    )
+  })
+
   test('converts IncomingMessage to Fetch Request', () => {
     const [req, res] = createMockRequest({
       method: 'POST',

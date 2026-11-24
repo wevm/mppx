@@ -113,7 +113,7 @@ type SharedParameters = Omit<charge_.Parameters, 'machineTokenEnabled'> &
   }
 
 export namespace tempo {
-  /** An accepted address or chain-indexed USD token definition from `viem/tokens`. */
+  /** An accepted address or USD token from `viem/tokens`, chain-indexed or resolved to one chain. */
   export type Currency = Currencies.Currency
   /** Shared charge/session configuration with mutually exclusive currency options. */
   export type Parameters = Omit<SharedParameters, 'currency'> &

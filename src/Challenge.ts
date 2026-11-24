@@ -1,6 +1,7 @@
 import { Base64, Bytes, Hash } from 'ox'
 
 import * as Constants from './Constants.js'
+import * as Errors from './Errors.js'
 import { constantTimeEqual } from './internal/constantTimeEqual.js'
 import type { OneOf } from './internal/types.js'
 import type * as Method from './Method.js'
@@ -8,6 +9,41 @@ import * as PaymentRequest from './PaymentRequest.js'
 import * as z from './zod.js'
 
 const maxRequestParameterLength = 16 * 1024
+
+/**
+ * Marks a challenge parsed from a header whose HMAC-bound parameter carried a legacy `\\uXXXX`
+ * escape. A symbol key, so it survives spreads but stays out of JSON and the wire form.
+ */
+const legacyUnicodeEscape = Symbol('mppx.Challenge.legacyUnicodeEscape')
+
+/** Auth-params the challenge keeps and binds into its ID (see `idBindingInput`). */
+const boundParams = new Set([
+  'digest',
+  'expires',
+  'header',
+  'intent',
+  'method',
+  'opaque',
+  'realm',
+  'request',
+])
+
+const unsupportedCredentialHeaderMessage =
+  'Unsupported credential header: challenges may only select Payment-Authorization.'
+
+/**
+ * Thrown when a challenge selects a credential header other than `Payment-Authorization`.
+ * List parsing skips such challenges so the client can still pay another one.
+ *
+ * @internal
+ */
+class UnsupportedCredentialHeaderError extends Error {
+  override readonly name = 'UnsupportedCredentialHeaderError'
+
+  constructor() {
+    super(unsupportedCredentialHeaderMessage)
+  }
+}
 
 /**
  * Schema for a payment challenge.
@@ -26,9 +62,13 @@ export const Schema = z.object({
   digest: z.optional(z.string().check(z.regex(/^sha-256=/, 'Invalid digest format'))),
   /** Optional expiration timestamp (ISO 8601). */
   expires: z.optional(z.datetime()),
-  /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+  /**
+   * Optional HTTP field name to carry the payment credential. When omitted, uses Authorization.
+   * When present, it MUST be `Payment-Authorization`, matched case-insensitively. The spelling is
+   * kept as received, because clients echo it unchanged and the challenge ID binds it.
+   */
   header: z.optional(
-    z.string().check(z.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name')),
+    z.string().check(z.refine(isPaymentAuthorizationHeader, unsupportedCredentialHeaderMessage)),
   ),
   /** Unique challenge identifier (HMAC-bound). */
   id: z.string().check(z.minLength(1)),
@@ -44,6 +84,18 @@ export const Schema = z.object({
   realm: z.string(),
   /** Method-specific request data. */
   request: z.record(z.string(), z.unknown()),
+})
+
+/**
+ * Schema for a payment challenge whose `header` may be any string. Use it to read challenges stored
+ * before `header` was limited to `Payment-Authorization`, or to check that a received challenge is
+ * well formed before skipping it for its credential header.
+ *
+ * @internal
+ */
+export const LenientSchema = z.extend(Schema, {
+  /** Optional HTTP field name to carry the payment credential, unchecked. */
+  header: z.optional(z.string()),
 })
 
 /**
@@ -139,15 +191,15 @@ export function from<
 
   // `Authorization` is the implicit protocol default and is intentionally not
   // advertised on the wire. This preserves the legacy challenge binding and
-  // lets servers opt into an alternate credential field explicitly.
-  const header = isDefaultCredentialHeader(suppliedHeader) ? undefined : suppliedHeader
+  // lets servers opt into `Payment-Authorization` explicitly.
+  const header = normalizeCredentialHeader(suppliedHeader)
 
   const expires = parameters.expires ? z.toDatetimeString(parameters.expires) : undefined
   const opaque =
     parameters.opaque ?? (meta !== undefined ? PaymentRequest.serialize(meta) : undefined)
   const id = secretKey
     ? computeId(
-        { ...parameters, expires, ...(meta !== undefined && { meta }), opaque },
+        { ...parameters, expires, header, ...(meta !== undefined && { meta }), opaque },
         { secretKey },
       )
     : (parameters as { id: string }).id
@@ -188,7 +240,10 @@ export declare namespace from {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
-    /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+    /**
+     * Optional HTTP field name to carry the payment credential: `Payment-Authorization`, or
+     * `Authorization` (the default, not advertised). Any other value throws.
+     */
     header?: string | undefined
     /** Intent type (e.g., "charge", "session"). */
     intent: string
@@ -284,7 +339,10 @@ export declare namespace fromMethod {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: z.DatetimeInput | undefined
-    /** Optional HTTP field name to carry the payment credential. When omitted, uses Authorization. */
+    /**
+     * Optional HTTP field name to carry the payment credential: `Payment-Authorization`, or
+     * `Authorization` (the default, not advertised). Any other value throws.
+     */
     header?: string | undefined
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
@@ -312,22 +370,25 @@ export declare namespace fromMethod {
  * ```
  */
 export function serialize(challenge: Challenge): string {
-  assertMethod(challenge.method)
+  // Re-serializing drops the backslash that marks a legacy escape, so a signer reading the new
+  // header would not see it.
+  assertNotLegacyUnicodeEscaped(challenge)
+  const { method } = challenge
+  assertMethod(method)
   const parts = [
     authParam('id', challenge.id),
     authParam('realm', challenge.realm),
-    authParam('method', challenge.method),
+    authParam('method', method),
     authParam('intent', challenge.intent),
     authParam('request', PaymentRequest.serialize(challenge.request)),
   ]
 
   if (challenge.description !== undefined)
-    parts.push(authParam('description', challenge.description))
+    parts.push(authParam('description', challenge.description, { escapeUnicode: true }))
   if (challenge.digest !== undefined) parts.push(authParam('digest', challenge.digest))
   if (challenge.expires !== undefined) parts.push(authParam('expires', challenge.expires))
-  const credentialHeader = challenge.header
-  if (credentialHeader !== undefined && !isDefaultCredentialHeader(credentialHeader))
-    parts.push(authParam('header', credentialHeader))
+  const credentialHeader = advertisedCredentialHeader(challenge.header)
+  if (credentialHeader !== undefined) parts.push(authParam('header', credentialHeader))
   if (challenge.opaque !== undefined) parts.push(authParam('opaque', challenge.opaque))
   else if (challenge.meta !== undefined)
     parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
@@ -338,24 +399,44 @@ export function serialize(challenge: Challenge): string {
 /** Payment method identifier grammar: `1*LOWERALPHA` (a-z only). */
 const methodPattern = /^[a-z]+$/
 
+/** @internal Thrown for a method identifier outside the spec's grammar. */
+class InvalidMethodError extends Error {
+  override readonly name = 'InvalidMethodError'
+
+  constructor(method: string) {
+    super(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
+  }
+}
+
 /** @internal Throws unless `method` matches the spec's method identifier grammar (a-z only). */
-function assertMethod(method: string): void {
-  if (!methodPattern.test(method))
-    throw new Error(`Invalid method: "${method}". Must be lowercase letters a-z per spec.`)
+export function assertMethod(method: string): void {
+  if (!methodPattern.test(method)) throw new InvalidMethodError(method)
+}
+
+/** @internal Throws unless `realm` can be sent in a header (no characters above U+00FF). */
+export function assertRealm(realm: string): void {
+  if (/[\u0100-\uffff]/.test(realm))
+    throw new Error('Invalid realm: characters above U+00FF cannot be sent in a header.')
 }
 
 /** @internal */
-function authParam(name: string, value: string): string {
+function authParam(
+  name: string,
+  value: string,
+  options: { escapeUnicode?: boolean | undefined } = {},
+): string {
   if (/[\r\n]/.test(value)) throw new Error('Invalid quoted-string value.')
-  const escaped = value
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    // Header values must be ByteStrings (code points ≤ 0xFF): escape anything
-    // above Latin-1 (em dashes, smart quotes, emoji in descriptions) so the
-    // serialized challenge is always a legal header value instead of crashing
-    // Response construction.
-    .replace(/[\u0100-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
-  return `${name}="${escaped}"`
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  // Header values must be ByteStrings (code points ≤ 0xFF). Receivers read a
+  // backslash as quoted-pair (`\\u2014` is the text `u2014`), so other
+  // characters cannot round-trip in a quoted-string.
+  if (!/[\u0100-\uffff]/.test(escaped)) return `${name}="${escaped}"`
+  // The display-only description is not bound into the Challenge ID: keep the
+  // `\\uXXXX` escape there so a 402 never fails on an em dash or emoji in a
+  // product title. Receivers show the escape text.
+  if (options.escapeUnicode)
+    return `${name}="${escaped.replace(/[\u0100-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)}"`
+  throw new Error(`Invalid ${name}: characters above U+00FF cannot be sent in a header.`)
 }
 
 /**
@@ -382,14 +463,19 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   const params = extractPaymentAuthParams(value)
   if (!params) throw new Error('Missing Payment scheme.')
 
-  const result = parseAuthParams(params)
+  const legacyEscaped = new Set<string>()
+  const result = parseAuthParams(params, legacyEscaped)
 
-  const { request, opaque, ...rest } = result
+  const { request, opaque, header, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
   if (request.length > maxRequestParameterLength) throw new Error('Request parameter too large.')
   if (rest.method !== undefined) assertMethod(rest.method)
+  // Validate the raw value before `from` treats `Authorization` as the omitted default: a
+  // received challenge may only select `Payment-Authorization`.
+  if (header !== undefined && !isPaymentAuthorizationHeader(header))
+    throw new UnsupportedCredentialHeaderError()
 
-  return from(
+  const challenge = from(
     {
       ...rest,
       request: PaymentRequest.deserialize(request),
@@ -397,6 +483,43 @@ export function deserialize<const methods extends readonly Method.Method[] | und
     } as from.Parameters,
     options,
   )
+  // Keep the spelling the server sent: the client echoes it unchanged, and the server's challenge
+  // ID may bind that exact spelling.
+  const parsed = (header === undefined ? challenge : { ...challenge, header }) as from.ReturnType<
+    from.Parameters,
+    methods
+  >
+  // Servers before quoted-pair parsing escaped characters above U+00FF as `\\uXXXX`. Quoted-pair
+  // reads those as different text than the server bound into the challenge ID, so the client must
+  // not pay such a challenge. `description` and unknown params are not bound.
+  if ([...legacyEscaped].some((key) => boundParams.has(key)))
+    (parsed as Record<symbol, unknown>)[legacyUnicodeEscape] = true
+  return parsed
+}
+
+/**
+ * Returns whether a challenge parsed from a header escaped an HMAC-bound parameter as `\\uXXXX`,
+ * as servers did before quoted-pair parsing. Paying it would fail verification after the payment
+ * may already have moved funds.
+ *
+ * @internal
+ */
+export function isLegacyUnicodeEscaped(challenge: unknown): boolean {
+  return Boolean(
+    challenge &&
+    typeof challenge === 'object' &&
+    (challenge as Record<symbol, unknown>)[legacyUnicodeEscape],
+  )
+}
+
+/**
+ * Throws {@link Errors.LegacyUnicodeEscapedChallengeError} for a challenge that
+ * {@link isLegacyUnicodeEscaped} reports, before a credential is created for it.
+ *
+ * @internal
+ */
+export function assertNotLegacyUnicodeEscaped(challenge: unknown): void {
+  if (isLegacyUnicodeEscaped(challenge)) throw new Errors.LegacyUnicodeEscapedChallengeError()
 }
 
 /** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
@@ -411,7 +534,7 @@ function extractPaymentAuthParams(header: string): string | null {
 }
 
 /** @internal Parses auth-params with support for escaped quoted-string values. */
-function parseAuthParams(input: string): Record<string, string> {
+function parseAuthParams(input: string, legacyEscaped?: Set<string>): Record<string, string> {
   const result: Record<string, string> = Object.create(null)
   let i = 0
 
@@ -432,8 +555,13 @@ function parseAuthParams(input: string): Record<string, string> {
 
     while (i < input.length && /\s/.test(input[i] ?? '')) i++
 
-    const [value, nextIndex] = readAuthParamValue(input, i)
+    const [value, nextIndex, legacy] = readAuthParamValue(input, i)
     i = nextIndex
+    if (legacy) legacyEscaped?.add(key)
+
+    // auth-params = auth-param *( OWS "," OWS auth-param ): a value ends at OWS, then "," or the end.
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+    if (i < input.length && input[i] !== ',') throw new Error('Malformed auth-param.')
 
     if (key in result) throw new Error(`Duplicate parameter: ${key}`)
     result[key] = value
@@ -443,21 +571,30 @@ function parseAuthParams(input: string): Record<string, string> {
 }
 
 /** @internal */
-function readAuthParamValue(input: string, start: number): [value: string, nextIndex: number] {
+function readAuthParamValue(
+  input: string,
+  start: number,
+): [value: string, nextIndex: number, legacyEscape?: boolean] {
   if (input[start] === '"') return readQuotedAuthParamValue(input, start + 1)
 
+  // token = 1*tchar (RFC 9110)
   let i = start
-  while (i < input.length && input[i] !== ',') i++
-  return [input.slice(start, i).trim(), i]
+  while (i < input.length && tcharPattern.test(input[i] ?? '')) i++
+  if (i === start) throw new Error('Malformed auth-param.')
+  return [input.slice(start, i), i]
 }
+
+/** @internal RFC 9110 `tchar`. */
+const tcharPattern = /[!#$%&'*+\-.^_`|~0-9A-Za-z]/
 
 /** @internal */
 function readQuotedAuthParamValue(
   input: string,
   start: number,
-): [value: string, nextIndex: number] {
+): [value: string, nextIndex: number, legacyEscape: boolean] {
   let i = start
   let escaped = false
+  let legacyEscape = false
   let segmentStart = start
   let parts: string[] | undefined
 
@@ -466,15 +603,11 @@ function readQuotedAuthParamValue(
     i++
 
     if (escaped) {
+      // quoted-pair (RFC 9110): drop the backslash and keep the next character
+      // as is, so `\\u2014` is the text `u2014`, not an escape.
+      if (char === 'u' && /^[0-9a-fA-F]{4}/.test(input.slice(i, i + 4))) legacyEscape = true
       parts ??= []
-      // `\\uXXXX` unescapes characters above Latin-1. Unambiguous: serializers
-      // always double raw backslashes, so a bare `\\u` only ever comes from
-      // the unicode escape in `authParam`.
-      const hex = char === 'u' ? input.slice(i, i + 4) : undefined
-      if (hex && /^[0-9A-Fa-f]{4}$/.test(hex)) {
-        parts.push(String.fromCharCode(Number.parseInt(hex, 16)))
-        i += 4
-      } else parts.push(char)
+      parts.push(char)
       segmentStart = i
       escaped = false
       continue
@@ -492,7 +625,7 @@ function readQuotedAuthParamValue(
       const value = parts
         ? [...parts, input.slice(segmentStart, i - 1)].join('')
         : input.slice(start, i - 1)
-      return [value, i]
+      return [value, i, legacyEscape]
     }
   }
 
@@ -654,6 +787,9 @@ export function fromHeadersList<
  * Deserializes a `WWW-Authenticate` header value that may contain multiple
  * Payment challenges (comma-separated per RFC 9110 §11.6.1).
  *
+ * Challenges that select a credential header other than `Payment-Authorization`
+ * are skipped, so the result may be empty.
+ *
  * @param value - The raw WWW-Authenticate header value.
  * @param options - Optional settings to narrow the challenge type.
  * @returns An array of deserialized challenges.
@@ -661,15 +797,63 @@ export function fromHeadersList<
 export function deserializeList<
   const methods extends readonly Method.Method[] | undefined = undefined,
 >(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
-  const starts = findSchemeStarts(value, Constants.Schemes.payment)
-  if (starts.length === 0) throw new Error('No Payment schemes found.')
+  const chunks = paymentChunks(value)
+  if (chunks.length === 0) throw new Error('No Payment schemes found.')
 
+  return chunks.flatMap((chunk) => {
+    try {
+      return [deserialize(chunk, options)]
+    } catch (error) {
+      // A challenge with an unsupported credential header gets no credential,
+      // but must not stop the client from paying another challenge.
+      if (error instanceof UnsupportedCredentialHeaderError) return []
+      // An offer for a method id outside the grammar can't be paid, but must not stop the
+      // client from paying another offer in the same header.
+      if (error instanceof InvalidMethodError) return []
+      throw error
+    }
+  })
+}
+
+/**
+ * Counts the Payment challenges in a `WWW-Authenticate` value that list parsing skips because they
+ * select a credential header other than `Payment-Authorization`.
+ *
+ * @internal
+ */
+export function countUnsupportedCredentialHeaders(value: string | null | undefined): number {
+  if (!value) return 0
+  return paymentChunks(value).filter((chunk) => {
+    try {
+      deserialize(chunk)
+      return false
+    } catch (error) {
+      return error instanceof UnsupportedCredentialHeaderError
+    }
+  }).length
+}
+
+/**
+ * Appends a note on skipped challenges to an error that reports no payable challenge. Returns the
+ * message unchanged when none were skipped.
+ *
+ * @internal
+ */
+export function withSkippedChallenges(message: string, count: number): string {
+  if (count <= 0) return message
+  return count === 1
+    ? `${message}. Skipped 1 challenge that selects a credential header other than Payment-Authorization`
+    : `${message}. Skipped ${count} challenges that select a credential header other than Payment-Authorization`
+}
+
+/** Splits a `WWW-Authenticate` value into its `Payment` challenges. */
+function paymentChunks(value: string): string[] {
+  const starts = findSchemeStarts(value, Constants.Schemes.payment)
   // Slice each scheme from its `Payment ` prefix up to the next scheme boundary,
   // trimming any trailing comma/whitespace between schemes.
   return starts.map((start, i) => {
     const end = i + 1 < starts.length ? starts[i + 1]! : value.length
-    const chunk = value.slice(start, end).replace(/,\s*$/, '')
-    return deserialize(chunk, options)
+    return value.slice(start, end).replace(/,\s*$/, '')
   })
 }
 
@@ -688,7 +872,14 @@ export function deserializeList<
  * ```
  */
 export function verify(challenge: Challenge, options: verify.Options): boolean {
-  const expectedId = computeId(challenge, options)
+  let expectedId: string
+  try {
+    expectedId = computeId(challenge, options)
+  } catch (error) {
+    // A challenge that selects an unsupported credential header was never issued by this server.
+    if (error instanceof UnsupportedCredentialHeaderError) return false
+    throw error
+  }
   return constantTimeEqual(challenge.id, expectedId)
 }
 
@@ -730,21 +921,65 @@ function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
     challenge.digest ?? '',
   ]
   // Keep opaque in the final optional slot required by the Payment auth scheme.
-  const credentialHeader = challenge.header
-  if (credentialHeader !== undefined && !isDefaultCredentialHeader(credentialHeader))
-    values.push(credentialHeader)
+  const credentialHeader = advertisedCredentialHeader(challenge.header)
+  if (credentialHeader !== undefined) values.push(credentialHeader)
   values.push(challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : ''))
   return values.join('|')
 }
 
-/** Returns the HTTP field name a client must use for a payment credential. */
+/**
+ * Returns the HTTP field name a client must use for a payment credential: `Authorization` when the
+ * challenge omits `header`, and the canonical `Payment-Authorization` for any spelling of it.
+ */
 export function credentialHeader(challenge: Challenge): string {
-  return challenge.header ?? Constants.Headers.authorization
+  const { header } = challenge
+  if (header === undefined) return Constants.Headers.authorization
+  return isPaymentAuthorizationHeader(header) ? Constants.Headers.paymentAuthorization : header
 }
 
-/** Returns whether a credential header is the implicit HTTP authentication default. */
-function isDefaultCredentialHeader(header: string | undefined): boolean {
-  return header?.toLowerCase() === Constants.Headers.authorization.toLowerCase()
+/**
+ * Returns whether a challenge object selects a credential header a client must not send a Payment
+ * credential for: any `header` other than `Payment-Authorization` (matched case-insensitively).
+ *
+ * Use it on challenge objects received outside `WWW-Authenticate`, such as MCP payment-required
+ * data, to skip such a challenge while still paying another one.
+ *
+ * @internal
+ */
+export function hasUnsupportedCredentialHeader(challenge: unknown): boolean {
+  if (typeof challenge !== 'object' || challenge === null || !('header' in challenge)) return false
+  const { header } = challenge as { header: unknown }
+  return (
+    header !== undefined && !(typeof header === 'string' && isPaymentAuthorizationHeader(header))
+  )
+}
+
+/** Returns whether a header name is `Payment-Authorization`, ignoring ASCII case. */
+function isPaymentAuthorizationHeader(header: string): boolean {
+  // Without the `u` flag, `i` folds ASCII letters only.
+  return /^payment-authorization$/i.test(header)
+}
+
+/**
+ * Normalizes a locally configured credential header: `Authorization` (any case) is the
+ * implicit default and is not advertised, `Payment-Authorization` is canonicalized, and any
+ * other value throws because servers MUST NOT emit it.
+ */
+function normalizeCredentialHeader(header: string | undefined): string | undefined {
+  const advertised = advertisedCredentialHeader(header)
+  return advertised === undefined ? undefined : Constants.Headers.paymentAuthorization
+}
+
+/**
+ * Returns a challenge's `header` as it is advertised and bound into the challenge ID:
+ * `Authorization` (any case) is the implicit default and is omitted, a `Payment-Authorization`
+ * spelling is kept exactly as given, and any other value throws because servers MUST NOT emit it.
+ */
+function advertisedCredentialHeader(header: string | undefined): string | undefined {
+  if (header === undefined) return undefined
+  if (/^authorization$/i.test(header)) return undefined
+  if (isPaymentAuthorizationHeader(header)) return header
+  throw new UnsupportedCredentialHeaderError()
 }
 
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */

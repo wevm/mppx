@@ -352,6 +352,57 @@ export declare namespace BroadcastOutcomeUnknownError {
 }
 
 /**
+ * An x402 facilitator answered with a non-2xx status (such as a 401 for a missing or wrong API
+ * key, or a 5xx outage) or with a body that is not a facilitator result.
+ *
+ * It says nothing about the payment itself, so it is not a `PaymentError`: HTTP handlers answer
+ * with a generic 500 `InternalPaymentError`, whose `cause` is this error, rather than a 402 that
+ * would tell the client its payment was invalid. A `/verify` or `/settle` error response whose
+ * body is a failed result (`isValid: false`, `success: false`) is read as that result instead.
+ */
+export class FacilitatorResponseError extends Error {
+  override readonly name = 'FacilitatorResponseError'
+
+  /** First 200 characters of the response body, for server-side logs. Never sent to clients. */
+  readonly body: string
+  /** Facilitator path that failed. */
+  readonly path: 'settle' | 'supported' | 'verify'
+  /** HTTP status of the facilitator response. */
+  readonly status: number
+
+  constructor(options: FacilitatorResponseError.Options) {
+    const { cause, path, status } = options
+    const body = excerpt(options.body)
+    super(`x402 facilitator /${path} failed (${status}): ${body}`)
+    this.body = body
+    this.path = path
+    this.status = status
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace FacilitatorResponseError {
+  type Options = {
+    /** Response body. Truncated to 200 characters. */
+    body: string
+    /** Parse error, when the body is not a facilitator result. */
+    cause?: unknown
+    /** Facilitator path that failed. */
+    path: 'settle' | 'supported' | 'verify'
+    /** HTTP status of the facilitator response. */
+    status: number
+  }
+}
+
+function excerpt(text: string, limit = 200): string {
+  const compact = text.trim().replace(/\s+/g, ' ')
+  if (!compact) return '<empty response>'
+  return compact.length <= limit ? compact : `${compact.slice(0, limit - 3)}...`
+}
+
+/**
  * A pre-broadcast simulation of a fee-sponsored payment failed, so the payment was not broadcast.
  *
  * `phase` says which simulation failed: `sender` runs the sender's calls before sponsorship, and
@@ -404,29 +455,183 @@ export declare namespace PaymentSimulationError {
 }
 
 /**
+ * The server escaped an HMAC-bound challenge parameter (such as `realm`) as `\\uXXXX`, as mppx
+ * servers before quoted-pair parsing did for characters above U+00FF. The client reads that
+ * escape as different text than the server bound into the challenge ID, so the server would
+ * reject the credential, possibly after the payment moved funds. The client stops before it
+ * creates, signs or broadcasts anything.
+ *
+ * Upgrade the server, or keep bound parameters within Latin-1.
+ */
+export class LegacyUnicodeEscapedChallengeError extends Error {
+  override readonly name = 'LegacyUnicodeEscapedChallengeError'
+
+  constructor() {
+    super(
+      'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',
+    )
+  }
+}
+
+/**
+ * A `tempo/session` client would open a channel whose vouchers a TIP-1166 configurable account
+ * signs, but the server's challenge does not advertise `configurableVouchers`, so the server
+ * would reject those vouchers. The client stops before it locks a deposit.
+ *
+ * Pay with a primitive account or access key, or ask the server operator to enable
+ * `configurableVouchers` once the chain runs T15.
+ */
+export class ConfigurableVouchersUnsupportedError extends Error {
+  override readonly name = 'ConfigurableVouchersUnsupportedError'
+
+  /** Configurable account that would sign the channel's vouchers. */
+  readonly signer: `0x${string}`
+
+  constructor(options: ConfigurableVouchersUnsupportedError.Options) {
+    const { signer } = options
+    super(
+      `Configurable account ${signer} signs vouchers with TIP-1166 configurable account signatures, but the session challenge does not advertise \`configurableVouchers\`, so the channel was not opened.`,
+    )
+    this.signer = signer
+  }
+}
+
+export declare namespace ConfigurableVouchersUnsupportedError {
+  type Options = {
+    /** Configurable account that would sign the channel's vouchers. */
+    signer: `0x${string}`
+  }
+}
+
+/**
+ * A `tempo/session` top-up would revert because the channel signer's TIP-1166 config changed
+ * since the channel opened, so the client did not sign it.
+ *
+ * The escrow reverts a nonzero top-up with `SignerConfigChanged(signer)` when the config
+ * commitment recorded at open differs from the signer's current one, or with
+ * `RootKeyRetired(signer)` when the signer had no commitment at open and has one now. Vouchers
+ * already signed for the channel still settle, since the escrow checks them against the commitment
+ * recorded at open, but the channel takes no new funds: close it and open a new one. The
+ * simulation error is the `cause`.
+ */
+export class SignerConfigChangedError extends Error {
+  override readonly name = 'SignerConfigChangedError'
+
+  /** Channel whose signer config changed. */
+  readonly channelId: `0x${string}`
+  /** Escrow error that reverted the top-up. */
+  readonly reason: SignerConfigChangedError.Reason
+  /** Voucher signer of the channel. */
+  readonly signer: `0x${string}`
+
+  constructor(options: SignerConfigChangedError.Options) {
+    const { cause, channelId, reason, signer } = options
+    super(
+      `Signer ${signer} of channel ${channelId} changed its account config since the channel opened, so the top-up was not signed. Close the channel and open a new one.`,
+    )
+    this.channelId = channelId
+    this.reason = reason
+    this.signer = signer
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace SignerConfigChangedError {
+  /** `SignerConfigChanged`: the commitment recorded at open differs. `RootKeyRetired`: the signer had none at open. */
+  type Reason = 'SignerConfigChanged' | 'RootKeyRetired'
+
+  type Options = {
+    /** The simulation error. */
+    cause?: unknown
+    /** Channel whose signer config changed. */
+    channelId: `0x${string}`
+    /** Escrow error that reverted the top-up. */
+    reason: Reason
+    /** Voucher signer of the channel. */
+    signer: `0x${string}`
+  }
+}
+
+/**
+ * The access key that signs a Tempo payment has less spending limit left than the payment needs,
+ * so the client did not sign it.
+ *
+ * The client simulates a payment before it signs. On chain the transaction would revert with the
+ * account keychain's `SpendingLimitExceeded()` error, and a fee payer would still pay for it.
+ * Raise the key's limit, wait for its period to reset, or pay with another key. The simulation
+ * error is the `cause`.
+ */
+export class SpendingLimitExceededError extends Error {
+  override readonly name = 'SpendingLimitExceededError'
+
+  /** Access key that signs the payment, when the account is an access key. */
+  readonly accessKey: `0x${string}` | undefined
+  /** Account that pays. */
+  readonly account: `0x${string}`
+
+  constructor(options: SpendingLimitExceededError.Options) {
+    const { accessKey, account, cause } = options
+    super(
+      `Access key spending limit exceeded: ${accessKey ? `key ${accessKey} of ` : ''}account ${account} cannot pay this amount, so the payment was not signed.`,
+    )
+    this.accessKey = accessKey
+    this.account = account
+    // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
+    if (cause !== undefined)
+      Object.defineProperty(this, 'cause', { configurable: true, value: cause, writable: true })
+  }
+}
+
+export declare namespace SpendingLimitExceededError {
+  type Options = {
+    /** Access key that signs the payment. */
+    accessKey?: `0x${string}` | undefined
+    /** Account that pays. */
+    account: `0x${string}`
+    /** The simulation error. */
+    cause?: unknown
+  }
+}
+
+/**
  * A client withdrew from a Zone to pay a challenge, but the withdrawal did not settle on Tempo
  * before the client stopped waiting. The withdrawal cannot be undone and may still settle.
  *
  * Retry the same challenge with the same `tempo.charge` client to resume waiting without
- * withdrawing again, or find the settlement with `senderTag` on the Zone's portal.
+ * withdrawing again, or find the settlement with `senderTag` (or one of `senderTags`) on the Zone's portal.
+ * A new challenge for the same payment never starts a second withdrawal: from the origin that
+ * issued `challengeId`, it resumes this withdrawal and returns a credential for that challenge;
+ * otherwise it throws this error again.
  */
 export class ZoneSettlementPendingError extends Error {
   override readonly name = 'ZoneSettlementPendingError'
 
   /** ID of the challenge the withdrawal pays. */
   readonly challengeId: string
-  /** Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it. */
-  readonly senderTag: `0x${string}`
+  /**
+   * Sender tag of the withdrawal, as the portal's `WithdrawalProcessed` event carries it.
+   * `undefined` when a Zone RPC hid it and more than one candidate remains: see `senderTags`.
+   */
+  readonly senderTag: `0x${string}` | undefined
+  /** Sender tags the withdrawal may carry: its tag alone when known, else every candidate. Empty when not yet read. */
+  readonly senderTags: readonly `0x${string}`[]
   /** ID of the Zone the withdrawal left. */
   readonly zoneId: number
 
   constructor(options: ZoneSettlementPendingError.Options) {
-    const { cause, challengeId, senderTag, zoneId } = options
+    const { cause, challengeId, zoneId } = options
+    const senderTags = options.senderTags ?? (options.senderTag ? [options.senderTag] : [])
+    const senderTag = senderTags.length === 1 ? senderTags[0] : undefined
+    const withdrawal =
+      senderTag ?? (senderTags.length ? `with sender tag ${senderTags.join(' or ')}` : undefined)
     super(
-      `Zone ${zoneId} withdrawal ${senderTag} for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
+      `Zone ${zoneId} withdrawal ${withdrawal ? `${withdrawal} ` : ''}for challenge "${challengeId}" has not settled on Tempo yet. Retry the challenge to resume waiting instead of paying again.`,
     )
     this.challengeId = challengeId
     this.senderTag = senderTag
+    this.senderTags = senderTags
     this.zoneId = zoneId
     // Defined manually (non-enumerable, like native `cause`) so consumers on pre-ES2022 libs still typecheck.
     if (cause !== undefined)
@@ -441,7 +646,9 @@ export declare namespace ZoneSettlementPendingError {
     /** ID of the challenge the withdrawal pays. */
     challengeId: string
     /** Sender tag of the withdrawal. */
-    senderTag: `0x${string}`
+    senderTag?: `0x${string}` | undefined
+    /** Sender tags the withdrawal may carry, when a Zone RPC hid its tag. */
+    senderTags?: readonly `0x${string}`[] | undefined
     /** ID of the Zone the withdrawal left. */
     zoneId: number
   }
@@ -583,19 +790,21 @@ export class InsufficientBalanceError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/session/insufficient-balance'
 
   constructor(options: InsufficientBalanceError.Options = {}) {
-    const { fundingUrl, reason } = options
+    const { cause, fundingUrl, reason } = options
     super(
       withFundingUrl(
         reason ? `Insufficient balance: ${reason}.` : 'Insufficient balance.',
         fundingUrl,
       ),
-      { fundingUrl },
+      { cause, fundingUrl },
     )
   }
 }
 
 export declare namespace InsufficientBalanceError {
   type Options = {
+    /** Underlying error, such as the failed simulation. Never serialized into Problem Details. */
+    cause?: unknown
     /** Page where the payer can get the funds, such as the MACH onramp. */
     fundingUrl?: string | undefined
     /** Reason for insufficient balance. */

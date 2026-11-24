@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from 'vp/test'
+import * as Http from '~test/Http.js'
 
+import * as Credential from '../Credential.js'
 import * as Mppx from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import * as Proxy from './Proxy.js'
@@ -32,7 +34,7 @@ function createProxy(parameters: {
   const store = parameters.replay?.store ?? Store.memory()
   return Proxy.create({
     fetch: parameters.fetch,
-    replay: { ...parameters.replay, store },
+    replay: { authority: 'test', ...parameters.replay, store },
     services: [
       Service.from('api', {
         baseUrl: 'https://upstream.example',
@@ -127,7 +129,7 @@ describe('replay', () => {
     const fetch = vi.fn(async () => {
       throw new Error('connection reset')
     }) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { maxAttempts: 2 } })
+    const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', maxAttempts: 2 } })
 
     const first = await proxy.fetch(paidRequest())
     expect(first.status).toBe(502)
@@ -188,7 +190,7 @@ describe('replay', () => {
     const proxy = createProxy({
       fetch,
       onPayment,
-      replay: { maxBodySize: 10, waitUntil: (promise) => pending.push(promise) },
+      replay: { authority: 'test', maxBodySize: 10, waitUntil: (promise) => pending.push(promise) },
     })
 
     expect(await (await proxy.fetch(paidRequest())).text()).toBe('x'.repeat(100))
@@ -201,7 +203,7 @@ describe('replay', () => {
     try {
       const onPayment = vi.fn()
       const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
-      const proxy = createProxy({ fetch, onPayment, replay: { ttl: 1_000 } })
+      const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', ttl: 1_000 } })
 
       await (await proxy.fetch(paidRequest())).text()
       await new Promise((r) => setTimeout(r, 0))
@@ -218,7 +220,7 @@ describe('replay', () => {
     const onPayment = vi.fn()
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
     const store = Store.memory()
-    const proxy = createProxy({ fetch, onPayment, replay: { store } })
+    const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', store } })
 
     const response = await proxy.fetch(
       new Request('https://proxy.example/api/generate', { body: '{}', method: 'POST' }),
@@ -232,7 +234,11 @@ describe('replay review fixes', () => {
   test('rejects paid request bodies over maxRequestBodySize with 413 before payment', async () => {
     const onPayment = vi.fn()
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { maxRequestBodySize: 8 } })
+    const proxy = createProxy({
+      fetch,
+      onPayment,
+      replay: { authority: 'test', maxRequestBodySize: 8 },
+    })
 
     const response = await proxy.fetch(paidRequest({ body: 'x'.repeat(64) }))
     expect(response.status).toBe(413)
@@ -277,7 +283,11 @@ describe('replay review fixes', () => {
         )
       return Response.json({ ok: true })
     }) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { waitUntil: (p) => pending.push(p) } })
+    const proxy = createProxy({
+      fetch,
+      onPayment,
+      replay: { authority: 'test', waitUntil: (p) => pending.push(p) },
+    })
 
     await (await proxy.fetch(paidRequest())).text().catch(() => {})
     await Promise.all(pending)
@@ -321,7 +331,7 @@ describe('replay review fixes', () => {
     process.on('unhandledRejection', unhandled)
     try {
       const fetch = vi.fn(async () => new Response('ok')) as typeof globalThis.fetch
-      const proxy = createProxy({ fetch, onPayment, replay: { store } })
+      const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', store } })
 
       expect(await (await proxy.fetch(paidRequest())).text()).toBe('ok')
       await new Promise((r) => setTimeout(r, 10))
@@ -339,7 +349,7 @@ describe('replay review fixes', () => {
         vi.setSystemTime(Date.now() + 900)
         return Response.json({ ok: true })
       }) as typeof globalThis.fetch
-      const proxy = createProxy({ fetch, onPayment, replay: { ttl: 1_000 } })
+      const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', ttl: 1_000 } })
 
       await (await proxy.fetch(paidRequest())).text()
       await new Promise((r) => setTimeout(r, 0))
@@ -355,13 +365,76 @@ describe('replay review fixes', () => {
 })
 
 describe('replay key scope', () => {
+  test.each([true])(
+    'isolates failed deliveries between Node authorities (explicit=%s)',
+    async (explicit) => {
+      const store = Store.memory()
+      const paidB = vi.fn()
+      const upstreamA = vi.fn(
+        async () => new Response('failed', { status: 502 }),
+      ) as typeof globalThis.fetch
+      const upstreamB = vi.fn(async () => new Response('paid B')) as typeof globalThis.fetch
+      const a = createProxy({
+        fetch: upstreamA,
+        onPayment: vi.fn(),
+        replay: { authority: 'test', store, ...(explicit ? { authority: 'a' } : {}) },
+      })
+      const b = createProxy({
+        fetch: upstreamB,
+        onPayment: paidB,
+        replay: { authority: 'test', store, ...(explicit ? { authority: 'b' } : {}) },
+      })
+      const serverA = await Http.createServer(a.listener)
+      const serverB = await Http.createServer(b.listener)
+      const init = {
+        method: 'POST',
+        headers: { Host: 'a.example', Authorization: 'Payment credential-1' },
+        body: '{}',
+      }
+      try {
+        expect((await fetch(serverA.url + '/api/generate', init)).status).toBe(502)
+        expect((await fetch(serverB.url + '/api/generate', init)).status).toBe(200)
+        expect(paidB).toHaveBeenCalledOnce()
+      } finally {
+        serverA.close()
+        serverB.close()
+      }
+    },
+  )
+
+  test('shares failed deliveries only between explicitly configured replicas', async () => {
+    const store = Store.memory()
+    const paid = vi.fn()
+    const a = createProxy({
+      fetch: vi.fn(async () => new Response('failed', { status: 502 })) as typeof globalThis.fetch,
+      onPayment: paid,
+      replay: { store, authority: 'replicas' },
+    })
+    const b = createProxy({
+      fetch: vi.fn(async () => new Response('retried')) as typeof globalThis.fetch,
+      onPayment: paid,
+      replay: { store, authority: 'replicas' },
+    })
+    expect((await a.fetch(paidRequest())).status).toBe(502)
+    expect(await (await b.fetch(paidRequest())).text()).toBe('retried')
+    expect(paid).toHaveBeenCalledOnce()
+  })
+
   test('does not replay a delivery on a proxy at another origin sharing the store', async () => {
     const store = Store.memory()
     const onPaymentA = vi.fn()
     const onPaymentB = vi.fn()
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
-    const proxyA = createProxy({ fetch, onPayment: onPaymentA, replay: { store } })
-    const proxyB = createProxy({ fetch, onPayment: onPaymentB, replay: { store } })
+    const proxyA = createProxy({
+      fetch,
+      onPayment: onPaymentA,
+      replay: { authority: 'test', store },
+    })
+    const proxyB = createProxy({
+      fetch,
+      onPayment: onPaymentB,
+      replay: { authority: 'test', store },
+    })
     const request = (origin: string) =>
       new Request(origin + '/api/generate', {
         body: '{}',
@@ -396,7 +469,7 @@ describe('replay review fixes (cyclops)', () => {
     const update = vi.fn(memory.update)
     const store = { ...memory, update } as Store.AtomicStore
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { store } })
+    const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', store } })
 
     await (await proxy.fetch(paidRequest())).text()
     expect(update).not.toHaveBeenCalled()
@@ -410,7 +483,7 @@ describe('replay review fixes (cyclops)', () => {
     }) as Service.IntentHandler
     const proxy = Proxy.create({
       fetch,
-      replay: { store: Store.memory() },
+      replay: { authority: 'test', store: Store.memory() },
       services: [
         Service.from('api', {
           baseUrl: 'https://upstream.example',
@@ -457,12 +530,15 @@ describe('replay review fixes (cyclops, round 3)', () => {
   test('rejects a ttl the timer cannot hold', () => {
     expect(() =>
       Proxy.create({
-        replay: { store: Store.memory(), ttl: Number.POSITIVE_INFINITY },
+        replay: { authority: 'test', store: Store.memory(), ttl: Number.POSITIVE_INFINITY },
         services: [],
       }),
     ).toThrow(RangeError)
     expect(() =>
-      Proxy.create({ replay: { store: Store.memory(), ttl: 2 ** 31 }, services: [] }),
+      Proxy.create({
+        replay: { authority: 'test', store: Store.memory(), ttl: 2 ** 31 },
+        services: [],
+      }),
     ).toThrow(RangeError)
   })
 
@@ -503,7 +579,7 @@ describe('replay review fixes (cyclops, round 3)', () => {
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
     const proxy = Proxy.create({
       fetch,
-      replay: { store: Store.memory() },
+      replay: { authority: 'test', store: Store.memory() },
       services: [
         Service.from('api', {
           baseUrl: 'https://upstream.example',
@@ -547,7 +623,7 @@ describe('replay store failures', () => {
       },
     }) as Store.AtomicStore
     const fetch = vi.fn(async () => Response.json({ ok: true })) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { store } })
+    const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', store } })
 
     const response = await proxy.fetch(paidRequest())
     expect(response.status).toBe(200)
@@ -574,10 +650,327 @@ describe('replay ttl scope', () => {
         }),
       )
     }) as typeof globalThis.fetch
-    const proxy = createProxy({ fetch, onPayment, replay: { ttl: 20 } })
+    const proxy = createProxy({ fetch, onPayment, replay: { authority: 'test', ttl: 20 } })
 
     const response = await proxy.fetch(paidRequest())
     expect(await response.text()).toBe('ab')
     expect(upstreamSignal?.aborted).toBe(false)
   })
+})
+
+test('rejects missing replay authority before accepting any payment', () => {
+  expect(() => Proxy.create({ services: [], replay: { store: Store.memory() } })).toThrow(
+    'replay.authority',
+  )
+})
+
+test('shares replay across equivalent canonical route and base URL configuration', async () => {
+  const store = Store.memory()
+  const paid = vi.fn()
+  const create = (baseUrl: string, basePath: string, route: string, fail: boolean) =>
+    Proxy.create({
+      basePath,
+      replay: { authority: 'replicas', store },
+      fetch: vi.fn(
+        async () => new Response(fail ? 'failed' : 'retried', { status: fail ? 502 : 200 }),
+      ) as typeof fetch,
+      services: [Service.from('api', { baseUrl, routes: { [route]: createPaidHandler(paid) } })],
+    })
+  const a = create('https://UPSTREAM.example:443/base/', '/paid/', 'post  /generate', true)
+  const b = create('https://upstream.example/base', '/paid', 'POST /generate', false)
+  const request = () =>
+    new Request('https://proxy.example/paid/api/generate', {
+      method: 'POST',
+      headers: { Authorization: 'Payment credential-1' },
+      body: '{}',
+    })
+  expect((await a.fetch(request())).status).toBe(502)
+  expect(await (await b.fetch(request())).text()).toBe('retried')
+  expect(paid).toHaveBeenCalledOnce()
+})
+
+test.each([false, true])(
+  're-verifies session retries including composed offers (%s)',
+  async (composed) => {
+    const onPayment = vi.fn()
+    const handler = Object.assign(createPaidHandler(onPayment), {
+      _internal: composed
+        ? {
+            offers: [
+              { intent: 'charge', _canonicalRequest: {} },
+              { intent: 'session', _canonicalRequest: { unitType: 'request' } },
+            ],
+          }
+        : { intent: 'session', _canonicalRequest: { unitType: 'request' } },
+    })
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValue(
+        new Response('data: paid\n\n', { headers: { 'Content-Type': 'text/event-stream' } }),
+      )
+    const proxy = Proxy.create({
+      fetch,
+      replay: { authority: 'test', store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    expect((await proxy.fetch(paidRequest())).status).toBe(503)
+    expect(await (await proxy.fetch(paidRequest())).text()).toBe('data: paid\n\n')
+    expect(onPayment).toHaveBeenCalledTimes(2)
+  },
+)
+
+test('rejects per-item session proxying before payment or upstream work', async () => {
+  const payment = vi.fn()
+  const fetch = vi.fn()
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+  })
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  expect((await proxy.fetch(paidRequest())).status).toBe(500)
+  expect(payment).not.toHaveBeenCalled()
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(
+  ['POST /generate', 'GET /generate'].flatMap((route) =>
+    ['close', 'topUp', 'open', 'voucher'].map((action) => ({ route, action })),
+  ),
+)('allows per-item $action management through $route', async ({ route, action }) => {
+  const fetch = vi.fn()
+  const management = new Response('closed')
+  const handler = Object.assign(
+    vi.fn(async () => ({
+      status: 200 as const,
+      withReceipt: <response>(_response: response) => management as response,
+    })),
+    {
+      _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+    },
+  )
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { [route]: handler },
+      }),
+    ],
+  })
+  const request =
+    action === 'close' || action === 'topUp'
+      ? paidRequest({ credential: sessionCredential(action) })
+      : new Request('https://proxy.example/api/generate', {
+          method: 'POST',
+          headers: { Authorization: `Payment ${sessionCredential(action)}` },
+        })
+  expect(await proxy.fetch(request)).toBe(management)
+  expect(handler).toHaveBeenCalledTimes(1)
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+function sessionCredential(action: string, intent = 'session') {
+  return Credential.serialize({
+    challenge: {
+      id: 'test-challenge',
+      realm: 'proxy.example',
+      method: 'tempo',
+      intent,
+      request: { unitType: 'request' },
+    },
+    payload: { action },
+  }).replace(/^Payment /, '')
+}
+
+test.each(['GET', 'POST'])(
+  'rejects canonical per-item %s content before charging, even with an echoed request unit',
+  async (method) => {
+    const payment = vi.fn()
+    const fetch = vi.fn()
+    const handler = Object.assign(createPaidHandler(payment), {
+      _internal: { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+    })
+    const proxy = Proxy.create({
+      fetch,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { [`${method} /generate`]: handler },
+        }),
+      ],
+    })
+    const request = new Request('https://proxy.example/api/generate', {
+      method,
+      headers: { Authorization: `Payment ${sessionCredential('voucher')}` },
+      ...(method === 'POST' ? { body: 'generate' } : {}),
+    })
+    expect((await proxy.fetch(request)).status).toBe(500)
+    expect(payment).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
+
+test('serves a charge credential when composed with an unsupported session offer', async () => {
+  const payment = vi.fn()
+  const fetch = vi.fn(async () => new Response('paid result'))
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: {
+      offers: [
+        { name: 'tempo', intent: 'charge', _canonicalRequest: {} },
+        { name: 'tempo', intent: 'session', _canonicalRequest: { unitType: 'token' } },
+      ],
+    },
+  })
+  const proxy = Proxy.create({
+    fetch,
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  const response = await proxy.fetch(
+    paidRequest({ credential: sessionCredential('charge', 'charge') }),
+  )
+  expect(await response.text()).toBe('paid result')
+  expect(response.headers.get('Payment-Receipt')).toBe('test-receipt')
+  expect(payment).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+test('recovers a composed charge delivery without verifying the single-use payment twice', async () => {
+  const payment = vi.fn()
+  const handler = Object.assign(createPaidHandler(payment), {
+    _internal: {
+      offers: [
+        { name: 'tempo', intent: 'charge', _canonicalRequest: {} },
+        {
+          name: 'tempo',
+          intent: 'session',
+          _canonicalRequest: { unitType: 'token' },
+          _transport: { name: 'sse' },
+        },
+      ],
+    },
+  })
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+    .mockResolvedValue(new Response('paid result'))
+  const proxy = Proxy.create({
+    fetch,
+    replay: { authority: 'test', store: Store.memory() },
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  const request = () => paidRequest({ credential: sessionCredential('charge', 'charge') })
+  expect((await proxy.fetch(request())).status).toBe(503)
+  expect(await (await proxy.fetch(request())).text()).toBe('paid result')
+  expect(await (await proxy.fetch(request())).text()).toBe('paid result')
+  expect(payment).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+test.each([
+  { transport: 'http', amount: '1' },
+  { transport: 'sse', amount: '0' },
+])(
+  'allows safe $transport automatic proxy sessions with amount $amount',
+  async ({ transport, amount }) => {
+    const payment = vi.fn()
+    const handler = Object.assign(createPaidHandler(payment), {
+      _internal: {
+        name: 'tempo',
+        intent: 'session',
+        _canonicalRequest: { unitType: 'page', amount },
+        _transport: { name: transport },
+      },
+    })
+    const fetch = vi.fn(async () => new Response('paid page'))
+    const proxy = Proxy.create({
+      fetch,
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    expect(
+      await (await proxy.fetch(paidRequest({ credential: sessionCredential('voucher') }))).text(),
+    ).toBe('paid page')
+    expect(payment).toHaveBeenCalledTimes(1)
+  },
+)
+
+test.each(['missing', 'undefined'])(
+  'rejects session content with %s handler metadata before replay or payment',
+  async (metadata) => {
+    const payment = vi.fn()
+    const handler = createPaidHandler(payment)
+    if (metadata === 'undefined') Object.assign(handler, { _internal: undefined })
+    const fetch = vi.fn(
+      async () =>
+        new Response('data: unmetered\n\n', { headers: { 'content-type': 'text/event-stream' } }),
+    )
+    const proxy = Proxy.create({
+      fetch,
+      replay: { authority: 'test', store: Store.memory() },
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://upstream.example',
+          routes: { 'POST /generate': handler },
+        }),
+      ],
+    })
+    for (let attempt = 0; attempt < 2; attempt++)
+      expect(
+        (await proxy.fetch(paidRequest({ credential: sessionCredential('voucher') }))).status,
+      ).toBe(500)
+    expect(payment).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
+
+test('reverifies opaque session management instead of caching its response', async () => {
+  const fetch = vi.fn()
+  const management = new Response('closed')
+  const handler = vi.fn(async () => ({
+    status: 200 as const,
+    withReceipt: <response>(_response: response) => management as response,
+  }))
+  const proxy = Proxy.create({
+    fetch,
+    replay: { authority: 'test', store: Store.memory() },
+    services: [
+      Service.from('api', {
+        baseUrl: 'https://upstream.example',
+        routes: { 'POST /generate': handler },
+      }),
+    ],
+  })
+  for (let attempt = 0; attempt < 2; attempt++)
+    expect(await proxy.fetch(paidRequest({ credential: sessionCredential('close') }))).toBe(
+      management,
+    )
+  expect(handler).toHaveBeenCalledTimes(2)
+  expect(fetch).not.toHaveBeenCalled()
 })

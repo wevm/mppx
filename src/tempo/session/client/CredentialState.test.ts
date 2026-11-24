@@ -1,21 +1,26 @@
+import { Secp256k1 } from 'ox'
+import { AccountConfig } from 'ox/tempo'
 import {
   createClient,
   custom,
   encodeAbiParameters,
+  http,
   type Address,
   type Client,
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
-import { InsufficientBalanceError } from '../../../Errors.js'
+import { ConfigurableVouchersUnsupportedError, InsufficientBalanceError } from '../../../Errors.js'
 import type * as z from '../../../zod.js'
 import { machineToken, machineTokenFundingBaseUrl } from '../../internal/defaults.js'
 import * as Channel from '../precompile/Channel.js'
 import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import {
@@ -35,6 +40,7 @@ import {
   hasManualSessionDescriptor,
   hasSessionAction,
   hasSessionDescriptor,
+  hydrateSessionSnapshot,
   parseOptionalContextAmount,
   planCredential,
   readCredentialCumulativeAmount,
@@ -570,6 +576,67 @@ describe('CredentialPlan', () => {
       expect(error.message).toContain('requested 2 MACH, available 0.25 MACH')
     })
 
+    test('reads configurableVouchers from challenge details', async () => {
+      const client = { chain: { id: 42431 } } as Client
+      const challenge = paymentChallenge()
+      const legacy = await resolveChallengeContext({ challenge, getClient: async () => client })
+      expect(legacy.configurableVouchers).toBeUndefined()
+      const enabled = await resolveChallengeContext({
+        challenge: paymentChallenge({
+          methodDetails: {
+            ...(challenge.request.methodDetails as object),
+            configurableVouchers: true,
+          },
+        }),
+        getClient: async () => client,
+      })
+      expect(enabled.configurableVouchers).toBe(true)
+    })
+
+    test('refuses to open with a configurable account unless the server accepts its vouchers', async () => {
+      const configurable = TempoAccount.fromConfig({
+        owners: [TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())],
+      })
+      const rpcMethods: string[] = []
+      const rpcClient = createClient({
+        transport: custom(
+          {
+            async request({ method }) {
+              rpcMethods.push(method)
+              throw new Error(`Unexpected RPC method: ${method}`)
+            },
+          },
+          { retryCount: 0 },
+        ),
+      })
+      const open = (configurableVouchers?: boolean) =>
+        executeCredentialPlan(
+          planCredential({
+            account: configurable,
+            entry: undefined,
+            decimals: 6,
+            maxDeposit: 100n,
+            resolved: challengeContext({
+              client: rpcClient,
+              suggestedDepositRaw: '100',
+              ...(configurableVouchers !== undefined ? { configurableVouchers } : {}),
+            }),
+          }),
+          sink(),
+        ).catch((error) => error)
+
+      for (const configurableVouchers of [undefined, false]) {
+        const error = await open(configurableVouchers)
+        expect(error).toBeInstanceOf(ConfigurableVouchersUnsupportedError)
+        expect(error.signer).toBe(configurable.address)
+      }
+      expect(rpcMethods).toEqual([])
+
+      const error = await open(true)
+      expect(error).not.toBeInstanceOf(ConfigurableVouchersUnsupportedError)
+      expect(rpcMethods.length).toBeGreaterThan(0)
+    })
+
     test('rejects manual descriptors that do not match the active challenge', async () => {
       const plan = planCredential({
         account,
@@ -870,5 +937,92 @@ describe('CredentialPlan', () => {
         ).rejects.toThrow(item.message)
       }
     })
+  })
+})
+
+describe('hydrateSessionSnapshot', () => {
+  const ownerA = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const ownerB = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const initial = TempoAccount.fromConfig({ owners: [ownerA, ownerB], threshold: 2 })
+  // The config the channel recorded as its opening commitment: version one of the same account.
+  const rotated = TempoAccount.fromConfig({
+    address: initial.address,
+    owners: [ownerA],
+    salt: initial.config!.salt,
+    threshold: 1,
+    version: 1,
+  })
+  const chainId = 42431
+  const escrow = tip20ChannelEscrow
+  const descriptor: Channel.ChannelDescriptor = {
+    payer: initial.address,
+    payee: '0x0000000000000000000000000000000000000002' as Address,
+    operator: '0x0000000000000000000000000000000000000000' as Address,
+    token: '0x20c0000000000000000000000000000000000001' as Address,
+    salt: AccountConfig.getCommitment(rotated.config!),
+    authorizedSigner: initial.address,
+    expiringNonceHash: `0x${'00'.repeat(32)}`,
+  }
+  const channelId = Channel.computeId({ ...descriptor, chainId, escrow })
+  const state = { deposit: 20n, settled: 0n, closeRequestedAt: 0 }
+
+  async function snapshotSignedBy(signer: typeof initial): Promise<SessionSnapshot> {
+    const client = createClient({ account: signer, transport: http('http://127.0.0.1') })
+    const signature = await Voucher.signVoucher(
+      client,
+      signer,
+      { channelId, cumulativeAmount: 10n },
+      escrow,
+      chainId,
+    )
+    return {
+      acceptedCumulative: '10',
+      chainId,
+      channelId,
+      deposit: '20',
+      descriptor,
+      escrow,
+      highestVoucher: { channelId, cumulativeAmount: '10', signature },
+      requiredCumulative: '10',
+      settled: '0',
+      spent: '0',
+    }
+  }
+
+  test('rejects a version-zero config voucher on a channel opened under a later commitment', async () => {
+    const client = createClient({ transport: http('http://127.0.0.1') })
+    // The recorded config's voucher verifies offline against the salt, with no escrow read.
+    await expect(
+      hydrateSessionSnapshot({
+        account: initial,
+        client,
+        snapshot: await snapshotSignedBy(rotated),
+        readChannelState: async () => state,
+        verifyVoucherOnChain: async () => {
+          throw new Error('unexpected escrow read')
+        },
+      }),
+    ).resolves.toMatchObject({ entry: { channelId, cumulativeAmount: 10n } })
+    // The version-zero owners' voucher does not match the salt, so only the escrow, which knows
+    // the opening commitment, can accept it.
+    const snapshot = await snapshotSignedBy(initial)
+    await expect(
+      hydrateSessionSnapshot({
+        account: initial,
+        client,
+        snapshot,
+        readChannelState: async () => state,
+        verifyVoucherOnChain: async () => false,
+      }),
+    ).rejects.toThrow('session snapshot highest voucher signature is invalid')
+    await expect(
+      hydrateSessionSnapshot({
+        account: initial,
+        client,
+        snapshot,
+        readChannelState: async () => state,
+        verifyVoucherOnChain: async () => true,
+      }),
+    ).resolves.toMatchObject({ entry: { channelId, cumulativeAmount: 10n } })
   })
 })

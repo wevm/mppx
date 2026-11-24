@@ -9,9 +9,9 @@ import { NextRequest } from 'next/server.js'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
+import * as ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
+import * as Types from '../../internal/x402/Types.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
-import * as ChallengeBrand from '../internal/ChallengeBrand.js'
-import * as Types from '../Types.js'
 
 const network = 'eip155:84532' as const
 const recipient = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as const

@@ -714,10 +714,13 @@ describe('isows', () => {
         store,
         url: 'ws://example.test/stream',
         route: acceptingRoute(2n),
-        generate: (async function* () {
+        generate: async function* (stream) {
+          await stream.charge()
+
           yield 'first'
+          await stream.charge()
           yield 'second'
-        })(),
+        },
         ...(hookName === 'onChargeCommitted'
           ? { onChargeCommitted: hook }
           : { settleScheduled: hook }),
@@ -762,9 +765,11 @@ describe('isows', () => {
       store,
       url: 'ws://example.test/stream',
       route: acceptingRoute(1n),
-      generate: (async function* () {
+      generate: async function* (stream) {
+        await stream.charge()
+
         yield 'message'
-      })(),
+      },
       onChargeCommitted() {
         callbacks.push('current')
       },
@@ -802,9 +807,11 @@ describe('isows', () => {
       store,
       url: 'ws://example.test/stream',
       route: acceptingRoute(1n),
-      generate: (async function* () {
+      generate: async function* (stream) {
+        await stream.charge()
+
         yield 'blocked'
-      })(),
+      },
       onChargeCommitted() {
         throw new Error('settlement failed')
       },
@@ -881,9 +888,11 @@ describe('isows', () => {
           return response
         },
       }),
-      generate: (async function* () {
+      generate: async function* (stream) {
+        await stream.charge()
+
         yield 'should-not-reach'
-      })(),
+      },
     })
 
     socket.receive(
@@ -953,7 +962,7 @@ test.each([
   { manual: false, pinned: true },
   { manual: true, pinned: true },
 ])(
-  'uses endpoint pricing (explicit charges: $manual, pin: $pinned)',
+  'requires manual charges and uses endpoint pricing (manual: $manual, pin: $pinned)',
   async ({ manual, pinned }) => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
@@ -1003,6 +1012,12 @@ test.each([
         }),
       ),
     )
+    if (!manual) {
+      await vi.waitFor(() => expect(socket.closed).toBe(true))
+      expect((await store.getChannel(channelId))!.spent).toBe(0n)
+      expect(socket.sent.some((frame) => frame.includes('canonical-price'))).toBe(false)
+      return
+    }
     await vi.waitFor(async () =>
       expect((await store.getChannel(channelId))!.spent).toBe(
         pinned ? BigInt(challenge.request.amount) : 7n,

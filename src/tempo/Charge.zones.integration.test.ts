@@ -5,7 +5,7 @@ import { type Address, createClient, custom, defineChain, type Hex, http, parseU
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { readContract, waitForTransactionReceipt } from 'viem/actions'
 import { tempoLocalnet } from 'viem/chains'
-import { Abis, Actions, Store } from 'viem/tempo'
+import { Abis, Actions, Addresses, Store } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 
 import type { Context } from '../../test/zones/setup.global.js'
@@ -238,9 +238,10 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
       .createCredential({ challenge: challenge as never, context: {} })
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(Errors.ZoneSettlementPendingError)
-    const { senderTag, zoneId } = error as Errors.ZoneSettlementPendingError
+    const { senderTag, senderTags, zoneId } = error as Errors.ZoneSettlementPendingError
     expect(zoneId).toBe(context.zoneId)
-    await Zone.waitForSettlement(l1, { portal: Zone.portalAddress(zoneId), senderTag })
+    expect(senderTags).toEqual([senderTag])
+    await Zone.waitForSettledWithdrawal(l1, { portal: Zone.portalAddress(zoneId), senderTags })
 
     // The retry finds the same withdrawal settled instead of paying again.
     const credential = await method.createCredential({
@@ -287,6 +288,110 @@ describe.runIf(context)('tempo charge paid from a Zone', () => {
       new Request('https://zones.example.com', { headers: { Authorization: credential } }),
     )
     expect(response.status).toBe(200)
+  }, 120_000)
+
+  test('pays when the Zone RPC redacts the outbox events', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient })
+    // A production Zone RPC leaves other contracts' events, such as the outbox's, out of receipts.
+    const redact = (receipt: { logs: { address: Address }[] }) => ({
+      ...receipt,
+      logs: receipt.logs.filter(
+        (log) => log.address.toLowerCase() !== Addresses.zoneOutbox.toLowerCase(),
+      ),
+    })
+    const zone = createClient({
+      account: payer.account,
+      chain: zoneChain,
+      transport: custom({
+        async request(args) {
+          const result = await payer.zone.request(args as never)
+          if (
+            result &&
+            (args.method === 'eth_sendRawTransactionSync' ||
+              args.method === 'eth_getTransactionReceipt')
+          )
+            return redact(result as never)
+          return result
+        },
+      }),
+    })
+
+    const client = Mppx_client.create({
+      fetch: (input, init) => handler(new Request(input, init)),
+      methods: [tempo_client.charge({ getClient: () => l1, zone: { client: zone } })],
+      polyfill: false,
+    })
+    const response = await client.fetch('https://zones.example.com/resource')
+
+    expect(response.status).toBe(200)
+    expect(await balanceOf(l1, recipient)).toBe(parseUnits(price, 6))
+  }, 120_000)
+
+  test('retries a failed sender tag read without withdrawing again', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address
+    const { handler } = service({ recipient })
+    const challenge = Challenge.fromResponse(
+      await handler(new Request('https://zones.example.com')),
+    )
+    const zoneBefore = await balanceOf(payer.zone, payer.account.address)
+    let sends = 0
+    let failReads = true
+    // A redacting Zone RPC whose historical reads fail until the test lets them through.
+    const zone = createClient({
+      account: payer.account,
+      chain: zoneChain,
+      transport: custom({
+        async request(args) {
+          if (args.method === 'eth_sendRawTransactionSync') sends++
+          if (failReads && args.method === 'eth_call') {
+            const [call, block] = (args.params ?? []) as [{ to?: string }, unknown]
+            // Only the reads at a past block, which derive the tag after the send.
+            if (
+              call?.to?.toLowerCase() === Addresses.zoneOutbox.toLowerCase() &&
+              typeof block === 'string' &&
+              block.startsWith('0x')
+            )
+              throw new Error('read failed')
+          }
+          const result = await payer.zone.request(args as never)
+          if (
+            result &&
+            (args.method === 'eth_sendRawTransactionSync' ||
+              args.method === 'eth_getTransactionReceipt')
+          ) {
+            const receipt = result as { logs: { address: string }[] }
+            return {
+              ...receipt,
+              logs: receipt.logs.filter(
+                (log) => log.address.toLowerCase() !== Addresses.zoneOutbox.toLowerCase(),
+              ),
+            }
+          }
+          return result
+        },
+      }),
+    })
+    const method = tempo_client.charge({ getClient: () => l1, zone: { client: zone } })
+
+    await expect(
+      method.createCredential({ challenge: challenge as never, context: {} }),
+    ).rejects.toThrow('sender tag could not be read')
+    failReads = false
+    const credential = await method.createCredential({
+      challenge: challenge as never,
+      context: {},
+    })
+
+    expect(sends).toBe(1)
+    const response = await handler(
+      new Request('https://zones.example.com', { headers: { Authorization: credential } }),
+    )
+    expect(response.status).toBe(200)
+    const fee = await Actions.zone.getWithdrawalFee(payer.zone)
+    expect(await balanceOf(payer.zone, payer.account.address)).toBe(
+      zoneBefore - parseUnits(price, 6) - fee,
+    )
   }, 120_000)
 
   test('rejects a Zone the service does not accept', async () => {

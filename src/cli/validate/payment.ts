@@ -29,6 +29,19 @@ import {
   parseEvent,
   type SessionReceipt,
 } from '../../tempo/session/precompile/Protocol.js'
+import { validateRealmMatchesHost } from '../../validation/challenge.js'
+import { buildUrl } from '../../validation/discovery.js'
+import type { CheckResult, EndpointSpec } from '../../validation/helpers.js'
+import {
+  check,
+  fail,
+  fetchWithTimeout,
+  formatBytes,
+  isValidIntegerAmount,
+  parseHeaders,
+  skip,
+  warn,
+} from '../../validation/helpers.js'
 import { resolveAccount, resolveAccountName } from '../account.js'
 import type { Config } from '../config.js'
 import type * as Extension from '../Extension.js'
@@ -40,19 +53,6 @@ import {
   resolvePlugin,
 } from '../internal.js'
 import { fetchTokenInfo, confirm, pc } from '../utils.js'
-import { validateRealmMatchesHost } from './challenge.js'
-import { buildUrl } from './discovery.js'
-import type { CheckResult, EndpointSpec } from './helpers.js'
-import {
-  check,
-  fail,
-  fetchWithTimeout,
-  formatBytes,
-  isValidIntegerAmount,
-  parseHeaders,
-  skip,
-  warn,
-} from './helpers.js'
 
 async function provisionAndPayTestnet(
   challenge: Challenge.Challenge,

@@ -14,7 +14,7 @@ import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
-import type { ChannelEntry } from '../client/ChannelOps.js'
+import { resolveEscrow, type ChannelEntry } from '../client/ChannelOps.js'
 import {
   createChannelStore,
   deleteChannel,
@@ -98,7 +98,10 @@ export type SessionManager = {
 
   /** Runs the HTTP 402 probe, signs/open/top-ups as needed, retries, and returns receipt metadata. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse>
-  /** Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom. */
+  /**
+   * Opens a paid SSE stream and auto-posts vouchers/top-ups when the server requests more headroom.
+   * Rejects `Fetch.withoutPayment` requests; use `fetch` to read an unpaid stream without session management.
+   */
   sse(input: RequestInfo | URL, init?: SessionManagerSseOptions): Promise<AsyncIterable<string>>
   /** Opens a paid WebSocket session after an HTTP challenge probe and manages in-band voucher frames. */
   ws(input: string | URL, init?: SessionManagerWebSocketOptions): Promise<SessionManagedWebSocket>
@@ -467,7 +470,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         use && use.challengesReceived > 0 && challenge.id === runtime.lastChallenge?.id
       const isSameRetryChallenge =
         isRepeatedRetryChallenge &&
-        Challenge.serialize(challenge) === Challenge.serialize(runtime.lastChallenge!)
+        Fetch.retryKey(challenge) === Fetch.retryKey(runtime.lastChallenge!)
       if (use) use.challengesReceived++
       if (isSameRetryChallenge) return undefined
       if (!commitReferencedChannel(challenge)) {
@@ -522,6 +525,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!header) return undefined
     const snapshot = deserializeSessionSnapshot(header)
     Client.assertAllowedChainId(parameters.allowedChainIds, snapshot.chainId)
+    // The snapshot's escrow verifies its voucher and reports its deposit, so it must pass the
+    // same escrow policy as a challenge before any contract read.
+    resolveEscrow(
+      { request: { methodDetails: { escrow: snapshot.escrow } } },
+      parameters.escrow,
+      allowCustomEscrow,
+    )
     const client = await getClient({ chainId: snapshot.chainId })
     Client.assertChainId(client, snapshot.chainId)
     const defaultAccount = getAccount(client)
@@ -869,10 +879,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (runtime.channel?.opened) await persistChannel(runtime.channel)
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
+  function toPaymentResponse(response: Response, acceptReceipt = true): PaymentResponse {
     const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
-    updateSpentFromReceipt(receipt)
+    if (acceptReceipt) updateSpentFromReceipt(receipt)
     return Object.assign(response, {
       receipt,
       challenge: runtime.lastChallenge,
@@ -882,6 +892,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+    // Opted-out requests must not bootstrap, restore, top up, or retry a session.
+    if (
+      (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+    )
+      return toPaymentResponse(await config.fetch(input, Fetch.withoutPayment(init)), false)
     // The manager drives one shared `runtime` state machine, so requests are
     // single-flight. Reject overlap loudly instead of letting concurrent calls
     // corrupt each other's runtime and channel tracking.
@@ -1064,6 +1079,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
 
     async sse(input, init) {
+      if (
+        (init as (RequestInit & { [Fetch.skipPayment]?: boolean }) | undefined)?.[Fetch.skipPayment]
+      )
+        throw new Error('SessionManager.sse requires payment; use fetch for unpaid streams.')
       return openSseSession(input, init, sseDriver)
     },
 

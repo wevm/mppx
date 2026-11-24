@@ -1,4 +1,4 @@
-import { DiscoveryDocument, PaymentInfo, ServiceInfo } from './Discovery.js'
+import { DiscoveryDocument, listOperations, PaymentInfo, ServiceInfo } from './Discovery.js'
 
 describe('PaymentInfo', () => {
   test('normalizes legacy shorthand to offers', () => {
@@ -224,5 +224,351 @@ describe('DiscoveryDocument', () => {
       openapi: '3.1.0',
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('listOperations', () => {
+  const doc = {
+    openapi: '3.1.0',
+    info: { title: 'Forecast API', version: '1.0.0' },
+    paths: {
+      '/v1/forecast': {
+        post: {
+          summary: 'Forecast',
+          'x-payment-info': {
+            amount: '2000',
+            currency: '0x20c0',
+            intent: 'charge',
+            method: 'tempo',
+          },
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: { type: 'object', properties: { city: { type: 'string' } } },
+              },
+            },
+          },
+          responses: { '200': { description: 'OK' }, '402': { description: 'Payment Required' } },
+        },
+        get: { responses: { '200': { description: 'OK' } } },
+      },
+    },
+  }
+
+  test('flattens operations with typed offers and request schemas', () => {
+    const operations = listOperations(doc)
+    expect(operations).toEqual([
+      {
+        method: 'get',
+        path: '/v1/forecast',
+        offers: [],
+        requestSchema: undefined,
+        summary: undefined,
+      },
+      {
+        method: 'post',
+        path: '/v1/forecast',
+        offers: [{ amount: '2000', currency: '0x20c0', intent: 'charge', method: 'tempo' }],
+        requestSchema: { type: 'object', properties: { city: { type: 'string' } } },
+        summary: 'Forecast',
+      },
+    ])
+    expectTypeOf(operations[1]!.offers[0]!.amount).toEqualTypeOf<string | null | undefined>()
+  })
+
+  test('accepts an already parsed document', () => {
+    expect(listOperations(DiscoveryDocument.parse(doc))).toEqual(listOperations(doc))
+  })
+
+  test('keeps boolean request schemas', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Boolean', version: '1' },
+      paths: {
+        '/none': { post: { requestBody: { content: { 'application/json': { schema: false } } } } },
+        '/any': { post: { requestBody: { content: { 'application/json': { schema: true } } } } },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([false, true])
+  })
+
+  test('follows local $refs to request bodies and schemas', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Refs', version: '1' },
+      components: {
+        requestBodies: {
+          Forecast: { $ref: '#/components/requestBodies/Inline' },
+          Inline: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Forecast' } } },
+          },
+        },
+        schemas: { Forecast: { type: 'object', properties: { city: { type: 'string' } } } },
+      },
+      paths: {
+        '/body': { post: { requestBody: { $ref: '#/components/requestBodies/Forecast' } } },
+        '/remote': { post: { requestBody: { $ref: 'https://example.com/body.json' } } },
+        '/loop': { post: { requestBody: { $ref: '#/paths/~1loop/post/requestBody' } } },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { type: 'object', properties: { city: { type: 'string' } } },
+      undefined,
+      undefined,
+    ])
+  })
+
+  test('keeps keywords next to a schema $ref', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Siblings', version: '1' },
+      components: { schemas: { Text: { type: 'string' } } },
+      paths: {
+        '/style': {
+          post: {
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/Text', maxLength: 10 },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    expect(operation!.requestSchema).toEqual({ maxLength: 10, allOf: [{ type: 'string' }] })
+  })
+
+  test('walks a shared $ref chain once', () => {
+    const size = 1000
+    const requestBodies: Record<string, unknown> = {
+      [`B${size}`]: { content: { 'application/json': { schema: { type: 'object' } } } },
+    }
+    const paths: Record<string, unknown> = {}
+    for (let i = 0; i < size; i++) {
+      requestBodies[`B${i}`] = { $ref: `#/components/requestBodies/B${i + 1}` }
+      paths[`/op${i}`] = { post: { requestBody: { $ref: '#/components/requestBodies/B0' } } }
+    }
+    const start = performance.now()
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Chain', version: '1' },
+      components: { requestBodies },
+      paths,
+    })
+    expect(performance.now() - start).toBeLessThan(1000)
+    expect(operations).toHaveLength(size)
+    expect(
+      operations.every(
+        (operation) => (operation.requestSchema as { type?: string })?.type === 'object',
+      ),
+    ).toBe(true)
+  })
+
+  test('ignores a $ref with malformed percent-encoding', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Malformed', version: '1' },
+      paths: { '/bad': { post: { requestBody: { $ref: '#/%E0' } } } },
+    })
+    expect(operation!.requestSchema).toBeUndefined()
+  })
+
+  test('percent-decodes a $ref fragment before splitting it', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Encoded', version: '1' },
+      components: {
+        requestBodies: {
+          'a b': { content: { 'application/json': { schema: { type: 'string' } } } },
+        },
+      },
+      paths: {
+        '/encoded': { post: { requestBody: { $ref: '#%2Fcomponents%2FrequestBodies%2Fa%20b' } } },
+      },
+    })
+    expect(operation!.requestSchema).toEqual({ type: 'string' })
+  })
+
+  test('shares one merged schema across operations that share a $ref with siblings', () => {
+    const paths: Record<string, unknown> = {}
+    for (let i = 0; i < 3; i++)
+      paths[`/op${i}`] = { post: { requestBody: { $ref: '#/components/requestBodies/Shared' } } }
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Shared', version: '1' },
+      components: {
+        requestBodies: {
+          Shared: {
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Text', allOf: [{ minLength: 1 }] },
+              },
+            },
+          },
+        },
+        schemas: { Text: { type: 'string' } },
+      },
+      paths,
+    })
+    expect(operations[0]!.requestSchema).toEqual({ allOf: [{ type: 'string' }, { minLength: 1 }] })
+    expect(operations[1]!.requestSchema).toBe(operations[0]!.requestSchema)
+    expect(operations[2]!.requestSchema).toBe(operations[0]!.requestSchema)
+  })
+
+  test('follows a long $ref chain without overflowing the stack', () => {
+    const size = 50_000
+    const requestBodies: Record<string, unknown> = {
+      [`B${size}`]: { content: { 'application/json': { schema: { type: 'object' } } } },
+    }
+    for (let i = 0; i < size; i++)
+      requestBodies[`B${i}`] = { $ref: `#/components/requestBodies/B${i + 1}` }
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Long chain', version: '1' },
+      components: { requestBodies },
+      paths: { '/op': { post: { requestBody: { $ref: '#/components/requestBodies/B0' } } } },
+    })
+    expect(operation!.requestSchema).toEqual({ type: 'object' })
+  })
+
+  test('keeps keywords next to a $ref to a boolean schema', () => {
+    const body = (schema: unknown) => ({
+      post: { requestBody: { content: { 'application/json': { schema } } } },
+    })
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Boolean target', version: '1' },
+      components: { schemas: { Any: true, None: false } },
+      paths: {
+        '/any': body({ $ref: '#/components/schemas/Any', maxLength: 10 }),
+        '/none': body({ $ref: '#/components/schemas/None', maxLength: 10 }),
+        '/bare': body({ $ref: '#/components/schemas/Any' }),
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { maxLength: 10 },
+      false,
+      true,
+    ])
+  })
+
+  test('ignores an array request schema', () => {
+    const [operation] = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Array', version: '1' },
+      paths: {
+        '/array': { post: { requestBody: { content: { 'application/json': { schema: [] } } } } },
+      },
+    })
+    expect(operation!.requestSchema).toBeUndefined()
+  })
+
+  test('lists operations of a $ref path item', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Path ref', version: '1' },
+      components: {
+        pathItems: {
+          Forecast: {
+            post: { 'x-payment-info': { amount: '2000', intent: 'charge', method: 'tempo' } },
+          },
+        },
+      },
+      paths: { '/v1/forecast': { $ref: '#/components/pathItems/Forecast' } },
+    })
+    expect(operations.map(({ method, path, offers }) => ({ method, path, offers }))).toEqual([
+      {
+        method: 'post',
+        path: '/v1/forecast',
+        offers: [{ amount: '2000', intent: 'charge', method: 'tempo' }],
+      },
+    ])
+  })
+
+  test('throws on an invalid $ref path item, as on an invalid inline one', () => {
+    const doc = (paths: unknown) => ({
+      openapi: '3.1.0',
+      info: { title: 'Invalid', version: '1' },
+      components: { pathItems: { Bad: { post: { 'x-payment-info': { amount: '1.5' } } } } },
+      paths,
+    })
+    expect(() =>
+      listOperations(doc({ '/inline': { post: { 'x-payment-info': { amount: '1.5' } } } })),
+    ).toThrow()
+    expect(() => listOperations(doc({ '/ref': { $ref: '#/components/pathItems/Bad' } }))).toThrow()
+    expect(listOperations(doc({ '/missing': { $ref: '#/components/pathItems/Missing' } }))).toEqual(
+      [],
+    )
+  })
+
+  test('merges inline operations next to a $ref path item', () => {
+    const doc = (paths: unknown) => ({
+      openapi: '3.1.0',
+      info: { title: 'Merge', version: '1' },
+      components: { pathItems: { Shared: { post: { summary: 'Shared post' } } } },
+      paths,
+    })
+    expect(
+      listOperations(
+        doc({ '/a': { $ref: '#/components/pathItems/Shared', get: { summary: 'Inline get' } } }),
+      ).map(({ method, summary }) => ({ method, summary })),
+    ).toEqual([
+      { method: 'get', summary: 'Inline get' },
+      { method: 'post', summary: 'Shared post' },
+    ])
+    expect(
+      listOperations(
+        doc({ '/b': { $ref: '#/components/pathItems/Missing', get: { summary: 'Inline get' } } }),
+      ).map(({ method }) => method),
+    ).toEqual(['get'])
+  })
+
+  test('reads a JSON request schema under a parameterised or mixed-case media type', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Media types', version: '1' },
+      paths: {
+        '/a': {
+          post: {
+            requestBody: {
+              content: { 'application/json; charset=utf-8': { schema: { type: 'object' } } },
+            },
+          },
+        },
+        '/b': {
+          post: {
+            requestBody: { content: { 'Application/JSON': { schema: { type: 'string' } } } },
+          },
+        },
+      },
+    })
+    expect(operations.map((operation) => operation.requestSchema)).toEqual([
+      { type: 'object' },
+      { type: 'string' },
+    ])
+  })
+
+  test('skips path keys that are not server-relative', () => {
+    const operations = listOperations({
+      openapi: '3.1.0',
+      info: { title: 'Paths', version: '1' },
+      paths: {
+        'https://example.com/pay': { post: {} },
+        '//example.com/pay': { post: {} },
+        relative: { post: {} },
+        '/ok': { post: {} },
+      },
+    })
+    expect(operations.map((operation) => operation.path)).toEqual(['/ok'])
+  })
+
+  test('returns no operations without paths', () => {
+    expect(listOperations({ openapi: '3.1.0', info: { title: 'Empty', version: '1' } })).toEqual([])
+  })
+
+  test('throws on an invalid document', () => {
+    expect(() => listOperations({ openapi: '3.1.0' })).toThrow()
   })
 })

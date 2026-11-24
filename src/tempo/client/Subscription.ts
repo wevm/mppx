@@ -37,6 +37,7 @@ export type SubscriptionContext = z.infer<typeof subscriptionContextSchema>
 export function subscription(parameters: subscription.Parameters = {}) {
   const getClient = Client.getResolver({
     chain: tempo_chain,
+    requireChain: true,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
@@ -48,6 +49,10 @@ export function subscription(parameters: subscription.Parameters = {}) {
     async createCredential({ challenge, context }) {
       const chainId = challenge.request.methodDetails?.chainId ?? defaults.chainId.testnet
       const client = await getClient({ chainId })
+      if (client.chain?.id !== chainId)
+        throw new Error(
+          `Subscription chain mismatch: expected ${chainId}, got ${client.chain?.id ?? 'unknown'}.`,
+        )
       const account = getAccount(client, context)
       const accessKey =
         context?.accessKey ?? parameters.accessKey ?? challenge.request.methodDetails?.accessKey

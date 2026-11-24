@@ -51,6 +51,13 @@ export class RpcStore extends Store.DurableObjectStore.rpc(DurableObject) {
     return this.state.storage.get(key)
   }
 
+  /** Seeds a pre-ownership replay table to exercise the additive migration. */
+  async legacyReplay(key: string, expires: number) {
+    const sql = this.state.storage.sql!
+    sql.exec('CREATE TABLE mppx_replay_claims (key TEXT PRIMARY KEY, expires INTEGER NOT NULL)')
+    sql.exec('INSERT INTO mppx_replay_claims (key, expires) VALUES (?, ?)', key, expires)
+  }
+
   /** The keys this object holds replay claims for, as a replay shard. */
   async replayClaimKeys() {
     const sql = this.state.storage.sql!
@@ -139,7 +146,9 @@ type Command = {
   | { op: 'put'; key: string; value: unknown; prefix?: string }
   | { op: 'increment'; key: string }
   | { op: 'bigint'; key: string; amount: string }
-  | { op: 'claim'; key: string; expires: number }
+  | { op: 'claim'; key: string; expires: number; owner?: string }
+  | { op: 'legacyReplay'; key: string; expires: number }
+  | { op: 'releaseClaim'; key: string; owner: string }
   | { op: 'raw'; key: string; body: Store.DurableObjectStore.Request }
   | { op: 'log' | 'shard'; key: string }
   | { op: 'arm' | 'hooked'; key: string }
@@ -200,8 +209,18 @@ export default {
         const stored = (await store.get(command.key)) as { amount: bigint }
         return Response.json({ type: typeof stored.amount, amount: stored.amount.toString() })
       }
+      case 'legacyReplay': {
+        const object = namespace.get(namespace.idFromName(command.key)) as unknown as RpcStore
+        await object.legacyReplay(command.key, command.expires)
+        return Response.json(null)
+      }
+      case 'releaseClaim':
+        await Store.releaseClaim(store, command.key, command.owner)
+        return Response.json(null)
       case 'claim':
-        return Response.json(await Store.tryClaim(store, command.key, command.expires))
+        return Response.json(
+          await Store.tryClaim(store, command.key, command.expires, command.owner),
+        )
       // Sends one operation to the key's object as is, such as a swap that conflicts.
       case 'raw':
         return namespace.get(namespace.idFromName(command.key)).fetch('https://mppx-store/', {

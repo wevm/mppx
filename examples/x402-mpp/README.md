@@ -39,6 +39,45 @@ No-key facilitators that currently advertise Base Sepolia v2 exact support:
 | `https://pay.openfacilitator.io`  | Hosted OpenFacilitator endpoint       |
 | `https://facilitator.openx402.ai` | Hosted OpenX402 endpoint              |
 
+### Facilitators that need an API key
+
+Pass the facilitator as `{ url, headers }`. `headers` is a flat record sent on every facilitator
+request, an object keyed by `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns
+in `@x402/core`), or a function returning either, called before every request so it can refresh
+short-lived tokens. An object counts as per-path only when every key is `verify`, `settle` or
+`supported` and every value is an object; anything else is a flat record. A path a per-path object
+leaves out gets no extra headers.
+
+```ts
+import { evm, Mppx } from 'mppx/server'
+
+const facilitator = {
+  url: 'https://facilitator.example',
+  headers: async () => ({ Authorization: `Bearer ${process.env.FACILITATOR_API_KEY}` }),
+}
+
+const mppx = Mppx.create({
+  methods: [
+    evm.charge({
+      currency: evm.assets.baseSepolia.USDC,
+      recipient: '0x…',
+      x402: { facilitator },
+    }),
+  ],
+  secretKey: process.env.MPP_SECRET_KEY,
+})
+```
+
+`x402: { facilitator: url, headers }` and
+`evm.facilitatorPayTo(url, { network, headers })` also work; a config's own `headers` win over the
+top-level ones.
+
+A facilitator that answers `/verify` or `/settle` with a non-2xx status (a wrong API key, an
+outage) throws `Errors.FacilitatorResponseError` with its `status` and the first 200 characters of
+its body. The client gets a generic 500 problem rather than an invalid-payment 402, and the error is
+logged on the server. An error response whose body is a failed result (`isValid: false`) is still
+read as a rejected payment.
+
 ## Test both clients
 
 With the Worker running, in a separate terminal:

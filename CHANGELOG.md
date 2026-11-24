@@ -1,5 +1,130 @@
 # mppx
 
+## 0.21.4
+
+### Patch Changes
+
+- 8b6b501: Required an explicit host allowlist or fixed Node host before accepting signed identity headers in Node and Express adapters. Unconfigured adapters now return 421 for those requests.
+
+## 0.21.3
+
+### Patch Changes
+
+- 8e4cd5f: Preserved configured plugin payment policies when using persistent Tempo session accounts.
+- ad2a467: Fixed `Challenge.deserialize` and `Challenge.serialize` to follow the MPP core grammar: payment method identifiers must be `1*LOWERALPHA` (a-z only), and a backslash in a quoted-string is a quoted-pair, so `\u2014` parses to the text `u2014` instead of being decoded. `Challenge.serialize` now throws for characters above U+00FF in any parameter except `description`, which keeps its `\uXXXX` escape so a 402 never fails on an em dash or emoji.
+
+  `Mppx.create` now throws at startup for a method name outside a-z, or for a `realm` above U+00FF on a transport that sends the Challenge in a header, instead of failing on every 402. `Challenge.deserializeList` skips an offer whose method id is outside a-z rather than rejecting the whole header, and the client keys payment retries without building a header or reading the display-only `description`.
+
+  The client now refuses a challenge from a server that escaped a parameter bound into the Challenge ID (such as `realm`) as `\uXXXX`, as servers before quoted-pair parsing did for characters above U+00FF: it skips such an offer when another is payable, and otherwise throws `Errors.LegacyUnicodeEscapedChallengeError` before creating, signing or broadcasting anything, since the server would reject the credential.
+
+## 0.21.2
+
+### Patch Changes
+
+- 60f265c: Fixed `mppx/validation` so it no longer imports the CLI, which pulled in the CLI's bundled `incur` dependency and failed to load from npm. `validate()` and `validateStream()` now take an optional `payment` validator; without one, payment checks are reported as skipped. `mppx validate` passes its own.
+
+  Moved shared modules so lower layers no longer import higher ones: the HTML payment-page infrastructure and x402 wire helpers now live under `src/internal`, and the MCP SDK server transport lives under `src/server`. Public entry points are unchanged.
+
+- 6056a5b: Added `mppx/client/core`, `mppx/tempo/client` and `mppx/tempo/server` entrypoints, so apps can load the client primitives or only the Tempo method without the other payment methods. `mppx/client` and `mppx/server` export the same API as before.
+- db173d9: Fixed Tempo session voucher, close authorization and subscription key authorization verification to reject secp256k1 signatures with a high `s` value, which Tempo does not accept onchain. Voucher and close authorization signing now normalize a signer's high-`s` signature to its low-`s` equivalent.
+- 98d110b: Added TIP-1166 configurable account voucher signers to `tempo/session`. Servers accept configurable account (`0x05`) vouchers and close authorizations when `configurableVouchers` is set (default `false`), advertise it in the challenge, and check each voucher against the signer config commitment recorded at open (`OpeningCommitmentRecorded`). Configurable account clients open channels with their config commitment as the salt, sign vouchers with configurable account signatures, refuse to open against servers that do not advertise `configurableVouchers` (`ConfigurableVouchersUnsupportedError`), and surface top-ups that revert because the signer config changed as `SignerConfigChangedError`. `Voucher.verifyVoucher` and `Voucher.verifyCloseAuthorization` take optional `{ configurable, openingCommitment }` options; without them they accept only primitive signatures, as before.
+- bd9dac5: Fixed `validateStream` to pass its synthesized `Payment: failed` check to `onPaymentResults`, and fixed `validate()` to promise automatic Tempo wallet provisioning only when a payment validator is configured.
+
+## 0.21.1
+
+### Patch Changes
+
+- c5bbb31: Added `tempoX402()` at `mppx/x402/tempo`, which wires the official x402 SDK to the Tempo x402 facilitator: `tempo.route({ price })` fills `payTo` with the facilitator's deposit address (from `GET /supported`) and `extra.tempoSettlement` with the payout address, and a route can pay out to its own `payoutAddress`. It throws at startup on a missing API key or a missing or malformed payout address.
+
+## 0.21.0
+
+### Minor Changes
+
+- 7b47ff2: Fixed payment enforcement, stream handling, and excessive callback overhead in Express, and hardened subscription signing and CLI retries against chain mismatches and cleartext payment requests. Proxy replay now requires a stable, explicitly configured `replay.authority`, shared only by replicas with identical payment policies and upstream permissions.
+
+### Patch Changes
+
+- 1cb1c24: Validated the authority actually used to construct adapter request URLs. Returned HTTP 400 for malformed request targets in the x402 Express adapter.
+- a7e84b7: Added optional exact host allowlists to Express and Node adapters, rejecting unapproved requests before payment or identity verification.
+- d2d3fba: Fixed payment retries creating credentials after cancellation during approval.
+- 58513ac: Changed challenges to accept only `Payment-Authorization` (any case) as an explicit `header`, keeping the received spelling so credentials echo it unchanged; clients skip a challenge that names any other credential header. Servers now throw when configured with another header (`Authorization` still means the default).
+- bf0bbcb: The CLI paid a new Challenge offered in a 402 after a Credential, such as the real charge after a zero-amount proof, instead of failing with `PAYMENT_REJECTED`, and resent the same Credential when the same Challenge was offered again, as the client's fetch does.
+- c796e45: Preserved automatic-payment opt-outs through identity clients and session managers, and disabled payment during issuer key retrieval.
+- 7300c80: Fixed stale payment cleanup removing a newer replay claim.
+- b457436: Bound session credential sources to the funding payer while preserving delegated voucher signatures.
+- c796e45: Prevented Persona issuer lookups from paying through identity wrappers and unpaid session requests from changing accounting or opening payment-driven streams.
+- 6826a97: Added `headers` for x402 facilitators that need an API key: a flat record sent on every request, or an object keyed by `verify`, `settle` and `supported` (the shape `createAuthHeaders` returns in `@x402/core`), or a function returning either. `x402.facilitator` accepts `{ url, headers }`, and `x402.headers`, `Facilitator.http(url, { headers })` and `evm.facilitatorPayTo(url, { headers })` authenticate a URL facilitator. A non-2xx facilitator response now throws `Errors.FacilitatorResponseError` (status and truncated body) and reaches the client as a 500 instead of a schema error. Clients with `maxAmount` and no `currencies` allowlist now read decimals and EIP-3009 metadata for assets mppx ships (such as Base USDC) from its registry.
+- c5c01a7: Added `x402.extra` to `evm.charge` for facilitators that read their own keys in a payment requirement's `extra`, an optional `supported()` on x402 facilitator clients (`GET /supported`, implemented by the HTTP client), and `evm.facilitatorPayTo()` to read the `payTo` a facilitator publishes there as the charge's `recipient`.
+- fa0388c: Added `extensions` to `Receipt` and to the result of `evm.charge`'s `settle` so a server reads the `extensions` an x402 facilitator returns from `/settle`, and forwarded them unchanged in the x402 `PAYMENT-RESPONSE` header. Fixed the HTTP facilitator client rejecting `/verify` and `/settle` responses whose `extensions` values aren't `{ info, schema }` declarations.
+- 6629814: Fixed `tempo.charge` clients so that `maxAmount` and `maxAtomicAmount` cover a Zone payment's withdrawal fee: the amount plus the fee must fit, checked before withdrawing.
+- 132e1b5: Fixed Zone payments so that a retry under a new Challenge no longer starts a second withdrawal: `tempo.charge` resumes the outstanding withdrawal for the same terms while it can still pay, and the fetch and MCP clients retry the original Challenge while it settles. Added the `zoneCredentialGraceMs` server option, which accepts a `zone` Credential for up to 5 minutes after its Challenge expires when its withdrawal settled before the expiry; only Challenges issued with the option on get this grace.
+- 88e8810: Fixed `tempo.charge` servers accepting a Zone withdrawal's settlement as a `hash` Credential as well as a `zone` Credential. A transfer sent by a Zone portal now counts only through its `zone` Credential, so one settlement pays once.
+
+## 0.20.1
+
+### Patch Changes
+
+- 067dd8f: Added `Attestation.Issuer.create`, which signs audience-bound identity attestations of any type with a local or remote Ed25519 key and serves its JSON Web Key Set, and the optional `uid` and `cnf` attestation claims, so one issuer can attest several linked accounts (such as `email`, `github` and `x`) of one user. Added `TempoId.Issuer`, which exchanges a Tempo ID access token for `tempo-id` and `email` attestations, and `TempoId.Client.attestations` and `TempoId.Client.attest`, which obtain them.
+- be2ae65: Added x402 `sign-in-with-x` support: `evm.charge({ x402: { siwx } })` lets a wallet that signs the 402's challenge get the resource without paying when `grant` approves it, and `Siwx.wrapFetch` answers that challenge on the client before mppx pays.
+
+## 0.20.0
+
+### Minor Changes
+
+- e2d81d0: Required manual charges before billable per-item stream generation; billable automatic SSE proxy sessions now require request pricing. Session replay retains payment verification, and opening credentials bind their source to the signed transaction payer.
+
+### Patch Changes
+
+- d8292be: Added `mppx/extensions/identity/erc8004`: an ERC-8004 agent identity provider. The client prover signs each request with the agent's wallet, and the server's verifier and payment check require that the wallet the Identity Registry names (on Tempo mainnet by default) signed the request or signed the transaction or proof of a `tempo` charge (transaction hashes, sessions, Zones and other methods need the signature). The proxy and cross-origin redirects drop its `Agent-Id` and `Agent-Signature` headers.
+
+## 0.19.1
+
+### Patch Changes
+
+- 03bd18d: Hardened `Poppy.Server.verifier`: it rejects invalid `clients` and `maxAge` config, returns `unavailable` instead of throwing on a malformed key set and `invalid` on a non-object `cnf.jwk`, caches a failed key load for 30 seconds, reloads keys once for an unknown `kid` after 30 seconds, only verifies delegations with signing keys that match their `kid` and `alg`, and rejects `Authorization` values that combine an access token with other credentials. `Poppy-Session` is now an `Identity.Headers.request` header, so the proxy no longer forwards it upstream.
+- 9405660: Added `mppx/extensions/identity/poppy`, an identity provider for Poppy (Personal Agent Protocol 1.0) Sessions: `Poppy.Client.prover` signs a fresh `Poppy-Session` JWT for each request, including the paid retry, and `Poppy.Server.verifier` verifies it, with its delegation and the agent's published keys, before any payment Challenge, returning the agent's `client_id`, the pseudonymous User ID, the Session ID and the optional Agent ID.
+- 4e51d05: Fixed `Poppy.Server.verifier` so a failed key reload keeps the agent's previously loaded keys for up to an hour after they loaded, instead of answering `unavailable` until the next reload. The Poppy prover and verifier now bind any single `Bearer` or `DPoP` token, ignore scheme names inside quoted `Authorization` parameters, and the prover throws instead of signing a Session for an `Authorization` value the verifier would reject.
+- 5e21a2e: Added `Errors.SpendingLimitExceededError`. The Tempo charge client and session open and top-up now throw it, or `Errors.InsufficientBalanceError`, when the pre-signing gas estimate reverts with the access key's `SpendingLimitExceeded` or the token's `InsufficientBalance`, instead of signing a transaction that would revert on chain at the fee payer's cost.
+
+## 0.19.0
+
+### Minor Changes
+
+- f2c69d5: Added remote signers (a cloud KMS, an HSM or Turnkey) to the Web Bot Auth and TAP client provers, `Attestation.sign` and the World ID issuer, through one `SigningKey` type: a `CryptoKeyPair` or a `Signer` (`{ publicKey, sign({ payload }) }`). mppx checks each remote signature against `publicKey` before it uses it.
+
+  Breaking: these take a key pair instead of a private key alone. `WebBotAuth.Client.prover` no longer takes `keyId`: it derives the keyid from the public key. `Attestation.sign`'s `keyId` is optional and defaults to the public key's RFC 7638 thumbprint.
+
+  ```diff
+  - WebBotAuth.Client.prover({ key: keys.privateKey, keyId, scope, signatureAgent })
+  + WebBotAuth.Client.prover({ key: keys, scope, signatureAgent })
+  - Tap.Client.prover({ key: keys.privateKey, keyId, intent, scope })
+  + Tap.Client.prover({ key: keys, keyId, intent, scope })
+  - Attestation.sign(claims, { key: keys.privateKey, keyId })
+  + Attestation.sign(claims, { key: keys })
+  ```
+
+### Patch Changes
+
+- 602682c: Fixed HTTP message signing to check a request's signature labels, the new label and a consumed body before it calls a remote signer, so a request it refuses no longer spends a signing operation.
+- f253219: Added `mppx/extensions/identity/tempo`: `TempoId.Server.create` verifies Tempo ID access tokens offline, with DPoP proofs, and returns a payment check that requires a `tempo` payment from a Tempo Account the token grants to the app. Without `clientId` it accepts any app's token. Its `allow` option decides by the user's ID, app, accounts, compliance states, and the email address of an ID token the client sends. `TempoId.Client.prover` sends the access token, a DPoP proof per request, and the optional ID token.
+- 7645703: Added `mppx/extensions/identity/world`: `World.Server.verifier` requires a human verified with World ID, as an `Identity-Attestation` of type `world-id` from a World ID issuer, `World.Issuer` runs that issuer as a shared service or inside an app, and `World.Client.prover` runs the issuer's device flow, shows the human World IdP's approval link and sends the attestation.
+- 3233543: Fixed paying from a Zone whose RPC redacts the outbox's `WithdrawalRequested` event from receipts. The client now derives the sender tag from the outbox's `lastFallbackNonce` and matches the portal's `WithdrawalProcessed` event on Tempo. A failed read of the sender tag is retried with the Challenge, without withdrawing again, and `ZoneSettlementPendingError` has `senderTags`, every candidate tag, with `senderTag` `undefined` when more than one remains.
+
+## 0.18.1
+
+### Patch Changes
+
+- 7663d93: Fixed Cloudflare settlement recovery for vouchers larger than recorded usage, capturing only the amount owed. Added a settlement backfill for channels left unscheduled before upgrading.
+- 2a00add: Fixed automatic session settlement retries and preserved prepaid stream delivery during channel closure. Fixed mixed-case channel IDs in settlement backfills.
+- e86c670: Added `listOperations` to `mppx/discovery`, which lists a discovery document's operations with typed offers and JSON request schemas. Typed the offers `PaymentInfo` returns.
+- 066a75b: Added `mppx/extensions/identity/link`: server verifiers and client provers for Link agent identity attestations and Link-signed claims, such as a verified email. Added `Identity.Verifier.authorization`, which makes a route refuse a server without `requiresAuth: true`, and stopped proxies from forwarding `Identity-Presentation` headers and upstream identity challenges.
+- 4071a6c: Added MACH onramp links to insufficient-balance errors. `Tempo.machineTokenFundingUrl` builds the Tempo Wallet link that buys MACH, and `PaymentError` gained an optional `fundingUrl`, serialized as a Problem Details extension member. On Tempo mainnet, the `tempo.charge` client now throws `InsufficientBalanceError` with the link when a MACH-enabled charge can't be paid from MACH or the charge currency, the session client does the same for a MACH channel deposit, servers link MACH payments rejected for a low MACH balance, and the `mppx` CLI treats a MACH-enabled charge as payable from a MACH balance.
+- ee48ef6: Removed the package size limits from the package check; it still reports the sizes.
+- 40b9535: Prevented automatic payments during email OTP requests through identity-wrapped fetch clients. Added `Fetch.withoutPayment` to explicitly disable payments for a request.
+- dd571b3: Added `mppx/extensions/identity/persona`: `Persona.Server.create` starts Persona inquiries and returns a payment check and a request-stage verifier that require an approved inquiry, with an onboarding link on rejection and an optional approval cache. `Persona.Server.verifyWallet` links a wallet to a person before KYC, and `Persona.did` builds a wallet's reference ID.
+- 6e32317: Fixed composed subscription routes retaining request-derived dispatch state and accepting overlapping identity policies.
+- 75aee4b: Added the `Currency` module and accepted `viem/tokens` tokens, chain-indexed (`ousd`) or resolved to one chain (`ousd(4217)`), everywhere a currency is configured: Tempo charge and session client `currencies`, `autoSwap.tokenIn`, Tempo server `currencies`, and EVM and x402 `currencies`, with token decimals used for `maxAmount`, `maxDeposit` and `topUpAmount`.
+
 ## 0.18.0
 
 ### Minor Changes

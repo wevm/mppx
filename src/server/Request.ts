@@ -1,10 +1,13 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http'
 
+import * as Host from './internal/host.js'
 import * as NodeListener from './NodeListener.js'
 
 export type FetchHandler = (request: Request) => Promise<Response> | Response
 
 export type RequestListenerOptions = {
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Required for signed identity requests unless a fixed Node host is configured; an empty list rejects all hosts. Validate at trusted ingress too; forwarded hosts are not trusted. */
+  allowedHosts?: readonly string[] | undefined
   host?: string | undefined
   /** Maximum accepted request body size in bytes. @default 10485760 (10 MiB) */
   maxBodySize?: number | undefined
@@ -14,6 +17,11 @@ export type RequestListenerOptions = {
 
 /** Options used only while converting a Node request to a Fetch request. */
 export type NodeConversionOptions = Omit<RequestListenerOptions, 'onError'>
+
+/** Raised when the incoming Host is outside the configured allowlist. */
+export class UntrustedHostError extends Error {
+  override readonly name = 'UntrustedHostError'
+}
 
 const defaultMaxBodySize = 10 * 1024 * 1024
 const bodyCompletions = new WeakMap<Request, Promise<unknown>>()
@@ -34,20 +42,22 @@ export function toNodeListener(
   handler: FetchHandler,
   options?: RequestListenerOptions | undefined,
 ): RequestListener {
-  const onError =
-    options?.onError ??
-    ((error: unknown) => {
-      if (error instanceof RequestBodyTooLargeError)
-        return new Response('Payload Too Large', {
-          status: 413,
-          headers: { 'Content-Type': 'text/plain' },
-        })
-      console.error(error)
-      return new Response('Internal Server Error', {
-        status: 500,
+  const customOnError = options?.onError
+  const defaultError = (error: unknown) => {
+    if (error instanceof UntrustedHostError)
+      return new Response('Misdirected Request', { status: 421 })
+    if (error instanceof RequestBodyTooLargeError)
+      return new Response('Payload Too Large', {
+        status: 413,
         headers: { 'Content-Type': 'text/plain' },
       })
+    if (!customOnError) console.error(error)
+    return new Response('Internal Server Error', {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' },
     })
+  }
+  const onError = customOnError ?? defaultError
 
   return (async (req: IncomingMessage, res: ServerResponse) => {
     let response: Response
@@ -57,12 +67,7 @@ export function toNodeListener(
       await waitForBody(request)
     } catch (error) {
       try {
-        response =
-          (await onError(error)) ??
-          new Response('Internal Server Error', {
-            status: 500,
-            headers: { 'Content-Type': 'text/plain' },
-          })
+        response = (await onError(error)) ?? defaultError(error)
       } catch (innerError) {
         console.error(`There was an error in the error handler: ${innerError}`)
         response = new Response('Internal Server Error', {
@@ -71,7 +76,18 @@ export function toNodeListener(
         })
       }
     }
-    await NodeListener.sendResponse(res, response)
+    try {
+      await NodeListener.sendResponse(res, response)
+    } catch (error) {
+      try {
+        await onError(error)
+      } catch (innerError) {
+        console.error(`There was an error in the error handler: ${innerError}`)
+      } finally {
+        // Transmission may already have sent headers; never send a second response.
+        if (!res.destroyed) res.destroy()
+      }
+    }
   }) as RequestListener
 }
 
@@ -87,6 +103,13 @@ export function fromNodeListener(
   res: ServerResponse,
   options?: NodeConversionOptions | undefined,
 ): Request {
+  const headers = createHeaders(req)
+  const incomingHost =
+    headers.get('Host') ?? (req.headers as Record<string, string>)[':authority'] ?? 'localhost'
+  const fixedHost = options?.host !== undefined
+  const checkedHost = fixedHost ? (req.headers.host ?? incomingHost) : incomingHost
+  if (!Host.isAllowed(req, options?.allowedHosts, checkedHost, fixedHost))
+    throw new UntrustedHostError('Incoming host is not allowed.')
   let controller: AbortController | null = new AbortController()
   res.once('close', () => controller?.abort())
   res.once('finish', () => {
@@ -94,17 +117,12 @@ export function fromNodeListener(
   })
 
   const method = req.method ?? 'GET'
-  const headers = createHeaders(req)
   const protocol =
     options?.protocol ??
     ('encrypted' in req.socket && (req.socket as { encrypted?: boolean }).encrypted
       ? 'https:'
       : 'http:')
-  const host =
-    options?.host ??
-    headers.get('Host') ??
-    (req.headers as Record<string, string>)[':authority'] ??
-    'localhost'
+  const host = options?.host ?? incomingHost
   const url = createRequestUrl(req.url, `${protocol}//${host}`)
 
   const init: RequestInit & { duplex?: string } = {

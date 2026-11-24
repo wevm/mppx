@@ -14,6 +14,7 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
+import * as IdentityClient from '../../identity/Client.js'
 import * as Fetch from './Fetch.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
@@ -395,7 +396,14 @@ const x402Eip3009Accept = {
 } satisfies x402_Types.PaymentRequirements
 
 /** Builds a valid 402 response with a WWW-Authenticate header. */
-function make402(overrides?: { expires?: string; id?: string; intent?: string; method?: string }) {
+function make402(overrides?: {
+  description?: string
+  expires?: string
+  id?: string
+  intent?: string
+  method?: string
+  realm?: string
+}) {
   const id = overrides?.id ?? 'abc'
   const method = overrides?.method ?? 'test'
   const intent = overrides?.intent ?? 'test'
@@ -404,7 +412,10 @@ function make402(overrides?: { expires?: string; id?: string; intent?: string; m
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
-  const header = `Payment id="${id}", realm="test", method="${method}", intent="${intent}", request="${request}"${expires}`
+  const realm = overrides?.realm ?? 'test'
+  const description =
+    overrides?.description === undefined ? '' : `, description="${overrides.description}"`
+  const header = `Payment id="${id}", realm="${realm}", method="${method}", intent="${intent}", request="${request}"${expires}${description}`
   return new Response(null, {
     status: 402,
     headers: { 'WWW-Authenticate': header },
@@ -767,6 +778,64 @@ describe('Fetch.from: 402 retry path', () => {
     expect(onChallenge).not.toHaveBeenCalled()
     expect(createCredential).not.toHaveBeenCalled()
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['caf\\u00e9.example.com', 'merchant\\u2014api.example.com'])(
+    'refuses a legacy unicode-escaped realm (%s) before credential creation',
+    async (realm) => {
+      const createCredential = vi.fn(async () => 'credential')
+      const mockFetch = vi.fn(async () => make402({ realm }))
+      const fetch = Fetch.from({
+        fetch: mockFetch as typeof globalThis.fetch,
+        methods: [{ ...noopMethod, createCredential }],
+      })
+
+      await expect(fetch('https://example.com/api')).rejects.toThrow(
+        Errors.LegacyUnicodeEscapedChallengeError,
+      )
+      expect(createCredential).not.toHaveBeenCalled()
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  test('skips a legacy unicode-escaped offer and pays another one', async () => {
+    const createCredential = vi.fn(async (_parameters: unknown) => 'credential')
+    const legacy = make402({ id: 'legacy', realm: 'caf\\u00e9.example.com' })
+    const plain = make402({ id: 'plain' })
+    const header = `${legacy.headers.get('WWW-Authenticate')}, ${plain.headers.get('WWW-Authenticate')}`
+    const mockFetch = vi.fn(async () =>
+      mockFetch.mock.calls.length === 1
+        ? new Response(null, { status: 402, headers: { 'WWW-Authenticate': header } })
+        : new Response('OK', { status: 200 }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+    expect(createCredential.mock.calls[0]).toMatchObject([{ challenge: { id: 'plain' } }])
+  })
+
+  test.each([
+    { realm: 'say \\"hi\\".example.com' },
+    { realm: 'back\\\\slash.example.com' },
+    { description: 'caf\\u00e9' },
+  ])('pays a challenge with other quoted-pairs (%o)', async (overrides) => {
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch = vi.fn(async () =>
+      mockFetch.mock.calls.length === 1 ? make402(overrides) : new Response('OK', { status: 200 }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(1)
   })
 
   test('strips context from init on retry', async () => {
@@ -1931,6 +2000,57 @@ describe('Fetch.from: 402 retry path', () => {
     expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
   })
 
+  test('proves a paid retry for the Challenge its credential pays', async () => {
+    const challenge = (id: string) =>
+      Challenge.from({
+        id,
+        intent: 'charge',
+        method: 'test',
+        realm: 'api.example.com',
+        request: { amount: '1' },
+      })
+    // A method that resumes an earlier payment pays that payment's Challenge.
+    const earlier = challenge('earlier')
+    const proved: (string | undefined)[] = []
+    let calls = 0
+    const fetch = Fetch.from({
+      fetch: async () =>
+        ++calls === 1
+          ? new Response(null, {
+              headers: { 'WWW-Authenticate': Challenge.serialize(challenge('selected')) },
+              status: 402,
+            })
+          : new Response('ok'),
+      identity: IdentityClient.from([
+        {
+          scope: '*',
+          prove(request, context) {
+            proved.push(context.challenge?.id)
+            return request
+          },
+        },
+      ]),
+      methods: [
+        Method.toClient(
+          Method.from({
+            intent: 'charge',
+            name: 'test',
+            schema: {
+              credential: { payload: z.object({}) },
+              request: z.object({ amount: z.string() }),
+            },
+          }),
+          {
+            createCredential: async () => Credential.serialize({ challenge: earlier, payload: {} }),
+          },
+        ),
+      ],
+    })
+
+    expect(await (await fetch('https://api.example.com/resource')).text()).toBe('ok')
+    expect(proved).toEqual([undefined, 'earlier'])
+  })
+
   test('retries a relative request whose 402 has no URL', async () => {
     const challenge = Challenge.from({
       id: 'relative',
@@ -3015,5 +3135,27 @@ describe('Fetch.polyfill / restore', () => {
     expect(globalThis.fetch).toBe(externalFetch)
 
     globalThis.fetch = originalFetch
+  })
+})
+
+describe('retryKey', () => {
+  const challenge = {
+    id: 'abc',
+    realm: 'shop\u2014example',
+    method: 'tempo',
+    intent: 'charge',
+    request: { amount: '1', currency: 'usd' },
+    description: 'Coffee \u2014 large',
+  } satisfies Challenge.Challenge
+
+  test('behavior: keys a realm a header cannot carry', () => {
+    expect(() => Fetch.retryKey(challenge)).not.toThrow()
+  })
+
+  test('behavior: ignores description and field order', () => {
+    const { request, id, ...rest } = challenge
+    expect(Fetch.retryKey({ ...rest, description: 'Coffee u2014 large', request, id })).toBe(
+      Fetch.retryKey(challenge),
+    )
   })
 })

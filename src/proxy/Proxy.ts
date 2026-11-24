@@ -5,6 +5,10 @@ import { generateProxy } from '../discovery/OpenApi.js'
 import * as Scope from '../server/internal/scope.js'
 import * as Mppx from '../server/Mppx.js'
 import * as Request from '../server/Request.js'
+import {
+  captureRequestBodyProbe,
+  isSessionContentRequest,
+} from '../tempo/server/internal/request-body.js'
 import * as Headers from './internal/Headers.js'
 import * as Replay from './internal/Replay.js'
 import * as Route from './internal/Route.js'
@@ -161,14 +165,37 @@ export function create(config: create.Config): Proxy {
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
+    let selected: Credential.Credential | undefined
+    try {
+      selected = paymentCredential ? Credential.deserialize(paymentCredential) : undefined
+    } catch {}
+    const manualGeneration = requiresManualGeneration(handler, selected?.challenge)
+    const payload = selected?.payload
+    const action =
+      payload && typeof payload === 'object' && 'action' in payload ? payload.action : undefined
+    // Unverified input only routes management to the verifier; it never authorizes upstream work.
+    const management =
+      selected?.challenge.intent === 'session' &&
+      (action === 'close' ||
+        action === 'topUp' ||
+        !isSessionContentRequest(captureRequestBodyProbe(request)))
+    const unsupportedGeneration = () =>
+      new Response(
+        'Per-item session proxy routes require a manual-charge generator; use request pricing for automatic proxying.',
+        { status: 500 },
+      )
+    if (manualGeneration && !management) return unsupportedGeneration()
+
     // With replay, a paid request whose credential already paid for this exact
     // request collects its recorded delivery instead of paying again.
     let paidRequest = request
     let replayBody: Uint8Array | undefined
     let replayKey: string | undefined
-    // Routes with identity verifiers keep paying normally: a replay would skip them.
+    // Identity and session routes retain their normal verification and metered delivery.
     const credential =
-      replay && !fallbackMatch && !requiresIdentity(handler) ? paymentCredential : undefined
+      replay && !fallbackMatch && !requiresFreshVerification(handler, selected?.challenge)
+        ? paymentCredential
+        : undefined
     if (replay && credential) {
       const body =
         boundedBody ??
@@ -179,6 +206,14 @@ export function create(config: create.Config): Proxy {
       replayBody = body
       paidRequest = Replay.withBody(request, body)
       replayKey = Replay.key({
+        authority: replay.authority,
+        scope: JSON.stringify([
+          (config.basePath ?? '').replace(/\/+$/, ''),
+          serviceId,
+          normalizeBaseUrl(service.baseUrl).href,
+          Route.parseRouteKey(matched.key),
+          getConfiguredScope(handler),
+        ]),
         body,
         credential,
         method: request.method,
@@ -232,6 +267,8 @@ export function create(config: create.Config): Proxy {
 
     if (managementResponse) return managementResponse
     if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
+
+    if (manualGeneration) return unsupportedGeneration()
 
     if (!boundedBody && !replayBody && request.body) {
       const body = await Replay.readBody(request, maxRequestBodySize)
@@ -511,15 +548,50 @@ function credentialHeaders(handler: Service.IntentHandler): string[] {
   return names.length > 0 ? names : ['authorization']
 }
 
-/** Whether a paid handler, or any offer of a composed one, requires identity verifiers. */
-function requiresIdentity(handler: Service.IntentHandler): boolean {
+function requiresManualGeneration(
+  handler: Service.IntentHandler,
+  selected?: PaymentBinding,
+): boolean {
+  if (!('_internal' in handler)) return selected?.intent === 'session'
+  type Offer = {
+    name?: string
+    intent?: string
+    _canonicalRequest?: { unitType?: unknown; amount?: unknown }
+    _transport?: { name?: string }
+  }
+  const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
+  const offers = internal?.offers ?? (internal ? [internal] : [])
+  const unsupported = (offer: Offer) =>
+    offer.intent === 'session' &&
+    offer._transport?.name !== 'http' &&
+    offer._canonicalRequest?.amount !== '0' &&
+    offer._canonicalRequest?.unitType !== 'request'
+  // Mixed methods can still challenge and serve their one-shot charge offer. A session's
+  // canonical route pricing is authoritative, never the unitType echoed by its credential.
+  if (!selected) return offers.length > 0 && offers.every(unsupported)
+  const selectedOffers = offers.filter(
+    (offer) => (!offer.name || offer.name === selected.method) && offer.intent === selected.intent,
+  )
+  return (
+    (selected.intent === 'session' && selectedOffers.length === 0) ||
+    selectedOffers.some(unsupported)
+  )
+}
+
+/** Identity and session offers must re-run authorization and delivery-time metering on every request. */
+function requiresFreshVerification(
+  handler: Service.IntentHandler,
+  selected?: PaymentBinding,
+): boolean {
+  if (selected?.intent === 'session') return true
   if (!('_internal' in handler)) return false
-  const internal = handler._internal as
-    | { _identity?: boolean; offers?: readonly { _identity?: boolean }[] }
-    | undefined
-  if (!internal) return false
-  if (internal.offers) return internal.offers.some((offer) => offer._identity)
-  return internal._identity === true
+  type Offer = { _identity?: boolean; name?: string; intent?: string }
+  const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
+  const offers = internal?.offers ?? (internal ? [internal] : [])
+  return (
+    offers.some((offer) => offer._identity) ||
+    (!selected && offers.some((offer) => offer.intent === 'session'))
+  )
 }
 
 function getConfiguredScope(handler: Service.IntentHandler): string | undefined {
@@ -603,8 +675,7 @@ function createFetchProxy(
   options?: { fetch?: typeof globalThis.fetch },
 ): (input: URL | RequestInfo, init?: RequestInit) => Promise<Response> {
   const localFetch = options?.fetch ?? globalThis.fetch
-  const targetUrl = new URL(target)
-  if (targetUrl.pathname.endsWith('/')) targetUrl.pathname = targetUrl.pathname.replace(/\/+$/, '')
+  const targetUrl = normalizeBaseUrl(target)
 
   return async (input, init) => {
     const request = new globalThis.Request(input, init)
@@ -627,4 +698,11 @@ function createFetchProxy(
     }
     return localFetch(proxyUrl, proxyInit)
   }
+}
+
+/** Uses the same canonical upstream base for delivery and replay scope. */
+function normalizeBaseUrl(target: string | URL): URL {
+  const url = new URL(target)
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  return url
 }

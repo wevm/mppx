@@ -11,8 +11,8 @@ import * as Http from '~test/Http.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Receipt from '../Receipt.js'
-import { validateRealmMatchesHost } from './validate/challenge.js'
-import { missingDiscoverySuggestion } from './validate/messages.js'
+import { validateRealmMatchesHost } from '../validation/challenge.js'
+import { missingDiscoverySuggestion } from '../validation/messages.js'
 
 // Keep validate tests out of JSON mode by default, even when the suite runs inside an agent.
 const isAgentEnvironmentMock = vi.fn(() => false)
@@ -696,19 +696,54 @@ describe('validate: error handling', () => {
     expect(output).toContain('Malformed credential returns 402 (Got 422)')
     expect(output).toContain('Returning 422 prevents the client from retrying with a valid payment')
   })
+  test(
+    'fails a challenge that selects an unsupported credential header',
+    { timeout: 15_000 },
+    async () => {
+      const challenge = Challenge.serialize(makeChallenge())
+      const server = await testServer((_req, res) => {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: `${challenge}, header="X-Payment"`,
+        })
+        res.end()
+      })
+      const { output } = await serve(['validate', server.url, '--endpoint', 'POST:/api/test'])
+      expect(output).toContain('Unsupported credential header')
+    },
+  )
+
+  test(
+    'fails a challenge that selects an unsupported credential header next to a valid one',
+    { timeout: 15_000 },
+    async () => {
+      const valid = Challenge.serialize(makeChallenge())
+      const unsupported = `${Challenge.serialize(makeChallenge({ id: 'unsupported' }))}, header="X-Payment"`
+      const server = await testServer((_req, res) => {
+        res.writeHead(402, {
+          [Constants.Headers.wwwAuthenticate]: `${unsupported}, ${valid}`,
+        })
+        res.end()
+      })
+      const { output } = await serve(['validate', server.url, '--endpoint', 'POST:/api/test'])
+      expect(output).toContain(
+        '1 of 2 challenges select a credential header other than Payment-Authorization',
+      )
+    },
+  )
+
   test('names the probed credential header in the hint', { timeout: 15_000 }, async () => {
-    const server = await mppServer(makeChallenge({ header: 'Payment-Credential' }), {
+    const server = await mppServer(makeChallenge({ header: 'Payment-Authorization' }), {
       errorStatus: 500,
     })
     const { output } = await serve(['validate', server.url])
-    expect(output).toContain('When the Payment-Credential header contains an invalid credential')
+    expect(output).toContain('When the Payment-Authorization header contains an invalid credential')
   })
 
   test(
     'sends -H headers and the Challenge credential header with the malformed Credential',
     { timeout: 15_000 },
     async () => {
-      const challenge = makeChallenge({ header: 'Payment-Credential' })
+      const challenge = makeChallenge({ header: 'Payment-Authorization' })
       const garbage = `${Constants.Schemes.payment} dGhpcyBpcyBnYXJiYWdl`
       const probes: http.IncomingHttpHeaders[] = []
       const server = await testServer((req, res) => {
@@ -723,7 +758,7 @@ describe('validate: error handling', () => {
           res.end()
           return
         }
-        if (req.headers['payment-credential'] === garbage) probes.push(req.headers)
+        if (req.headers['payment-authorization'] === garbage) probes.push(req.headers)
         res.writeHead(402, { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) })
         res.end()
       })
@@ -1516,5 +1551,109 @@ describe('validate: live mppx server', () => {
     // The CLI fetches a fresh Challenge before paying; its new nonce is not a changed payment.
     expect(output).toContain('Payment: submitted')
     expect(output).not.toContain('Payment request changed on retry')
+  })
+})
+
+describe('validateStream: custom payment validator', () => {
+  async function paymentEvent(payment: import('../validation/index.js').PaymentValidator) {
+    const { validateStream } = await import('../validation/index.js')
+    const server = await mppServer(makeChallenge())
+    for await (const event of validateStream({ url: server.url, payment }))
+      if (event.phase === 'payment') return event
+    throw new Error('no payment event')
+  }
+
+  test('uses the succeeded flag a validator returns', async () => {
+    const results = [{ severity: 'pass' as const, label: 'Paid with my wallet' }]
+    const event = await paymentEvent(async () => ({ results, succeeded: true }))
+    expect(event.results).toEqual(results)
+    expect(event.succeeded).toBe(true)
+  })
+
+  test('reports failure when a validator says so', async () => {
+    const event = await paymentEvent(async () => ({ results: [], succeeded: false }))
+    expect(event.succeeded).toBe(false)
+    expect(event.results).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+  })
+
+  test('forwards a synthesized payment failure to onPaymentResults', async () => {
+    const { validateStream } = await import('../validation/index.js')
+    const server = await mppServer(makeChallenge())
+    const streamed: import('../validation/index.js').CheckResult[] = []
+    for await (const _ of validateStream({
+      url: server.url,
+      payment: async () => ({ results: [], succeeded: false }),
+      onPaymentResults: (results) => streamed.push(...results),
+    }));
+    expect(streamed).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+  })
+
+  test('onPaymentResults cannot erase a synthesized payment failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const result = await validate({
+      url: (await mppServer(makeChallenge())).url,
+      payment: async () => ({ results: [], succeeded: false }),
+      onPaymentResults: (results) => {
+        for (const r of results) r.severity = 'warn'
+      },
+    })
+    expect(result.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(result.summary.failed).toBeGreaterThan(0)
+  })
+
+  test('only promises wallet provisioning when a payment validator is configured', async () => {
+    const { validate } = await import('../validation/index.js')
+    const run = async (payment?: import('../validation/index.js').PaymentValidator) => {
+      const challenge = makeChallenge()
+      challenge.request.methodDetails = { chainId: 4217 }
+      return validate({ url: (await mppServer(challenge)).url, ...(payment && { payment }) })
+    }
+    const testnet = (s: string) => s.startsWith('Validate your testnet server')
+
+    const without = (await run()).suggestions.find(testnet)
+    expect(without).toBeDefined()
+    expect(without).not.toContain('are automatically provisioned')
+    expect(without).toContain('mppx validate')
+
+    const withValidator = await run(async () => ({ results: [], succeeded: true }))
+    expect(withValidator.suggestions.find(testnet)).toContain('are automatically provisioned')
+  })
+
+  test('validate() keeps the succeeded flag and counts a reported failure', async () => {
+    const { validate } = await import('../validation/index.js')
+    const run = async (succeeded: boolean) =>
+      validate({
+        url: (await mppServer(makeChallenge())).url,
+        payment: async () => ({
+          results: [{ severity: 'pass', label: 'Paid with my wallet' }],
+          succeeded,
+        }),
+      })
+
+    const failed = await run(false)
+    expect(failed.endpoints[0]!.paymentSucceeded).toBe(false)
+    expect(failed.endpoints[0]!.payment).toContainEqual(
+      expect.objectContaining({ severity: 'fail', label: 'Payment: failed' }),
+    )
+    expect(failed.summary.failed).toBeGreaterThan(0)
+
+    const passed = await run(true)
+    expect(passed.endpoints[0]!.paymentSucceeded).toBe(true)
+    expect(passed.endpoints[0]!.payment).not.toContainEqual(
+      expect.objectContaining({ label: 'Payment: failed' }),
+    )
+    expect(passed.summary.failed).toBe(failed.summary.failed - 1)
+  })
+
+  test('treats a passing success check as succeeded when only checks are returned', async () => {
+    const { paymentSuccessLabel } = await import('../validation/index.js')
+    const event = await paymentEvent(async () => [{ severity: 'pass', label: paymentSuccessLabel }])
+    expect(event.succeeded).toBe(true)
   })
 })

@@ -13,10 +13,10 @@ import {
 import * as Challenge from '../Challenge.js'
 import * as Errors from '../Errors.js'
 import * as Negotiator from '../integrations/x402/Negotiator.js'
+import * as McpCredential from '../internal/McpCredential.js'
+import { paymentRequiredHeader } from '../internal/x402/Types.js'
 import * as Mcp from '../Mcp.js'
-import * as McpCredential from '../mcp/internal/Credential.js'
 import * as Receipt from '../Receipt.js'
-import { paymentRequiredHeader } from './Types.js'
 
 type ToolResource = NonNullable<PaymentWrapperConfig['resource']> & {
   url: `mcp://tool/${string}`

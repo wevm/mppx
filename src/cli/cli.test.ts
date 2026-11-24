@@ -15,6 +15,8 @@ import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
+import * as x402_Header from '../internal/x402/Header.js'
+import * as x402_Types from '../internal/x402/Types.js'
 import * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
 import * as Mppx_server from '../server/Mppx.js'
@@ -28,8 +30,6 @@ import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../tempo/session/precompile/Protocol.js'
 import * as x402_Assets from '../x402/Assets.js'
-import * as x402_Header from '../x402/Header.js'
-import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
 import cli, { resolveMppCredentialTarget } from './cli.js'
 
@@ -374,6 +374,81 @@ export default defineConfig({
       expect(output).toContain('paid')
     } finally {
       httpServer.close()
+    }
+  })
+
+  test('resends an x402 credential when only the resource description changes', async () => {
+    const signatures: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      const signature = req.headers['payment-signature'] as string | undefined
+      if (signature) signatures.push(signature)
+      if (signatures.length === 1 && signature) {
+        res.writeHead(402, {
+          [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+            accepts: [paymentAccept()],
+            resource: {
+              description: 'Payment was not accepted',
+              mimeType: 'application/json',
+              url: `http://${req.headers.host}${req.url}`,
+            },
+            x402Version: 2,
+          }),
+        })
+        res.end()
+        return
+      }
+      if (!signature) {
+        res.writeHead(402, { [x402_Types.paymentRequiredHeader]: paymentRequired(req) })
+        res.end()
+        return
+      }
+      res.end('paid-on-resend')
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output).toContain('paid-on-resend')
+      expect(signatures).toHaveLength(2)
+      expect(signatures[1]).toBe(signatures[0])
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('rejects a cross-origin x402 destination before sending a credential', async () => {
+    const otherSignatures: string[] = []
+    const otherServer = await Http.createServer((req, res) => {
+      const signature = req.headers['payment-signature'] as string | undefined
+      if (signature) otherSignatures.push(signature)
+      res.writeHead(402, {
+        [x402_Types.paymentRequiredHeader]: paymentRequired(req, [
+          paymentAccept({ amount: '6000' }),
+        ]),
+      })
+      res.end()
+    })
+    const httpServer = await Http.createServer((req, res) => {
+      res.writeHead(402, {
+        [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+          accepts: [paymentAccept()],
+          resource: { mimeType: 'application/json', url: `${otherServer.url}/paid` },
+          x402Version: 2,
+        }),
+      })
+      res.end()
+    })
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBeDefined()
+      expect(otherSignatures).toHaveLength(0)
+    } finally {
+      httpServer.close()
+      otherServer.close()
     }
   })
 
@@ -1877,6 +1952,600 @@ export default defineConfig({
       expect(output).toContain('not found')
     } finally {
       httpServer.close()
+    }
+  })
+})
+
+describe('challenge rounds', () => {
+  const roundsSecretKey = 'cli-test-secret-cli-test-secret-32'
+
+  function alphaChallenge(
+    parameters: { amount?: string; currency?: string; method?: string; realm?: string } = {},
+  ) {
+    return Challenge.from({
+      secretKey: roundsSecretKey,
+      realm: parameters.realm ?? 'localhost',
+      method: parameters.method ?? 'alpha',
+      intent: 'charge',
+      request: {
+        amount: parameters.amount ?? '1',
+        currency: parameters.currency ?? asset,
+        decimals: 6,
+        recipient: accounts[0].address,
+      },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+  }
+
+  function writeAlphaConfig() {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-rounds-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const mppxModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { Credential, Method, z } from '${mppxModuleUrl}'
+import { defineConfig } from '${cliModuleUrl}'
+
+let signed = 0
+
+const alpha = Method.toClient(Method.from({
+  name: 'alpha',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string(), currency: z.string(), decimals: z.number(), recipient: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    signed += 1
+    return Credential.serialize({ challenge, payload: { token: 'alpha-' + challenge.id + '-' + signed } })
+  },
+})
+
+export default defineConfig({ methods: [alpha] })
+      `.trim(),
+    )
+    return {
+      configPath,
+      cleanup: () => fs.rmSync(configDir, { recursive: true, force: true }),
+    }
+  }
+
+  type RecordedRequest = {
+    authorization: string | undefined
+    body: string
+    header: string | undefined
+    method: string | undefined
+  }
+
+  /**
+   * Serves a payment-gated resource whose 402 answers are chosen per request, recording every
+   * request the CLI sends.
+   */
+  async function roundsServer(
+    respond: (
+      credential: Credential.Credential | undefined,
+      index: number,
+    ) => { challenges?: Challenge.Challenge[]; paid?: string },
+  ) {
+    const requests: RecordedRequest[] = []
+    const httpServer = await Http.createServer(async (req, res) => {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(chunk as Buffer)
+      const authorization = req.headers.authorization
+      requests.push({
+        authorization,
+        body: Buffer.concat(chunks).toString(),
+        header: req.headers['x-round-test'] as string | undefined,
+        method: req.method,
+      })
+      const credential = authorization ? Credential.deserialize(authorization) : undefined
+      const answer = respond(credential, requests.length - 1)
+      if (answer.paid !== undefined) {
+        res.end(answer.paid)
+        return
+      }
+      res.statusCode = 402
+      if (answer.challenges?.length)
+        res.setHeader(
+          Constants.Headers.wwwAuthenticate,
+          answer.challenges.map((challenge) => Challenge.serialize(challenge)).join(', '),
+        )
+      res.setHeader('content-type', 'application/problem+json')
+      res.end(
+        JSON.stringify({
+          type: 'https://paymentauth.org/problems/credit_insufficient',
+          title: 'Credit insufficient',
+          status: 402,
+        }),
+      )
+    })
+    return { httpServer, requests }
+  }
+
+  const credentialIds = (requests: RecordedRequest[]) =>
+    requests.flatMap((request) =>
+      request.authorization ? [Credential.deserialize(request.authorization).challenge.id] : [],
+    )
+
+  test(
+    'pays the real charge when a zero-amount proof is answered with a new 402',
+    { timeout: 120_000 },
+    async () => {
+      const { Actions } = await import('viem/tempo')
+      const payerPrivateKey = generatePrivateKey()
+      await Actions.token.transferSync(client, {
+        account: accounts[0],
+        chain: client.chain,
+        token: asset,
+        to: privateKeyToAccount(payerPrivateKey).address,
+        amount: parseUnits('100', 6),
+      })
+      const [tempoMethod] = tempo.charge({ chainId: client.chain.id, getClient: () => client })
+      const server = Mppx_server.create({
+        methods: [tempoMethod],
+        realm: 'localhost',
+        secretKey: roundsSecretKey,
+      })
+      const realCharge = () => ({
+        amount: '1',
+        currency: asset,
+        decimals: 6,
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        recipient: accounts[0].address,
+      })
+      const authorizations: string[] = []
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const authorization = req.headers.authorization
+        if (authorization) authorizations.push(authorization)
+        const credential = authorization ? Credential.deserialize(authorization) : undefined
+
+        if (credential?.challenge.request.amount === '0') {
+          // A wallet without credit: answer the proof with only the real charge.
+          delete req.headers.authorization
+          const result = await toNodeListener(server.compose([tempoMethod, realCharge()]))(req, res)
+          if (result.status !== 402) res.end('unexpected')
+          return
+        }
+
+        const result = await toNodeListener(
+          credential
+            ? server.compose([tempoMethod, realCharge()])
+            : server.compose(
+                [
+                  tempoMethod,
+                  {
+                    amount: '0',
+                    currency: asset,
+                    decimals: 6,
+                    expires: new Date(Date.now() + 60_000).toISOString(),
+                    recipient: accounts[0].address,
+                  },
+                ],
+                [tempoMethod, realCharge()],
+              ),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('paid-after-proof')
+      })
+
+      try {
+        const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+          env: { MPPX_PRIVATE_KEY: payerPrivateKey },
+        })
+
+        expect(exitCode, output).toBeUndefined()
+        expect(output).toContain('paid-after-proof')
+        expect(authorizations).toHaveLength(2)
+        const [proof, charge] = authorizations.map((authorization) =>
+          Credential.deserialize<{ type: string }>(authorization),
+        )
+        expect(proof!.challenge.request.amount).toBe('0')
+        expect(proof!.payload.type).toBe('proof')
+        expect(charge!.challenge.request.amount).toBe('1000000')
+        expect(charge!.payload.type).not.toBe('proof')
+        expect(charge!.challenge.id).not.toBe(proof!.challenge.id)
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
+
+  test('pays a new challenge and keeps the request on every round', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge({ amount: '0' })
+    const second = alphaChallenge({ amount: '10000' })
+    const { httpServer, requests } = await roundsServer((credential) => {
+      if (!credential) return { challenges: [first, second] }
+      if (credential.challenge.id === first.id) return { challenges: [second] }
+      if (credential.challenge.id === second.id) return { paid: 'paid-second-round' }
+      return {}
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-X',
+        'PUT',
+        '-d',
+        '{"q":"test"}',
+        '-H',
+        'X-Round-Test: kept',
+        '--fail',
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-second-round')
+      expect(requests).toHaveLength(3)
+      expect(credentialIds(requests)).toEqual([first.id, second.id])
+      for (const request of requests) {
+        expect(request.method).toBe('PUT')
+        expect(request.body).toBe('{"q":"test"}')
+        expect(request.header).toBe('kept')
+      }
+      expect(Credential.deserialize(requests[2]!.authorization!).payload).toEqual({
+        token: `alpha-${second.id}-2`,
+      })
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('resends the same credential when the answered challenge is offered again', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer(() => ({ challenges: [challenge] }))
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(4)
+      expect(credentialIds(requests)).toEqual([challenge.id, challenge.id, challenge.id])
+      expect(new Set(requests.slice(1).map((request) => request.authorization)).size).toBe(1)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('resends the same credential when the answered challenge returns with new display text', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential, index) =>
+      index === 1
+        ? { challenges: [{ ...challenge, description: 'Payment was not accepted' }] }
+        : credential
+          ? { paid: 'paid-on-resend' }
+          : { challenges: [challenge] },
+    )
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-on-resend')
+      expect(requests).toHaveLength(3)
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('pays a new challenge after resending the answered one', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential, index) => {
+      if (!credential || index === 1) return { challenges: [first] }
+      if (credential.challenge.id === first.id) return { challenges: [second] }
+      return { paid: 'paid-new-challenge' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-new-challenge')
+      expect(credentialIds(requests)).toEqual([first.id, first.id, second.id])
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('signs a new credential for an earlier challenge offered again', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential) => {
+      if (!credential) return { challenges: [first] }
+      if (credential.challenge.id === first.id && requests.length === 2)
+        return { challenges: [second] }
+      if (credential.challenge.id === second.id) return { challenges: [first] }
+      return { paid: 'paid-earlier-challenge' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-earlier-challenge')
+      expect(credentialIds(requests)).toEqual([first.id, second.id, first.id])
+      expect(requests[3]!.authorization).not.toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('resends the previous credential when the server reorders its offers', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge()
+    const second = alphaChallenge({ amount: '2' })
+    const { httpServer, requests } = await roundsServer((credential, index) => {
+      if (!credential) return { challenges: [first, second] }
+      if (index === 1) return { challenges: [second, first] }
+      return { paid: 'paid-after-reorder' }
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-after-reorder')
+      expect(credentialIds(requests)).toEqual([first.id, first.id])
+      expect(requests[2]!.authorization).toBe(requests[1]!.authorization)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('starts a new round from challenge headers without reading the 402 body', async () => {
+    const config = writeAlphaConfig()
+    const first = alphaChallenge({ amount: '0' })
+    const second = alphaChallenge({ amount: '2' })
+    const authorizations: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      const authorization = req.headers.authorization
+      if (authorization) authorizations.push(authorization)
+      const credential = authorization ? Credential.deserialize(authorization) : undefined
+      if (credential?.challenge.id === second.id) {
+        res.end('paid-without-body')
+        return
+      }
+      res.statusCode = 402
+      res.setHeader(
+        Constants.Headers.wwwAuthenticate,
+        Challenge.serialize(credential ? second : first),
+      )
+      if (!credential) {
+        res.end()
+        return
+      }
+      // A body that never ends: the CLI must not wait for it.
+      res.write('x')
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-without-body')
+      expect(authorizations).toHaveLength(2)
+    } finally {
+      httpServer.closeAllConnections?.()
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('reads at most a bounded 402 body before honoring --fail', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    let sent = 0
+    const httpServer = await Http.createServer((req, res) => {
+      if (!req.headers.authorization) {
+        res.statusCode = 402
+        res.setHeader(Constants.Headers.wwwAuthenticate, Challenge.serialize(challenge))
+        res.end()
+        return
+      }
+      res.statusCode = 402
+      const chunk = Buffer.alloc(64 * 1024, 'x')
+      // An endless body: the CLI stops reading past its limit.
+      const write = () => {
+        while (sent < 64 * 1024 * 1024 && res.write(chunk)) sent += chunk.length
+        if (sent < 64 * 1024 * 1024) res.once('drain', write)
+      }
+      write()
+      req.socket.on('close', () => res.destroy())
+    })
+
+    try {
+      const { exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '--fail',
+        '-s',
+      ])
+
+      expect(exitCode).toBe(22)
+      expect(sent).toBeLessThan(64 * 1024 * 1024)
+    } finally {
+      httpServer.closeAllConnections?.()
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('returns a server error after a credential without another round', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const requests: string[] = []
+    const httpServer = await Http.createServer((req, res) => {
+      requests.push(req.headers.authorization ?? '')
+      if (req.headers.authorization) {
+        res.statusCode = 500
+        res.setHeader(
+          Constants.Headers.wwwAuthenticate,
+          Challenge.serialize(alphaChallenge({ amount: '3' })),
+        )
+        res.end('settlement failed')
+        return
+      }
+      res.statusCode = 402
+      res.setHeader(Constants.Headers.wwwAuthenticate, Challenge.serialize(challenge))
+      res.end()
+    })
+
+    try {
+      const { output } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(output).toContain('settlement failed')
+      expect(requests).toHaveLength(2)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('reports a rejected payment when the new 402 offers no challenge', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential) =>
+      credential ? {} : { challenges: [challenge] },
+    )
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(2)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('stops after the maximum number of challenge rounds', async () => {
+    const config = writeAlphaConfig()
+    const { httpServer, requests } = await roundsServer(() => ({ challenges: [alphaChallenge()] }))
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(4)
+      expect(new Set(credentialIds(requests)).size).toBe(3)
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('does not pay a new challenge for a method it cannot pay', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential) => ({
+      challenges: credential ? [alphaChallenge({ method: 'gamma' })] : [challenge],
+    }))
+
+    try {
+      const { exitCode } = await serve([httpServer.url, '--config', config.configPath, '-s'])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(2)
+      expect(credentialIds(requests)).toEqual([challenge.id])
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('does not pay a new challenge in a currency the caller did not select', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential) => ({
+      challenges: credential ? [alphaChallenge({ currency: unfundedToken })] : [challenge],
+    }))
+
+    try {
+      const { exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '--currency',
+        asset,
+        '-s',
+      ])
+
+      expect(exitCode).toBe(75)
+      expect(requests).toHaveLength(2)
+      expect(credentialIds(requests)).toEqual([challenge.id])
+    } finally {
+      httpServer.close()
+      config.cleanup()
+    }
+  })
+
+  test('does not start a new round after the payment succeeds', async () => {
+    const config = writeAlphaConfig()
+    const challenge = alphaChallenge()
+    const { httpServer, requests } = await roundsServer((credential) =>
+      credential ? { paid: 'paid-once' } : { challenges: [challenge] },
+    )
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--config',
+        config.configPath,
+        '-s',
+      ])
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('paid-once')
+      expect(requests).toHaveLength(2)
+    } finally {
+      httpServer.close()
+      config.cleanup()
     }
   })
 })

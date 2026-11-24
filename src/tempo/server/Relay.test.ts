@@ -104,6 +104,18 @@ afterEach(() => {
 })
 
 describe('relay boundary', () => {
+  test('rejects a Zone credential grace, which a relay cannot check', () => {
+    expect(() =>
+      tempo.charge({
+        currency: '0x20c0000000000000000000000000000000000001',
+        recipient: '0x2222222222222222222222222222222222222222',
+        relay: { apiKey: 'tempo_api_key' },
+        testnet: true,
+        zoneCredentialGraceMs: 60_000,
+      }),
+    ).toThrow('`zoneCredentialGraceMs` is not supported with `relay`.')
+  })
+
   test('sends the complete credential to the configured validation endpoint', async () => {
     const fetch = mockRelay(() => Response.json({ success: true }))
     const [method, session] = methods(fetch)

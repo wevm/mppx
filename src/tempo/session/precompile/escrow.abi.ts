@@ -150,6 +150,17 @@ export const escrowAbi = [
   },
   {
     type: 'function',
+    name: 'verifyVoucher',
+    stateMutability: 'view',
+    inputs: [
+      channelDescriptorInput,
+      { name: 'cumulativeAmount', type: 'uint96' },
+      { name: 'signature', type: 'bytes' },
+    ],
+    outputs: [{ name: 'valid', type: 'bool' }],
+  },
+  {
+    type: 'function',
     name: 'domainSeparator',
     stateMutability: 'view',
     inputs: [],
@@ -168,6 +179,15 @@ export const escrowAbi = [
       { name: 'salt', type: 'bytes32' },
       { name: 'expiringNonceHash', type: 'bytes32' },
       { name: 'deposit', type: 'uint96' },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'OpeningCommitmentRecorded',
+    inputs: [
+      { name: 'channelId', type: 'bytes32', indexed: true },
+      { name: 'signer', type: 'address', indexed: true },
+      { name: 'commitment', type: 'bytes32' },
     ],
   },
   {
@@ -221,6 +241,24 @@ export const escrowAbi = [
       { name: 'channelId', type: 'bytes32', indexed: true },
       { name: 'payer', type: 'address', indexed: true },
       { name: 'payee', type: 'address', indexed: true },
+    ],
+  },
+  {
+    type: 'error',
+    name: 'RootKeyRetired',
+    inputs: [{ name: 'account', type: 'address' }],
+  },
+  {
+    type: 'error',
+    name: 'SignerConfigChanged',
+    inputs: [{ name: 'signer', type: 'address' }],
+  },
+  {
+    type: 'error',
+    name: 'SaltNotSignerCommitment',
+    inputs: [
+      { name: 'signer', type: 'address' },
+      { name: 'commitment', type: 'bytes32' },
     ],
   },
 ] as const

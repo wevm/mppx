@@ -97,10 +97,15 @@ function paymentRequiredDataFromValue(data: unknown): PaymentRequiredData | unde
   if (!Array.isArray(challenges) || challenges.length === 0) return undefined
   const parsed: Challenge.Challenge[] = []
   for (const challenge of challenges) {
+    if (!Challenge.LenientSchema.safeParse(challenge).success) return undefined
+    // A well-formed challenge that selects an unsupported credential header gets no credential, but
+    // must not stop the client from paying another challenge.
+    if (Challenge.hasUnsupportedCredentialHeader(challenge)) continue
     const result = Challenge.Schema.safeParse(challenge)
     if (!result.success) return undefined
     parsed.push(result.data as Challenge.Challenge)
   }
+  if (parsed.length === 0) return undefined
   const { httpStatus, problem } = data as {
     httpStatus?: unknown
     problem?: PaymentRequiredData['problem']

@@ -1,10 +1,13 @@
 import { getAddress, recoverTypedDataAddress } from 'viem'
 
 import type * as Credential from '../../Credential.js'
+import * as Currency from '../../Currency.js'
 import { VerificationFailedError } from '../../Errors.js'
+import * as Siwx from '../../internal/x402/Siwx.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as ServerTransport from '../../server/Transport.js'
+import type * as Store from '../../Store.js'
 import * as X402 from '../../x402/server/EvmCharge.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
@@ -28,6 +31,7 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const transport = httpTransport(paths)
 
   return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
+    ...(config.x402.siwx ? { authorize: siwxAuthorize(config.x402.siwx) } : {}),
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
@@ -125,7 +129,9 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
         }),
       })
 
+      const extensions = toJsonExtensions(settled.extensions)
       return Receipt.from({
+        ...(extensions ? { extensions } : {}),
         method: Types.paymentMethod,
         reference: settled.reference,
         status: 'success',
@@ -182,6 +188,11 @@ export declare namespace charge {
     request: Types.ChargeRequest
     source: ReturnType<typeof Types.toSource>
   }) => Promise<{
+    /**
+     * Settlement data to pass through on the Receipt and the x402 `PAYMENT-RESPONSE`, such as
+     * an x402 facilitator's `SettleResponse.extensions`.
+     */
+    extensions?: Record<string, unknown> | undefined
     reference: string
     timestamp?: string | undefined
   }>
@@ -234,9 +245,7 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
   let chainId = config.chainId
   let decimals = config.decimals
 
-  if (Assets.isAsset(currency)) {
-    chainId ??= Assets.toChainId(currency.network)
-  }
+  chainId ??= Currency.chainIdOf(currency)
 
   if (chainId !== undefined) {
     const resolved = Assets.resolve(currency, Types.networkOf(chainId))
@@ -332,7 +341,142 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
   })
 }
 
+/**
+ * SIWX nonces each request has claimed, per replay store, shared by the offers of a
+ * composed route. Offers with their own stores each record the nonce in theirs.
+ */
+const siwxClaims = new WeakMap<Request, WeakMap<Store.AtomicStore, Set<string>>>()
+
+/**
+ * SIWX nonces an offer of each request found already used. Later offers of a composed
+ * route refuse them too, so an offer whose store never saw the nonce can't accept a replay.
+ */
+const siwxReplays = new WeakMap<Request, Set<string>>()
+
+/**
+ * Grants a request that carries a valid x402 SIWX proof without payment, when the
+ * server's `grant` approves the wallet. A request without a proof, or one `grant`
+ * refuses, gets the route's 402; an invalid proof gets it with the spec's error code.
+ */
+function siwxAuthorize(siwx: Siwx.ServerOptions): Method.AuthorizeFn<typeof Methods.charge> {
+  return async ({ input, request }) => {
+    const value = input.headers.get(Siwx.header)
+    if (!value) return undefined
+    try {
+      const payload = Siwx.decode(value)
+      const proof = await Siwx.verify({
+        chainId: request.methodDetails.chainId,
+        options: siwx,
+        payload,
+      })
+      // A copy, as canOffer and selectOffers get, so a grant that reads the body leaves it
+      // for the route handler. Taken before the claim, so a body already read can't spend the
+      // nonce: grant then gets the request without its body.
+      const copy = cloneGrantInput(input)
+      // The copy's body tees the request's, so it is cancelled once grant returns: an unread
+      // copy would otherwise buffer everything the route handler later streams from the request.
+      let granted: boolean
+      try {
+        // Reserve the nonce before grant, so a replayed proof never reaches grant. A claim this
+        // request already made (a composed offer before this one declined) is shared, so a later
+        // offer can still grant the wallet; a proof every offer declined stays spent, so it can't
+        // be replayed once grant would approve the wallet. Clients sign a fresh proof each time.
+        const stores = siwxClaims.get(input) ?? new WeakMap<Store.AtomicStore, Set<string>>()
+        siwxClaims.set(input, stores)
+        const claimed = stores.get(siwx.store) ?? new Set<string>()
+        stores.set(siwx.store, claimed)
+        const key = `${payload.nonce}:${payload.issuedAt}`
+        const replays = siwxReplays.get(input) ?? new Set<string>()
+        siwxReplays.set(input, replays)
+        if (replays.has(key)) throw new Siwx.InvalidProofError('invalid_siwx_nonce')
+        if (!claimed.has(key)) {
+          try {
+            await Siwx.claim({ payload, store: siwx.store })
+          } catch (error) {
+            if (error instanceof Siwx.InvalidProofError) replays.add(key)
+            throw error
+          }
+          claimed.add(key)
+        }
+        granted = Boolean(await siwx.grant({ ...proof, request: copy }))
+      } finally {
+        releaseGrantInput(copy)
+      }
+      if (!granted) return undefined
+      return {
+        receipt: {
+          method: Methods.charge.name,
+          reference: Types.toSource({ address: proof.address, chainId: proof.chainId }),
+          status: 'success',
+          timestamp: new Date().toISOString(),
+        },
+      }
+    } catch (error) {
+      if (error instanceof Siwx.InvalidProofError)
+        throw new VerificationFailedError({ reason: error.code })
+      throw error
+    }
+  }
+}
+
+/** Clones a request for `grant`, falling back to a bodyless copy when its body was read. */
+function cloneGrantInput(input: Request): Request {
+  try {
+    return input.clone()
+  } catch {
+    return new globalThis.Request(input.url, {
+      headers: new Headers(input.headers),
+      method: input.method,
+      signal: input.signal,
+    })
+  }
+}
+
+/** Cancels a grant copy's body, so its tee branch stops buffering the request's body. */
+function releaseGrantInput(copy: Request): void {
+  if (!copy.body || copy.bodyUsed) return
+  // Not awaited: a tee branch's cancel settles only once the other branch is done too.
+  void copy.body.cancel().catch(() => {})
+}
+
 function assertAddressEqual(actual: string, expected: string, reason: string) {
   if (getAddress(actual) === getAddress(expected)) return
   throw new VerificationFailedError({ reason })
+}
+
+/** Largest serialized settle extensions a receipt carries; larger ones are dropped. */
+const maxExtensionsBytes = 4096
+/** Deepest nesting settle extensions may have; deeper ones are dropped. */
+const maxExtensionsDepth = 8
+
+/**
+ * Normalizes settler extensions to the JSON the receipt header carries. A value that isn't a
+ * plain JSON object, nests deeper than 8 levels or serializes past 4 KiB is dropped, so a settled
+ * payment never fails on its receipt or overflows a client's header limit.
+ */
+function toJsonExtensions(extensions: unknown): Record<string, unknown> | undefined {
+  if (!extensions || typeof extensions !== 'object' || Array.isArray(extensions)) return undefined
+  if (!withinDepth(extensions, maxExtensionsDepth)) return undefined
+  try {
+    const serialized = JSON.stringify(extensions)
+    if (new TextEncoder().encode(serialized).byteLength > maxExtensionsBytes) return undefined
+    const json = JSON.parse(serialized) as unknown
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined
+    return Object.keys(json).length ? (json as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Checks nesting without recursion, so hostile depth can't overflow the stack. */
+function withinDepth(value: unknown, limit: number): boolean {
+  const stack: [unknown, number][] = [[value, 1]]
+  let visited = 0
+  while (stack.length) {
+    const [node, depth] = stack.pop()!
+    if (!node || typeof node !== 'object') continue
+    if (depth > limit || ++visited > 10_000) return false
+    for (const child of Object.values(node)) stack.push([child, depth + 1])
+  }
+  return true
 }

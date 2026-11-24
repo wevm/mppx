@@ -2,9 +2,9 @@ import type { Account } from 'viem'
 import { getAddress, parseUnits } from 'viem'
 
 import * as Credential from '../../Credential.js'
+import * as x402_ChallengeBrand from '../../internal/x402/ChallengeBrand.js'
 import * as Method from '../../Method.js'
 import * as x402_Exact from '../../x402/client/Exact.js'
-import * as x402_ChallengeBrand from '../../x402/internal/ChallengeBrand.js'
 import * as z from '../../zod.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
@@ -176,6 +176,8 @@ function resolveAuthorization(
       version: resolved.transfer.version,
     }
   if (parameters.authorization) return parameters.authorization
+  const known = Assets.lookup(acceptedCurrency, network)?.transfer
+  if (known?.type === Types.eip3009) return { name: known.name, version: known.version }
   throw new Error('EVM authorization requires token name and version.')
 }
 
@@ -191,5 +193,7 @@ function decimalsOfAcceptedCurrency(
   )
   const resolved = currency ? Assets.resolve(currency, network) : undefined
   if (resolved?.decimals !== undefined) return resolved.decimals
-  return parameters.decimals
+  if (parameters.decimals !== undefined) return parameters.decimals
+  // Never `methodDetails.decimals`: a server could inflate decimals to raise the cap.
+  return Assets.lookup(acceptedCurrency, network)?.decimals
 }

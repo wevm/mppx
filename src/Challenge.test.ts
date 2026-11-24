@@ -1,5 +1,6 @@
-import { Challenge, Constants } from 'mppx'
+import { Challenge, Constants, Credential, PaymentRequest } from 'mppx'
 import { Methods } from 'mppx/tempo'
+import { Base64, Bytes, Hash } from 'ox'
 import { describe, expect, test } from 'vp/test'
 
 describe('from', () => {
@@ -100,6 +101,58 @@ describe('from', () => {
     expect(Challenge.serialize(challenge)).not.toContain('header=')
     expect(Challenge.credentialHeader(challenge)).toBe(Constants.Headers.authorization)
   })
+
+  test.each(['authorization', 'AUTHORIZATION'])(
+    'behavior: treats %s as the default credential header',
+    (header) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        header,
+      })
+
+      expect(challenge.header).toBeUndefined()
+      expect(Challenge.serialize(challenge)).not.toContain('header=')
+    },
+  )
+
+  test('behavior: canonicalizes the Payment-Authorization credential header', () => {
+    const parameters = {
+      secretKey: 'test-secret-key-test-secret-key-32',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+    }
+    const challenge = Challenge.from({ ...parameters, header: 'payment-authorization' })
+    const canonical = Challenge.from({
+      ...parameters,
+      header: Constants.Headers.paymentAuthorization,
+    })
+
+    expect(challenge.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(challenge.id).toBe(canonical.id)
+    expect(Challenge.serialize(challenge)).toContain('header="Payment-Authorization"')
+  })
+
+  test.each(['X-Payment', 'Payment-Credential', ''])(
+    'error: rejects the credential header "%s"',
+    (header) => {
+      expect(() =>
+        Challenge.from({
+          id: 'abc123',
+          realm: 'api.example.com',
+          method: 'tempo',
+          intent: 'charge',
+          request: { amount: '1000000' },
+          header,
+        }),
+      ).toThrow('Unsupported credential header')
+    },
+  )
 
   test('error: rejects empty id', () => {
     expect(() =>
@@ -501,20 +554,6 @@ describe('serialize', () => {
     expect(header).toContain('request="')
   })
 
-  test.each(['Tempo', 'x402', 'my-method', ''])(
-    'error: rejects method %j outside the a-z grammar',
-    (method) => {
-      const challenge = Challenge.from({
-        id: 'abc123',
-        realm: 'api.example.com',
-        method,
-        intent: 'charge',
-        request: { amount: '1000000' },
-      })
-      expect(() => Challenge.serialize(challenge)).toThrow(`Invalid method: "${method}"`)
-    },
-  )
-
   test('behavior: includes optional fields', () => {
     const challenge = Challenge.from({
       id: 'abc123',
@@ -558,14 +597,9 @@ describe('serialize', () => {
       label: 'trailing backslash',
     },
     {
-      description: '1 \u00d7 Classmatic \u2014 General Admission',
-      escaped: '1 \u00d7 Classmatic \\u2014 General Admission',
-      label: 'characters above Latin-1 (em dash)',
-    },
-    {
-      description: 'Tickets \ud83c\udf9f\ufe0f "VIP"',
-      escaped: 'Tickets \\ud83c\\udf9f\\ufe0f \\"VIP\\"',
-      label: 'surrogate pairs and quotes',
+      description: 'caf\u00e9 na\u00efve',
+      escaped: 'caf\u00e9 na\u00efve',
+      label: 'raw Latin-1',
     },
   ])('behavior: escapes quoted-string values: $label', ({ description, escaped }) => {
     const challenge = Challenge.from({
@@ -581,6 +615,70 @@ describe('serialize', () => {
     expect(header).toContain(`description="${escaped}"`)
     expect(Challenge.deserialize(header).description).toBe(description)
   })
+
+  test.each([
+    {
+      description: '1 \u00d7 Classmatic \u2014 General Admission',
+      escaped: '1 \u00d7 Classmatic \\u2014 General Admission',
+      parsed: '1 \u00d7 Classmatic u2014 General Admission',
+      label: 'characters above Latin-1 (em dash)',
+    },
+    {
+      description: 'Tickets \ud83c\udf9f\ufe0f "VIP"',
+      escaped: 'Tickets \\ud83c\\udf9f\\ufe0f \\"VIP\\"',
+      parsed: 'Tickets ud83cudf9fufe0f "VIP"',
+      label: 'surrogate pairs and quotes',
+    },
+  ])(
+    'behavior: escapes description characters above Latin-1 as display-only text: $label',
+    ({ description, escaped, parsed }) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        description,
+      })
+
+      const header = Challenge.serialize(challenge)
+      expect(header).toContain(`description="${escaped}"`)
+      // quoted-pair keeps the escaped character, not a decoded code point.
+      expect(Challenge.deserialize(header).description).toBe(parsed)
+    },
+  )
+
+  test.each(['realm', 'intent', 'id'] as const)(
+    'error: rejects characters above Latin-1 in %s',
+    (field) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        [field]: 'merchant\u2014api',
+      })
+
+      expect(() => Challenge.serialize(challenge)).toThrow(
+        `Invalid ${field}: characters above U+00FF cannot be sent in a header.`,
+      )
+    },
+  )
+
+  test.each(['Tempo', 'tempo2', 'x402', 'a1:b_2-c', 'my-method', ''])(
+    'error: rejects method %j outside the a-z grammar',
+    (method) => {
+      const challenge = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method,
+        intent: 'charge',
+        request: { amount: '1000000' },
+      })
+      expect(() => Challenge.serialize(challenge)).toThrow(`Invalid method: "${method}"`)
+    },
+  )
 
   test('behavior: serialized challenges are valid HTTP header values', () => {
     const description = '1 \u00d7 Classmatic \u2014 General Admission \ud83c\udf9f\ufe0f'
@@ -598,7 +696,6 @@ describe('serialize', () => {
     // construction throw in fetch-compliant runtimes.
     expect([...header].every((char) => char.charCodeAt(0) <= 0xff)).toBe(true)
     expect(() => new Headers({ 'WWW-Authenticate': header })).not.toThrow()
-    expect(Challenge.deserialize(header).description).toBe(description)
   })
 
   test('error: rejects CRLF in quoted-string values', () => {
@@ -613,6 +710,37 @@ describe('serialize', () => {
 
     expect(() => Challenge.serialize(challenge)).toThrow('Invalid quoted-string value.')
   })
+})
+
+describe('serialize: credential header', () => {
+  const challenge = {
+    id: 'abc123',
+    realm: 'api.example.com',
+    method: 'tempo',
+    intent: 'charge',
+    request: { amount: '1000000' },
+  }
+
+  test.each([
+    { header: undefined, expected: undefined },
+    { header: 'Authorization', expected: undefined },
+    { header: 'authorization', expected: undefined },
+    { header: 'Payment-Authorization', expected: 'Payment-Authorization' },
+    { header: 'payment-authorization', expected: 'payment-authorization' },
+  ])('behavior: serializes header $header as $expected', ({ header, expected }) => {
+    const serialized = Challenge.serialize({ ...challenge, header })
+    if (expected === undefined) expect(serialized).not.toContain('header=')
+    else expect(serialized).toContain(`header="${expected}"`)
+  })
+
+  test.each(['X-Payment', ''])(
+    'error: refuses to serialize the credential header "%s"',
+    (header) => {
+      expect(() => Challenge.serialize({ ...challenge, header })).toThrow(
+        'Unsupported credential header',
+      )
+    },
+  )
 })
 
 describe('deserialize', () => {
@@ -642,6 +770,44 @@ describe('deserialize', () => {
       }
     `)
   })
+
+  test('behavior: reads \\uXXXX in a quoted-string as quoted-pair, not a unicode escape', () => {
+    const challenge = Challenge.deserialize(
+      'Payment id="a", realm="merchant\\u2014api.example.com", method="tempo", intent="charge", request="e30", description="literal \\\\u2014"',
+    )
+    expect(challenge.realm).toBe('merchantu2014api.example.com')
+    expect(challenge.description).toBe('literal \\u2014')
+  })
+
+  test.each([
+    { name: 'realm \\u00e9', params: 'realm="caf\\u00e9.example.com"', legacy: true },
+    { name: 'realm \\u2014', params: 'realm="merchant\\u2014api"', legacy: true },
+    { name: 'uppercase hex', params: 'realm="caf\\u00E9", opaque="x"', legacy: true },
+    { name: 'other bound param', params: 'realm="a", digest="sha-256=\\u00e9"', legacy: true },
+    { name: 'escaped quote', params: 'realm="say \\"hi\\""', legacy: false },
+    { name: 'escaped backslash', params: 'realm="a\\\\u00e9"', legacy: false },
+    { name: 'not four hex digits', params: 'realm="\\u00g9"', legacy: false },
+    { name: 'description only', params: 'realm="a", description="caf\\u00e9"', legacy: false },
+    { name: 'unknown param', params: 'realm="a", foo="caf\u00e9"', legacy: false },
+  ])(
+    'behavior: flags a legacy \\uXXXX escape in a bound parameter ($name)',
+    ({ params, legacy }) => {
+      const challenge = Challenge.deserialize(
+        `Payment id="a", ${params}, method="tempo", intent="charge", request="e30"`,
+      )
+      expect(Challenge.isLegacyUnicodeEscaped(challenge)).toBe(legacy)
+      // The flag stays out of the JSON and wire forms.
+      expect(JSON.stringify(challenge)).not.toContain('legacy')
+      expect(Challenge.isLegacyUnicodeEscaped({ ...challenge })).toBe(legacy)
+      // Re-serializing would drop the escape that marks it.
+      if (legacy) expect(() => Challenge.serialize(challenge)).toThrow('Legacy unicode-escaped')
+      else expect(() => Challenge.serialize(challenge)).not.toThrow()
+      if (legacy)
+        expect(() => Challenge.assertNotLegacyUnicodeEscaped(challenge)).toThrow(
+          'Legacy unicode-escaped challenge: the server escaped a bound parameter as \\uXXXX; upgrade the server.',
+        )
+    },
+  )
 
   test.each([
     {
@@ -772,13 +938,13 @@ describe('deserialize', () => {
     },
     {
       name: 'method with digits',
-      header: 'Payment id="a", realm="api", method="x402", intent="charge", request="e30"',
-      error: 'Invalid method: "x402". Must be lowercase letters a-z per spec.',
+      header: 'Payment id="a", realm="api", method="tempo2", intent="charge", request="e30"',
+      error: 'Invalid method: "tempo2". Must be lowercase letters a-z per spec.',
     },
     {
       name: 'method with punctuation',
-      header: 'Payment id="a", realm="api", method="my-method", intent="charge", request="e30"',
-      error: 'Invalid method: "my-method". Must be lowercase letters a-z per spec.',
+      header: 'Payment id="a", realm="api", method="a1:b_2-c", intent="charge", request="e30"',
+      error: 'Invalid method: "a1:b_2-c". Must be lowercase letters a-z per spec.',
     },
     {
       name: 'malformed auth-param',
@@ -793,6 +959,52 @@ describe('deserialize', () => {
     },
   ])('error: throws for $name', ({ header, error }) => {
     expect(() => Challenge.deserialize(header)).toThrow(error)
+  })
+
+  test.each([
+    {
+      name: 'params without commas',
+      header: 'Payment method="tempo" realm="api" intent="charge" request="e30" id="a"',
+    },
+    {
+      name: 'text after a closing quote',
+      header:
+        'Payment id="a", method="tempo", intent="charge", request="e30", realm="p"ay.example.com:8443"',
+    },
+    {
+      name: 'unquoted value followed by another param without a comma',
+      header: 'Payment id="a", method=tempo realm="api", intent="charge", request="e30"',
+    },
+    {
+      name: 'unquoted value with a non-token character',
+      header: 'Payment id="a", realm=api/v1, method="tempo", intent="charge", request="e30"',
+    },
+    {
+      name: 'empty unquoted value',
+      header: 'Payment id="a", realm=, method="tempo", intent="charge", request="e30"',
+    },
+  ])('error: rejects malformed auth-param list ($name)', ({ header }) => {
+    expect(() => Challenge.deserialize(header)).toThrow('Malformed auth-param.')
+  })
+
+  test('behavior: parses token values and OWS around commas', () => {
+    const challenge = Challenge.deserialize(
+      'Payment id=a ,realm=api.example.com ,  method=tempo,intent=charge , request=e30 ',
+    )
+    expect(challenge).toMatchObject({
+      id: 'a',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'api.example.com',
+    })
+  })
+
+  test.each([
+    'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", Basic realm="x"',
+    'Basic realm="x", Payment id="a", realm="api", method="tempo", intent="charge", request="e30"',
+    'Payment id=a, realm=api, method=tempo, intent=charge, request=e30, Bearer token68==',
+  ])('behavior: parses Payment beside other schemes (%s)', (header) => {
+    expect(Challenge.deserialize(header)).toMatchObject({ id: 'a', realm: 'api' })
   })
 
   test('error: missing required fields', () => {
@@ -813,6 +1025,104 @@ describe('deserialize', () => {
 
     expect(() => Challenge.deserialize(header)).toThrow('Request parameter too large.')
   })
+
+  test.each([
+    { header: undefined, expected: Constants.Headers.authorization },
+    { header: 'Payment-Authorization', expected: Constants.Headers.paymentAuthorization },
+    { header: 'payment-authorization', expected: Constants.Headers.paymentAuthorization },
+    { header: 'Authorization', expected: undefined },
+    { header: '', expected: undefined },
+    { header: 'X-Payment', expected: undefined },
+  ])(
+    'behavior: credential header $header selects $expected (undefined: rejected)',
+    ({ header, expected }) => {
+      const value = header === undefined ? paymentHeader : `${paymentHeader}, header="${header}"`
+
+      if (expected === undefined) {
+        expect(() => Challenge.deserialize(value)).toThrow(
+          'Unsupported credential header: challenges may only select Payment-Authorization.',
+        )
+        return
+      }
+      const challenge = Challenge.deserialize(value)
+      expect(Challenge.credentialHeader(challenge)).toBe(expected)
+      // The received spelling is kept so the credential echoes it unchanged.
+      expect(challenge.header).toBe(header)
+    },
+  )
+})
+
+describe('credential header binding', () => {
+  const secretKey = 'test-secret-key-test-secret-key-32'
+  const realm = 'api.example.com'
+  const request = { amount: '1000000' }
+
+  // A server that bound the lowercase spelling, as earlier releases did for `header` as configured.
+  function lowercaseBoundChallenge(): Challenge.Challenge {
+    const header = 'payment-authorization'
+    const input = [realm, 'tempo', 'charge', PaymentRequest.serialize(request), '', '', header, '']
+    const mac = Hash.hmac256(Bytes.fromString(secretKey), Bytes.fromString(input.join('|')), {
+      as: 'Bytes',
+    })
+    const id = Base64.fromBytes(mac, { url: true, pad: false })
+    return { id, realm, method: 'tempo', intent: 'charge', request, header }
+  }
+
+  test('behavior: a lowercase-bound challenge verifies after a client round trip', () => {
+    const issued = lowercaseBoundChallenge()
+    expect(Challenge.verify(issued, { secretKey })).toBe(true)
+
+    const wire = Challenge.serialize(issued)
+    expect(wire).toContain('header="payment-authorization"')
+
+    const received = Challenge.deserialize(wire)
+    expect(received.header).toBe('payment-authorization')
+    expect(Challenge.credentialHeader(received)).toBe(Constants.Headers.paymentAuthorization)
+
+    const credential = Credential.deserialize(
+      Credential.serialize({ challenge: received, payload: { signature: '0x' } }),
+    )
+    expect(credential.challenge.header).toBe('payment-authorization')
+    expect(Challenge.verify(credential.challenge, { secretKey })).toBe(true)
+    // Rewriting the echoed spelling breaks the binding.
+    expect(
+      Challenge.verify(
+        { ...credential.challenge, header: Constants.Headers.paymentAuthorization },
+        { secretKey },
+      ),
+    ).toBe(false)
+  })
+
+  test('behavior: locally constructed challenges bind and emit the canonical spelling', () => {
+    const issued = Challenge.from({
+      secretKey,
+      realm,
+      method: 'tempo',
+      intent: 'charge',
+      request,
+      header: 'payment-authorization',
+    })
+    expect(issued.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(issued.id).not.toBe(lowercaseBoundChallenge().id)
+
+    const received = Challenge.deserialize(Challenge.serialize(issued))
+    expect(received.header).toBe(Constants.Headers.paymentAuthorization)
+    expect(Challenge.verify(received, { secretKey })).toBe(true)
+  })
+
+  test.each(['X-Payment', 'Payment-Credential', ''])(
+    'behavior: verify returns false for the credential header "%s"',
+    (header) => {
+      const issued = Challenge.from({
+        secretKey,
+        realm,
+        method: 'tempo',
+        intent: 'charge',
+        request,
+      })
+      expect(Challenge.verify({ ...issued, header }, { secretKey })).toBe(false)
+    },
+  )
 })
 
 describe('deserializeList', () => {
@@ -829,6 +1139,17 @@ describe('deserializeList', () => {
     method: 'tempo',
     intent: 'charge',
     request: { amount: '1000000', currency: 'USD' },
+  })
+
+  test('behavior: skips an offer whose method id is outside a-z', () => {
+    const invalid = secondHeader
+      .replace('method="tempo"', 'method="tempo2"')
+      .replace('id="second"', 'id="invalid"')
+
+    const challenges = Challenge.deserializeList(`${invalid}, ${secondHeader}`)
+
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]).toMatchObject({ id: 'second', method: 'tempo' })
   })
 
   test('behavior: parses the reported Stripe and Tempo header with payment in description', () => {
@@ -877,6 +1198,32 @@ describe('deserializeList', () => {
     const header = 'Bearer error_description="use Payment challenge"'
 
     expect(() => Challenge.deserializeList(header)).toThrow('No Payment schemes found.')
+  })
+
+  test.each(['Authorization', 'X-Payment', ''])(
+    'behavior: skips a challenge with the credential header "%s"',
+    (header) => {
+      const unsupported = `${Challenge.serialize(baseChallenge)}, header="${header}"`
+
+      expect(
+        Challenge.deserializeList(`${unsupported}, ${secondHeader}`).map(({ id }) => id),
+      ).toEqual(['second'])
+      expect(Challenge.deserializeList(unsupported)).toEqual([])
+    },
+  )
+
+  test('behavior: counts challenges skipped for their credential header', () => {
+    const unsupported = `${Challenge.serialize(baseChallenge)}, header="X-Payment"`
+    const supported = `${secondHeader}, header="Payment-Authorization"`
+
+    expect(Challenge.countUnsupportedCredentialHeaders(`${unsupported}, ${supported}`)).toBe(1)
+    expect(Challenge.countUnsupportedCredentialHeaders(`${unsupported}, ${unsupported}`)).toBe(2)
+    expect(Challenge.countUnsupportedCredentialHeaders(supported)).toBe(0)
+    expect(Challenge.countUnsupportedCredentialHeaders(null)).toBe(0)
+    expect(Challenge.withSkippedChallenges('No method found', 0)).toBe('No method found')
+    expect(Challenge.withSkippedChallenges('No method found', 2)).toBe(
+      'No method found. Skipped 2 challenges that select a credential header other than Payment-Authorization',
+    )
   })
 })
 

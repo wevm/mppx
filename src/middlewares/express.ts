@@ -7,6 +7,7 @@ import type {
 } from 'express'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Host from '../server/internal/host.js'
 import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as ExpressAdapter from './internal/express.js'
@@ -33,10 +34,18 @@ export namespace Mppx {
    * ```
    */
   export function create<const methods extends Mppx_core.Methods>(
-    config: Mppx_core.create.Config<methods>,
+    config: Mppx_core.create.Config<methods> & AdapterOptions,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, RequestHandler> {
-    return Mppx_internal.wrap(Mppx_core.create(config), payment)
+    return Mppx_internal.wrap(Mppx_core.create(config), (method, options) =>
+      payment(method, options, config),
+    )
   }
+}
+
+/** Optional ingress validation shared by Express payment handlers. */
+export type AdapterOptions = {
+  /** Exact incoming hosts, including ports. Treat the list as immutable; replace the array to change it. Required for signed identity requests unless a fixed Node host is configured; an empty list rejects all hosts. Configure trusted ingress to enforce the same list. */
+  allowedHosts?: readonly string[] | undefined
 }
 
 /**
@@ -62,9 +71,25 @@ export namespace Mppx {
 export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
+  adapterOptions: AdapterOptions = {},
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const rawRequest = ExpressAdapter.toRequest(req)
+    const protocol = req.protocol.toLowerCase()
+    if (
+      !Host.isAllowed(req, adapterOptions.allowedHosts, req.get('host')) ||
+      (adapterOptions.allowedHosts !== undefined && protocol !== 'http' && protocol !== 'https')
+    ) {
+      res.status(421).send('Misdirected Request')
+      return
+    }
+    let rawRequest: Request
+    try {
+      rawRequest = ExpressAdapter.toRequest(req, protocol)
+    } catch (error) {
+      if (!(error instanceof ExpressAdapter.InvalidRequestTargetError)) throw error
+      res.status(400).send('Bad Request')
+      return
+    }
     const routePath = typeof req.route?.path === 'string' ? req.route.path : req.path
     const request =
       options.scope === undefined && Scope.read(options.meta) === undefined
@@ -98,28 +123,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
-    const originalJson = res.json
-    res.json = (body: any) => {
-      const originalSend = res.send
-      // Let Express serialize with the application's replacer, spacing, and
-      // escaping settings, but defer sending until the payment transport wraps it.
-      res.send = (serialized: any) => {
-        const response = new Response(
-          [204, 205, 304].includes(res.statusCode) ? null : serialized,
-          { status: res.statusCode, headers: { 'Content-Type': res.get('Content-Type')! } },
-        )
-        void Promise.resolve()
-          .then(() => result.withReceipt(response))
-          .then((wrapped: Response) => ExpressAdapter.sendResponse(res, wrapped))
-          .catch(next)
-        return res
-      }
-      try {
-        return originalJson.call(res, body)
-      } finally {
-        res.send = originalSend
-      }
-    }
+    ExpressAdapter.wrapResponse(res, (response) => result.withReceipt(response), next)
 
     next()
   }

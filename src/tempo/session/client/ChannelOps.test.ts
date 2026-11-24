@@ -1,9 +1,21 @@
-import { Hex } from 'ox'
-import { type Address, createClient, custom, zeroAddress } from 'viem'
+import { Challenge, Credential } from 'mppx'
+import { Hex, Secp256k1 } from 'ox'
+import { AccountConfig } from 'ox/tempo'
+import {
+  type Address,
+  createClient,
+  custom,
+  encodeErrorResult,
+  encodeFunctionResult,
+  zeroAddress,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Abis, Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
+import * as Errors from '../../../Errors.js'
 import * as Channel from '../precompile/Channel.js'
+import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
@@ -46,6 +58,30 @@ const descriptor = {
 const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
+  test('names the funding payer when a delegated signer serializes a voucher', () => {
+    const payer = '0x0000000000000000000000000000000000000099'
+    const challenge = Challenge.from({
+      id: 'payer',
+      intent: 'session',
+      method: 'tempo',
+      realm: 'api.example.com',
+      request: {},
+    })
+    const credential = ChannelOps.serializeCredential(
+      challenge,
+      {
+        action: 'voucher',
+        channelId,
+        cumulativeAmount: '1',
+        descriptor: { ...descriptor, payer },
+        signature: '0x1234',
+      },
+      chainId,
+      account,
+    )
+    expect(Credential.deserialize(credential).source).toBe(`did:pkh:eip155:42431:${payer}`)
+  })
+
   test('requires custom challenge escrows to be allowed or explicitly pinned', () => {
     const override = '0x0000000000000000000000000000000000000005' as Address
     const hinted = '0x0000000000000000000000000000000000000006' as Address
@@ -234,5 +270,210 @@ describe('precompile client ChannelOps credential builders', () => {
       }),
     )
     expect(mocks.prepareTransactionRequest.mock.calls[0]?.[1]).not.toHaveProperty('feePayer')
+  })
+
+  test('distinguishes otherwise-identical opens that share a salt', async () => {
+    mocks.prepareTransactionRequest.mockClear()
+    let randomValue = 1
+    const random = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array) => {
+      if (!array) return array
+      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(randomValue++)
+      return array
+    })
+    const parameters = {
+      chainId,
+      deposit: 100n,
+      initialAmount: 1n,
+      payee: descriptor.payee,
+      salt: descriptor.salt,
+      token: descriptor.token,
+    }
+    try {
+      for (let i = 0; i < 2; i++) {
+        mocks.signTransaction.mockRejectedValueOnce(new Error('stop after prepare'))
+        await expect(ChannelOps.createOpenPayload(client, account, parameters)).rejects.toThrow(
+          'stop after prepare',
+        )
+      }
+    } finally {
+      random.mockRestore()
+    }
+
+    const validAfter = mocks.prepareTransactionRequest.mock.calls.map(([, request]) =>
+      Number((request as { validAfter?: number }).validAfter),
+    )
+    const now = Math.floor(Date.now() / 1_000)
+    expect(validAfter).toHaveLength(2)
+    expect(new Set(validAfter).size).toBe(2)
+    expect(validAfter.every((value) => value >= 0 && value < now)).toBe(true)
+  })
+})
+
+describe('TIP-1166 configurable account signers', () => {
+  const ownerA = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const ownerB = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const configurable = TempoAccount.fromConfig({ owners: [ownerA, ownerB], threshold: 2 })
+  const localCommitment = AccountConfig.getCommitment(configurable.config!)
+
+  function commitmentClient(commitment: Hex.Hex, calls: string[] = []) {
+    return createClient({
+      account: configurable,
+      chain: { id: chainId } as never,
+      transport: custom({
+        async request(args) {
+          calls.push(args.method)
+          if (args.method === 'eth_call')
+            return encodeFunctionResult({
+              abi: Abis.configurableAccount,
+              functionName: 'getConfigCommitment',
+              result: commitment,
+            })
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
+      }),
+    })
+  }
+
+  test('signs vouchers only for a channel whose signer rules accept its config', () => {
+    const rotated = TempoAccount.fromConfig({
+      address: configurable.address,
+      owners: [ownerA],
+      salt: configurable.config!.salt,
+      threshold: 1,
+      version: 1,
+    })
+    const descriptor = (salt: Hex.Hex) =>
+      ({
+        payer: configurable.address,
+        payee: account.address,
+        operator: zeroAddress,
+        token: account.address,
+        salt,
+        authorizedSigner: configurable.address,
+        expiringNonceHash: `0x${'00'.repeat(32)}`,
+      }) as Channel.ChannelDescriptor
+    const randomSalt = Hex.random(32)
+    // A zero-commitment channel (random salt) settles the version-zero config that derives the signer.
+    expect(() =>
+      ChannelOps.assertCanSignVoucher(configurable, descriptor(randomSalt)),
+    ).not.toThrow()
+    // A config the channel recorded as its opening commitment (the salt) settles.
+    const rotatedCommitment = AccountConfig.getCommitment(rotated.config!)
+    expect(() =>
+      ChannelOps.assertCanSignVoucher(rotated, descriptor(rotatedCommitment)),
+    ).not.toThrow()
+    // A rotated config on a zero-commitment channel would not settle.
+    expect(() => ChannelOps.assertCanSignVoucher(rotated, descriptor(randomSalt))).toThrow(
+      /cannot sign a voucher the channel settles/,
+    )
+    // Primitive accounts keep signing primitive vouchers.
+    expect(() => ChannelOps.assertCanSignVoucher(account, descriptor(randomSalt))).not.toThrow()
+  })
+
+  test('detects configurable account signers', () => {
+    expect(ChannelOps.isConfigurableSigner(configurable)).toBe(true)
+    expect(ChannelOps.isConfigurableSigner(account)).toBe(false)
+    const accessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+      access: configurable,
+    })
+    expect(ChannelOps.isConfigurableSigner(accessKey)).toBe(false)
+  })
+
+  test('treats a configurable access key as a configurable signer', () => {
+    // A configurable account access key (TIP-1111) signs vouchers raw as the configurable account.
+    const configurableKey = TempoAccount.fromConfig(
+      { owners: [ownerA, ownerB], threshold: 2 },
+      { access: account },
+    )
+    expect(ChannelOps.isConfigurableSigner(configurableKey)).toBe(true)
+    const rotatedKey = TempoAccount.fromConfig(
+      {
+        address: configurable.address,
+        owners: [ownerA],
+        salt: configurable.config!.salt,
+        threshold: 1,
+        version: 1,
+      },
+      { access: account },
+    )
+    const descriptor = {
+      payer: account.address,
+      payee: account.address,
+      operator: zeroAddress,
+      token: account.address,
+      salt: Hex.random(32),
+      authorizedSigner: configurable.address,
+      expiringNonceHash: `0x${'00'.repeat(32)}`,
+    } as Channel.ChannelDescriptor
+    // Its rotated config would not settle on a zero-commitment channel.
+    expect(() => ChannelOps.assertCanSignVoucher(rotatedKey, descriptor)).toThrow(
+      /cannot sign a voucher the channel settles/,
+    )
+  })
+
+  test('keeps a random salt for other accounts without an RPC call', async () => {
+    const salt = await ChannelOps.resolveOpenSalt(client, account)
+    expect(salt).toMatch(/^0x[0-9a-f]{64}$/)
+    expect(await ChannelOps.resolveOpenSalt(client, account)).not.toBe(salt)
+  })
+
+  test("opens with a registered configurable account's commitment", async () => {
+    const calls: string[] = []
+    expect(
+      await ChannelOps.resolveOpenSalt(commitmentClient(localCommitment, calls), configurable),
+    ).toBe(localCommitment)
+    expect(calls).toEqual(['eth_call'])
+  })
+
+  test("opens an unregistered configurable account with its version-zero config's commitment", async () => {
+    expect(
+      await ChannelOps.resolveOpenSalt(commitmentClient(`0x${'00'.repeat(32)}`), configurable),
+    ).toBe(localCommitment)
+  })
+
+  test('rejects a configurable account whose config is stale', async () => {
+    await expect(
+      ChannelOps.resolveOpenSalt(commitmentClient(`0x${'77'.repeat(32)}`), configurable),
+    ).rejects.toThrow('does not match its on-chain commitment')
+  })
+
+  test.each([
+    { errorName: 'SignerConfigChanged' as const },
+    { errorName: 'RootKeyRetired' as const },
+  ])('maps a $errorName top-up revert to SignerConfigChangedError', async ({ errorName }) => {
+    const data = encodeErrorResult({ abi: escrowAbi, errorName, args: [account.address] })
+    mocks.prepareTransactionRequest.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('execution reverted'), { data })
+    })
+    const error = await ChannelOps.createTopUpPayload(
+      client,
+      account,
+      descriptor,
+      10n,
+      chainId,
+      false,
+    ).catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(Errors.SignerConfigChangedError)
+    expect(error).toMatchObject({ channelId, reason: errorName, signer: account.address })
+  })
+
+  test('leaves other top-up reverts unmapped', async () => {
+    const data = encodeErrorResult({
+      abi: escrowAbi,
+      errorName: 'SignerConfigChanged',
+      args: [descriptor.payee],
+    })
+    mocks.prepareTransactionRequest.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('execution reverted'), { data })
+    })
+    const error = await ChannelOps.createTopUpPayload(
+      client,
+      account,
+      descriptor,
+      10n,
+      chainId,
+      false,
+    ).catch((error: unknown) => error)
+    expect(error).not.toBeInstanceOf(Errors.SignerConfigChangedError)
   })
 })

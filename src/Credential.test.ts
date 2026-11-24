@@ -244,6 +244,57 @@ describe('deserialize', () => {
     expect(credential.challenge.request).toEqual({ amount: '1000' })
   })
 
+  test.each([
+    { name: 'array payload', fields: { payload: [] } },
+    { name: 'number payload', fields: { payload: 0 } },
+    { name: 'string payload', fields: { payload: 'x' } },
+    { name: 'null payload', fields: { payload: null } },
+    { name: 'missing payload', fields: {} },
+    { name: 'array source', fields: { payload: {}, source: [0] } },
+    { name: 'object source', fields: { payload: {}, source: {} } },
+    { name: 'number source', fields: { payload: {}, source: 1 } },
+  ])('error: rejects $name', ({ fields }) => {
+    const encoded = Base64.fromString(
+      JSON.stringify({
+        challenge: {
+          id: 'abc',
+          intent: 'charge',
+          method: 'tempo',
+          realm: 'api.example.com',
+          request: 'eyJhbW91bnQiOiIxMDAwIn0',
+        },
+        ...fields,
+      }),
+      { pad: false, url: true },
+    )
+
+    expect(() => Credential.deserialize(`Payment ${encoded}`)).toThrow(
+      Credential.InvalidCredentialEncodingError,
+    )
+  })
+
+  test('behavior: accepts an empty payload object and a string source', () => {
+    const encoded = Base64.fromString(
+      JSON.stringify({
+        challenge: {
+          id: 'abc',
+          intent: 'charge',
+          method: 'tempo',
+          realm: 'api.example.com',
+          request: 'eyJhbW91bnQiOiIxMDAwIn0',
+        },
+        payload: {},
+        source: 'did:pkh:eip155:4217:0x0000000000000000000000000000000000000001',
+      }),
+      { pad: false, url: true },
+    )
+
+    const credential = Credential.deserialize(`Payment ${encoded}`)
+
+    expect(credential.payload).toEqual({})
+    expect(credential.source).toBe('did:pkh:eip155:4217:0x0000000000000000000000000000000000000001')
+  })
+
   test('behavior: preserves legacy object-shaped opaque credentials', () => {
     const encoded = Base64.fromString(
       JSON.stringify({

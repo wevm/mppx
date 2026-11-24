@@ -77,6 +77,10 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
       payload: payload
       source?: string
     }
+    // The payload is a required JSON object and the source an optional string.
+    if (!isObject(parsed.payload)) throw new Error('Invalid payload.')
+    if (parsed.source !== undefined && typeof parsed.source !== 'string')
+      throw new Error('Invalid source.')
     const { opaque: challengeOpaque, request, meta: _meta, ...challengeFields } = parsed.challenge
     const { meta, opaque } = normalizeCredentialOpaque(challengeOpaque)
     const challenge = Challenge.Schema.parse({
@@ -112,8 +116,12 @@ function normalizeCredentialOpaque(value: unknown): {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function isStringRecord(value: unknown): value is Record<string, string> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  if (!isObject(value)) return false
   return Object.values(value).every((entry) => typeof entry === 'string')
 }
 

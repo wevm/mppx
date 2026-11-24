@@ -11,7 +11,7 @@ trustPolicy: no-downgrade
 
 catalog:
   file-type: '22.1.1'
-  ox: '0.14.45'
+  ox: '0.14.65'
   typescript: '~7.0.2'
 
 overrides:
@@ -25,7 +25,7 @@ overrides:
   vitest@<4.1.11: '4.1.11'
   typescript: 'catalog:'
   ox: 'catalog:'
-  viem: '2.57.1'
+  viem: '2.57.19'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.20: '7.5.21'
   postcss@<=8.5.22: '8.5.23'
@@ -45,8 +45,8 @@ overrides:
   flatted@<=3.4.1: '>=3.4.2'
   follow-redirects@<1.16.2: '1.16.2'
   fast-uri@<3.1.9: '3.1.9'
-  hono@<4.13.11: '4.13.11'
-  '@hono/node-server@<2.1.5': '2.1.5'
+  hono@<4.13.16: '4.13.16'
+  '@hono/node-server@<2.1.6': '2.1.6'
   undici@>=7.0.0 <7.30.1: '7.30.1'
   undici@>=8.0.0 <8.12.2: '8.12.2'
   socket.io-parser@>=4.0.0 <4.2.7: '4.2.7'
@@ -101,7 +101,7 @@ minimumReleaseAgeExclude:
   - ip-address@10.7.1
   - js-yaml@4.3.1
   - nanoid@3.3.18
-  - ox@0.14.45
+  - ox@0.14.65
   - postcss@8.5.23
   - protobufjs@7.6.5
   - qs@6.16.1
@@ -109,7 +109,7 @@ minimumReleaseAgeExclude:
   - tmp@0.2.7
   - socket.io-parser@4.2.7
   - undici@8.10.2
-  - viem@2.57.1
+  - viem@2.57.19
   - vite@8.0.16
   - ws@8.21.0
 
@@ -117,3 +117,5 @@ auditConfig:
   ignoreGhsas:
     # zod 3 has no patched release; only @x402/core (zod ^3, an optional peer) pulls it in.
     - GHSA-mrhx-c7xc-m3w5
+    # picomatch <=4.0.7 has no patched release; only dev tooling (@changesets/cli, vite, vitest) pulls it in.
+    - GHSA-fc5q-39xc-vjpf

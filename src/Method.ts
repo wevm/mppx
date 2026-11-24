@@ -1,10 +1,10 @@
-import type * as Challenge from './Challenge.js'
+import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Errors from './Errors.js'
-import * as Expires from './Expires.js'
+import * as CredentialExpiry from './internal/CredentialExpiry.js'
+import type * as Html from './internal/html/config.js'
 import type { DeepReadonly, ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
-import type * as Html from './server/internal/html/config.js'
 import type * as Transport from './server/Transport.js'
 import type * as z from './zod.js'
 
@@ -470,7 +470,7 @@ function prepareCredential(
       reason: `no registered method for ${credential.challenge.method}/${credential.challenge.intent}`,
     })
 
-  Expires.assert(credential.challenge.expires, credential.challenge.id)
+  CredentialExpiry.assertFor(method, credential)
 
   let payload: unknown
   try {
@@ -540,7 +540,11 @@ export function toClient<
     ...method,
     canHandleChallenge,
     context,
-    createCredential,
+    // Refuse a legacy `\uXXXX`-escaped challenge before the method signs or broadcasts anything.
+    async createCredential(this: unknown, parameters: Parameters<typeof createCredential>[0]) {
+      Challenge.assertNotLegacyUnicodeEscaped(parameters.challenge)
+      return createCredential.call(this, parameters)
+    },
   } as Client<method, context>
 }
 

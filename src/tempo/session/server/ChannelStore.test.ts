@@ -691,6 +691,88 @@ describe('ChannelStore voucher acceptance', () => {
 
 // ---------- channelStore ----------
 
+describe('ChannelStore TIP-1166 voucher options', () => {
+  const commitment = `0x${'33'.repeat(32)}` as Hex
+
+  test('keeps primitive-only verification by default', () => {
+    expect(ChannelStore.resolveVoucherOptions(voucherAcceptanceChannel(), undefined)).toEqual({})
+    expect(ChannelStore.resolveVoucherOptions(voucherAcceptanceChannel(), false)).toEqual({})
+  })
+
+  test('applies the stored opening commitment, and configurable vouchers when enabled', () => {
+    const channel = voucherAcceptanceChannel({ openingCommitment: commitment })
+    expect(ChannelStore.resolveVoucherOptions(channel, false)).toEqual({
+      openingCommitment: commitment,
+    })
+    expect(ChannelStore.resolveVoucherOptions(channel, true)).toEqual({
+      configurable: true,
+      openingCommitment: commitment,
+    })
+    expect(ChannelStore.resolveVoucherOptions(voucherAcceptanceChannel(), true)).toEqual({
+      configurable: true,
+    })
+  })
+
+  test('reads an opening commitment stored under the legacy signerSnapshot key', () => {
+    const channel = Object.assign(voucherAcceptanceChannel(), { signerSnapshot: commitment })
+    expect(ChannelStore.resolveOpeningCommitment(channel)).toBe(commitment)
+    expect(ChannelStore.resolveVoucherOptions(channel, true)).toEqual({
+      configurable: true,
+      openingCommitment: commitment,
+    })
+  })
+
+  test('passes the voucher options to voucher verification', async () => {
+    const verify = vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+    const channel = voucherAcceptanceChannel({
+      highestVoucherAmount: 50n,
+      openingCommitment: commitment,
+    })
+
+    await ChannelStore.verifyAndAcceptVoucher({
+      challenge: voucherAcceptanceChallenge,
+      channel,
+      channelState: { deposit: 100n, settled: 10n, closeRequestedAt: 0 },
+      configurableVouchers: true,
+      methodDetails: { chainId: 4217, escrowContract: voucherAcceptanceEscrow },
+      minVoucherDelta: 5n,
+      store: memoryChannelStore(channel),
+      voucher: voucherAcceptanceVoucher(70n),
+    })
+
+    expect(verify).toHaveBeenLastCalledWith(
+      voucherAcceptanceEscrow,
+      4217,
+      voucherAcceptanceVoucher(70n),
+      channel.authorizedSigner,
+      { configurable: true, openingCommitment: commitment },
+    )
+  })
+
+  test('opens precompile channels with an optional opening commitment', () => {
+    const base = {
+      authorizedSigner: precompileDescriptor.authorizedSigner,
+      chainId: 4217,
+      channelId,
+      cumulativeAmount: 0n,
+      current: null,
+      descriptor: precompileDescriptor,
+      escrow: voucherAcceptanceEscrow,
+      expiringNonceHash: precompileDescriptor.expiringNonceHash,
+      signature: `0x${'aa'.repeat(65)}` as Hex,
+      state: { closeRequestedAt: 0, deposit: 100n, settled: 0n },
+    } satisfies ChannelStore.OpenChannelStateParameters
+    const opened = ChannelStore.openChannelState(base)
+    expect('openingCommitment' in opened).toBe(false)
+    expect(ChannelStore.resolveVoucherOptions(opened, true)).toEqual({ configurable: true })
+    const committed = ChannelStore.openChannelState({ ...base, openingCommitment: commitment })
+    expect(ChannelStore.resolveVoucherOptions(committed, true)).toEqual({
+      configurable: true,
+      openingCommitment: commitment,
+    })
+  })
+})
+
 describe('channelStore', () => {
   describe('getChannel', () => {
     test('returns null for missing channel', async () => {

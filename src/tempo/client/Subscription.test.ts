@@ -1,7 +1,7 @@
 import { Challenge, Credential } from 'mppx'
 import { KeyAuthorization } from 'ox/tempo'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Methods from '../Methods.js'
 import {
@@ -60,6 +60,23 @@ function createChallenge(
 }
 
 describe('tempo.subscription client', () => {
+  test.each([undefined, { id: 42431 }])(
+    'rejects an untrusted resolved chain %j before signing',
+    async (chain) => {
+      const sign = vi.fn(selectedAccount.sign)
+      const request = vi.fn()
+      const method = subscription({
+        account: { ...selectedAccount, sign },
+        getClient: () => ({ chain, request }) as never,
+      })
+      await expect(
+        method.createCredential({ challenge: createChallenge(), context: {} }),
+      ).rejects.toThrow('Subscription chain mismatch')
+      expect(sign).not.toHaveBeenCalled()
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
   test('uses Tempo testnet as the default subscription chain', async () => {
     const challenge = createChallenge({ chainId: undefined })
     const method = subscription({
@@ -124,6 +141,7 @@ describe('tempo.subscription client', () => {
       account: selectedAccount.address,
       getClient: async () =>
         ({
+          chain: { id: chainId },
           request: async ({ params }: { params: readonly Record<string, unknown>[] }) => {
             capturedParams = params[0]
             return { keyAuthorization: KeyAuthorization.toRpc(keyAuthorization) }
@@ -171,6 +189,7 @@ describe('tempo.subscription client', () => {
       account: selectedAccount.address,
       getClient: async () =>
         ({
+          chain: { id: chainId },
           request: async () => ({
             keyAuthorization: KeyAuthorization.toRpc(keyAuthorization),
           }),

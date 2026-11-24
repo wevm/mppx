@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import * as Challenge from '../../Challenge.js'
+import * as PendingSettlement from '../../client/internal/PendingSettlement.js'
 import * as ProofRealm from '../../client/internal/ProofRealm.js'
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
 import * as Credential from '../../Credential.js'
@@ -151,11 +152,6 @@ export declare namespace wrap {
   }
 }
 
-/** Minimal wire shape of payment-required data; challenges are validated, extra fields pass through. */
-const PaymentRequiredSchema = z.object({
-  challenges: z.array(Challenge.Schema).check(z.minLength(1)),
-})
-
 /**
  * Checks if an error is a payment required error.
  */
@@ -176,16 +172,25 @@ async function createCredential(
   config: {
     context?: unknown
     method: Method.AnyClient
+    /** Stops resuming a pending Zone settlement once the call is aborted. */
+    signal?: AbortSignal | undefined
   },
 ): Promise<string> {
-  const { context, method } = config
+  const { context, method, signal } = config
 
   if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
   const parsedContext =
     method.context && context !== undefined ? method.context.parse(context) : undefined
-  return method.createCredential(
-    parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
+  // A Zone withdrawal still settling is resumed for this challenge, not paid again.
+  return PendingSettlement.resume(
+    () =>
+      method.createCredential(
+        parsedContext !== undefined
+          ? { challenge, context: parsedContext }
+          : ({ challenge } as never),
+      ),
+    { attempts: maxPaymentAttempts, signal },
   )
 }
 
@@ -211,7 +216,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
     cause: unknown,
     attemptsRemaining = maxPaymentAttempts,
   ): Promise<CallToolResult> => {
-    const challenges = paymentRequired.challenges
+    const challenges = usableChallenges(paymentRequired.challenges)
     const candidates = AcceptPayment.selectChallengeCandidates(
       challenges,
       methods,
@@ -227,7 +232,10 @@ function createPaymentAwareCallTool<methods extends Methods>(
       const available = challenges.map((challenge) => `${challenge.method}.${challenge.intent}`)
       const installed = methods.map((method) => `${method.name}.${method.intent}`)
       throw new Error(
-        `No compatible payment method. Server offers: ${available.join(', ')}. Client has: ${installed.join(', ')}`,
+        Challenge.withSkippedChallenges(
+          `No compatible payment method. Server offers: ${available.join(', ')}. Client has: ${installed.join(', ')}`,
+          paymentRequired.challenges.length - challenges.length,
+        ),
         { cause },
       )
     }
@@ -244,6 +252,7 @@ function createPaymentAwareCallTool<methods extends Methods>(
     const credential = await createCredential(selected.challenge, {
       context: call.context,
       method: selected.method,
+      signal: call.requestOptions?.signal,
     })
     const parsed = Credential.deserialize(credential)
 
@@ -313,8 +322,28 @@ function isInvalidChallenge(data: PaymentRequiredData): boolean {
   )
 }
 
+/**
+ * Validates payment-required data: challenges are validated, extra fields pass through. A
+ * well-formed challenge that selects an unsupported credential header is allowed here and skipped
+ * when paying.
+ */
 function isPaymentRequiredData(value: unknown): value is PaymentRequiredData {
-  return PaymentRequiredSchema.safeParse(value).success
+  if (typeof value !== 'object' || value === null) return false
+  const { challenges } = value as { challenges?: unknown }
+  if (!Array.isArray(challenges) || challenges.length === 0) return false
+  return challenges.every((challenge) => Challenge.LenientSchema.safeParse(challenge).success)
+}
+
+/**
+ * Returns the challenges a client may pay: a challenge that selects an unsupported credential
+ * header gets no credential, but does not stop the client from paying another challenge.
+ */
+function usableChallenges(challenges: readonly unknown[]): Challenge.Challenge[] {
+  return challenges.flatMap((challenge) =>
+    Challenge.hasUnsupportedCredentialHeader(challenge)
+      ? []
+      : [Challenge.Schema.parse(challenge) as Challenge.Challenge],
+  )
 }
 
 function withReceipt(result: Awaited<ReturnType<Client['callTool']>>): CallToolResult {

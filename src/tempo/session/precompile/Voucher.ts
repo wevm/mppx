@@ -5,6 +5,8 @@ import { signTypedData } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
 
 import * as TempoAddress from '../../internal/address.js'
+import * as ConfigurableAccount from '../../internal/configurable-account.js'
+import { isLowS, toLowS } from '../../internal/signature.js'
 import type { Voucher, SignedVoucher } from './Protocol.js'
 import { uint96 } from './Protocol.js'
 
@@ -79,8 +81,78 @@ function getVoucherPayload(verifyingContract: Address, chainId: number, voucher:
   })
 }
 
-function isPrimitiveEnvelope(type: string): boolean {
-  return type === 'secp256k1' || type === 'p256' || type === 'webAuthn'
+/**
+ * Options for verifying TIP-1166 configurable account voucher signers.
+ *
+ * With the defaults, verification accepts only TIP-1020 primitive signatures, as before TIP-1166.
+ */
+export type VerifyVoucherOptions = {
+  /**
+   * Accepts TIP-1166 configurable account (`0x05`) signatures from a configurable account
+   * signer. Enable only once the chain runs T15.
+   * @default false
+   */
+  configurable?: boolean | undefined
+  /**
+   * Config commitment the escrow recorded for the channel signer at open
+   * (`OpeningCommitmentRecorded`). A missing or zero opening commitment means the signer had no config
+   * commitment when the channel opened.
+   */
+  openingCommitment?: Hex | undefined
+}
+
+/**
+ * Verifies a canonical serialized signature against one expected signer under the TIP-1034 and
+ * TIP-1166 rules. Keychain signatures are always rejected.
+ */
+function verifySignerSignature(
+  signature: Hex,
+  payload: Hex,
+  expectedSigner: Address,
+  options: VerifyVoucherOptions,
+): boolean {
+  const envelope = parseCanonicalEnvelope(signature)
+  if (!envelope) return false
+  return verifySignerEnvelope(envelope, payload, expectedSigner, options)
+}
+
+/** Parses a serialized signature envelope, or returns undefined unless it is canonical. */
+function parseCanonicalEnvelope(signature: Hex): SignatureEnvelope.SignatureEnvelope | undefined {
+  const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+  if (SignatureEnvelope.serialize(envelope).toLowerCase() !== signature.toLowerCase())
+    return undefined
+  return envelope
+}
+
+/** Verifies a parsed canonical signature envelope against one expected signer. */
+function verifySignerEnvelope(
+  envelope: SignatureEnvelope.SignatureEnvelope,
+  payload: Hex,
+  expectedSigner: Address,
+  options: VerifyVoucherOptions,
+): boolean {
+  if (envelope.type === 'configurable') {
+    if (!options.configurable) return false
+    return ConfigurableAccount.verify(envelope, {
+      account: expectedSigner,
+      commitment: options.openingCommitment,
+      payload,
+    })
+  }
+
+  if (!ConfigurableAccount.isPrimitiveEnvelope(envelope.type)) return false
+  // Tempo settlement rejects high-s signatures, so a voucher carrying one could never be collected.
+  if (!isLowS(envelope)) return false
+  // A channel whose signer had a config commitment at open accepts only that config's approvals.
+  if (!ConfigurableAccount.isZeroCommitment(options.openingCommitment)) return false
+  const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
+  const valid = SignatureEnvelope.verify(envelope, { address: signer, payload })
+  return valid && TempoAddress.isEqual(signer, expectedSigner)
+}
+
+/** Returns whether an account signs with a TIP-1166 configurable account (`0x05`) signature. */
+export function isConfigurableAccount(account: Account): boolean {
+  return (account as { source?: unknown }).source === 'configurable'
 }
 
 /** Detects a viem/tempo access key account the same way `Account.signVoucher` does. */
@@ -136,12 +208,12 @@ export async function signVoucher(
   })()
 
   const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-  if (!isPrimitiveEnvelope(envelope.type))
+  if (!ConfigurableAccount.isPrimitiveEnvelope(envelope.type) && envelope.type !== 'configurable')
     throw new Error(
-      `TIP-1034 vouchers require a TIP-1020 primitive signature; received "${envelope.type}".`,
+      `TIP-1034 vouchers require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
 
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
 /**
@@ -171,32 +243,53 @@ export async function signCloseAuthorization(
         message: authorization,
       })
   const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-  if (!isPrimitiveEnvelope(envelope.type))
+  if (!ConfigurableAccount.isPrimitiveEnvelope(envelope.type) && envelope.type !== 'configurable')
     throw new Error(
-      `TIP-1034 close authorizations require a TIP-1020 primitive signature; received "${envelope.type}".`,
+      `TIP-1034 close authorizations require a TIP-1020 primitive or TIP-1166 configurable account signature; received "${envelope.type}".`,
     )
-  return SignatureEnvelope.serialize(envelope)
+  return SignatureEnvelope.serialize(toLowS(envelope))
 }
 
-/** Verifies that a cooperative-close signature belongs to a channel authority. */
+/** Options for {@link verifyCloseAuthorization}. */
+export type VerifyCloseAuthorizationOptions = VerifyVoucherOptions & {
+  /**
+   * The channel's voucher signer. The configurable account rules apply only to the candidate equal
+   * to it; other candidates, such as a distinct payer, must sign a primitive signature, since no
+   * opening commitment binds their config. Without it, the options apply to every candidate.
+   */
+  voucherSigner?: Address | undefined
+}
+
+/**
+ * Verifies that a cooperative-close signature belongs to a channel authority.
+ *
+ * `options` applies the TIP-1166 configurable account rules of {@link verifyVoucher}; the
+ * defaults accept only TIP-1020 primitive signatures.
+ */
 export function verifyCloseAuthorization(
   escrowContract: Address,
   chainId: number,
   authorization: SignedVoucher,
   expectedSigners: readonly Address[],
+  options: VerifyCloseAuthorizationOptions = {},
 ): boolean {
   try {
-    const envelope = SignatureEnvelope.from(authorization.signature as SignatureEnvelope.Serialized)
-    if (!isPrimitiveEnvelope(envelope.type)) return false
-    if (
-      SignatureEnvelope.serialize(envelope).toLowerCase() !== authorization.signature.toLowerCase()
-    )
-      return false
-
     const payload = getCloseAuthorizationPayload(escrowContract, chainId, authorization)
-    const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
-    const valid = SignatureEnvelope.verify(envelope, { address: signer, payload })
-    return valid && expectedSigners.some((expected) => TempoAddress.isEqual(signer, expected))
+    const { voucherSigner, ...voucherOptions } = options
+    // Parse once: every candidate checks the same envelope.
+    const envelope = parseCanonicalEnvelope(authorization.signature)
+    if (!envelope) return false
+    return expectedSigners.some((expected) =>
+      verifySignerEnvelope(
+        envelope,
+        payload,
+        expected,
+        // The opening commitment binds only the voucher signer's config. Another candidate's
+        // configurable signature could only be checked against its version-zero config, which a
+        // later rotation supersedes, so it is rejected.
+        !voucherSigner || TempoAddress.isEqual(expected, voucherSigner) ? voucherOptions : {},
+      ),
+    )
   } catch {
     return false
   }
@@ -205,26 +298,25 @@ export function verifyCloseAuthorization(
 /**
  * Verify a voucher signature matches the expected signer.
  *
- * Accepts canonical TIP-1020 primitive signatures. Keychain wrappers,
- * multisig signatures, and magic-suffixed encodings are rejected.
+ * By default, accepts canonical TIP-1020 primitive signatures only. Keychain wrappers,
+ * configurable account signatures, and magic-suffixed encodings are rejected.
+ *
+ * With `options.configurable`, also applies TIP-1166: a configurable account (`0x05`)
+ * signature is accepted when it names `expectedSigner`, its owner approvals reach the
+ * threshold, and its config commitment equals `options.openingCommitment` or, when the channel
+ * has no opening commitment, its config is the version-zero config that derives `expectedSigner`. A
+ * nonzero `openingCommitment` rejects primitive signatures.
  */
 export function verifyVoucher(
   escrowContract: Address,
   chainId: number,
   voucher: SignedVoucher,
   expectedSigner: Address,
+  options: VerifyVoucherOptions = {},
 ): boolean {
   try {
-    const envelope = SignatureEnvelope.from(voucher.signature as SignatureEnvelope.Serialized)
-
-    if (!isPrimitiveEnvelope(envelope.type)) return false
-    if (SignatureEnvelope.serialize(envelope).toLowerCase() !== voucher.signature.toLowerCase())
-      return false
-
     const payload = getVoucherPayload(escrowContract, chainId, voucher)
-    const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
-    const valid = SignatureEnvelope.verify(envelope, { address: signer, payload })
-    return valid && TempoAddress.isEqual(signer, expectedSigner)
+    return verifySignerSignature(voucher.signature, payload, expectedSigner, options)
   } catch {
     return false
   }

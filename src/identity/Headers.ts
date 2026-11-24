@@ -8,7 +8,15 @@
  * never sent across origins on a redirect or forwarded upstream by a proxy. Provers declare
  * their own extra sensitive headers in `Prover.headers`.
  */
-export const request = Object.freeze(['identity-attestation', 'identity-presentation'] as const)
+export const request = Object.freeze([
+  'agent-id',
+  'agent-signature',
+  'dpop',
+  'identity-attestation',
+  'identity-presentation',
+  'poppy-session',
+  'tempo-id-token',
+] as const)
 
 /**
  * `WWW-Authenticate` schemes that ask for an identity, lowercased. A proxy removes them from

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vp/test'
 import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 
 import { adapterPaymentMetaKey } from '../../client/internal/protocols/Mcp.js'
-import * as McpServer_transport from '../server/Transport.js'
+import * as McpServer_transport from '../../server/internal/mcpSdk.js'
 import * as McpClient from './McpClient.js'
 
 const realm = 'api.example.com'

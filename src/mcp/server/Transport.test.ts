@@ -10,7 +10,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Mcp from '../../Mcp.js'
-import { type Extra, mcpSdk } from './Transport.js'
+import { type Extra, mcpSdk } from '../../server/internal/mcpSdk.js'
 
 const challenge: Challenge = {
   id: 'test-challenge-id',
