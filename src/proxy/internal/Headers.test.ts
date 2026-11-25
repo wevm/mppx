@@ -155,9 +155,9 @@ describe('scrubResponse', () => {
       headers: { 'Identity-Attestation-Required': 'email;issuer="https://issuer.example"' },
     })
     const strip = { response: ['identity-attestation-required'] }
-    expect(Headers.scrubResponse(response, strip).headers.has('identity-attestation-required')).toBe(
-      false,
-    )
+    expect(
+      Headers.scrubResponse(response, strip).headers.has('identity-attestation-required'),
+    ).toBe(false)
   })
 
   test('behavior: strips every upstream Identity.Headers response header', () => {
