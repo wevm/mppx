@@ -260,16 +260,23 @@ export async function verify(
   }
   if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
   if (hasComponent(input.components, Constants.components.contentDigest)) {
+    // A digest is checked only when the whole field is signed: covering one member (`;key=`)
+    // would let an unsigned member stand in for it.
+    if (!coversWholeField(input.components, Constants.components.contentDigest))
+      return {
+        status: 'invalid',
+        reason: 'The signature must cover the whole Content-Digest field.',
+      }
     const reason = await checkContentDigest(request)
     if (reason) return { status: 'invalid', reason }
   }
   try {
     if (
-      !(await Store.tryClaim(
+      !(await claimNonce(
         options.nonceStore,
-        options.nonceScope === 'namespace'
-          ? `${options.nonceNamespace}:${input.nonce}`
-          : `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
+        options.nonceNamespace,
+        options.nonceScope,
+        input,
         // Held for as long as the skewed lifetime check could still accept the signature.
         (input.expires + skew) * 1000,
       ))
@@ -281,6 +288,24 @@ export async function verify(
   if (input.expires <= Math.floor(Date.now() / 1000) - skew)
     return { status: 'invalid', reason: 'The signature has expired.' }
   return { status: 'verified', input }
+}
+
+/**
+ * Claims a signature's nonce. A namespace-wide claim also claims the per-key ID entry, so a
+ * verifier that still claims per key (an earlier release, mid-deploy) refuses a nonce this one
+ * accepted, and this one refuses a nonce such a verifier accepted.
+ */
+async function claimNonce(
+  store: Store.AtomicStore,
+  namespace: string,
+  scope: 'key' | 'namespace' | undefined,
+  input: SignatureInput,
+  expires: number,
+): Promise<boolean> {
+  const perKey = await Store.tryClaim(store, `${namespace}:${input.keyId}:${input.nonce}`, expires)
+  if (scope !== 'namespace') return perKey
+  const shared = await Store.tryClaim(store, `${namespace}:${input.nonce}`, expires)
+  return perKey && shared
 }
 
 function parse(
@@ -472,6 +497,11 @@ function hasExpectedTag(entry: unknown, tags: ReadonlySet<string>): boolean {
   return typeof tag === 'string' && tags.has(tag)
 }
 
+/** Whether `id` is covered without parameters, so its whole field value is signed. */
+export function coversWholeField(components: readonly Component[], id: string): boolean {
+  return components.some((component) => component.id === id && !component.parameters?.size)
+}
+
 /** RFC 9421 §2.5: each component is covered at most once, and never `@signature-params`. */
 function hasValidComponents(components: readonly Component[]): boolean {
   const identifiers = components.map(serializeComponent)
@@ -540,7 +570,12 @@ async function checkContentDigest(request: Request): Promise<string | undefined>
   if (!expected.length) return 'The Content-Digest header has no supported digest.'
   if (request.bodyUsed || request.body?.locked)
     return 'The request body is unavailable to check its Content-Digest.'
-  const body = await request.clone().arrayBuffer()
+  let body: ArrayBuffer
+  try {
+    body = await request.clone().arrayBuffer()
+  } catch {
+    return 'The request body could not be read to check its Content-Digest.'
+  }
   for (const { algorithm, value } of expected) {
     const actual = new Uint8Array(await crypto.subtle.digest(algorithm, body))
     if (!constantTimeEqual(Base64.fromBytes(actual), Base64.fromBytes(value)))
