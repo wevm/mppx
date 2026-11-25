@@ -1,5 +1,14 @@
 # mppx
 
+## 0.22.1
+
+### Patch Changes
+
+- d4a8c29: Added `headers` declarations to every identity extension's verifier, payment check and prover, so a proxy and the client's redirect stripping find each protocol's headers from the extension itself.
+- d20d140: Fixed macOS account storage passing the private key in `security` process arguments. The CLI now sends the keychain command on stdin through `security -i`.
+- e3a3dad: Stripped `Forwarded`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP` and `Via` from proxied requests, as `X-Forwarded-*` already is.
+- 364fe92: Added `headers` to identity verifiers and payment checks: a proxy strips the headers declared by the identity protocols its routes use.
+
 ## 0.22.0
 
 ### Minor Changes
