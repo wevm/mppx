@@ -67,8 +67,21 @@ export type Verification<value = unknown> =
       readonly reason: string
     }
 
+/**
+ * Headers an identity protocol sends. A proxy serving a route that uses the protocol strips them:
+ * the proxy, not the upstream service, decides which identity the client presents.
+ */
+export type ProtocolHeaders = {
+  /** Request headers the client sends, never forwarded upstream, such as a proof. */
+  readonly request?: readonly string[] | undefined
+  /** Response headers the server sends, never passed from upstream to the client. */
+  readonly response?: readonly string[] | undefined
+}
+
 /** Verifies one identity protocol on the server, before any payment Challenge is issued. */
 export type Verifier<value = unknown> = {
+  /** Headers the protocol sends, beyond those in `Identity.Headers`, stripped by a proxy. */
+  readonly headers?: ProtocolHeaders | undefined
   /**
    * When the verifier runs.
    *
@@ -124,6 +137,8 @@ export type PaymentCheck<value = unknown> = {
    * created with `requiresAuth: true`, so Payment Credentials travel in `Payment-Authorization`.
    */
   readonly authorization?: boolean | undefined
+  /** Headers the check's protocol sends, beyond those in `Identity.Headers`, stripped by a proxy. */
+  readonly headers?: ProtocolHeaders | undefined
   /** Identities the check requires, advertised in every 402 of the route. */
   readonly requires: readonly Requirement[]
   /** Returns the check's outcome for the paid retry (or, without a Credential, for `authorize`). */

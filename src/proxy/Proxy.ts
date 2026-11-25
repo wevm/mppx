@@ -1,6 +1,7 @@
 import type * as http from 'node:http'
 
 import * as Credential from '../Credential.js'
+import * as Metadata from '../discovery/internal/Metadata.js'
 import { generateProxy } from '../discovery/OpenApi.js'
 import * as Scope from '../server/internal/scope.js'
 import * as Mppx from '../server/Mppx.js'
@@ -57,6 +58,7 @@ export function create(config: create.Config): Proxy {
     throw new RangeError('maxRequestBodySize must be a non-negative safe integer')
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
+  const strip = stripHeadersOf(config.services)
 
   const services = new Map(
     config.services.map((s) => {
@@ -162,6 +164,7 @@ export function create(config: create.Config): Proxy {
         service,
         ctx: { ...ctx, ...Service.getOptions(endpoint) },
         proxy,
+        strip,
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
@@ -237,6 +240,7 @@ export function create(config: create.Config): Proxy {
               service,
               ctx: { ...ctx, request: upstream, ...options },
               proxy,
+              strip,
               onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
             })
           },
@@ -285,7 +289,7 @@ export function create(config: create.Config): Proxy {
         attempts: 1,
         replay,
         replayKey,
-        requestHeaders: [...Headers.scrub(paidRequest.headers).entries()],
+        requestHeaders: [...Headers.scrub(paidRequest.headers, strip).entries()],
         run: (signal) => {
           const upstream = Replay.withBody(paidRequest, body, signal)
           return proxyUpstream({
@@ -293,6 +297,7 @@ export function create(config: create.Config): Proxy {
             service,
             ctx: { ...ctx, request: upstream, ...options },
             proxy,
+            strip,
             onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
           })
         },
@@ -303,6 +308,7 @@ export function create(config: create.Config): Proxy {
       service,
       ctx: { ...ctx, ...options },
       proxy,
+      strip,
       onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
     })
     return result.withReceipt(upstreamRes)
@@ -358,14 +364,15 @@ declare namespace proxyUpstream {
     proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
     request: globalThis.Request
     service: Service.Service
+    strip?: Headers.Strip | undefined
   }
 }
 
 /** @internal */
 async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> {
-  const { request, service, ctx, proxy, onUpstreamError } = options
+  const { request, service, ctx, proxy, onUpstreamError, strip } = options
   const url = ctx.upstreamPath + new URL(request.url).search
-  const headers = Headers.scrub(request.headers)
+  const headers = Headers.scrub(request.headers, strip)
 
   const method = request.method.toUpperCase()
   const hasBody = method !== 'GET' && method !== 'HEAD'
@@ -391,6 +398,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
       ctx,
       proxy,
       service,
+      strip,
       upstreamRequest,
     })
 
@@ -399,6 +407,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
       ctx,
       proxy,
       service,
+      strip,
       upstreamRequest,
     })
 
@@ -436,13 +445,13 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
 
 /** Proxies one request without retaining a replay copy of its body. */
 async function proxyUpstreamOnce(options: proxyUpstreamAttempt.Options): Promise<Response> {
-  const { ctx, proxy, service } = options
+  const { ctx, proxy, service, strip } = options
   let upstreamRequest = options.upstreamRequest
 
   if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
 
   let response = await proxy(upstreamRequest)
-  response = Headers.scrubResponse(response)
+  response = Headers.scrubResponse(response, strip)
 
   if (service.rewriteResponse) response = await service.rewriteResponse(response, ctx)
 
@@ -454,6 +463,7 @@ declare namespace proxyUpstreamAttempt {
     ctx: Service.Context
     proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
     service: Service.Service
+    strip?: Headers.Strip | undefined
     upstreamRequest: Request
   }
 
@@ -468,14 +478,14 @@ declare namespace proxyUpstreamAttempt {
 async function proxyUpstreamAttempt(
   options: proxyUpstreamAttempt.Options,
 ): Promise<proxyUpstreamAttempt.Result> {
-  const { ctx, proxy, service } = options
+  const { ctx, proxy, service, strip } = options
   let upstreamRequest = options.upstreamRequest.clone()
 
   try {
     if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
 
     let response = await proxy(upstreamRequest)
-    response = Headers.scrubResponse(response)
+    response = Headers.scrubResponse(response, strip)
 
     return { error: undefined, response, upstreamRequest }
   } catch (error) {
@@ -576,6 +586,28 @@ function requiresManualGeneration(
     (selected.intent === 'session' && selectedOffers.length === 0) ||
     selectedOffers.some(unsupported)
   )
+}
+
+/**
+ * Headers the proxy strips beyond the built-in ones: those declared by the identity verifiers and
+ * payment checks of its routes (`headers` on each), so a route that uses an identity extension
+ * never needs them listed by hand. The names are validated and lowercased when each route is
+ * created (`IdentityServer.headersOf`), so a bad declaration fails before the proxy starts.
+ */
+function stripHeadersOf(services: readonly Service.Service[]): Headers.Strip {
+  type Offer = Metadata.Offer & { _identityHeaders?: Headers.Strip | undefined }
+  const request = new Set<string>()
+  const response = new Set<string>()
+  for (const service of services)
+    for (const endpoint of Object.values(service.routes)) {
+      const handler = endpoint === undefined ? undefined : Service.getHandler(endpoint)
+      if (!handler || !('_internal' in handler) || !handler._internal) continue
+      for (const offer of Metadata.offers(handler._internal as Metadata.Metadata) as Offer[]) {
+        for (const name of offer._identityHeaders?.request ?? []) request.add(name)
+        for (const name of offer._identityHeaders?.response ?? []) response.add(name)
+      }
+    }
+  return { request: [...request], response: [...response] }
 }
 
 /** Identity and session offers must re-run authorization and delivery-time metering on every request. */
