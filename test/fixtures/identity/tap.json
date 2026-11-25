@@ -1,0 +1,175 @@
+{
+  "description": "TAP agent-recognition signature vectors (RFC 9421). Keys are RFC 9421 Appendix B test keys, plus a P-384 test key made for these vectors. Signatures are made with node:crypto.",
+  "created": 1767225600,
+  "expires": 1767226080,
+  "keys": {
+    "test-key-ed25519": {
+      "publicKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+      },
+      "privateKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+        "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+      }
+    },
+    "test-key-ecc-p256": {
+      "publicKey": {
+        "kty": "EC",
+        "x": "qIVYZVLCrPZHGHjP17CTW0_-D9Lfw0EkjqF7xB4FivA",
+        "y": "Mc4nN9LTDOBhfoUeg8Ye9WedFRhnZXZJA12Qp0zZ6F0",
+        "crv": "P-256"
+      },
+      "privateKey": {
+        "kty": "EC",
+        "x": "qIVYZVLCrPZHGHjP17CTW0_-D9Lfw0EkjqF7xB4FivA",
+        "y": "Mc4nN9LTDOBhfoUeg8Ye9WedFRhnZXZJA12Qp0zZ6F0",
+        "crv": "P-256",
+        "d": "UpuF81l-kOxbjf7T4mNSv0r5tN67Gim7rnf6EFpcYDs"
+      }
+    },
+    "test-key-rsa-pss": {
+      "publicKey": {
+        "kty": "RSA",
+        "n": "r4tmm3r20Wd_PbqvP1s2-QEtvpuRaV8Yq40gjUR8y2Rjxa6dpG2GXHbPfvMs8ct-Lh1GH45x28Rw3Ry53mm-oAXjyQ86OnDkZ5N8lYbggD4O3w6M6pAvLkhk95AndTrifbIFPNU8PPMO7OyrFAHqgDsznjPFmTOtCEcN2Z1FpWgchwuYLPL-Wokqltd11nqqzi-bJ9cvSKADYdUAAN5WUtzdpiy6LbTgSxP7ociU4Tn0g5I6aDZJ7A8Lzo0KSyZYoA485mqcO0GVAdVw9lq4aOT9v6d-nb4bnNkQVklLQ3fVAvJm-xdDOp9LCNCN48V2pnDOkFV6-U9nV5oyc6XI2w",
+        "e": "AQAB"
+      },
+      "privateKey": {
+        "kty": "RSA",
+        "n": "r4tmm3r20Wd_PbqvP1s2-QEtvpuRaV8Yq40gjUR8y2Rjxa6dpG2GXHbPfvMs8ct-Lh1GH45x28Rw3Ry53mm-oAXjyQ86OnDkZ5N8lYbggD4O3w6M6pAvLkhk95AndTrifbIFPNU8PPMO7OyrFAHqgDsznjPFmTOtCEcN2Z1FpWgchwuYLPL-Wokqltd11nqqzi-bJ9cvSKADYdUAAN5WUtzdpiy6LbTgSxP7ociU4Tn0g5I6aDZJ7A8Lzo0KSyZYoA485mqcO0GVAdVw9lq4aOT9v6d-nb4bnNkQVklLQ3fVAvJm-xdDOp9LCNCN48V2pnDOkFV6-U9nV5oyc6XI2w",
+        "e": "AQAB",
+        "d": "lAfIqfpCYomVShfAKnwf2lD9I0wKjkHsCtZCif4kAlwQqqW6N-tIL3bdOR-VWf0Q1ZBIDtpO91UrG7pansyrPERbNrRJlPiYEyPTHkCT1nD-l2isuiyGLNBNnFoKfBgA4KAbPJZQatFIV9Cn34JSHnpN5-2ehreGBYHtkwHFtlmzeF3yu5bqRcqOhx8lkYmBzDAEUFyyXjknU5-WjAT9DzuG0MpOTkcU1EnjnIjyVBZLUB5Lxm8puyq8hH8B_E5LNC-1oc8j-tDy98UvRTTiYvZvs87cGCFxg0LijNhg7CE3g9piNqB6DzMgA9MHSOwcElVtfKdYfo4H3OHZXsSmEQ",
+        "p": "5V-6ISI5yEaCFXm-fk1EM2xwAWekePVCAyvr9QbTlFOCZwt9WwjUjhtKRusi5Uq-IYZ_tq2WRE4As4b_FHEMtp2AER43IcvmXPqKFBoUktVDS7dThIHrsnRi1U7dHqVdwiMEMe5jxKNgnsKLpnq-4NyhoS6OeWu1SFozG9J9xQk",
+        "q": "w-wIde17W5Y0Cphp3ZZ0uM8OUq1AkrV2IKauqYHaDxAT32EM4ci2MMER2nIUEo4g_42lW0zYouFFqONwv0-HyOsgPpdSqKRC5WLgn0VXabjaNcy6KhNPXeJ0AgtqdiDwPeJ2_L_eKwNWQ43RfdQBUquAwSd7SEmmQ8sViqB628M",
+        "dp": "otDolkxtJ7Sk8gmRJqZCGx6GAvlGznWJfibXPv6xgUAl-G83dD84YgcNGnoeMxRzEekfDtT5LVMRPF4_AoucsqPqHDyOdfb-dlGBYfOBVxj6w-xF5HE0lV_4J-HrI63Od9fTSn4lY5d1JjyCVJIcnBEAyiD6EUZbUBh23vDzRcE",
+        "dq": "iZE1S6CpqmBoQDxOsXGQmaeBdhoCqkDSJhEDuS_dLhBq88FQa0UkcE1QvOK3J2Q21VnfDqGBx7SH1hOFOj-cpz45kNluB832ztxDvnHQ9AIA7h_HY_3VD6YPMNRVN4bfSYS3abdLR0Z7jsmInGJ9X0_fA0E2tkZIgXeas5EFU0M",
+        "qi": "jRAqfYi_tKCjhP9eM0N2XaRlNeoYCTx06GlSLD8d0zc4ZZuEePY10LMGWI6Y_JC0CvvvQYhNa9sAj4hFjIVLsWeTplVVUezGO1ofLW4kYWVpnMpHgAY1pRM4kyzo1p3MKYY8DE1BA4KqhSOfhdGs6Ov3Dfj0migZeE7Fu7yc7Fc"
+      }
+    },
+    "test-key-ecc-p384": {
+      "publicKey": {
+        "kty": "EC",
+        "x": "hQXDUNjMQJMkzB8bmyXGzSipV1vLKPtw2a_bTHJCZNpqB_ab24zeCXsF1s6sbSOF",
+        "y": "KmxOHygwAg-nGaozH4kP1g8xH38w8dtXDFtBTygMaFyCIEXjjOfAXzuibn5gG4Hz",
+        "crv": "P-384"
+      },
+      "privateKey": {
+        "kty": "EC",
+        "x": "hQXDUNjMQJMkzB8bmyXGzSipV1vLKPtw2a_bTHJCZNpqB_ab24zeCXsF1s6sbSOF",
+        "y": "KmxOHygwAg-nGaozH4kP1g8xH38w8dtXDFtBTygMaFyCIEXjjOfAXzuibn5gG4Hz",
+        "crv": "P-384",
+        "d": "RpPgLaEp0caexZCFmpuR4e6_bkiaAh15kcgKGQrRqMIKI-wD-lTwJQp5y_O9WklY"
+      }
+    }
+  },
+  "vectors": [
+    {
+      "name": "ed25519 browse",
+      "keyid": "test-key-ed25519",
+      "alg": "ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/products/123"
+      },
+      "signatureBase": "\"@authority\": merchant.example\n\"@path\": /products/123\n\"@signature-params\": (\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\";tag=\"agent-browser-auth\"",
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:obio1FzGaLHmeDPtS+yn8TuD7oVergytJBtTDdLmA09fLrA16a5WVtVu5WwmAbeAHpQniAnz1B9F4xgFu5/bCg==:"
+    },
+    {
+      "name": "ecdsa-p256-sha256 payment",
+      "keyid": "test-key-ecc-p256",
+      "alg": "ecdsa-p256-sha256",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureBase": "\"@authority\": merchant.example\n\"@path\": /checkout\n\"@signature-params\": (\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ecc-p256\";alg=\"ecdsa-p256-sha256\";nonce=\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\";tag=\"agent-payer-auth\"",
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ecc-p256\";alg=\"ecdsa-p256-sha256\";nonce=\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\";tag=\"agent-payer-auth\"",
+      "signature": "tap=:h9uRxKVaMWNbT3kuELjkoLW/bXojq92Ii5OlE3LSyRFZsH10LH2rxF25/kAI+ho0glXGurmM/j4d8oBTQqt7bw==:"
+    },
+    {
+      "name": "ecdsa-p384-sha384 payment",
+      "keyid": "test-key-ecc-p384",
+      "alg": "ecdsa-p384-sha384",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureBase": "\"@authority\": merchant.example\n\"@path\": /checkout\n\"@signature-params\": (\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ecc-p384\";alg=\"ecdsa-p384-sha384\";nonce=\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\";tag=\"agent-payer-auth\"",
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ecc-p384\";alg=\"ecdsa-p384-sha384\";nonce=\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\";tag=\"agent-payer-auth\"",
+      "signature": "tap=:ZjEeTe96O2/HEIRXF4h4+T9cpn2q8EDCCWhZt+pgT2y+qNOP6SouQ9PvUYcyBRV6D/Xyf6s6R3VlBUB3LUfXK8Hgla+R9PET0NZNAXBtlYx6RbEWi0KaKQv1bKTkbK65:"
+    },
+    {
+      "name": "rsa-pss-sha512 browse",
+      "keyid": "test-key-rsa-pss",
+      "alg": "rsa-pss-sha512",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/products/123"
+      },
+      "signatureBase": "\"@authority\": merchant.example\n\"@path\": /products/123\n\"@signature-params\": (\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-rsa-pss\";alg=\"rsa-pss-sha512\";nonce=\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA\";tag=\"agent-browser-auth\"",
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-rsa-pss\";alg=\"rsa-pss-sha512\";nonce=\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:ipOMMQJmbgSHbjDx6KpHnEiahfmjjvF5j1yvNNfm489FSjEsbJiVpZe34pGVNBV4pcHZqy+lDJqVgN0ITHNGII7BVpz9U7tpMkU6/3nZw/sia457wSbSkTWbJb7fDK2/gz/hy0j5NTkAFEKJHpXzPDMMW8sAt2Tz/ZksUtmHTvXBGQtD0ELRKKwpgfNUtAvNMlEwFoo//2RdSbKRj44wOCKB5MpRjB2uf9ae6ZMZ+whDGDKcapT5WfPDjbJW+lRigSA7Qsp2HxcpMjQoFQbi18nwwOK1yYCZ9hVKJdEBdp+dp44gBwcOZ5Ho6mHFsTnux3cjASwmptgqAL063uAFhQ==:"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "keyId parameter (Visa reference agent)",
+      "keyid": "test-key-ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyId=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:mCEcEeCkpzG4AH/0afmYlOwyVQRBqVDyNgOFNmdGlNIJbJ6aloikqiUEhqWoVrKwISXrdGJHimJFWAm7nioRAA==:",
+      "reason": "The HTTP message signature is malformed."
+    },
+    {
+      "name": "alg=\"Ed25519\" (Visa spec examples)",
+      "keyid": "test-key-ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"Ed25519\";nonce=\"ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:etbdZjnrLo0LezZeN1DuzJ5O9jN7fqDZFNrGqTED/pwutz7NksbWQrMoxV8MwJAPhtSUhxTtpoOHG4VQlbu5Ag==:",
+      "reason": "The HTTP message signature is malformed."
+    },
+    {
+      "name": "signs the raw Signature-Input text (Visa reference agent)",
+      "keyid": "test-key-ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureInput": "tap=(\"@authority\" \"@path\"); created=1767225600; expires=1767226080; keyid=\"test-key-ed25519\"; alg=\"ed25519\"; nonce=\"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\"; tag=\"agent-browser-auth\"",
+      "signature": "tap=:Euj4350oveFJQbyAJJRafr05mrKZRGtdekP5ocXw3lCNc0FjfD7UsS0YapEA0SSL4RkeorzfSa7Sbf7d4i/ZBg==:",
+      "reason": "The HTTP message signature is invalid."
+    },
+    {
+      "name": "lifetime over 8 minutes (Visa spec examples)",
+      "keyid": "test-key-ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureInput": "tap=(\"@authority\" \"@path\");created=1767225600;expires=1767229200;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"IyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIw\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:nm1nasi3fkjs5x3FRH+/cxCHFVRk+M+erWYNQlET20SuiN2dyK4fnITuILgBQ+sHQ8a4+IFNHqd00rHJxfIyCA==:",
+      "reason": "The signature is expired or has an invalid lifetime."
+    },
+    {
+      "name": "covers @path twice",
+      "keyid": "test-key-ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureInput": "tap=(\"@authority\" \"@path\" \"@path\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJA\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:ZTkh9mms5eusBiugNb3dwf3cgKQHCtlqcjXNB5O/jU2aXWClMMop9ANPQLBU4WOXJVa88HTkz/0irr0D6JU9DQ==:",
+      "reason": "The HTTP message signature is malformed."
+    }
+  ]
+}
