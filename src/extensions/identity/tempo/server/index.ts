@@ -221,10 +221,16 @@ export function create(config: create.Config): TempoId {
     return result
   }
 
+  const protocolHeaders = { request: [Constants.idTokenHeader, 'DPoP'] }
   return {
-    verifier: { authorization: true, verify: async (request) => allowed(await verify(request)) },
+    verifier: {
+      authorization: true,
+      headers: protocolHeaders,
+      verify: async (request) => allowed(await verify(request)),
+    },
     paymentCheck: {
       authorization: true,
+      headers: protocolHeaders,
       requires: [{ type: Constants.type, issuer }],
       async verify(parameters): Promise<Identity.Verification<Types.Payer>> {
         const caller = await verify(parameters.request)

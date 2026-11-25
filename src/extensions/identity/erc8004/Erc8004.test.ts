@@ -1,7 +1,6 @@
 import { Credential, Method, Receipt, Store, z } from 'mppx'
 import { Mppx as ClientMppx } from 'mppx/client'
 import * as Erc8004 from 'mppx/extensions/identity/erc8004'
-import * as Identity from 'mppx/identity'
 import { Mppx } from 'mppx/server'
 import {
   createClient,
@@ -235,9 +234,16 @@ test("needs the agent's signature when the payment doesn't bind its source", asy
   }
 })
 
-test('marks the agent headers as bearer identity headers, so a proxy does not forward them', () => {
-  expect(Identity.Headers.request).toContain('agent-id')
-  expect(Identity.Headers.request).toContain('agent-signature')
+test('declares the agent headers, so a proxy does not forward them and redirects drop them', () => {
+  const agents = Erc8004.Server.create()
+  expect(agents.verifier.headers).toEqual({ request: ['Agent-Id', 'Agent-Signature'] })
+  expect(agents.paymentCheck.headers).toEqual({ request: ['Agent-Id', 'Agent-Signature'] })
+  const prover = Erc8004.Client.prover({
+    account: privateKeyToAccount(generatePrivateKey()),
+    agentId: 1n,
+    scope: ['https://api.example'],
+  })
+  expect(prover.headers).toEqual(['agent-id', 'agent-signature'])
 })
 
 test('accepts signed requests for the configured receiving origin', async () => {

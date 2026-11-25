@@ -142,6 +142,7 @@ export function attestations(config: attestations.Config): Identity.Prover {
 
   return {
     scope: config.scope,
+    headers: [AttestationConstants.header.toLowerCase()],
     async prove(request, context) {
       const { prover, user } = await resolve()
       // A request already in flight (such as a payment retry) may still carry the previous
