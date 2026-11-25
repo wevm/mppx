@@ -18,6 +18,9 @@ import * as Service from './Service.js'
 /** Options for {@link create.Config.replay}. */
 export type ReplayOptions = Replay.Options
 
+/** Sends a request to one service's upstream origin. */
+type Proxy_ = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
+
 /** A paid API proxy that gates upstream services behind the mppx 402 protocol. */
 export type Proxy = {
   /** Fetch API handler. Works with Bun, Deno, Next.js, Hono, Elysia, SvelteKit, etc. */
@@ -59,6 +62,21 @@ export function create(config: create.Config): Proxy {
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
   const strip = stripHeadersOf(config.services)
+  /** Forwards a request to a service's upstream, with the proxy's header stripping and retries. */
+  const forward = (
+    service: Service.Service,
+    proxy: Proxy_,
+    request: globalThis.Request,
+    ctx: Service.Context,
+  ) =>
+    proxyUpstream({
+      ctx,
+      onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
+      proxy,
+      request,
+      service,
+      strip,
+    })
 
   const services = new Map(
     config.services.map((s) => {
@@ -159,14 +177,7 @@ export function create(config: create.Config): Proxy {
     const ctx: Service.Context = { request, service, upstreamPath }
 
     if (!handler)
-      return proxyUpstream({
-        request,
-        service,
-        ctx: { ...ctx, ...Service.getOptions(endpoint) },
-        proxy,
-        strip,
-        onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
-      })
+      return forward(service, proxy, request, { ...ctx, ...Service.getOptions(endpoint) })
 
     let selected: Credential.Credential | undefined
     try {
@@ -235,14 +246,7 @@ export function create(config: create.Config): Proxy {
           run: (signal) => {
             // Send the headers of the request that was paid for, not the retry's.
             const upstream = Replay.withBody(paidRequest, body, signal, found.requestHeaders)
-            return proxyUpstream({
-              request: upstream,
-              service,
-              ctx: { ...ctx, request: upstream, ...options },
-              proxy,
-              strip,
-              onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
-            })
+            return forward(service, proxy, upstream, { ...ctx, request: upstream, ...options })
           },
         })
       }
@@ -292,25 +296,11 @@ export function create(config: create.Config): Proxy {
         requestHeaders: [...Headers.scrub(paidRequest.headers, strip).entries()],
         run: (signal) => {
           const upstream = Replay.withBody(paidRequest, body, signal)
-          return proxyUpstream({
-            request: upstream,
-            service,
-            ctx: { ...ctx, request: upstream, ...options },
-            proxy,
-            strip,
-            onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
-          })
+          return forward(service, proxy, upstream, { ...ctx, request: upstream, ...options })
         },
       })
     }
-    const upstreamRes = await proxyUpstream({
-      request,
-      service,
-      ctx: { ...ctx, ...options },
-      proxy,
-      strip,
-      onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
-    })
+    const upstreamRes = await forward(service, proxy, request, { ...ctx, ...options })
     return result.withReceipt(upstreamRes)
   }
 
@@ -361,7 +351,7 @@ declare namespace proxyUpstream {
   type Options = {
     ctx: Service.Context
     onUpstreamError?: Service.UpstreamErrorHandler | undefined
-    proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
+    proxy: Proxy_
     request: globalThis.Request
     service: Service.Service
     strip?: Headers.Strip | undefined
@@ -443,25 +433,29 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
   }
 }
 
+/** Applies the service's request rewrite, if any. */
+async function rewrite(options: proxyUpstreamAttempt.Options): Promise<Request> {
+  const { ctx, service, upstreamRequest } = options
+  return service.rewriteRequest ? service.rewriteRequest(upstreamRequest, ctx) : upstreamRequest
+}
+
+/** Sends a rewritten request upstream and strips the response's headers. */
+async function send(options: proxyUpstreamAttempt.Options, request: Request): Promise<Response> {
+  return Headers.scrubResponse(await options.proxy(request), options.strip)
+}
+
 /** Proxies one request without retaining a replay copy of its body. */
 async function proxyUpstreamOnce(options: proxyUpstreamAttempt.Options): Promise<Response> {
-  const { ctx, proxy, service, strip } = options
-  let upstreamRequest = options.upstreamRequest
-
-  if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
-
-  let response = await proxy(upstreamRequest)
-  response = Headers.scrubResponse(response, strip)
-
-  if (service.rewriteResponse) response = await service.rewriteResponse(response, ctx)
-
-  return response
+  const response = await send(options, await rewrite(options))
+  return options.service.rewriteResponse
+    ? options.service.rewriteResponse(response, options.ctx)
+    : response
 }
 
 declare namespace proxyUpstreamAttempt {
   type Options = {
     ctx: Service.Context
-    proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
+    proxy: Proxy_
     service: Service.Service
     strip?: Headers.Strip | undefined
     upstreamRequest: Request
@@ -478,16 +472,11 @@ declare namespace proxyUpstreamAttempt {
 async function proxyUpstreamAttempt(
   options: proxyUpstreamAttempt.Options,
 ): Promise<proxyUpstreamAttempt.Result> {
-  const { ctx, proxy, service, strip } = options
+  // The result carries the request as rewritten, as `onUpstreamError` documents.
   let upstreamRequest = options.upstreamRequest.clone()
-
   try {
-    if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
-
-    let response = await proxy(upstreamRequest)
-    response = Headers.scrubResponse(response, strip)
-
-    return { error: undefined, response, upstreamRequest }
+    upstreamRequest = await rewrite({ ...options, upstreamRequest })
+    return { error: undefined, response: await send(options, upstreamRequest), upstreamRequest }
   } catch (error) {
     return { error, response: undefined, upstreamRequest }
   }
