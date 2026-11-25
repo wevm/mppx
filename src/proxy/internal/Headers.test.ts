@@ -38,15 +38,13 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
-  test('behavior: strips declared identity attestation and presentation headers', () => {
+  test('behavior: strips identity attestation and presentation headers', () => {
     const headers = new globalThis.Headers({
       'Identity-Attestation': 'token',
       'Identity-Presentation': 'sd-jwt~kb-jwt',
       'X-Public': 'value',
     })
-    const result = Headers.scrub(headers, {
-      request: ['identity-attestation', 'identity-presentation'],
-    })
+    const result = Headers.scrub(headers)
     expect(result.get('identity-attestation')).toBeNull()
     expect(result.get('identity-presentation')).toBeNull()
     expect(result.get('x-public')).toBe('value')
@@ -154,10 +152,7 @@ describe('scrubResponse', () => {
       status: 401,
       headers: { 'Identity-Attestation-Required': 'email;issuer="https://issuer.example"' },
     })
-    const strip = { response: ['identity-attestation-required'] }
-    expect(
-      Headers.scrubResponse(response, strip).headers.has('identity-attestation-required'),
-    ).toBe(false)
+    expect(Headers.scrubResponse(response).headers.has('identity-attestation-required')).toBe(false)
   })
 
   test('behavior: strips every upstream Identity.Headers response header', () => {

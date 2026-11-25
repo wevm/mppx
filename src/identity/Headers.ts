@@ -4,11 +4,20 @@
  */
 
 /**
- * Bearer identity request headers mppx itself defines, never sent across origins on a redirect or
- * forwarded upstream by a proxy. None today: each identity protocol declares its own, in
- * `Prover.headers` on the client and `headers` on its verifier or payment check on the server.
+ * Bearer identity request headers. Anyone holding one can replay it until it expires, so it is
+ * never sent across origins on a redirect or forwarded upstream by a proxy, even when an app sets
+ * it by hand. Each protocol also declares its own, in `Prover.headers` and on its verifier or
+ * payment check, so a protocol outside mppx is stripped the same way.
  */
-export const request: readonly string[] = Object.freeze([])
+export const request = Object.freeze([
+  'agent-id',
+  'agent-signature',
+  'dpop',
+  'identity-attestation',
+  'identity-presentation',
+  'poppy-session',
+  'tempo-id-token',
+] as const)
 
 /**
  * `WWW-Authenticate` schemes that ask for an identity, lowercased. A proxy removes them from
@@ -17,8 +26,10 @@ export const request: readonly string[] = Object.freeze([])
 export const challenges = Object.freeze(['privatetoken', 'identity-presentation'] as const)
 
 /**
- * Identity response headers mppx itself defines, which a proxy must not pass on from upstream:
- * they ask the client for an identity the proxy, not the upstream, decides on. Each identity
- * protocol declares its own in `headers` on its verifier or payment check.
+ * Identity response headers a proxy must not pass on from upstream: they ask the client for an
+ * identity the proxy, not the upstream, decides on.
  */
-export const response = Object.freeze(['identity-required'] as const)
+export const response = Object.freeze([
+  'identity-attestation-required',
+  'identity-required',
+] as const)
