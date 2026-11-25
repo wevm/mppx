@@ -106,6 +106,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Sessi
   }
 
   return {
+    headers: { request: [Constants.sessionHeader] },
     async verify(request) {
       const token = request.headers.get(Constants.sessionHeader)
       if (!token)

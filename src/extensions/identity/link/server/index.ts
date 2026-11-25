@@ -190,6 +190,7 @@ export function claims(config: claims.Config): Identity.Verifier<Types.VerifiedC
   }
 
   return {
+    headers: { request: [Constants.presentationHeader] },
     async verify(request) {
       const presentation = request.headers.get(Constants.presentationHeader)
       if (!presentation) return challenge('missing', 'Link identity claims are required.')

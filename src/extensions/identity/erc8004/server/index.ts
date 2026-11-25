@@ -180,9 +180,11 @@ export function create(config: create.Config = {}): Erc8004 {
     return { status: 'forbidden', reason: 'This agent may not call this API.' }
   }
 
+  const headers = { request: [Constants.idHeader, Constants.signatureHeader] }
   return {
-    verifier: { verify: async (request) => allowed(await getSigned(request)) },
+    verifier: { headers, verify: async (request) => allowed(await getSigned(request)) },
     paymentCheck: {
+      headers,
       requires: [{ type: Constants.type }],
       async verify({ challenge, credential, request }) {
         // Only a tempo charge the source signed binds it to the payer: a transaction or a proof.

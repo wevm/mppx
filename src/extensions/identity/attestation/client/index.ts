@@ -86,6 +86,7 @@ export function prover(config: prover.Config): Identity.Prover {
 
   return {
     scope: config.scope,
+    headers: [Constants.header.toLowerCase()],
     prove(request, context) {
       const origin = new URL(request.url).origin
       // A bearer attestation never goes over plaintext HTTP, except to localhost.

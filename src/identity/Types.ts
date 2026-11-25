@@ -80,7 +80,7 @@ export type ProtocolHeaders = {
 
 /** Verifies one identity protocol on the server, before any payment Challenge is issued. */
 export type Verifier<value = unknown> = {
-  /** Headers the protocol sends, beyond those in `Identity.Headers`, stripped by a proxy. */
+  /** Headers the protocol sends, such as a bearer proof, stripped by a proxy. */
   readonly headers?: ProtocolHeaders | undefined
   /**
    * When the verifier runs.
@@ -137,7 +137,7 @@ export type PaymentCheck<value = unknown> = {
    * created with `requiresAuth: true`, so Payment Credentials travel in `Payment-Authorization`.
    */
   readonly authorization?: boolean | undefined
-  /** Headers the check's protocol sends, beyond those in `Identity.Headers`, stripped by a proxy. */
+  /** Headers the check's protocol sends, such as a bearer proof, stripped by a proxy. */
   readonly headers?: ProtocolHeaders | undefined
   /** Identities the check requires, advertised in every 402 of the route. */
   readonly requires: readonly Requirement[]
@@ -224,8 +224,8 @@ export type Prover = {
   /** Origins the prover may run for, such as `['https://shop.example']`, or `'*'` for any origin. */
   readonly scope: readonly string[] | '*'
   /**
-   * Extra sensitive request headers the prover writes, such as a bearer token. Like those in
-   * `Identity.Headers.request`, the client strips them on a cross-origin redirect.
+   * Sensitive request headers the prover writes, such as a bearer token. The client strips them
+   * on a cross-origin redirect.
    */
   readonly headers?: readonly string[] | undefined
   /** Returns a new request carrying the protocol's identity material. */

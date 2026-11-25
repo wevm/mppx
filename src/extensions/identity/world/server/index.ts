@@ -43,6 +43,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     }),
   })
   return {
+    headers: inner.headers,
     async verify(request) {
       const result = await inner.verify(request)
       if (result.status !== 'valid') return result
