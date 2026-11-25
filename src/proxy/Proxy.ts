@@ -433,18 +433,20 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
   }
 }
 
-/** Sends one upstream request: the service's request rewrite, then the response header stripping. */
-async function send(options: proxyUpstreamAttempt.Options): Promise<Response> {
-  const { ctx, proxy, service, strip, upstreamRequest } = options
-  const rewritten = service.rewriteRequest
-    ? await service.rewriteRequest(upstreamRequest, ctx)
-    : upstreamRequest
-  return Headers.scrubResponse(await proxy(rewritten), strip)
+/** Applies the service's request rewrite, if any. */
+async function rewrite(options: proxyUpstreamAttempt.Options): Promise<Request> {
+  const { ctx, service, upstreamRequest } = options
+  return service.rewriteRequest ? service.rewriteRequest(upstreamRequest, ctx) : upstreamRequest
+}
+
+/** Sends a rewritten request upstream and strips the response's headers. */
+async function send(options: proxyUpstreamAttempt.Options, request: Request): Promise<Response> {
+  return Headers.scrubResponse(await options.proxy(request), options.strip)
 }
 
 /** Proxies one request without retaining a replay copy of its body. */
 async function proxyUpstreamOnce(options: proxyUpstreamAttempt.Options): Promise<Response> {
-  const response = await send(options)
+  const response = await send(options, await rewrite(options))
   return options.service.rewriteResponse
     ? options.service.rewriteResponse(response, options.ctx)
     : response
@@ -470,13 +472,11 @@ declare namespace proxyUpstreamAttempt {
 async function proxyUpstreamAttempt(
   options: proxyUpstreamAttempt.Options,
 ): Promise<proxyUpstreamAttempt.Result> {
-  const upstreamRequest = options.upstreamRequest.clone()
+  // The result carries the request as rewritten, as `onUpstreamError` documents.
+  let upstreamRequest = options.upstreamRequest.clone()
   try {
-    return {
-      error: undefined,
-      response: await send({ ...options, upstreamRequest }),
-      upstreamRequest,
-    }
+    upstreamRequest = await rewrite({ ...options, upstreamRequest })
+    return { error: undefined, response: await send(options, upstreamRequest), upstreamRequest }
   } catch (error) {
     return { error, response: undefined, upstreamRequest }
   }
