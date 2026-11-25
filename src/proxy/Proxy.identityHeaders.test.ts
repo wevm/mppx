@@ -6,40 +6,6 @@ import * as Mppx from '../server/Mppx.js'
 import * as Proxy from './Proxy.js'
 import * as Service from './Service.js'
 
-describe('stripHeaders', () => {
-  test('behavior: strips the listed headers in both directions', async () => {
-    let forwarded: Headers | undefined
-    const proxy = Proxy.create({
-      fetch: async (input, init) => {
-        forwarded = new Request(input, init).headers
-        return new Response('ok', {
-          headers: { 'Proof-Request': 'request', 'Proof-Result': 'error', 'X-Upstream': 'kept' },
-        })
-      },
-      services: [
-        Service.from('api', {
-          baseUrl: 'https://upstream.example',
-          routes: { 'GET /resource': true },
-        }),
-      ],
-      stripHeaders: { request: ['Proof-Response'], response: ['proof-request', 'proof-result'] },
-    })
-
-    const response = await proxy.fetch(
-      new Request('https://proxy.example/api/resource', {
-        headers: { 'Proof-Response': 'proof', 'X-Client': 'kept' },
-      }),
-    )
-
-    expect(response.status).toBe(200)
-    expect(forwarded?.has('proof-response')).toBe(false)
-    expect(forwarded?.get('x-client')).toBe('kept')
-    expect(response.headers.has('proof-request')).toBe(false)
-    expect(response.headers.has('proof-result')).toBe(false)
-    expect(response.headers.get('x-upstream')).toBe('kept')
-  })
-})
-
 describe('identity headers', () => {
   const method = Method.toServer(
     Method.from({
@@ -72,24 +38,30 @@ describe('identity headers', () => {
     verify: () => ({ status: 'valid', value: true }),
   }
 
-  async function run(identity: Parameters<typeof mppx.charge>[0]['identity']) {
-    let forwarded: Headers | undefined
-    const proxy = Proxy.create({
-      fetch: async (input, init) => {
-        forwarded = new Request(input, init).headers
-        return new Response('ok', {
-          headers: { 'Proof-Request': 'request', 'Proof-Result': 'error', 'X-Upstream': 'kept' },
-        })
-      },
+  type RouteOptions = Parameters<typeof mppx.charge>[0]
+
+  function create(options: Partial<RouteOptions>, fetch?: typeof globalThis.fetch) {
+    return Proxy.create({
+      ...(fetch && { fetch }),
       services: [
         Service.from('api', {
           baseUrl: 'https://upstream.example',
           routes: {
             'GET /free': true,
-            'GET /paid': mppx.charge({ amount: '1', identity }),
+            'GET /paid': mppx.charge({ amount: '1', ...options }),
           },
         }),
       ],
+    })
+  }
+
+  async function run(identity: RouteOptions['identity']) {
+    let forwarded: Headers | undefined
+    const proxy = create({ identity }, async (input, init) => {
+      forwarded = new Request(input, init).headers
+      return new Response('ok', {
+        headers: { 'Proof-Request': 'request', 'Proof-Result': 'error', 'X-Upstream': 'kept' },
+      })
     })
     const response = await proxy.fetch(
       new Request('https://proxy.example/api/free', {
@@ -123,5 +95,11 @@ describe('identity headers', () => {
     const { forwarded, response } = await run(undefined)
     expect(forwarded.get('proof-response')).toBe('proof')
     expect(response.headers.get('proof-request')).toBe('request')
+  })
+
+  test('error: an invalid declared header name throws at startup', () => {
+    expect(() =>
+      create({ identity: { payment: { ...check, headers: { response: ['proof-request '] } } } }),
+    ).toThrow('Invalid identity header name: "proof-request ".')
   })
 })

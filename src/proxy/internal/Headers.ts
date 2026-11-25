@@ -26,7 +26,7 @@ const paymentHeaders = new Set([
   'www-authenticate',
 ])
 
-/** Extra headers the proxy strips, beyond the built-in payment and identity headers. */
+/** Headers the proxy strips beyond the built-in ones, declared by its routes' identity protocols. */
 export type Strip = {
   /** Request headers never forwarded upstream, such as an identity proof. */
   readonly request?: readonly string[] | undefined
