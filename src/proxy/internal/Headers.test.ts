@@ -93,6 +93,18 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
+  test('behavior: strips client forwarding headers', () => {
+    const headers = new globalThis.Headers({
+      'CF-Connecting-IP': '1.2.3.4',
+      Forwarded: 'for=1.2.3.4',
+      'True-Client-IP': '1.2.3.4',
+      Via: '1.1 client',
+      'X-Real-IP': '1.2.3.4',
+      'X-Public': 'value',
+    })
+    expect([...Headers.scrub(headers).keys()]).toEqual(['x-public'])
+  })
+
   test('behavior: strips x-forwarded-* headers', () => {
     const headers = new globalThis.Headers({
       'X-Forwarded-For': '127.0.0.1',

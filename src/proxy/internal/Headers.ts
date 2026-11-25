@@ -11,6 +11,15 @@ const hopByHopHeaders = new Set([
   'trailer',
 ])
 
+// Client-supplied forwarding headers: a client could claim any address or path through them.
+const forwardingHeaders = new Set([
+  'cf-connecting-ip',
+  'forwarded',
+  'true-client-ip',
+  'via',
+  'x-real-ip',
+])
+
 // Payment credentials are consumed by the proxy and must never reach upstream services.
 const paymentHeaders = new Set([
   'accept-payment',
@@ -49,7 +58,7 @@ export function scrub(headers: Headers, strip?: Strip | undefined): Headers {
     if (lower === 'content-length') continue
     if (lower === 'cookie') continue
     if (hopByHopHeaders.has(lower)) continue
-    if (lower.startsWith('x-forwarded-')) continue
+    if (forwardingHeaders.has(lower) || lower.startsWith('x-forwarded-')) continue
 
     scrubbed.append(name, value)
   }
