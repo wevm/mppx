@@ -2,6 +2,7 @@ import { isInnerList, parseDictionary, Token } from 'structured-headers'
 
 import type * as Identity from '../../../../identity/Types.js'
 import type * as Store from '../../../../Store.js'
+import { Algorithms } from '../../Constants.js'
 import * as HttpMessageSignature from '../../internal/HttpMessageSignature.js'
 import * as JwkThumbprint from '../../internal/JwkThumbprint.js'
 import * as Verification from '../../internal/Verification.js'
@@ -43,6 +44,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
             return 'The Web Bot Auth key must be an extractable Ed25519 or RSA public key.'
           }
         },
+        algorithms: [Algorithms.ed25519, Algorithms.rsaPssSha512],
         maxAge,
         nonceNamespace: Constants.protocol,
         nonceStore: config.nonceStore,

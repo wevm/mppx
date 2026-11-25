@@ -8,6 +8,8 @@ export const Constants = {
   label: 'tap',
   /** Maximum lifetime, in seconds, permitted by TAP for an agent signature. */
   maximumSignatureLifetime: 8 * 60,
+  /** Largest clock skew, in seconds, a TAP verifier may be configured to allow. */
+  maximumClockSkew: 60,
   /** Default lifetime, in seconds, applied to TAP agent signatures. */
   defaultSignatureLifetime: 8 * 60,
   /** TAP tags that identify the signed interaction's intent. */
