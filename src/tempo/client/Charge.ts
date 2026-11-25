@@ -154,9 +154,15 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const { request } = challenge
       const { amount, methodDetails } = request
-      const supportedModes = (methodDetails?.supportedModes as
-        | readonly Methods.ChargeMode[]
-        | undefined) ?? ['pull', 'push']
+      // A memo the server sets is shared by every payer of the route, so it can't bind a transfer
+      // the client broadcasts to this challenge: never push (hash or Zone) for such a challenge.
+      const requiredMemo = (methodDetails as { memo?: string | undefined } | undefined)?.memo
+      const supportedModes = (
+        (methodDetails?.supportedModes as readonly Methods.ChargeMode[] | undefined) ?? [
+          'pull',
+          'push',
+        ]
+      ).filter((mode) => !(requiredMemo && mode === 'push'))
       const zoneChain = parameters.zone?.client.chain
       const zoneId = parameters.zone
         ? (parameters.zone.zoneId ?? Zone.idFromChainId(zoneChain?.id ?? 0))
@@ -238,9 +244,7 @@ export function charge(parameters: charge.Parameters = {}) {
       // A memo the server requires (`methodDetails.memo`, which other MPP servers may set)
       // goes on the primary transfer as is; otherwise the optional attribution memo does.
       const memo =
-        ((methodDetails as { memo?: string | undefined } | undefined)?.memo as
-          | Hex.Hex
-          | undefined) ??
+        (requiredMemo as Hex.Hex | undefined) ??
         Attribution.encode({
           challengeId: challenge.id,
           clientId,
@@ -364,7 +368,8 @@ export function charge(parameters: charge.Parameters = {}) {
 
         const preferredMode = account.type === 'json-rpc' ? 'push' : 'pull'
         if (supportedModes.includes(preferredMode)) return preferredMode
-        return supportedModes[0]!
+        if (!supportedModes[0]) throw new Error('Challenge supports no payment mode.')
+        return supportedModes[0]
       })()
 
       const validBefore = (() => {

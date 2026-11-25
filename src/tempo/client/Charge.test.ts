@@ -446,6 +446,85 @@ describe('tempo.charge client', () => {
     }
   })
 
+  describe('a challenge whose request sets a memo', () => {
+    const memo = `0x${'11'.repeat(32)}` as const
+
+    function memoChallenge(supportedModes: readonly ('pull' | 'push')[]) {
+      const challenge = createChallenge({ amount: '1', chainId: 42431, supportedModes })
+      return {
+        ...challenge,
+        request: {
+          ...challenge.request,
+          methodDetails: { ...challenge.request.methodDetails, memo },
+        },
+      } as typeof challenge
+    }
+
+    async function pay(parameters: {
+      mode?: 'pull' | 'push' | undefined
+      supportedModes: readonly ('pull' | 'push')[]
+    }) {
+      vi.resetModules()
+      const sendCallsSync = vi.fn(async () => ({
+        receipts: [{ transactionHash: `0x${'ab'.repeat(32)}` }],
+      }))
+      const signTransaction = vi.fn(async () => '0xdeadbeef')
+      vi.doMock('viem/actions', async (importOriginal) => ({
+        ...(await importOriginal<typeof import('viem/actions')>()),
+        prepareTransactionRequest: vi.fn(async () => ({})),
+        sendCallsSync,
+        sendTransactionSync: vi.fn(),
+        signTransaction,
+      }))
+      try {
+        const { charge: chargeWithMockedActions } = await import('./Charge.js')
+        const rpcClient = createClient({
+          account: account.address,
+          chain: { ...tempoLocalnet, id: 42431 },
+          transport: http('http://127.0.0.1'),
+        })
+        const result = await chargeWithMockedActions({
+          account: account.address,
+          getClient: () => rpcClient,
+          ...(parameters.mode ? { mode: parameters.mode } : {}),
+        })
+          .createCredential({ challenge: memoChallenge(parameters.supportedModes), context: {} })
+          .then(
+            (credential) => Credential.deserialize(credential),
+            (error: Error) => error,
+          )
+        return { result, sendCallsSync }
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    }
+
+    test('refuses an explicit push', async () => {
+      const { result, sendCallsSync } = await pay({
+        mode: 'push',
+        supportedModes: ['pull', 'push'],
+      })
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toBe('Challenge does not support push mode.')
+      expect(sendCallsSync).not.toHaveBeenCalled()
+    })
+
+    test('refuses a push-only challenge without paying', async () => {
+      const { result, sendCallsSync } = await pay({ supportedModes: ['push'] })
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toBe('Challenge supports no payment mode.')
+      expect(sendCallsSync).not.toHaveBeenCalled()
+    })
+
+    test('pays a JSON-RPC account by pull instead of its preferred push', async () => {
+      const { result, sendCallsSync } = await pay({ supportedModes: ['pull', 'push'] })
+      expect(sendCallsSync).not.toHaveBeenCalled()
+      expect(result).not.toBeInstanceOf(Error)
+      expect((result as Credential.Credential).payload).toMatchObject({ type: 'transaction' })
+    })
+  })
+
   test('under spending options, never broadcasts or signs a challenge that expired meanwhile', async () => {
     vi.resetModules()
     const sendCallsSync = vi.fn(async () => ({
