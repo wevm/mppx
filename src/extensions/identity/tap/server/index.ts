@@ -13,17 +13,35 @@ import type * as Types from '../Types.js'
  * recognition and payment-container verification stay protocol-specific and
  * are intentionally not inferred from this header-only verifier.
  *
+ * A request carrying more than one TAP signature is rejected, since it is ambiguous which one
+ * identifies the agent.
+ *
  * @example
  * ```ts
- * const tap = Tap.Server.verifier({ keyResolver, nonceStore })
+ * const tap = Tap.Server.verifier({
+ *   keyResolver: Tap.Jwks.resolver({ url: 'https://agent-provider.example/.well-known/jwks.json' }),
+ *   nonceStore: Store.redis(redis),
+ *   // Bind payment requests to their method and body, beyond TAP's minimum.
+ *   requiredComponents: { payment: ['@method', 'content-digest'] },
+ * })
  * mppx.charge({ amount: '1', identity: [tap] })
  * ```
  */
 export function verifier(config: verifier.Config): Identity.Verifier<Types.VerifiedRequest> {
+  const clockSkew = config.clockSkew ?? 0
+  if (!Number.isInteger(clockSkew) || clockSkew < 0 || clockSkew > Constants.maximumClockSkew)
+    throw new RangeError(
+      `TAP clockSkew must be an integer from 0 to ${Constants.maximumClockSkew}.`,
+    )
+  const extra = {
+    [Constants.tags.browse]: config.requiredComponents?.browse ?? [],
+    [Constants.tags.payment]: config.requiredComponents?.payment ?? [],
+  }
   return {
     stage: 'request',
     async verify(request) {
       const result = await HttpMessageSignature.verify(request, {
+        clockSkew,
         keyResolver: config.keyResolver,
         maxAge: Constants.maximumSignatureLifetime,
         nonceNamespace: Constants.protocol,
@@ -32,6 +50,13 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         nonceStore: config.nonceStore,
         requiredComponents: Constants.requiredComponents,
         tag: [Constants.tags.browse, Constants.tags.payment],
+        unique: true,
+        validate(input) {
+          const required = extra[input.tag as keyof typeof extra] ?? []
+          if (!required.every((id) => input.components.some((component) => component.id === id)))
+            return 'The signature does not cover the components this verifier requires.'
+          return undefined
+        },
       })
       if (result.status !== 'verified') return Verification.fromSignature(result)
       return {
@@ -51,9 +76,34 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
 
 export declare namespace verifier {
   type Config = {
-    /** Resolves a TAP-approved public key by its `keyid` and signature algorithm. */
+    /**
+     * Resolves a TAP-approved public key by its `keyid` and signature algorithm, such as
+     * `Tap.Jwks.resolver` for an agent provider's JSON Web Key Set.
+     */
     keyResolver: SignatureTypes.KeyResolver
-    /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
+    /**
+     * Atomically consumes each nonce. `Store.memory()` covers one long-lived process only: with
+     * several instances, use a shared store such as `Store.redis`, `Store.upstash`,
+     * `Store.durableObject` or `Store.postgres`, so a nonce one instance accepted is refused by
+     * the others for the signature's lifetime.
+     */
     nonceStore: Store.AtomicStore
+    /**
+     * Seconds the agent's clock may run ahead of or behind this server's. TAP itself allows none.
+     * @default 0
+     */
+    clockSkew?: number | undefined
+    /**
+     * Components a signature must cover beyond TAP's `@authority` and `@path`, by intent. A
+     * covered `content-digest` is checked against the request body.
+     */
+    requiredComponents?:
+      | {
+          /** Required on `agent-browser-auth` signatures. */
+          browse?: readonly string[] | undefined
+          /** Required on `agent-payer-auth` signatures, such as `['@method', 'content-digest']`. */
+          payment?: readonly string[] | undefined
+        }
+      | undefined
   }
 }

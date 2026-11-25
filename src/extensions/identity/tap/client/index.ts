@@ -21,6 +21,7 @@ export function prover(config: prover.Config): Identity.Prover {
     config.intent === Constants.intents.payment ? Constants.tags.payment : Constants.tags.browse
   const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime
   Signer.resolve(config.key)
+  const components = [...Constants.requiredComponents, ...(config.components ?? [])]
   if (
     !Number.isInteger(expiresIn) ||
     expiresIn <= 0 ||
@@ -31,16 +32,21 @@ export function prover(config: prover.Config): Identity.Prover {
     )
   return {
     scope: config.scope,
-    prove(request, context) {
-      return HttpMessageSignature.sign(request, {
-        components: Constants.requiredComponents,
-        context,
-        expiresIn,
-        key: config.key,
-        keyId: config.keyId,
-        label: config.label ?? Constants.label,
-        tag,
-      })
+    async prove(request, context) {
+      return HttpMessageSignature.sign(
+        components.includes(HttpMessageSignature.Constants.components.contentDigest)
+          ? await HttpMessageSignature.withContentDigest(request)
+          : request,
+        {
+          components,
+          context,
+          expiresIn,
+          key: config.key,
+          keyId: config.keyId,
+          label: config.label ?? Constants.label,
+          tag,
+        },
+      )
     },
   }
 }
@@ -60,6 +66,12 @@ export declare namespace prover {
     scope: Identity.Prover['scope']
     /** Signature lifetime in seconds. TAP permits at most eight minutes. @default 480 */
     expiresIn?: number | undefined
+    /**
+     * Components to cover beyond TAP's required `@authority` and `@path`, such as `@method`,
+     * `@query` or `content-digest`. With `content-digest`, the prover adds a SHA-256
+     * `Content-Digest` header of the body when the request has none.
+     */
+    components?: readonly string[] | undefined
     /** RFC 9421 dictionary label. @default 'tap' */
     label?: string | undefined
   }

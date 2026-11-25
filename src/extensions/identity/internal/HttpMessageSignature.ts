@@ -1,3 +1,4 @@
+import { Base64 } from 'ox'
 import {
   isInnerList,
   parseDictionary,
@@ -8,6 +9,7 @@ import {
 } from 'structured-headers'
 import type { BareItem, Dictionary, InnerList, Item } from 'structured-headers'
 
+import { constantTimeEqual } from '../../../internal/constantTimeEqual.js'
 import type { MaybePromise } from '../../../internal/types.js'
 import * as Store from '../../../Store.js'
 import { Algorithms, Headers as SignatureHeaders } from '../Constants.js'
@@ -21,6 +23,8 @@ export const Constants = {
   components: {
     /** The target host and non-default port. */
     authority: '@authority',
+    /** The RFC 9530 `Content-Digest` request header, checked against the body. */
+    contentDigest: 'content-digest',
     /** The case-sensitive HTTP request method. */
     method: '@method',
     /** The request URL path without its query string. */
@@ -168,6 +172,8 @@ export async function verify(
   options: {
     keyResolver: KeyResolver
     maxAge: number
+    /** Seconds a signer's clock may differ from this one. @default 0 */
+    clockSkew?: number | undefined
     nonceNamespace: string
     /**
      * Whether a nonce is single-use per key ID (`'key'`) or across every key in the namespace
@@ -177,6 +183,8 @@ export async function verify(
     nonceStore: Store.AtomicStore
     requiredComponents: readonly string[]
     tag: string | readonly string[]
+    /** Rejects a request carrying more than one signature with an expected tag. @default false */
+    unique?: boolean | undefined
     /** Algorithms this profile accepts. @default every algorithm in {@link Algorithms} */
     algorithms?: readonly SignatureAlgorithm[] | undefined
     validate?: ((input: SignatureInput, request: Request) => string | undefined) | undefined
@@ -189,7 +197,7 @@ export async function verify(
       | undefined
   },
 ): Promise<VerificationResult> {
-  const parsed = parse(request, options.tag)
+  const parsed = parse(request, options.tag, options.unique ?? false)
   if (!parsed) return { status: 'absent' }
   if (parsed.reason) return { status: 'invalid', reason: parsed.reason }
   if (!parsed.input || !parsed.signature)
@@ -203,8 +211,13 @@ export async function verify(
       status: 'invalid',
       reason: 'The signature does not cover the required request components.',
     }
+  const skew = options.clockSkew ?? 0
   const now = Math.floor(Date.now() / 1000)
-  if (input.created > now || input.expires <= now || input.expires - input.created > options.maxAge)
+  if (
+    input.created > now + skew ||
+    input.expires <= now - skew ||
+    input.expires - input.created > options.maxAge
+  )
     return { status: 'invalid', reason: 'The signature is expired or has an invalid lifetime.' }
   if (options.validate) {
     const reason = options.validate(input, request)
@@ -246,6 +259,10 @@ export async function verify(
     valid = false
   }
   if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
+  if (hasComponent(input.components, Constants.components.contentDigest)) {
+    const reason = await checkContentDigest(request)
+    if (reason) return { status: 'invalid', reason }
+  }
   try {
     if (
       !(await Store.tryClaim(
@@ -253,14 +270,15 @@ export async function verify(
         options.nonceScope === 'namespace'
           ? `${options.nonceNamespace}:${input.nonce}`
           : `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
-        input.expires * 1000,
+        // Held for as long as the skewed lifetime check could still accept the signature.
+        (input.expires + skew) * 1000,
       ))
     )
       return { status: 'invalid', reason: 'The signature nonce has already been used.' }
   } catch {
     return { status: 'unverified', reason: 'Replay protection is unavailable.' }
   }
-  if (input.expires <= Math.floor(Date.now() / 1000))
+  if (input.expires <= Math.floor(Date.now() / 1000) - skew)
     return { status: 'invalid', reason: 'The signature has expired.' }
   return { status: 'verified', input }
 }
@@ -268,6 +286,7 @@ export async function verify(
 function parse(
   request: Request,
   expectedTag: string | readonly string[],
+  unique: boolean,
 ): { input?: SignatureInput; reason?: string; signature?: Uint8Array } | undefined {
   const inputHeader = request.headers.get(SignatureHeaders.signatureInput)
   const signatureHeader = request.headers.get(SignatureHeaders.signature)
@@ -285,6 +304,8 @@ function parse(
   if (!haveSameKeys(inputs, signatures))
     return { reason: 'Signature-Input and Signature do not contain the same labels.' }
   const tags = new Set(typeof expectedTag === 'string' ? [expectedTag] : expectedTag)
+  if (unique && [...inputs.values()].filter((entry) => hasExpectedTag(entry, tags)).length > 1)
+    return { reason: 'More than one matching HTTP message signature was provided.' }
   for (const [label, entry] of inputs) {
     if (!hasExpectedTag(entry, tags)) continue
     const input = toSignatureInput(label, entry)
@@ -478,6 +499,54 @@ function parseHeaderDictionary(headers: Headers, name: string): Dictionary {
   } catch {
     throw new Error(`HTTP header "${name}" is not a structured dictionary.`)
   }
+}
+
+/** RFC 9530 digest algorithms this verifier checks, by their `Content-Digest` key. */
+const digestAlgorithms = { 'sha-256': 'SHA-256', 'sha-512': 'SHA-512' } as const
+
+/**
+ * Returns a request with an RFC 9530 `sha-256` `Content-Digest` of its body, so a signature can
+ * cover it. A request that already has the header is returned unchanged.
+ */
+export async function withContentDigest(request: Request): Promise<Request> {
+  if (request.headers.has('content-digest')) return request
+  if (request.bodyUsed || request.body?.locked)
+    throw new TypeError('Cannot digest a request whose body has already been read or is locked.')
+  const digest = await crypto.subtle.digest('SHA-256', await request.clone().arrayBuffer())
+  const headers = new Headers(request.headers)
+  headers.set('Content-Digest', `sha-256=:${Base64.fromBytes(new Uint8Array(digest))}:`)
+  return new Request(request, { headers })
+}
+
+/**
+ * Checks a covered `Content-Digest` against the request body. Every supported digest present must
+ * match, and at least one must be present. Returns the reason it fails, or `undefined`.
+ */
+async function checkContentDigest(request: Request): Promise<string | undefined> {
+  let digests: Dictionary
+  try {
+    digests = parseDictionary(request.headers.get('content-digest') ?? '')
+  } catch {
+    return 'The Content-Digest header is malformed.'
+  }
+  const expected: { algorithm: string; value: Uint8Array }[] = []
+  for (const [key, algorithm] of Object.entries(digestAlgorithms)) {
+    const member = digests.get(key)
+    if (!member) continue
+    if (isInnerList(member) || !(member[0] instanceof ArrayBuffer))
+      return 'The Content-Digest header is malformed.'
+    expected.push({ algorithm, value: new Uint8Array(member[0]) })
+  }
+  if (!expected.length) return 'The Content-Digest header has no supported digest.'
+  if (request.bodyUsed || request.body?.locked)
+    return 'The request body is unavailable to check its Content-Digest.'
+  const body = await request.clone().arrayBuffer()
+  for (const { algorithm, value } of expected) {
+    const actual = new Uint8Array(await crypto.subtle.digest(algorithm, body))
+    if (!constantTimeEqual(Base64.fromBytes(actual), Base64.fromBytes(value)))
+      return 'The Content-Digest does not match the request body.'
+  }
+  return undefined
 }
 
 function encode(value: string): Uint8Array {

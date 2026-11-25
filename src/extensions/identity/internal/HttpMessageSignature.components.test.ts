@@ -116,7 +116,9 @@ test('verifies an external TAP signature covering additional request components 
   const unsigned = new Headers(headers)
   unsigned.set('X-Unrelated', 'changed')
   expect(
-    await verifier(keys.publicKey).verify(new Request(url, { method: 'POST', headers: unsigned })),
+    await verifier(keys.publicKey).verify(
+      new Request(url, { method: 'POST', headers: unsigned, body: 'payload' }),
+    ),
   ).toMatchObject({ status: 'valid' })
 })
 
