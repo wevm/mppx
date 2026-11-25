@@ -13,8 +13,10 @@ export type Resolved = {
 
 const webCrypto = {
   [Algorithms.ed25519]: { name: 'Ed25519' },
+  [Algorithms.ecdsaP256Sha256]: { name: 'ECDSA', hash: 'SHA-256' },
+  [Algorithms.ecdsaP384Sha384]: { name: 'ECDSA', hash: 'SHA-384' },
   [Algorithms.rsaPssSha512]: { name: 'RSA-PSS', saltLength: 64 },
-} as const satisfies Record<SignatureAlgorithm, AlgorithmIdentifier | RsaPssParams>
+} as const satisfies Record<SignatureAlgorithm, AlgorithmIdentifier | RsaPssParams | EcdsaParams>
 
 /**
  * Checks a {@link SigningKey} and returns how to sign with it.
@@ -86,6 +88,11 @@ export function resolve(
 /** The signature algorithm a key is for, or `undefined` when it is not supported. */
 function algorithmOf(key: CryptoKey): SignatureAlgorithm | undefined {
   if (key.algorithm.name === 'Ed25519') return Algorithms.ed25519
+  if (key.algorithm.name === 'ECDSA') {
+    const { namedCurve } = key.algorithm as EcKeyAlgorithm
+    if (namedCurve === 'P-256') return Algorithms.ecdsaP256Sha256
+    if (namedCurve === 'P-384') return Algorithms.ecdsaP384Sha384
+  }
   if (
     key.algorithm.name === 'RSA-PSS' &&
     (key.algorithm as RsaHashedKeyAlgorithm).hash?.name === 'SHA-512'
@@ -95,9 +102,13 @@ function algorithmOf(key: CryptoKey): SignatureAlgorithm | undefined {
 }
 
 function describe(algorithms: readonly SignatureAlgorithm[]): string {
-  return algorithms
-    .map((algorithm) => (algorithm === Algorithms.ed25519 ? 'Ed25519' : 'RSA-PSS SHA-512'))
-    .join(' or ')
+  const descriptions = {
+    [Algorithms.ed25519]: 'Ed25519',
+    [Algorithms.ecdsaP256Sha256]: 'ECDSA P-256 SHA-256',
+    [Algorithms.ecdsaP384Sha384]: 'ECDSA P-384 SHA-384',
+    [Algorithms.rsaPssSha512]: 'RSA-PSS SHA-512',
+  }
+  return algorithms.map((algorithm) => descriptions[algorithm]).join(' or ')
 }
 
 function invalidKey() {

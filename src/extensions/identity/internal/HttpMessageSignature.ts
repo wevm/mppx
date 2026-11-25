@@ -34,11 +34,25 @@ const algorithmDescriptors = {
   [Algorithms.ed25519]: {
     hash: undefined,
     keyAlgorithm: 'Ed25519',
+    namedCurve: undefined,
     webCryptoAlgorithm: 'Ed25519',
+  },
+  [Algorithms.ecdsaP256Sha256]: {
+    hash: undefined,
+    keyAlgorithm: 'ECDSA',
+    namedCurve: 'P-256',
+    webCryptoAlgorithm: { name: 'ECDSA', hash: 'SHA-256' },
+  },
+  [Algorithms.ecdsaP384Sha384]: {
+    hash: undefined,
+    keyAlgorithm: 'ECDSA',
+    namedCurve: 'P-384',
+    webCryptoAlgorithm: { name: 'ECDSA', hash: 'SHA-384' },
   },
   [Algorithms.rsaPssSha512]: {
     hash: 'SHA-512',
     keyAlgorithm: 'RSA-PSS',
+    namedCurve: undefined,
     webCryptoAlgorithm: { name: 'RSA-PSS', saltLength: 64 },
   },
 } as const satisfies Record<
@@ -46,7 +60,8 @@ const algorithmDescriptors = {
   {
     hash: string | undefined
     keyAlgorithm: string
-    webCryptoAlgorithm: AlgorithmIdentifier | RsaPssParams
+    namedCurve: string | undefined
+    webCryptoAlgorithm: AlgorithmIdentifier | RsaPssParams | EcdsaParams
   }
 >
 
@@ -117,6 +132,8 @@ export async function sign(
     parameters,
     tag: options.tag,
   }
+  if (!hasValidComponents(input.components))
+    throw new Error('Covered components must be unique and must not include "@signature-params".')
   // Check the existing signatures first, so a request this refuses never reaches a remote signer.
   const headers = new Headers(request.headers)
   const inputs = parseHeaderDictionary(headers, SignatureHeaders.signatureInput)
@@ -146,9 +163,16 @@ export async function verify(
     keyResolver: KeyResolver
     maxAge: number
     nonceNamespace: string
+    /**
+     * Whether a nonce is single-use per key ID (`'key'`) or across every key in the namespace
+     * (`'namespace'`). @default 'key'
+     */
+    nonceScope?: 'key' | 'namespace' | undefined
     nonceStore: Store.AtomicStore
     requiredComponents: readonly string[]
     tag: string | readonly string[]
+    /** Algorithms this profile accepts. @default every algorithm in {@link Algorithms} */
+    algorithms?: readonly SignatureAlgorithm[] | undefined
     validate?: ((input: SignatureInput, request: Request) => string | undefined) | undefined
     validateKey?:
       | ((
@@ -165,6 +189,8 @@ export async function verify(
   if (!parsed.input || !parsed.signature)
     return { status: 'invalid', reason: 'The HTTP message signature is malformed.' }
   const { input, signature } = parsed
+  if (options.algorithms && !options.algorithms.includes(input.algorithm))
+    return { status: 'invalid', reason: 'The signature algorithm is not supported.' }
 
   if (!options.requiredComponents.every((component) => hasComponent(input.components, component)))
     return {
@@ -216,9 +242,11 @@ export async function verify(
   if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
   try {
     if (
-      !(await Store.tryClaim(
+      !(await claimNonce(
         options.nonceStore,
-        `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
+        options.nonceNamespace,
+        options.nonceScope,
+        input,
         input.expires * 1000,
       ))
     )
@@ -229,6 +257,24 @@ export async function verify(
   if (input.expires <= Math.floor(Date.now() / 1000))
     return { status: 'invalid', reason: 'The signature has expired.' }
   return { status: 'verified', input }
+}
+
+/**
+ * Claims a signature's nonce. A namespace-wide claim also claims the per-key ID entry, so a
+ * verifier that still claims per key (an earlier release, mid-deploy) refuses a nonce this one
+ * accepted, and this one refuses a nonce such a verifier accepted.
+ */
+async function claimNonce(
+  store: Store.AtomicStore,
+  namespace: string,
+  scope: 'key' | 'namespace' | undefined,
+  input: SignatureInput,
+  expires: number,
+): Promise<boolean> {
+  const perKey = await Store.tryClaim(store, `${namespace}:${input.keyId}:${input.nonce}`, expires)
+  if (scope !== 'namespace') return perKey
+  const shared = await Store.tryClaim(store, `${namespace}:${input.nonce}`, expires)
+  return perKey && shared
 }
 
 function parse(
@@ -288,6 +334,7 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
     id: id as string,
     parameters,
   }))
+  if (!hasValidComponents(components)) return undefined
   const created = parameters.get('created')
   const expires = parameters.get('expires')
   const algorithm = parameters.get('alg')
@@ -325,14 +372,17 @@ function isSignatureAlgorithm(value: unknown): value is SignatureAlgorithm {
 }
 
 function keySupportsAlgorithm(key: CryptoKey, algorithm: SignatureAlgorithm): boolean {
-  const { hash, keyAlgorithm } = algorithmDescriptors[algorithm]
+  const { hash, keyAlgorithm, namedCurve } = algorithmDescriptors[algorithm]
   return (
     key.algorithm.name === keyAlgorithm &&
-    (!hash || (key.algorithm as RsaHashedKeyAlgorithm).hash.name === hash)
+    (!hash || (key.algorithm as RsaHashedKeyAlgorithm).hash.name === hash) &&
+    (!namedCurve || (key.algorithm as EcKeyAlgorithm).namedCurve === namedCurve)
   )
 }
 
-function webCryptoAlgorithm(algorithm: SignatureAlgorithm): AlgorithmIdentifier | RsaPssParams {
+function webCryptoAlgorithm(
+  algorithm: SignatureAlgorithm,
+): AlgorithmIdentifier | RsaPssParams | EcdsaParams {
   return algorithmDescriptors[algorithm].webCryptoAlgorithm
 }
 
@@ -399,6 +449,15 @@ function hasExpectedTag(entry: unknown, tags: ReadonlySet<string>): boolean {
   if (!isInnerList(value)) return false
   const tag = value[1].get('tag')
   return typeof tag === 'string' && tags.has(tag)
+}
+
+/** RFC 9421 §2.5: each component is covered at most once, and never `@signature-params`. */
+function hasValidComponents(components: readonly Component[]): boolean {
+  const identifiers = components.map(serializeComponent)
+  return (
+    new Set(identifiers).size === identifiers.length &&
+    !components.some((component) => component.id === Constants.components.signatureParams)
+  )
 }
 
 function serializeComponent(component: Component): string {
