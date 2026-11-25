@@ -422,7 +422,8 @@ export type RouteConfig = {
 
 /**
  * Returns the protocol headers declared by identity verifiers and payment checks, lowercased and
- * deduplicated, such as for a proxy to strip.
+ * deduplicated, such as for a proxy to strip. Throws a `TypeError` for a name that is not an HTTP
+ * field name, checked before lowercasing so a Unicode name cannot fold into an ASCII one.
  */
 export function headersOf(
   checks: readonly (Types.Verifier | Types.PaymentCheck | undefined)[],
@@ -430,7 +431,13 @@ export function headersOf(
   const names = (key: keyof Types.ProtocolHeaders) =>
     Object.freeze([
       ...new Set(
-        checks.flatMap((check) => check?.headers?.[key] ?? []).map((n) => n.toLowerCase()),
+        checks
+          .flatMap((check) => check?.headers?.[key] ?? [])
+          .map((name) => {
+            if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+              throw new TypeError(`Invalid identity header name: ${JSON.stringify(name)}.`)
+            return name.toLowerCase()
+          }),
       ),
     ])
   return Object.freeze({ request: names('request'), response: names('response') })

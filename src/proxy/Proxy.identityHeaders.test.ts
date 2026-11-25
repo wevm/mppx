@@ -97,6 +97,12 @@ describe('identity headers', () => {
     expect(response.headers.get('proof-request')).toBe('request')
   })
 
+  test('error: a Unicode name that folds into an ASCII one throws', () => {
+    expect(() =>
+      create({ identity: { payment: { ...check, headers: { request: ['x-Key'] } } } }),
+    ).toThrow('Invalid identity header name')
+  })
+
   test('error: an invalid declared header name throws at startup', () => {
     expect(() =>
       create({ identity: { payment: { ...check, headers: { response: ['proof-request '] } } } }),

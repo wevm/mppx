@@ -591,8 +591,8 @@ function requiresManualGeneration(
 /**
  * Headers the proxy strips beyond the built-in ones: those declared by the identity verifiers and
  * payment checks of its routes (`headers` on each), so a route that uses an identity extension
- * never needs them listed by hand. Throws for an invalid header name, so a bad declaration fails
- * at startup instead of after an upstream response.
+ * never needs them listed by hand. The names are validated and lowercased when each route is
+ * created (`IdentityServer.headersOf`), so a bad declaration fails before the proxy starts.
  */
 function stripHeadersOf(services: readonly Service.Service[]): Headers.Strip {
   type Offer = Metadata.Offer & { _identityHeaders?: Headers.Strip | undefined }
@@ -603,18 +603,11 @@ function stripHeadersOf(services: readonly Service.Service[]): Headers.Strip {
       const handler = endpoint === undefined ? undefined : Service.getHandler(endpoint)
       if (!handler || !('_internal' in handler) || !handler._internal) continue
       for (const offer of Metadata.offers(handler._internal as Metadata.Metadata) as Offer[]) {
-        for (const name of offer._identityHeaders?.request ?? []) request.add(headerName(name))
-        for (const name of offer._identityHeaders?.response ?? []) response.add(headerName(name))
+        for (const name of offer._identityHeaders?.request ?? []) request.add(name)
+        for (const name of offer._identityHeaders?.response ?? []) response.add(name)
       }
     }
   return { request: [...request], response: [...response] }
-}
-
-/** Returns a lowercased header name, or throws when it is not a valid one. */
-function headerName(name: string): string {
-  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
-    throw new TypeError(`Invalid identity header name: ${JSON.stringify(name)}.`)
-  return name.toLowerCase()
 }
 
 /** Identity and session offers must re-run authorization and delivery-time metering on every request. */
