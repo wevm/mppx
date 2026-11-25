@@ -285,3 +285,22 @@ describe('timing', () => {
     await expect(lookup()).rejects.toThrow('The JWKS is unavailable.')
   })
 })
+
+test('fails closed when a refetch fails after maxStale has passed', async () => {
+  vi.useFakeTimers({ now: 1_000_000, toFake: ['Date'] })
+  const keys = await generate({ name: 'Ed25519' })
+  const jwk = await jwkOf(keys)
+  let calls = 0
+  const fetch = (async () => {
+    calls++
+    if (calls === 1) return Response.json({ keys: [jwk] })
+    // The refetch starts before the deadline and fails after it.
+    vi.setSystemTime(1_000_000 + 61_000)
+    throw new Error('down')
+  }) as typeof globalThis.fetch
+  const resolve = Tap.Jwks.resolver({ fetch, maxStale: 60, refreshInterval: 1, ttl: 10, url })
+  const lookup = () => resolve({ algorithm: 'ed25519', keyId: 'agent', request: new Request(url) })
+  await lookup()
+  vi.setSystemTime(1_000_000 + 59_000)
+  await expect(lookup()).rejects.toThrow('down')
+})

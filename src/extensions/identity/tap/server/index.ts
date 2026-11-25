@@ -53,7 +53,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
         unique: true,
         validate(input) {
           const required = extra[input.tag as keyof typeof extra] ?? []
-          if (!required.every((id) => input.components.some((component) => component.id === id)))
+          if (!required.every((id) => HttpMessageSignature.coversWholeField(input.components, id)))
             return 'The signature does not cover the components this verifier requires.'
           return undefined
         },

@@ -247,3 +247,80 @@ describe('several signatures', () => {
     expect((await verifier().verify(await prover.prove(other, context()))).status).toBe('valid')
   })
 })
+
+describe('review fixes', () => {
+  const digest = 'sha-256=:' + Buffer.alloc(32).toString('base64') + ':'
+
+  async function signCovering(component: HttpMessageSignature.ComponentInput, request: Request) {
+    const keys = await keyPair()
+    const signed = await HttpMessageSignature.sign(request, {
+      components: ['@authority', '@path', component],
+      context: context(),
+      key: keys,
+      keyId: 'agent',
+      label: 'tap',
+      tag: 'agent-payer-auth',
+    })
+    return { keys, signed }
+  }
+
+  test('rejects a signature that covers only one Content-Digest member', async () => {
+    const body = 'body'
+    const real =
+      'sha-256=:' +
+      Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))).toString(
+        'base64',
+      ) +
+      ':'
+    const { keys, signed } = await signCovering(
+      { id: 'content-digest', parameters: new Map([['key', 'md5']]) },
+      new Request(url, {
+        body,
+        headers: { 'Content-Digest': 'md5=:AAAAAAAAAAAAAAAAAAAAAA==:, ' + real },
+        method: 'POST',
+      }),
+    )
+    const strict = Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Store.memory(),
+      requiredComponents: { payment: ['content-digest'] },
+    })
+    expect(await strict.verify(signed.clone())).toEqual({
+      reason: 'The signature does not cover the components this verifier requires.',
+      status: 'invalid',
+    })
+    const plain = Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Store.memory(),
+    })
+    expect(await plain.verify(signed)).toEqual({
+      reason: 'The signature must cover the whole Content-Digest field.',
+      status: 'invalid',
+    })
+  })
+
+  test('rejects a body that fails while it is read', async () => {
+    const stream = new ReadableStream({
+      pull(controller) {
+        controller.error(new Error('aborted'))
+      },
+    })
+    const { keys, signed } = await signCovering(
+      'content-digest',
+      new Request(url, {
+        body: stream,
+        duplex: 'half',
+        headers: { 'Content-Digest': digest },
+        method: 'POST',
+      } as RequestInit),
+    )
+    const verifier = Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Store.memory(),
+    })
+    expect(await verifier.verify(signed)).toEqual({
+      reason: 'The request body could not be read to check its Content-Digest.',
+      status: 'invalid',
+    })
+  })
+})

@@ -117,7 +117,8 @@ export function resolver(options: resolver.Options): KeyResolver {
       } catch (error) {
         // A failed refetch for an unknown key ID cannot say it is unknown: it may be newly rotated
         // in. Only a set that already went stale is served through an outage.
-        if (!fresh && good && now - good.fetchedAt <= maxStale) return good.keys
+        // Measured after the fetch, which may have outlasted the deadline.
+        if (!fresh && good && Date.now() - good.fetchedAt <= maxStale) return good.keys
         throw error
       }
     }
