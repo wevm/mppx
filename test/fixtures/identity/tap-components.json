@@ -1,0 +1,46 @@
+{
+  "description": "TAP agent-recognition signature vectors (RFC 9421). Keys are RFC 9421 Appendix B test keys, plus a P-384 test key made for these vectors. Signatures are made with node:crypto.",
+  "created": 1767225600,
+  "expires": 1767226080,
+  "keys": {
+    "test-key-ed25519": {
+      "publicKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+      },
+      "privateKey": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+        "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+      }
+    }
+  },
+  "vectors": [
+    {
+      "name": "ed25519 with @method, @scheme and @query",
+      "keyid": "test-key-ed25519",
+      "alg": "ed25519",
+      "request": {
+        "method": "POST",
+        "url": "https://merchant.example/checkout?cart=1&cart=2&q=a%2Fb"
+      },
+      "signatureBase": "\"@method\": POST\n\"@scheme\": https\n\"@authority\": merchant.example\n\"@path\": /checkout\n\"@query\": ?cart=1&cart=2&q=a%2Fb\n\"@signature-params\": (\"@method\" \"@scheme\" \"@authority\" \"@path\" \"@query\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\";tag=\"agent-payer-auth\"",
+      "signatureInput": "tap=(\"@method\" \"@scheme\" \"@authority\" \"@path\" \"@query\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\";tag=\"agent-payer-auth\"",
+      "signature": "tap=:DotCcu7bJ7LFawdYW2XPo6GK4WUXQYQpNwLf5I9h111gaeWZWeUskX4vfTIzVcp5BGi3EyMpref7axfQH0RqCQ==:"
+    },
+    {
+      "name": "ed25519 with an empty @query",
+      "keyid": "test-key-ed25519",
+      "alg": "ed25519",
+      "request": {
+        "method": "GET",
+        "url": "https://merchant.example/checkout"
+      },
+      "signatureBase": "\"@authority\": merchant.example\n\"@path\": /checkout\n\"@query\": ?\n\"@signature-params\": (\"@authority\" \"@path\" \"@query\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\";tag=\"agent-browser-auth\"",
+      "signatureInput": "tap=(\"@authority\" \"@path\" \"@query\");created=1767225600;expires=1767226080;keyid=\"test-key-ed25519\";alg=\"ed25519\";nonce=\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\";tag=\"agent-browser-auth\"",
+      "signature": "tap=:rcwVyux+58P6MeaTBeLYi8Lcicybx57EJoI8LkKYar+eLgYvCSQyei6hVujm1L1C5S8P2FWtM5wxHFgpofnlCA==:"
+    }
+  ]
+}

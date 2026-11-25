@@ -21,8 +21,14 @@ export const Constants = {
   components: {
     /** The target host and non-default port. */
     authority: '@authority',
+    /** The case-sensitive HTTP request method. */
+    method: '@method',
     /** The request URL path without its query string. */
     path: '@path',
+    /** The query string, including the leading `?`, or `?` when absent. */
+    query: '@query',
+    /** The lowercased request URL scheme without its trailing colon. */
+    scheme: '@scheme',
     /** The lowercased `Signature-Agent` request header. */
     signatureAgent: 'signature-agent',
     /** The signature's canonicalized covered-components and parameters. */
@@ -378,6 +384,10 @@ function signatureBase(request: Request, input: SignatureInput): string {
 
 function componentValue(request: Request, component: Component): string {
   const url = new URL(request.url)
+  if (component.id === Constants.components.method) {
+    if (component.parameters?.size) throw new Error('Unsupported parameters for "@method".')
+    return request.method
+  }
   if (component.id === Constants.components.authority) {
     if (component.parameters?.size) throw new Error('Unsupported parameters for "@authority".')
     return url.host
@@ -385,6 +395,14 @@ function componentValue(request: Request, component: Component): string {
   if (component.id === Constants.components.path) {
     if (component.parameters?.size) throw new Error('Unsupported parameters for "@path".')
     return url.pathname
+  }
+  if (component.id === Constants.components.query) {
+    if (component.parameters?.size) throw new Error('Unsupported parameters for "@query".')
+    return url.search || '?'
+  }
+  if (component.id === Constants.components.scheme) {
+    if (component.parameters?.size) throw new Error('Unsupported parameters for "@scheme".')
+    return url.protocol.slice(0, -1)
   }
   if (component.parameters?.size)
     return componentDictionaryValue(request, component.id, component.parameters)
