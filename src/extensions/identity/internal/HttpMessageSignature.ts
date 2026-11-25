@@ -242,11 +242,11 @@ export async function verify(
   if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
   try {
     if (
-      !(await Store.tryClaim(
+      !(await claimNonce(
         options.nonceStore,
-        options.nonceScope === 'namespace'
-          ? `${options.nonceNamespace}:${input.nonce}`
-          : `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
+        options.nonceNamespace,
+        options.nonceScope,
+        input,
         input.expires * 1000,
       ))
     )
@@ -257,6 +257,24 @@ export async function verify(
   if (input.expires <= Math.floor(Date.now() / 1000))
     return { status: 'invalid', reason: 'The signature has expired.' }
   return { status: 'verified', input }
+}
+
+/**
+ * Claims a signature's nonce. A namespace-wide claim also claims the per-key ID entry, so a
+ * verifier that still claims per key (an earlier release, mid-deploy) refuses a nonce this one
+ * accepted, and this one refuses a nonce such a verifier accepted.
+ */
+async function claimNonce(
+  store: Store.AtomicStore,
+  namespace: string,
+  scope: 'key' | 'namespace' | undefined,
+  input: SignatureInput,
+  expires: number,
+): Promise<boolean> {
+  const perKey = await Store.tryClaim(store, `${namespace}:${input.keyId}:${input.nonce}`, expires)
+  if (scope !== 'namespace') return perKey
+  const shared = await Store.tryClaim(store, `${namespace}:${input.nonce}`, expires)
+  return perKey && shared
 }
 
 function parse(

@@ -82,6 +82,23 @@ test('shares replay protection across verifier instances and TAP intents', async
   })
 })
 
+test('refuses a nonce a per-key verifier already claimed', async () => {
+  const keys = await keyPair()
+  const nonceStore = Identity.Store.memory()
+  const context = { created: Math.floor(Date.now() / 1_000), nonce: 'C'.repeat(86) } as const
+  const signed = await Tap.Client.prover({
+    scope: '*',
+    intent: Tap.Constants.intents.browse,
+    key: keys,
+    keyId: 'tap-agent',
+  }).prove(new Request('https://merchant.example/browse'), context)
+  // An earlier release claimed `tap:<keyId>:<nonce>`.
+  await Identity.Store.tryClaim(nonceStore, `tap:tap-agent:${context.nonce}`, Date.now() + 60_000)
+  expect(
+    await Tap.Server.verifier({ keyResolver: () => keys.publicKey, nonceStore }).verify(signed),
+  ).toEqual({ reason: 'The signature nonce has already been used.', status: 'invalid' })
+})
+
 test('rejects a nonce already used by another key', async () => {
   const nonceStore = Identity.Store.memory()
   const context = {
