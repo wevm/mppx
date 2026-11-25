@@ -17,6 +17,9 @@ import * as Service from './Service.js'
 /** Options for {@link create.Config.replay}. */
 export type ReplayOptions = Replay.Options
 
+/** Options for {@link create.Config.stripHeaders}. */
+export type StripHeaders = Headers.Strip
+
 /** A paid API proxy that gates upstream services behind the mppx 402 protocol. */
 export type Proxy = {
   /** Fetch API handler. Works with Bun, Deno, Next.js, Hono, Elysia, SvelteKit, etc. */
@@ -57,6 +60,7 @@ export function create(config: create.Config): Proxy {
     throw new RangeError('maxRequestBodySize must be a non-negative safe integer')
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
+  const strip = config.stripHeaders
 
   const services = new Map(
     config.services.map((s) => {
@@ -162,6 +166,7 @@ export function create(config: create.Config): Proxy {
         service,
         ctx: { ...ctx, ...Service.getOptions(endpoint) },
         proxy,
+        strip,
         onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
       })
 
@@ -237,6 +242,7 @@ export function create(config: create.Config): Proxy {
               service,
               ctx: { ...ctx, request: upstream, ...options },
               proxy,
+              strip,
               onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
             })
           },
@@ -285,7 +291,7 @@ export function create(config: create.Config): Proxy {
         attempts: 1,
         replay,
         replayKey,
-        requestHeaders: [...Headers.scrub(paidRequest.headers).entries()],
+        requestHeaders: [...Headers.scrub(paidRequest.headers, strip).entries()],
         run: (signal) => {
           const upstream = Replay.withBody(paidRequest, body, signal)
           return proxyUpstream({
@@ -293,6 +299,7 @@ export function create(config: create.Config): Proxy {
             service,
             ctx: { ...ctx, request: upstream, ...options },
             proxy,
+            strip,
             onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
           })
         },
@@ -303,6 +310,7 @@ export function create(config: create.Config): Proxy {
       service,
       ctx: { ...ctx, ...options },
       proxy,
+      strip,
       onUpstreamError: service.onUpstreamError ?? config.onUpstreamError,
     })
     return result.withReceipt(upstreamRes)
@@ -344,6 +352,20 @@ export declare namespace create {
     replay?: ReplayOptions | undefined
     /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
+    /**
+     * Extra headers to strip, beyond the built-in payment and identity headers: `request`
+     * headers are never forwarded upstream, and `response` headers are never passed from an
+     * upstream response to the client. Names are case-insensitive.
+     *
+     * @example
+     * ```ts
+     * Proxy.create({
+     *   services,
+     *   stripHeaders: { request: ['proof-response'], response: ['proof-request', 'proof-result'] },
+     * })
+     * ```
+     */
+    stripHeaders?: StripHeaders | undefined
     /** Human-readable title for the proxy shown in `llms.txt`. */
     title?: string | undefined
     /** Version to include in the generated OpenAPI document. */
@@ -358,14 +380,15 @@ declare namespace proxyUpstream {
     proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
     request: globalThis.Request
     service: Service.Service
+    strip?: Headers.Strip | undefined
   }
 }
 
 /** @internal */
 async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> {
-  const { request, service, ctx, proxy, onUpstreamError } = options
+  const { request, service, ctx, proxy, onUpstreamError, strip } = options
   const url = ctx.upstreamPath + new URL(request.url).search
-  const headers = Headers.scrub(request.headers)
+  const headers = Headers.scrub(request.headers, strip)
 
   const method = request.method.toUpperCase()
   const hasBody = method !== 'GET' && method !== 'HEAD'
@@ -391,6 +414,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
       ctx,
       proxy,
       service,
+      strip,
       upstreamRequest,
     })
 
@@ -399,6 +423,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
       ctx,
       proxy,
       service,
+      strip,
       upstreamRequest,
     })
 
@@ -436,13 +461,13 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
 
 /** Proxies one request without retaining a replay copy of its body. */
 async function proxyUpstreamOnce(options: proxyUpstreamAttempt.Options): Promise<Response> {
-  const { ctx, proxy, service } = options
+  const { ctx, proxy, service, strip } = options
   let upstreamRequest = options.upstreamRequest
 
   if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
 
   let response = await proxy(upstreamRequest)
-  response = Headers.scrubResponse(response)
+  response = Headers.scrubResponse(response, strip)
 
   if (service.rewriteResponse) response = await service.rewriteResponse(response, ctx)
 
@@ -454,6 +479,7 @@ declare namespace proxyUpstreamAttempt {
     ctx: Service.Context
     proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
     service: Service.Service
+    strip?: Headers.Strip | undefined
     upstreamRequest: Request
   }
 
@@ -468,14 +494,14 @@ declare namespace proxyUpstreamAttempt {
 async function proxyUpstreamAttempt(
   options: proxyUpstreamAttempt.Options,
 ): Promise<proxyUpstreamAttempt.Result> {
-  const { ctx, proxy, service } = options
+  const { ctx, proxy, service, strip } = options
   let upstreamRequest = options.upstreamRequest.clone()
 
   try {
     if (service.rewriteRequest) upstreamRequest = await service.rewriteRequest(upstreamRequest, ctx)
 
     let response = await proxy(upstreamRequest)
-    response = Headers.scrubResponse(response)
+    response = Headers.scrubResponse(response, strip)
 
     return { error: undefined, response, upstreamRequest }
   } catch (error) {

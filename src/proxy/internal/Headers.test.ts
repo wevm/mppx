@@ -122,6 +122,30 @@ describe('scrub', () => {
   })
 })
 
+describe('strip', () => {
+  test('behavior: strips extra request headers, case-insensitively', () => {
+    const headers = new globalThis.Headers({
+      'Proof-Response': 'proof',
+      'Content-Type': 'application/json',
+    })
+    const result = Headers.scrub(headers, { request: ['PROOF-RESPONSE'] })
+    expect([...result.keys()]).toEqual(['content-type'])
+  })
+
+  test('behavior: strips extra response headers', () => {
+    const response = new Response('ok', {
+      headers: { 'Proof-Request': 'request', 'Proof-Result': 'error', 'X-Public': 'value' },
+    })
+    const result = Headers.scrubResponse(response, { response: ['proof-request', 'proof-result'] })
+    expect([...result.headers.keys()]).toEqual(['content-type', 'x-public'])
+  })
+
+  test('behavior: keeps headers when nothing extra is listed', () => {
+    const headers = new globalThis.Headers({ 'Proof-Response': 'proof' })
+    expect(Headers.scrub(headers).get('proof-response')).toBe('proof')
+  })
+})
+
 describe('scrubResponse', () => {
   test('behavior: strips an upstream identity attestation requirement', () => {
     const response = new Response('body', {

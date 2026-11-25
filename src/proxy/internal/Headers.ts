@@ -26,15 +26,25 @@ const paymentHeaders = new Set([
   'www-authenticate',
 ])
 
+/** Extra headers the proxy strips, beyond the built-in payment and identity headers. */
+export type Strip = {
+  /** Request headers never forwarded upstream, such as an identity proof. */
+  readonly request?: readonly string[] | undefined
+  /** Upstream response headers never returned to the client, such as an identity request. */
+  readonly response?: readonly string[] | undefined
+}
+
 /** Strips hop-by-hop, auth, identity, encoding, cookie, and forwarding headers from a request before proxying upstream. */
-export function scrub(headers: Headers): Headers {
+export function scrub(headers: Headers, strip?: Strip | undefined): Headers {
   const scrubbed = new Headers()
+  const extra = new Set(strip?.request?.map((name) => name.toLowerCase()))
 
   for (const [name, value] of headers) {
     const lower = name.toLowerCase()
 
     if (paymentHeaders.has(lower)) continue
     if ((IdentityHeaders.request as readonly string[]).includes(lower)) continue
+    if (extra.has(lower)) continue
     if (lower === 'accept-encoding') continue
     if (lower === 'content-length') continue
     if (lower === 'cookie') continue
@@ -60,7 +70,7 @@ export function scrub(headers: Headers): Headers {
  * primitive. Proxied services authenticate via bearer tokens / signed
  * payloads, never cookies, so dropping `set-cookie` is purely defensive.
  */
-export function scrubResponse(response: Response): Response {
+export function scrubResponse(response: Response, strip?: Strip | undefined): Response {
   const headers = new Headers(response.headers)
   headers.delete('content-encoding')
   headers.delete('content-length')
@@ -71,6 +81,7 @@ export function scrubResponse(response: Response): Response {
   headers.delete('payment-authorization')
   // The proxy decides which identity the client presents, so upstream identity headers never pass.
   for (const name of [...IdentityHeaders.request, ...IdentityHeaders.response]) headers.delete(name)
+  for (const name of strip?.response ?? []) headers.delete(name)
   const authorization = headers.get('authorization')
   if (authorization && /^\s*Payment(?:\s|$)/i.test(authorization)) headers.delete('authorization')
   const authenticate = headers.get('www-authenticate')
