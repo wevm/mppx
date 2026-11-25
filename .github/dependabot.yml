@@ -1,4 +1,8 @@
 version: 2
+
+# Patch and minor updates are grouped; a major update opens its own pull
+# request, so a breaking release holds back only itself. Security updates are
+# grouped separately and are not held to the weekly schedule.
 updates:
   - package-ecosystem: npm
     directory: /
@@ -11,8 +15,14 @@ updates:
     groups:
       npm-production:
         dependency-type: production
+        update-types: [minor, patch]
       npm-development:
         dependency-type: development
+        update-types: [minor, patch]
+      npm-security:
+        applies-to: security-updates
+        patterns: ['*']
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directories:
@@ -23,8 +33,10 @@ updates:
       day: monday
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 1
+    # Majors wait for a person; leave room for the minor/patch group beside them.
+    open-pull-requests-limit: 5
     groups:
       github-actions:
         patterns:
           - '*'
+        update-types: [minor, patch]
