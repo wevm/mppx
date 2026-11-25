@@ -60,7 +60,7 @@ export function create(config: create.Config): Proxy {
     throw new RangeError('maxRequestBodySize must be a non-negative safe integer')
   const fetchImpl = config.fetch ?? globalThis.fetch
   const replay = config.replay ? Replay.resolve(config.replay) : undefined
-  const strip = config.stripHeaders
+  const strip = stripHeadersOf(config)
 
   const services = new Map(
     config.services.map((s) => {
@@ -357,6 +357,9 @@ export declare namespace create {
      * headers are never forwarded upstream, and `response` headers are never passed from an
      * upstream response to the client. Names are case-insensitive.
      *
+     * Headers declared by the identity verifiers and payment checks of the proxy's routes
+     * (`headers` on each) are stripped without being listed here.
+     *
      * @example
      * ```ts
      * Proxy.create({
@@ -602,6 +605,28 @@ function requiresManualGeneration(
     (selected.intent === 'session' && selectedOffers.length === 0) ||
     selectedOffers.some(unsupported)
   )
+}
+
+/**
+ * Headers the proxy strips beyond the built-in ones: `config.stripHeaders` and the headers
+ * declared by every identity verifier and payment check its routes use, so a route that uses an
+ * identity extension never needs them listed by hand.
+ */
+function stripHeadersOf(config: create.Config): Headers.Strip {
+  type Offer = { _identityHeaders?: Headers.Strip | undefined }
+  const sets: Headers.Strip[] = config.stripHeaders ? [config.stripHeaders] : []
+  for (const service of config.services)
+    for (const endpoint of Object.values(service.routes)) {
+      const handler = endpoint === undefined ? undefined : Service.getHandler(endpoint)
+      if (!handler || !('_internal' in handler)) continue
+      const internal = handler._internal as (Offer & { offers?: readonly Offer[] }) | undefined
+      for (const offer of internal?.offers ?? (internal ? [internal] : []))
+        if (offer._identityHeaders) sets.push(offer._identityHeaders)
+    }
+  return {
+    request: sets.flatMap((set) => set.request ?? []),
+    response: sets.flatMap((set) => set.response ?? []),
+  }
 }
 
 /** Identity and session offers must re-run authorization and delivery-time metering on every request. */

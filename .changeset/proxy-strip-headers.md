@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added `stripHeaders` to `Proxy.create`: extra request headers the proxy never forwards upstream and extra response headers it never returns to the client, beyond the built-in payment and identity headers.
+Added `headers` to identity verifiers and payment checks, so a proxy strips the headers of the identity protocols its routes use, and `stripHeaders` to `Proxy.create` for extra headers to strip.
