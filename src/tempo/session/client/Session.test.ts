@@ -963,6 +963,122 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(500n)
   })
 
+  test('bounds the open transaction by context validBefore', async () => {
+    const method = session({ account, getClient: () => client })
+    const validBefore = Math.floor(Date.now() / 1000) + 60
+    const payload = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: { validBefore } }),
+    )
+
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    const transaction = Transaction.deserialize(
+      payload.transaction as Transaction.TransactionSerializedTempo,
+    ) as Transaction.TransactionSerializableTempo
+    expect(transaction.validBefore).toBe(validBefore)
+  })
+
+  test('keeps the default open window before a later context validBefore', async () => {
+    const method = session({ account, getClient: () => client })
+    const now = Math.floor(Date.now() / 1000)
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge(),
+        context: { validBefore: now + 3_600 },
+      }),
+    )
+
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    const transaction = Transaction.deserialize(
+      payload.transaction as Transaction.TransactionSerializedTempo,
+    ) as Transaction.TransactionSerializableTempo
+    expect(transaction.validBefore).toBeGreaterThan(now)
+    expect(transaction.validBefore).toBeLessThanOrEqual(now + 300)
+  })
+
+  test('refuses to sign an open after its context validBefore', async () => {
+    const method = session({ account, getClient: () => client })
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge(),
+        context: { validBefore: Math.floor(Date.now() / 1000) - 1 },
+      }),
+    ).rejects.toThrow('Channel open validBefore has already passed.')
+  })
+
+  test('calls onChannelOpening with the open before the credential is sent', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
+    const channelStore = createChannelStore()
+    const openings: session.ChannelOpening[] = []
+    const sent: Types.SessionCredentialPayload[] = []
+    const fetch = Fetch.from({
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return paymentRequired(challenge)
+        expect(openings).toHaveLength(1)
+        expect(await channelStore.get(defaultChannelKey)).toBeUndefined()
+        sent.push(deserialize(authorization))
+        return new Response('ok')
+      },
+      methods: [
+        makeSessionMethod(channelStore, {
+          onChannelOpening: (opening) => {
+            openings.push(opening)
+          },
+        }),
+      ],
+    })
+
+    expect((await fetch('https://example.com/resource')).status).toBe(200)
+    const payload = sent[0]!
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    expect(openings[0]!.entry).toMatchObject({
+      channelId: payload.channelId,
+      descriptor: payload.descriptor,
+      deposit: 1000n,
+      escrow: tip20ChannelEscrow,
+      chainId,
+      opened: true,
+    })
+    expect(openings[0]!.transaction).toBe(payload.transaction)
+  })
+
+  test('does not send an open credential when onChannelOpening throws', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
+    const channelStore = createChannelStore()
+    let paid = 0
+    const fetch = Fetch.from({
+      fetch: async (_input, init) => {
+        if (new Headers(init?.headers).get(Constants.Headers.authorization)) paid++
+        return paymentRequired(challenge)
+      },
+      methods: [
+        makeSessionMethod(channelStore, {
+          onChannelOpening: () => {
+            throw new Error('not persisted')
+          },
+        }),
+      ],
+    })
+
+    await expect(fetch('https://example.com/resource')).rejects.toThrow('not persisted')
+    expect(paid).toBe(0)
+    expect(await channelStore.get(defaultChannelKey)).toBeUndefined()
+  })
+
+  test('drops a stored open when onChannelOpening throws without Fetch', async () => {
+    const channelStore = createChannelStore()
+    const method = makeSessionMethod(channelStore, {
+      onChannelOpening: () => {
+        throw new Error('not persisted')
+      },
+    })
+
+    await expect(
+      method.createCredential({ challenge: makeChallenge(), context: {} }),
+    ).rejects.toThrow('not persisted')
+    expect(await channelStore.get(defaultChannelKey)).toBeUndefined()
+  })
+
   test('caps suggestedDeposit by maxDeposit', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '500', getClient: () => client })
     const payload = deserialize(

@@ -111,6 +111,7 @@ export const sessionContextSchema = z.object({
   additionalDeposit: z.optional(z.amount()),
   additionalDepositRaw: z.optional(z.string()),
   depositRaw: z.optional(z.string()),
+  validBefore: z.optional(z.number()),
 })
 
 /** Low-level context accepted by `tempo.session()` for manual credentials. */
@@ -137,6 +138,11 @@ export type SessionContext = {
   additionalDepositRaw?: string | undefined
   /** Raw opening deposit override for automatic open credentials. */
   depositRaw?: string | undefined
+  /**
+   * Latest time, in Unix seconds, at which an automatic open transaction may land on chain.
+   * Sets the open's expiring-nonce `validBefore` to the sooner of this and the default window.
+   */
+  validBefore?: number | undefined
 }
 
 /** Manual low-level TIP-1034 session action name. */
@@ -816,6 +822,7 @@ async function open(
       tokenOut: resolved.token,
     }),
     token: resolved.token,
+    validBefore: plan.context?.validBefore,
   })
   await storeChannelEntry(sink, {
     channelId: payload.channelId,
