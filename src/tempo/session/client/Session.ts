@@ -1,4 +1,4 @@
-import { type Address, parseUnits } from 'viem'
+import { type Address, type Hex, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
@@ -7,6 +7,7 @@ import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as Currency from '../../../Currency.js'
 import * as AcceptPayment from '../../../internal/AcceptPayment.js'
+import type { MaybePromise } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -27,6 +28,7 @@ import {
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import {
   createChannelStore,
+  deleteChannel,
   entryKey,
   persistChannel,
   withFundingLock,
@@ -243,6 +245,7 @@ export function session(parameters: session.Parameters = {}) {
     getClient: getClientParameter,
     maxDeposit: maxDepositParameter,
     topUpAmount: topUpAmountParameter,
+    onChannelOpening,
     onChannelUpdate,
     resolveAccount,
   } = parameters
@@ -412,6 +415,17 @@ export function session(parameters: session.Parameters = {}) {
           resolved.chainId,
           plan.account,
         )
+        if (onChannelOpening && plan.type === 'open' && payload.action === 'open') {
+          const opening = pendingOpen ?? (await store.get(resolved.key))
+          if (opening?.channelId.toLowerCase() === payload.channelId.toLowerCase())
+            try {
+              await onChannelOpening({ entry: opening, transaction: payload.transaction })
+            } catch (error) {
+              // The credential is never sent, so drop an entry the plan already stored.
+              if (!pendingOpen) await deleteChannel(store, resolved.key)
+              throw error
+            }
+        }
         if (attempt && pendingOpen) {
           const opened = pendingOpen
           attempt.settle = async (outcome) => {
@@ -643,6 +657,13 @@ export function session(parameters: session.Parameters = {}) {
 
 /** Type helpers for the low-level TIP-1034 session client method. */
 export declare namespace session {
+  /** A channel open whose credential is signed but not yet sent. */
+  type ChannelOpening = {
+    /** The channel entry the open commits: channel ID, descriptor, deposit, escrow and chain. */
+    entry: ChannelEntry
+    /** The signed open transaction carried by the credential. */
+    transaction: Hex
+  }
   type ResolveAccount = ResolveAccount_
   type ResolveAccountInfo = ResolveAccountInfo_
 
@@ -711,6 +732,13 @@ export declare namespace session {
        * a bounded server `suggestedDeposit` is preferred, then the exact shortfall.
        */
       topUpAmount?: string | undefined
+      /**
+       * Called with a new channel's entry and signed open transaction after the open credential
+       * is signed and before it is returned to be sent. Persist the entry here to recover the
+       * channel if the response is lost: the open may still land on chain until its
+       * `validBefore`. Throwing aborts the credential, so it is never sent.
+       */
+      onChannelOpening?: ((opening: ChannelOpening) => MaybePromise<void>) | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
       /** Selects the account that signs this session credential after the challenge is known. */

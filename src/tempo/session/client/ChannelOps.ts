@@ -89,6 +89,24 @@ function randomValidAfter(): number {
   return Number(BigInt(Hex.random(8)) % latest)
 }
 
+/**
+ * Seconds from now of the default expiring-nonce `validBefore`, matching viem's Tempo default
+ * and staying under the protocol's 300-second limit.
+ */
+const expiringNonceWindowSeconds = 270
+
+/**
+ * Bounds an open transaction's `validBefore` by a caller deadline in Unix seconds, keeping the
+ * default window when it ends sooner. Throws when the deadline has already passed.
+ */
+function resolveOpenValidBefore(deadline: number | undefined): number | undefined {
+  if (deadline === undefined) return undefined
+  if (!Number.isSafeInteger(deadline)) throw new Error('validBefore must be whole Unix seconds.')
+  const now = Math.floor(Date.now() / 1_000)
+  if (deadline <= now) throw new Error('Channel open validBefore has already passed.')
+  return Math.min(deadline, now + expiringNonceWindowSeconds)
+}
+
 /** Resolves the voucher authority address for a client account. */
 export function resolveAuthorizedSigner(account: Account): Address {
   return readAccessKeyAddress(account) ?? account.address
@@ -187,9 +205,10 @@ async function prepareTempoChannelTransaction(
     feePayer?: boolean | undefined
     feeToken: Address
     validAfter?: number | undefined
+    validBefore?: number | undefined
   },
 ) {
-  const { account, calls, feePayer, feeToken, validAfter } = parameters
+  const { account, calls, feePayer, feeToken, validAfter, validBefore } = parameters
   // Session management transactions are independent and short-lived, so they
   // always use TIP-1009 expiring nonces. `feePayer` controls sponsorship only.
   // viem's stable transaction request type does not yet expose Tempo's
@@ -205,6 +224,7 @@ async function prepareTempoChannelTransaction(
       ...(feePayer ? { feePayer: true } : {}),
       feeToken,
       ...(validAfter !== undefined ? { validAfter } : {}),
+      ...(validBefore !== undefined ? { validBefore } : {}),
     } as never),
   )
 }
@@ -389,8 +409,14 @@ export async function createOpenPayload(
      */
     salt?: Hex.Hex | undefined
     token: Address
+    /**
+     * Latest time, in Unix seconds, at which the open transaction may land. Defaults to the
+     * expiring-nonce window; a later value keeps the default.
+     */
+    validBefore?: number | undefined
   },
 ): Promise<OpenCredentialPayload> {
+  const validBefore = resolveOpenValidBefore(parameters.validBefore)
   const authorizedSigner = resolveAuthorizedSigner(account)
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
@@ -411,6 +437,7 @@ export async function createOpenPayload(
     // A configurable signer's salt is its stable config commitment, so the open needs its own
     // entropy to get a distinct expiring nonce hash and channel ID.
     validAfter: randomValidAfter(),
+    validBefore,
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
   const signed = Transaction.deserialize(transaction as Transaction.TransactionSerializedTempo)
