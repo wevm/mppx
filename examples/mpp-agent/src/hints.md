@@ -1,0 +1,30 @@
+capability: METHOD URL body · quote · notes ("…" = your value; +gas = not fee-sponsored)
+
+- web search: POST https://firecrawl.mpp.tempo.xyz/v1/search {"query":"…","limit":5} · $0.004 · returns data[] of url/title/description
+- web search: POST https://parallelmpp.dev/api/search {"objective":"…","max_results":3} · $0.01 · +gas
+- Google search/places/news: POST https://mpp.orthogonal.com/serper/search {"q":"…"} · $0.002
+- Google Places: POST https://mpp.orthogonal.com/serper/places {"q":"…"} · $0.002
+- X/Twitter search: POST https://glim.sh/api/v1/twitter/search {"query":"…"} · $0.005
+- X/Reddit/GitHub/web search: POST https://glim.sh/api/v1/reddit/search {"query":"…"} · $0.01 · Reddit
+- scrape to markdown: POST https://firecrawl.mpp.tempo.xyz/v1/scrape {"url":"…","formats":["markdown"]} · $0.002
+- image gen (fast): POST https://fal.mpp.tempo.xyz/fal-ai/flux/schnell {"prompt":"…"} · $0.003 · returns images[].url
+- image gen w/ text: POST https://fal.mpp.tempo.xyz/fal-ai/recraft-v3 {"prompt":"…"} · $0.04 · good with text in images
+- TTS (ElevenLabs): POST https://fal.mpp.tempo.xyz/fal-ai/elevenlabs/tts/eleven-v3 {"text":"…"} · $0.007 · returns audio.url mp3
+- weather: POST https://openweather.mpp.paywithlocus.com/openweather/current-weather {"lat":37.7749,"lon":-122.4194,"units":"metric"} · $0.006 · +gas · lat/lon: geocode first
+- geocode / static map: POST https://mapbox.mpp.paywithlocus.com/mapbox/geocode-forward {"q":"…"} · $0.0037 · +gas · returns lat/lon
+- translation: POST https://deepl.mpp.paywithlocus.com/deepl/translate {"text":["Hello world"],"target_lang":"DE"} · $0.025 · +gas · text is an array
+- stock quotes/fundamentals: POST https://alphavantage.mpp.paywithlocus.com/alphavantage/global-quote {"symbol":"AAPL"} · $0.008 · +gas
+- SEC XBRL facts: POST https://edgar.mpp.paywithlocus.com/edgar/company-facts {"cik":"0000320193"} · $0.008 · +gas · 10-digit cik (NVIDIA 0001045810); large response
+- data search + charts: POST https://tako.com/api/mpp/v1/search {"query":"…"} · $0.012 · +gas · returns chart URLs
+- website tech stack: POST https://builtwith.mpp.paywithlocus.com/builtwith/free {"LOOKUP":"example.com"} · $0.015 · +gas
+- crypto prices: POST https://coingecko.mpp.paywithlocus.com/coingecko/simple-price {"ids":"…","vs_currencies":"usd"} · $0.06 · +gas
+- crypto news: GET https://cryptonews.ivan-tempo.xyz/api/news/latest?limit=5 · $0.01
+- home value / rent: POST https://rentcast.mpp.paywithlocus.com/rentcast/value-estimate {"address":"…"} · $0.033 · +gas
+- code execution: POST https://judge0.mpp.paywithlocus.com/judge0/execute-code {"source_code":"print(2+2)","language_id":71} · $0.006 · +gas · language_id 71 = Python 3
+- computation / facts: POST https://wolframalpha.mpp.paywithlocus.com/wolframalpha/short-answer {"i":"…"} · $0.055 · +gas
+- sneaker prices: GET https://kicksdb.mpp.tempo.xyz/v3/stockx/products?query=jordan%201&limit=1 · $0.0005
+- FDA drug products: GET https://api.rxatlas.dev/v1/drugs?q=ibuprofen&limit=1 · $0.1 · +gas
+- clinical trials: GET https://api.trialbase-db.org/v1/trials?q=semaglutide&limit=1 · $0.1 · +gas
+- product recalls: GET https://api.recallradar.dev/v1/recalls?q=stroller&limit=1 · $0.1 · +gas
+- text-to-video (async): POST https://fal-queue.mpp.tempo.xyz/xai/grok-imagine-video/text-to-video {"prompt":"…"} · $0.50 · returns status_url + response_url: call wait_for {"url":status_url,"until":{"field":"status","in":["COMPLETED"]},"then":response_url} (status polls unpriced); result has video.url mp4
+- text-to-video (async): POST https://fal-queue.mpp.tempo.xyz/minimax/h3-max/text-to-video {"prompt":"…","duration":6} · ~$0.58 · duration is a NUMBER; same submit → wait_for flow

@@ -1,0 +1,36 @@
+{
+  "out": "dist-site",
+  "title": "mpp-agent: an agent whose only integration is a wallet",
+  "runs": [
+    {
+      "id": "2026-10-09T21-53-41-475Z-ooh4",
+      "emoji": "🎧",
+      "title": "Tech brief I can listen to"
+    },
+    {
+      "id": "2026-10-09T21-39-19-658Z-bkio",
+      "emoji": "💊",
+      "title": "Semaglutide landscape"
+    },
+    {
+      "id": "2026-10-09T21-37-52-362Z-ktp7",
+      "emoji": "🏠",
+      "title": "Is this house a good rental?"
+    },
+    {
+      "id": "2026-10-09T21-25-34-718Z-s2p1",
+      "emoji": "👟",
+      "title": "Should I flip these sneakers?"
+    },
+    {
+      "id": "2026-10-09T21-16-25-195Z-vekq",
+      "emoji": "🌤",
+      "title": "Plan my Saturday in Lisbon"
+    },
+    {
+      "id": "2026-10-09T20-45-00-710Z-d3a8",
+      "emoji": "🎬",
+      "title": "Make a viral video"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Recorded runs of an AI agent whose only integration is a stablecoin wallet, paying per call over MPP on Tempo mainnet."
+    />
+    <title>mpp-agent · Runs</title>
+    <link rel="stylesheet" href="site.css" />
+    <script src="site.js" defer></script>
+  </head>
+  <body data-page="index">
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-head">
+      <div class="site-head-inner">
+        <a class="brand" href="index.html"
+          ><span class="brand-mark" aria-hidden="true"></span>mpp-agent</a
+        >
+        <nav class="site-nav" aria-label="Primary">
+          <a href="try.html" data-nav="try" hidden>Try it</a>
+          <a href="index.html" data-nav="index">Runs</a>
+          <a href="how.html" data-nav="how">How this works</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="site-main" tabindex="-1">
+      <section class="hero" aria-labelledby="hero-title" data-static-only>
+        <h1 id="hero-title">An agent with a wallet and nothing else</h1>
+        <p>
+          Each run below was a real agent with no API keys and no accounts. It discovered tools,
+          paid for each call over MPP from a stablecoin wallet, and logged every payment. Click a
+          run to see every call, what it cost and the transaction that paid for it.
+        </p>
+      </section>
+      <section class="hero" aria-labelledby="hist-title" data-live-only>
+        <h1 id="hist-title">History</h1>
+        <p>
+          Featured runs, newest first, plus any run in progress. Click a run to see every call, what
+          it cost and the transaction that paid for it.
+        </p>
+      </section>
+      <section id="totals" class="panel totals" aria-label="All-time totals">
+        <p class="muted">Loading…</p>
+      </section>
+      <h2 class="sr-only">Runs</h2>
+      <ul id="cards" class="gallery"></ul>
+      <section
+        id="run-yourself"
+        class="panel run-yourself"
+        aria-labelledby="ry-title"
+        hidden
+      ></section>
+    </main>
+    <footer class="site-foot">
+      Recorded runs of an agent whose only integration is a stablecoin wallet paying per call over
+      MPP on Tempo mainnet. Every payment links to its on-chain transaction.
+    </footer>
+  </body>
+</html>
