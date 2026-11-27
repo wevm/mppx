@@ -233,7 +233,9 @@ function createPaymentAwareCallTool<methods extends Methods>(
       paymentPreferences.entries,
       call.context,
     )
-    const preferredCandidates = await AcceptPayment.preferCandidates(candidates, call.context)
+    const preferredCandidates = await AcceptPayment.preferCandidates(candidates, call.context, {
+      permits: spender.permits,
+    })
     const orderedCandidates = config.orderChallenges
       ? await config.orderChallenges(preferredCandidates)
       : preferredCandidates

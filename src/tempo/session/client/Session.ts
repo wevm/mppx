@@ -17,7 +17,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
-import { machineTokenFeeTokens, resolveFeeToken } from '../../internal/fee-token.js'
+import { resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
 import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
@@ -604,31 +604,47 @@ export function session(parameters: session.Parameters = {}) {
     const account = getAccount(client, sessionContext)
     /** Whether the payer can fund `amount` of MACH and the gas for depositing it. */
     const canFund = async (amount: bigint) => {
-      const gasCovered =
-        resolved.feePayer ||
-        (await resolveFeeToken({
+      // The MACH balance (and the access key's limit) first: most payers hold none.
+      if (!(await MachineTokenCharge.canSpend(client, { account, amount, chainId }))) return false
+      if (resolved.feePayer) return true
+      return (
+        (await resolveMachineTokenFeeToken({
           account: account.address,
-          candidateTokens: machineTokenFeeTokens(chainId, resolved.feeToken),
+          chainId,
           client,
           funded: true,
+          preferred: resolved.feeToken,
         })) !== undefined
-      if (!gasCovered) return false
-      const balance = await MachineTokenCharge.getBalance(client, {
-        account: account.address,
-        chainId,
-      })
-      return balance !== undefined && balance >= amount
+      )
     }
-    const entry = await store.get(resolved.key)
+    const stored = await store.get(resolved.key)
+    // The store keys channels by payee and currency, not payer: a channel this account can't sign
+    // for is one it would open anew, so it counts as none.
+    const entry = stored && canSignDescriptor(account, stored.descriptor) ? stored : undefined
     if (entry?.opened) {
-      const required = entry.cumulativeAmount + resolved.amount
-      if (required <= entry.deposit) return true
+      // Same amounts the top-up hook uses: the server's snapshot of this channel can ask for more.
+      const snapshot =
+        resolved.snapshot?.channelId.toLowerCase() === entry.channelId.toLowerCase()
+          ? resolved.snapshot
+          : undefined
+      const next = entry.cumulativeAmount + resolved.amount
+      const snapshotRequired = snapshot ? BigInt(snapshot.requiredCumulative) : next
+      const required = snapshotRequired > next ? snapshotRequired : next
+      const snapshotDeposit = snapshot ? BigInt(snapshot.deposit) : entry.deposit
+      const deposit = snapshotDeposit > entry.deposit ? snapshotDeposit : entry.deposit
+      if (required <= deposit) return true
       // A voucher adds no funds: an exhausted channel pays only where the caller tops it up first
-      // (`fetch`, not MCP), within `maxDeposit`, from MACH the payer can still deposit.
-      if (!preparesChallenge || (maxDeposit !== undefined && required > maxDeposit)) return false
+      // (`fetch`, not MCP), within `maxDeposit`, from MACH the payer can still deposit. A top-up
+      // whose outcome is still unknown blocks the next one.
+      if (
+        !preparesChallenge ||
+        entry.uncertainTopUp ||
+        (maxDeposit !== undefined && required > maxDeposit)
+      )
+        return false
       return canFund(
         resolveAutomaticTopUp({
-          deposit: entry.deposit,
+          deposit,
           maxDeposit,
           requiredCumulative: required,
           suggestedDeposit:

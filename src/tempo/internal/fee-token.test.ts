@@ -45,6 +45,27 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
     expectAddress(feeToken, asset)
   })
 
+  test('never returns an excluded token, even as the funded account fee preference', async () => {
+    const account = testAccount()
+    const client = clientFor(account)
+    await fundAccount({ address: account.address, token: asset })
+    await fundAccount({ address: account.address, token: Addresses.pathUsd })
+    await Actions.fee.setUserTokenSync(client, {
+      feeToken: asset,
+      token: asset,
+    } as never)
+
+    const feeToken = await resolveFeeToken({
+      account: account.address,
+      candidateTokens: [asset, Addresses.pathUsd],
+      client,
+      excludedTokens: [asset],
+      funded: true,
+    })
+
+    expectAddress(feeToken, Addresses.pathUsd)
+  })
+
   test('falls through to the first funded candidate token', async () => {
     const account = testAccount()
     const client = clientFor(account)

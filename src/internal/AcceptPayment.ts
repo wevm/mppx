@@ -43,44 +43,38 @@ export function withPreference<const method extends object>(
 }
 
 /**
- * Moves offers a method prefers ahead of the adjacent offers for the same method and intent (one
- * route's currencies), keeping every other order: payment preferences and a caller's
- * `orderChallenges`, which runs after, still decide. Expired offers are never moved, and a failing
- * preference counts as none.
+ * Moves offers a method prefers ahead of the adjacent offers for the same method, intent, amount and
+ * recipient (one route's currencies), keeping every other order: payment preferences and a caller's
+ * `orderChallenges`, which runs after, still decide. Expired offers, and offers `permits` refuses
+ * (such as the client's spending limits), are never moved, and a failing preference counts as none.
+ * An offer several methods accept moves as one, keeping which method signs it.
  */
 export async function preferCandidates<
   const candidate extends { challenge: Challenge.Challenge; method: object },
 >(
   candidates: readonly candidate[],
   context?: unknown,
-  options: { preparesChallenge?: boolean | undefined } = {},
+  options: {
+    permits?: ((challenge: Challenge.Challenge) => boolean) | undefined
+    preparesChallenge?: boolean | undefined
+  } = {},
 ): Promise<readonly candidate[]> {
   if (candidates.length < 2) return candidates
   const challenges = candidates.map(({ challenge }) => challenge)
-  const preferred = await Promise.all(
-    candidates.map(async ({ challenge, method }) => {
-      const preferChallenge = (method as { [prefer]?: PreferChallenge })[prefer]
-      if (!preferChallenge) return false
-      if (challenge.expires && new Date(challenge.expires).getTime() <= Date.now()) return false
-      try {
-        return await preferChallenge({
-          challenge,
-          challenges,
-          preparesChallenge: options.preparesChallenge === true,
-          ...(context === undefined || context === deferredContext ? {} : { context }),
-        })
-      } catch {
-        return false
-      }
-    }),
-  )
+  // Only an offer's first method decides: a later one must not take over its signing.
+  const first = new Map<Challenge.Challenge, candidate>()
+  for (const candidate of candidates)
+    if (!first.has(candidate.challenge)) first.set(candidate.challenge, candidate)
+  const decided = new Map<Challenge.Challenge, Promise<boolean>>()
+  for (const [challenge, { method }] of first) decided.set(challenge, decide(challenge, method))
+  const preferred = await Promise.all(candidates.map(({ challenge }) => decided.get(challenge)!))
   if (!preferred.some(Boolean)) return candidates
   const ordered: candidate[] = []
   let start = 0
   for (let end = 1; end <= candidates.length; end++) {
     if (
       end < candidates.length &&
-      keyOf(candidates[end]!.challenge) === keyOf(candidates[start]!.challenge)
+      runOf(candidates[end]!.challenge) === runOf(candidates[start]!.challenge)
     )
       continue
     const run = candidates.slice(start, end).map((candidate, offset) => ({
@@ -94,6 +88,30 @@ export async function preferCandidates<
     start = end
   }
   return ordered
+
+  async function decide(challenge: Challenge.Challenge, method: object): Promise<boolean> {
+    const preferChallenge = (method as { [prefer]?: PreferChallenge })[prefer]
+    if (!preferChallenge) return false
+    if (challenge.expires && new Date(challenge.expires).getTime() <= Date.now()) return false
+    try {
+      if (options.permits && !options.permits(challenge)) return false
+      return await preferChallenge({
+        challenge,
+        challenges,
+        preparesChallenge: options.preparesChallenge === true,
+        ...(context === undefined || context === deferredContext ? {} : { context }),
+      })
+    } catch {
+      return false
+    }
+  }
+}
+
+/** Offers that differ only in currency: same method, intent, amount and recipient. */
+function runOf(challenge: Challenge.Challenge): string {
+  const request = challenge.request as { amount?: unknown; recipient?: unknown }
+  const recipient = typeof request.recipient === 'string' ? request.recipient.toLowerCase() : ''
+  return `${keyOf(challenge)}|${String(request.amount ?? '')}|${recipient}`
 }
 
 /** Supported challenge paired with the configured client method that can sign it. */

@@ -280,6 +280,35 @@ describe('MACH direct payments', () => {
     httpServer.close()
   })
 
+  test('charge: a client whose spending limits would refuse MACH keeps paying the main currency', async () => {
+    const payer = await createPayer({ machineToken: 5_000_000n, stablecoin: 5_000_000n })
+    const httpServer = await serve(chargeRoute(createServer(true)))
+    const pathUsdToken = { address: asset, chainId: chain.id, currency: 'USD', decimals: 6 }
+    for (const limits of [
+      // Localnet's pathUSD isn't a built-in token, so the client names it.
+      { maxPayment: { currency: 'USD', value: '2' }, tokens: [pathUsdToken] },
+      { maxPayment: [{ amount: 2_000_000n, asset, network: `eip155:${chain.id}` }] },
+    ]) {
+      const mppx = Mppx_client.create({
+        ...(limits as object),
+        methods: [tempo_client({ account: payer, getClient: () => client })],
+        polyfill: false,
+      })
+      expect((await mppx.fetch(httpServer.url)).status).toBe(200)
+    }
+    expect(await balance(payer.address, mach)).toBe(5_000_000n)
+    // With MACH among its known tokens, the same limit lets MACH through.
+    const mppx = Mppx_client.create({
+      maxPayment: { currency: 'USD', value: '2' },
+      methods: [tempo_client({ account: payer, getClient: () => client })],
+      polyfill: false,
+      tokens: [pathUsdToken, { address: mach, chainId: chain.id, currency: 'USD', decimals: 6 }],
+    } as never)
+    expect((await mppx.fetch(httpServer.url)).status).toBe(200)
+    expect(await balance(payer.address, mach)).toBe(4_000_000n)
+    httpServer.close()
+  })
+
   test('charge: a client with resolveAccount keeps the server order', async () => {
     const payer = await createPayer({ machineToken: 5_000_000n, stablecoin: 5_000_000n })
     const spender = await createPayer({ machineToken: 0n, stablecoin: 5_000_000n })

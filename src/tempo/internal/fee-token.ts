@@ -8,8 +8,10 @@ function pushUnique(
   tokens: Address[],
   token: Address | undefined,
   allowedTokens?: readonly Address[] | undefined,
+  excludedTokens?: readonly Address[] | undefined,
 ) {
   if (!token) return
+  if (excludedTokens?.some((excluded) => TempoAddress.isEqual(excluded, token))) return
   if (
     allowedTokens &&
     !allowedTokens.some((allowedToken) => TempoAddress.isEqual(allowedToken, token))
@@ -59,25 +61,34 @@ export async function resolveFeeToken(parameters: {
   allowedTokens?: readonly Address[] | undefined
   candidateTokens?: readonly Address[] | undefined
   client: Client
+  /** Tokens never returned, such as MACH for a MACH payment's fees. */
+  excludedTokens?: readonly Address[] | undefined
   prioritizeCandidates?: boolean | undefined
   /** Return `undefined` instead of the first token when the account holds none of them. */
   funded?: boolean | undefined
 }): Promise<Address | undefined> {
-  const { account, allowedTokens, candidateTokens, client, funded, prioritizeCandidates } =
-    parameters
+  const {
+    account,
+    allowedTokens,
+    candidateTokens,
+    client,
+    excludedTokens,
+    funded,
+    prioritizeCandidates,
+  } = parameters
   const tokens: Address[] = []
+  const push = (token: Address | undefined) =>
+    pushUnique(tokens, token, allowedTokens, excludedTokens)
 
-  if (prioritizeCandidates)
-    for (const token of candidateTokens ?? []) pushUnique(tokens, token, allowedTokens)
+  if (prioritizeCandidates) for (const token of candidateTokens ?? []) push(token)
 
   const userToken = await Actions.fee
     .getUserToken(client as never, { account })
     .then((token) => token?.address as Address | undefined)
     .catch(() => undefined)
-  pushUnique(tokens, userToken, allowedTokens)
-  pushUnique(tokens, getChainFeeToken(client), allowedTokens)
-  if (!prioritizeCandidates)
-    for (const token of candidateTokens ?? []) pushUnique(tokens, token, allowedTokens)
+  push(userToken)
+  push(getChainFeeToken(client))
+  if (!prioritizeCandidates) for (const token of candidateTokens ?? []) push(token)
 
   for (const token of tokens) {
     if (await hasBalance(client, account, token)) return token
@@ -100,4 +111,27 @@ export function machineTokenFeeTokens(
   pushUnique(tokens, defaults.tokens.ousd)
   pushUnique(tokens, defaults.tokens.usdc)
   return tokens
+}
+
+/**
+ * Resolves the stablecoin a MACH payment pays its fees in: the payer's or chain's fee token, then
+ * {@link machineTokenFeeTokens}, never MACH itself, which can't pay fees.
+ */
+export function resolveMachineTokenFeeToken(parameters: {
+  account: Address
+  chainId: number
+  client: Client
+  funded?: boolean | undefined
+  preferred?: Address | undefined
+}): Promise<Address | undefined> {
+  const { account, chainId, client, funded, preferred } = parameters
+  const machineToken = defaults.machineToken[chainId as keyof typeof defaults.machineToken]?.token
+  return resolveFeeToken({
+    account,
+    candidateTokens: machineTokenFeeTokens(chainId, preferred),
+    client,
+    excludedTokens: machineToken ? [machineToken] : undefined,
+    funded,
+    prioritizeCandidates: preferred !== undefined,
+  })
 }

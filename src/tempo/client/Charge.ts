@@ -38,7 +38,11 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import { defaultFeeTokens, machineTokenFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
+import {
+  defaultFeeTokens,
+  resolveFeeToken,
+  resolveMachineTokenFeeToken,
+} from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Simulation from '../internal/simulation.js'
@@ -360,11 +364,11 @@ export function charge(parameters: charge.Parameters = {}) {
       const machineTokenFeesPaidByPayer =
         isMachineTokenCurrency && !(methodDetails?.feePayer && mode === 'pull')
       const feeToken = machineTokenFeesPaidByPayer
-        ? await resolveFeeToken({
+        ? await resolveMachineTokenFeeToken({
             account: account.address,
-            candidateTokens: machineTokenFeeTokens(chainId, explicitFeeToken),
+            chainId,
             client,
-            prioritizeCandidates: explicitFeeToken !== undefined,
+            preferred: explicitFeeToken,
           })
         : explicitFeeToken
           ? explicitFeeToken
@@ -548,23 +552,32 @@ export function charge(parameters: charge.Parameters = {}) {
           ? 'push'
           : 'pull'
         : supportedModes[0])
+    // The MACH balance (and the access key's limit) first: most payers hold none.
+    if (
+      !(await MachineTokenCharge.canSpend(client, {
+        account,
+        amount: BigInt(request.amount),
+        chainId,
+      }))
+    )
+      return false
     // MACH can't pay gas: the server pays it for a sponsored pull payment, else a stablecoin must.
+    if (request.methodDetails?.feePayer === true && mode === 'pull') {
+      // The fee payer refuses a challenge this close to expiry, so signing would fail.
+      const expiresMs = challenge.expires ? new Date(challenge.expires).getTime() : Infinity
+      return expiresMs - Date.now() >= defaults.minRemainingValiditySeconds * 1_000
+    }
     const preferred =
       (context as { feeToken?: Address } | undefined)?.feeToken ?? parameters.feeToken
-    const gasCovered =
-      (request.methodDetails?.feePayer === true && mode === 'pull') ||
-      (await resolveFeeToken({
+    return (
+      (await resolveMachineTokenFeeToken({
         account: account.address,
-        candidateTokens: machineTokenFeeTokens(chainId, preferred),
+        chainId,
         client,
         funded: true,
+        preferred,
       })) !== undefined
-    if (!gasCovered) return false
-    const balance = await MachineTokenCharge.getBalance(client, {
-      account: account.address,
-      chainId,
-    })
-    return balance !== undefined && balance >= BigInt(request.amount)
+    )
   }
 }
 

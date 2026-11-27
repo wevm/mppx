@@ -418,6 +418,79 @@ describe('preferCandidates', () => {
     expect(await AcceptPayment.preferCandidates(candidates)).toBe(candidates)
   })
 
+  test('never prefers an offer `permits` refuses', async () => {
+    const method = AcceptPayment.withPreference(
+      { ...plain },
+      async ({ challenge }) => challenge.id === 'mach',
+    )
+    const candidates = [
+      { challenge: challenge('usd'), method },
+      { challenge: challenge('mach'), method },
+    ]
+    const refused = await AcceptPayment.preferCandidates(candidates, undefined, {
+      permits: (challenge) => challenge.id !== 'mach',
+    })
+    expect(refused).toBe(candidates)
+    const allowed = await AcceptPayment.preferCandidates(candidates, undefined, {
+      permits: () => true,
+    })
+    expect(allowed.map(({ challenge }) => challenge.id)).toEqual(['mach', 'usd'])
+  })
+
+  test('never moves an offer ahead of one with another amount or recipient', async () => {
+    const method = AcceptPayment.withPreference({ ...plain }, async ({ challenge }) =>
+      challenge.id.startsWith('mach'),
+    )
+    const offer = (id: string, amount: string, recipient: string) => ({
+      challenge: { ...challenge(id), request: { amount, recipient } },
+      method,
+    })
+    const ordered = await AcceptPayment.preferCandidates([
+      offer('usd', '1', '0xAbC'),
+      offer('mach-cheaper', '2', '0xabc'),
+      offer('mach-elsewhere', '1', '0xdef'),
+      offer('mach', '1', '0xabc'),
+    ])
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual([
+      'usd',
+      'mach-cheaper',
+      'mach-elsewhere',
+      'mach',
+    ])
+    const same = await AcceptPayment.preferCandidates([
+      offer('usd', '1', '0xAbC'),
+      offer('mach', '1', '0xabc'),
+    ])
+    expect(same.map(({ challenge }) => challenge.id)).toEqual(['mach', 'usd'])
+  })
+
+  test('an offer two methods accept moves as one, decided by its first method', async () => {
+    const declines = AcceptPayment.withPreference({ ...plain }, async () => false)
+    const accepts = AcceptPayment.withPreference(
+      { ...plain },
+      async ({ challenge }) => challenge.id === 'mach',
+    )
+    const usd = challenge('usd')
+    const mach = challenge('mach')
+    const candidates = [
+      { challenge: usd, method: declines },
+      { challenge: mach, method: declines },
+      { challenge: mach, method: accepts },
+    ]
+    // The first method declines MACH: the second must not take it over.
+    expect(await AcceptPayment.preferCandidates(candidates)).toBe(candidates)
+    const ordered = await AcceptPayment.preferCandidates([
+      { challenge: usd, method: accepts },
+      { challenge: mach, method: accepts },
+      { challenge: mach, method: declines },
+    ])
+    expect(ordered.map(({ challenge, method }) => [challenge.id, method === accepts])).toEqual([
+      ['mach', true],
+      ['mach', false],
+      ['usd', true],
+    ])
+  })
+
   test('survives spreading the method', async () => {
     const method = AcceptPayment.withPreference({ ...plain }, async () => true)
     const spread = { ...method }
