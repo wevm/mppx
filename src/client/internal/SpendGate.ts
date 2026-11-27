@@ -71,6 +71,12 @@ export type Spender = {
         options?: { method?: Method.AnyClient | undefined; signal?: AbortSignal | undefined },
       ) => Promise<Prepared>)
     | undefined
+  /**
+   * Whether the spending options could let this challenge through: always without options, else a
+   * `charge` within `maxPayment`, in a token whose currency the client knows when `authorize` is
+   * set. Used to keep offers the options would refuse from being preferred.
+   */
+  permits(challenge: Challenge.Challenge): boolean
   /** The limit a refused credential names: `maxPayment` when it is set, else `budget`. */
   limit: PaymentLimitExceededError.Limit
 }
@@ -108,6 +114,19 @@ export function from(config: Config): Spender {
   const limit = maxPayment === undefined ? 'budget' : 'maxPayment'
   return {
     limit,
+    permits(challenge) {
+      if (!enabled) return true
+      if (challenge.intent !== chargeIntent) return false
+      try {
+        const requirement = resolve(challenge)
+        if (maxPayment !== undefined) assertWithin(requirement, maxPayment)
+        // A budget counts known currencies; an unknown token would be refused.
+        if (authorize !== undefined && requirement.currency === undefined) return false
+        return true
+      } catch {
+        return false
+      }
+    },
     resolve(challenge) {
       if (challenge.intent !== chargeIntent) return undefined
       try {

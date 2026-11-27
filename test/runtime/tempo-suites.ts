@@ -22,6 +22,7 @@ export const tempoSuites: Record<string, number> = {
   'src/server/Methods.test.ts': 28,
   'src/server/Mppx.test.ts': 2159,
   'src/tempo/AccessKeyAuthorization.test.ts': 258,
+  'src/tempo/MachineTokenOffer.test.ts': 2000,
   'src/tempo/internal/fee-token.test.ts': 2100,
   'src/tempo/legacy/AccessKeyAuthorization.test.ts': 1068,
   'src/tempo/legacy/client/ChannelOps.test.ts': 456,

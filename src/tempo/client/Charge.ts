@@ -27,6 +27,7 @@ import * as Credential from '../../Credential.js'
 import * as Currency from '../../Currency.js'
 import * as Errors from '../../Errors.js'
 import * as Expires from '../../Expires.js'
+import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import * as ChallengeMeta from '../../internal/challengeMeta.js'
 import * as Method from '../../Method.js'
 import * as PaymentRequest from '../../PaymentRequest.js'
@@ -37,7 +38,11 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
-import { defaultFeeTokens, resolveFeeToken } from '../internal/fee-token.js'
+import {
+  defaultFeeTokens,
+  resolveFeeToken,
+  resolveMachineTokenFeeToken,
+} from '../internal/fee-token.js'
 import * as MachineTokenCharge from '../internal/machine-token-charge.js'
 import * as Proof from '../internal/proof.js'
 import * as Simulation from '../internal/simulation.js'
@@ -342,18 +347,6 @@ export function charge(parameters: charge.Parameters = {}) {
       const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
       const allowedFeeTokens = defaultFeeTokens(chainId)
       const explicitFeeToken = context?.feeToken ?? parameters.feeToken
-      const feeToken = explicitFeeToken
-        ? explicitFeeToken
-        : machineTokenRoute || isMachineTokenCurrency
-          ? await resolveFeeToken({
-              account: account.address,
-              allowedTokens: allowedFeeTokens,
-              candidateTokens: allowedFeeTokens,
-              client,
-              prioritizeCandidates: true,
-            })
-          : undefined
-
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
         if (explicitMode) {
@@ -366,6 +359,28 @@ export function charge(parameters: charge.Parameters = {}) {
         if (supportedModes.includes(preferredMode)) return preferredMode
         return supportedModes[0]!
       })()
+      // MACH can't pay fees. The server pays them only for a sponsored pull payment; otherwise the
+      // payer pays them in a stablecoin it holds.
+      const machineTokenFeesPaidByPayer =
+        isMachineTokenCurrency && !(methodDetails?.feePayer && mode === 'pull')
+      const feeToken = machineTokenFeesPaidByPayer
+        ? await resolveMachineTokenFeeToken({
+            account: account.address,
+            chainId,
+            client,
+            preferred: explicitFeeToken,
+          })
+        : explicitFeeToken
+          ? explicitFeeToken
+          : machineTokenRoute || isMachineTokenCurrency
+            ? await resolveFeeToken({
+                account: account.address,
+                allowedTokens: allowedFeeTokens,
+                candidateTokens: allowedFeeTokens,
+                client,
+                prioritizeCandidates: true,
+              })
+            : undefined
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + validityWindowSeconds
@@ -492,7 +507,10 @@ export function charge(parameters: charge.Parameters = {}) {
     return promise
   }
   return SpendHooks.register(
-    MethodResponse.registerTransactionHash({ ...method, createCredential }, transactionHash),
+    MethodResponse.registerTransactionHash(
+      AcceptPayment.withPreference({ ...method, createCredential }, preferMachineToken),
+      transactionHash,
+    ),
     {
       // The client's spending options refuse what this policy refuses before any funder runs.
       assert: (challenge) =>
@@ -507,6 +525,60 @@ export function charge(parameters: charge.Parameters = {}) {
         ),
     },
   )
+
+  /**
+   * Moves a MACH offer first when the payer can spend its amount in MACH. Zone payers and accounts
+   * chosen per payment by `resolveAccount` keep the server's order.
+   */
+  async function preferMachineToken({
+    challenge,
+    context,
+  }: Parameters<AcceptPayment.PreferChallenge>[0]): Promise<boolean> {
+    if (parameters.zone || parameters.resolveAccount) return false
+    if (challenge.method !== 'tempo' || challenge.intent !== 'charge') return false
+    const request = challenge.request as ChargeRequest
+    const chainId = request.methodDetails?.chainId
+    if (typeof chainId !== 'number') return false
+    if (!MachineTokenCharge.isMachineToken({ chainId, currency: request.currency as Address }))
+      return false
+    const client = await getClient({ chainId })
+    const account = getAccount(client, context as never)
+    const supportedModes = request.methodDetails?.supportedModes ?? ['pull', 'push']
+    const mode =
+      (context as { mode?: Methods.ChargeMode } | undefined)?.mode ??
+      parameters.mode ??
+      (supportedModes.includes(account.type === 'json-rpc' ? 'push' : 'pull')
+        ? account.type === 'json-rpc'
+          ? 'push'
+          : 'pull'
+        : supportedModes[0])
+    // The MACH balance (and the access key's limit) first: most payers hold none.
+    if (
+      !(await MachineTokenCharge.canSpend(client, {
+        account,
+        amount: BigInt(request.amount),
+        chainId,
+      }))
+    )
+      return false
+    // MACH can't pay gas: the server pays it for a sponsored pull payment, else a stablecoin must.
+    if (request.methodDetails?.feePayer === true && mode === 'pull') {
+      // The fee payer refuses a challenge this close to expiry, so signing would fail.
+      const expiresMs = challenge.expires ? new Date(challenge.expires).getTime() : Infinity
+      return expiresMs - Date.now() >= defaults.minRemainingValiditySeconds * 1_000
+    }
+    const preferred =
+      (context as { feeToken?: Address } | undefined)?.feeToken ?? parameters.feeToken
+    return (
+      (await resolveMachineTokenFeeToken({
+        account: account.address,
+        chainId,
+        client,
+        funded: true,
+        preferred,
+      })) !== undefined
+    )
+  }
 }
 
 /**

@@ -32,7 +32,7 @@ describe('Tempo machine token', () => {
         },
       }),
     ).rejects.toThrow(
-      'MACH cannot be advertised as a charge currency. Advertise the settlement currency with `machineTokenEnabled: true`.',
+      'MACH cannot be listed as a currency. Use `acceptMachineToken: true` to accept it as the last offer.',
     )
   })
 })

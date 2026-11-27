@@ -2,6 +2,7 @@ import { isAddress } from 'viem'
 
 import * as Currency_ from '../../Currency.js'
 import * as defaults from './defaults.js'
+import * as MachineTokenOffer from './machine-token-offer.js'
 
 /** An accepted Tempo currency: an address or a `viem/tokens` token, chain-indexed or resolved. */
 export type Currency = Currency_.Currency
@@ -41,6 +42,7 @@ export function resolve(parameters: {
       parameters.decimals !== token.decimals
     )
       throw new Error('Configured `decimals` must match each token definition.')
+    MachineTokenOffer.assertAllowed({ chainId, currency: currency.address, offer: false })
     if (!isAddress(currency.address, { strict: false }))
       throw new Error(`Invalid Tempo currency address: ${currency.address}.`)
     const decimals = currency.decimals ?? defaults.decimals

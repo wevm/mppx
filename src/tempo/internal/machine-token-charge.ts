@@ -7,13 +7,16 @@ import {
   isAddress,
   isAddressEqual,
   parseAbi,
+  type Account,
   type Address,
   type Client,
+  zeroAddress,
 } from 'viem'
 import { call, readContract } from 'viem/actions'
 import { Abis, Actions } from 'viem/tempo'
 
 import * as Errors from '../../Errors.js'
+import { isAccessKeyAccount } from './account.js'
 import * as defaults from './defaults.js'
 
 /** ABI for the first-party machine-token settlement swapper. */
@@ -64,6 +67,13 @@ export function isMachineToken(parameters: {
     !!deployment &&
     isAddress(parameters.currency, { strict: false }) &&
     isAddressEqual(parameters.currency, deployment.token)
+  )
+}
+
+/** Whether `currency` is MACH on any chain it is deployed on. */
+export function isMachineTokenAddress(currency: string): boolean {
+  return Object.keys(defaults.machineToken).some((chainId) =>
+    isMachineToken({ chainId: Number(chainId), currency: currency as Address }),
   )
 }
 
@@ -241,6 +251,38 @@ export async function getBalance(
     }) as never,
   ).catch(() => undefined)
   return typeof balance === 'bigint' ? balance : undefined
+}
+
+/**
+ * Whether `account` can spend `amount` of MACH: it holds that much, and a published access key is
+ * neither revoked nor limited below it. Clients prefer a MACH offer only then. Failed reads answer
+ * `false`.
+ */
+export async function canSpend(
+  client: Client,
+  parameters: { account: Account; amount: bigint; chainId: number | undefined },
+): Promise<boolean> {
+  const { account, amount, chainId } = parameters
+  const deployment = getDeployment(chainId)
+  if (!deployment) return false
+  try {
+    const balance = await getBalance(client, { account: account.address, chainId })
+    // Most payers hold no MACH: one read settles them.
+    if (balance === undefined || balance < amount) return false
+    if (!isAccessKeyAccount(account)) return true
+    const keys = { account: account.address, accessKey: account.accessKeyAddress }
+    const metadata = await Actions.accessKey.getMetadata(client as never, keys)
+    if (metadata.isRevoked) return false
+    // An unpublished key, or one without a limit, is checked by the payment itself.
+    if (metadata.address === zeroAddress || metadata.spendPolicy !== 'limited') return true
+    const { remaining } = await Actions.accessKey.getRemainingLimit(client as never, {
+      ...keys,
+      token: deployment.token,
+    })
+    return remaining >= amount
+  } catch {
+    return false
+  }
 }
 
 /**

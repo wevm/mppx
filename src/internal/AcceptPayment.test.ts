@@ -345,3 +345,159 @@ describe('AcceptPayment', () => {
     ).toThrow('Expected a finite number')
   })
 })
+
+describe('preferCandidates', () => {
+  const challenge = (id: string) =>
+    ({ id, intent: 'charge', method: 'tempo', realm: 'test', request: {} }) as const
+  const plain = { name: 'tempo', intent: 'charge' }
+
+  test('moves preferred offers first and keeps the rest in order', async () => {
+    const method = AcceptPayment.withPreference(
+      { name: 'tempo', intent: 'charge' },
+      async ({ challenge }) => challenge.id === '3',
+    )
+    const candidates = ['1', '2', '3', '4'].map((id) => ({ challenge: challenge(id), method }))
+    const ordered = await AcceptPayment.preferCandidates(candidates)
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual(['3', '1', '2', '4'])
+  })
+
+  test('keeps the order when nothing is preferred, a preference throws, or a method has none', async () => {
+    const declines = AcceptPayment.withPreference({ ...plain }, async () => false)
+    const throws = AcceptPayment.withPreference({ ...plain }, async () => {
+      throw new Error('rpc down')
+    })
+    const candidates = [
+      { challenge: challenge('1'), method: plain },
+      { challenge: challenge('2'), method: declines },
+      { challenge: challenge('3'), method: throws },
+    ]
+    expect(await AcceptPayment.preferCandidates(candidates)).toBe(candidates)
+  })
+
+  test('passes every offer and the caller context, but not the deferred marker', async () => {
+    const seen: unknown[] = []
+    const method = AcceptPayment.withPreference({ ...plain }, async (parameters) => {
+      seen.push(parameters)
+      return false
+    })
+    const candidates = [
+      { challenge: challenge('1'), method },
+      { challenge: challenge('2'), method },
+    ]
+    await AcceptPayment.preferCandidates(candidates, { account: 'a' })
+    await AcceptPayment.preferCandidates(candidates, AcceptPayment.deferredContext)
+    expect(seen[0]).toMatchObject({ context: { account: 'a' } })
+    expect((seen[0] as { challenges: unknown[] }).challenges).toHaveLength(2)
+    expect(seen[2]).not.toHaveProperty('context')
+  })
+
+  test('never moves an offer ahead of another capability', async () => {
+    const tempo = AcceptPayment.withPreference(
+      { ...plain },
+      async ({ challenge }) => challenge.id === 'mach',
+    )
+    const stripe = { name: 'stripe', intent: 'charge' }
+    const ordered = await AcceptPayment.preferCandidates([
+      {
+        challenge: { id: 'card', intent: 'charge', method: 'stripe', realm: 'test', request: {} },
+        method: stripe,
+      },
+      { challenge: challenge('usd'), method: tempo },
+      { challenge: challenge('mach'), method: tempo },
+    ])
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual(['card', 'mach', 'usd'])
+  })
+
+  test('never prefers an expired offer', async () => {
+    const method = AcceptPayment.withPreference({ ...plain }, async () => true)
+    const expired = { ...challenge('2'), expires: new Date(Date.now() - 1_000).toISOString() }
+    const candidates = [
+      { challenge: challenge('1'), method: plain },
+      { challenge: expired, method },
+    ]
+    expect(await AcceptPayment.preferCandidates(candidates)).toBe(candidates)
+  })
+
+  test('never prefers an offer `permits` refuses', async () => {
+    const method = AcceptPayment.withPreference(
+      { ...plain },
+      async ({ challenge }) => challenge.id === 'mach',
+    )
+    const candidates = [
+      { challenge: challenge('usd'), method },
+      { challenge: challenge('mach'), method },
+    ]
+    const refused = await AcceptPayment.preferCandidates(candidates, undefined, {
+      permits: (challenge) => challenge.id !== 'mach',
+    })
+    expect(refused).toBe(candidates)
+    const allowed = await AcceptPayment.preferCandidates(candidates, undefined, {
+      permits: () => true,
+    })
+    expect(allowed.map(({ challenge }) => challenge.id)).toEqual(['mach', 'usd'])
+  })
+
+  test('never moves an offer ahead of one with another amount or recipient', async () => {
+    const method = AcceptPayment.withPreference({ ...plain }, async ({ challenge }) =>
+      challenge.id.startsWith('mach'),
+    )
+    const offer = (id: string, amount: string, recipient: string) => ({
+      challenge: { ...challenge(id), request: { amount, recipient } },
+      method,
+    })
+    const ordered = await AcceptPayment.preferCandidates([
+      offer('usd', '1', '0xAbC'),
+      offer('mach-cheaper', '2', '0xabc'),
+      offer('mach-elsewhere', '1', '0xdef'),
+      offer('mach', '1', '0xabc'),
+    ])
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual([
+      'usd',
+      'mach-cheaper',
+      'mach-elsewhere',
+      'mach',
+    ])
+    const same = await AcceptPayment.preferCandidates([
+      offer('usd', '1', '0xAbC'),
+      offer('mach', '1', '0xabc'),
+    ])
+    expect(same.map(({ challenge }) => challenge.id)).toEqual(['mach', 'usd'])
+  })
+
+  test('an offer two methods accept moves as one, decided by its first method', async () => {
+    const declines = AcceptPayment.withPreference({ ...plain }, async () => false)
+    const accepts = AcceptPayment.withPreference(
+      { ...plain },
+      async ({ challenge }) => challenge.id === 'mach',
+    )
+    const usd = challenge('usd')
+    const mach = challenge('mach')
+    const candidates = [
+      { challenge: usd, method: declines },
+      { challenge: mach, method: declines },
+      { challenge: mach, method: accepts },
+    ]
+    // The first method declines MACH: the second must not take it over.
+    expect(await AcceptPayment.preferCandidates(candidates)).toBe(candidates)
+    const ordered = await AcceptPayment.preferCandidates([
+      { challenge: usd, method: accepts },
+      { challenge: mach, method: accepts },
+      { challenge: mach, method: declines },
+    ])
+    expect(ordered.map(({ challenge, method }) => [challenge.id, method === accepts])).toEqual([
+      ['mach', true],
+      ['mach', false],
+      ['usd', true],
+    ])
+  })
+
+  test('survives spreading the method', async () => {
+    const method = AcceptPayment.withPreference({ ...plain }, async () => true)
+    const spread = { ...method }
+    const ordered = await AcceptPayment.preferCandidates([
+      { challenge: challenge('1'), method: plain },
+      { challenge: challenge('2'), method: spread },
+    ])
+    expect(ordered.map(({ challenge }) => challenge.id)).toEqual(['2', '1'])
+  })
+})

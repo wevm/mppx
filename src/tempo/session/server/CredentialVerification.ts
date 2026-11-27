@@ -21,6 +21,8 @@ import {
 } from '../../../Errors.js'
 import * as ConfigurableAccount from '../../internal/configurable-account.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
+import { machineTokenFeeTokens } from '../../internal/fee-token.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Chain from '../precompile/Chain.js'
 import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
@@ -136,8 +138,17 @@ export function validateChannelDescriptor(
   }
 }
 
-/** Accepts the advertised fee token while preserving pre-advertisement direct clients. */
-function allowedSponsoredFeeTokens(currency: Address, feeToken?: Address | undefined) {
+/**
+ * Accepts the advertised fee token while preserving pre-advertisement direct clients. MACH can't pay
+ * fees, so a MACH channel is sponsored in the advertised fee token or a default stablecoin instead.
+ */
+function allowedSponsoredFeeTokens(
+  currency: Address,
+  feeToken: Address | undefined,
+  chainId: number,
+) {
+  if (MachineTokenCharge.isMachineToken({ chainId, currency }))
+    return machineTokenFeeTokens(chainId, feeToken)
   if (!feeToken || isAddressEqual(feeToken, currency)) return [currency]
   return [feeToken, currency]
 }
@@ -601,7 +612,7 @@ async function validateOpenCredential(
     expectedOperator,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
-    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken, chainId),
     challengeExpires: challenge.expires,
     chainId,
     escrowContract: escrow,
@@ -675,7 +686,7 @@ async function validateTopUpCredential(
   })
   const transaction = Chain.validateTopUpCredentialTransaction({
     additionalDeposit,
-    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken, chainId),
     challengeExpires: challenge.expires,
     chainId,
     descriptor: channel.descriptor,
@@ -959,7 +970,7 @@ async function handleOpenCredential(
   )
 
   const result = await Chain.broadcastOpenTransaction({
-    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken, chainId),
     challengeExpires: challenge.expires,
     chainId,
     client,
@@ -1083,7 +1094,7 @@ async function handleTopUpCredential(
   })
   const result = await Chain.broadcastTopUpTransaction({
     additionalDeposit,
-    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken),
+    allowedFeeTokens: allowedSponsoredFeeTokens(request.currency, parameters.feeToken, chainId),
     challengeExpires: challenge.expires,
     chainId,
     client,

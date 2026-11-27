@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -16,6 +17,8 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import { resolveMachineTokenFeeToken } from '../../internal/fee-token.js'
+import * as MachineTokenCharge from '../../internal/machine-token-charge.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
@@ -24,7 +27,7 @@ import {
   readSessionChallengeAmount,
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
-import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
+import { isSameAddress, serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import {
   createChannelStore,
   entryKey,
@@ -43,7 +46,7 @@ import {
   type ChallengeContext,
   type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
+import { assertWithinMaxDeposit, resolveAutomaticTopUp, resolveOpeningDeposit } from './Runtime.js'
 import {
   getSessionSnapshot,
   handleSseNeedVoucher,
@@ -568,8 +571,108 @@ export function session(parameters: session.Parameters = {}) {
     })
   })
 
+  /**
+   * Moves a MACH session offer first when the payer can pay it: it reuses an open MACH channel
+   * (topping it up within `maxDeposit`), and otherwise opens one only when no channel to the payee
+   * is open in another offered currency and the payer can spend the opening deposit in MACH.
+   */
+  async function preferMachineToken({
+    challenge,
+    challenges,
+    context,
+    preparesChallenge,
+  }: Parameters<AcceptPayment.PreferChallenge>[0]): Promise<boolean> {
+    // The account `resolveAccount` picks per channel isn't known here, so keep the server order.
+    if (resolveAccount || !isTip1034SessionChallenge(challenge)) return false
+    const sessionContext = context as CredentialContext | undefined
+    if (hasSessionAction(sessionContext) || sessionContext?.descriptor !== undefined) return false
+    const resolveOffer = (offer: Challenge.Challenge) =>
+      resolveChallengeContext({
+        allowCustomEscrow,
+        challenge: offer,
+        escrowOverride,
+        allowedChainIds,
+        getClient,
+      })
+    const resolved = await resolveOffer(challenge)
+    const { chainId, client, payee, token } = resolved
+    if (!MachineTokenCharge.isMachineToken({ chainId, currency: token })) return false
+    const { maxDeposit, topUpAmount } = resolveAmounts(
+      challenge.request as SpendingRequest,
+      chainId,
+    )
+    const account = getAccount(client, sessionContext)
+    /** Whether the payer can fund `amount` of MACH and the gas for depositing it. */
+    const canFund = async (amount: bigint) => {
+      // The MACH balance (and the access key's limit) first: most payers hold none.
+      if (!(await MachineTokenCharge.canSpend(client, { account, amount, chainId }))) return false
+      if (resolved.feePayer) return true
+      return (
+        (await resolveMachineTokenFeeToken({
+          account: account.address,
+          chainId,
+          client,
+          funded: true,
+          preferred: resolved.feeToken,
+        })) !== undefined
+      )
+    }
+    const stored = await store.get(resolved.key)
+    // The store keys channels by payee and currency, not payer: a channel this account can't sign
+    // for is one it would open anew, so it counts as none.
+    const entry = stored && canSignDescriptor(account, stored.descriptor) ? stored : undefined
+    if (entry?.opened) {
+      // Same amounts the top-up hook uses: the server's snapshot of this channel can ask for more.
+      const snapshot =
+        resolved.snapshot?.channelId.toLowerCase() === entry.channelId.toLowerCase()
+          ? resolved.snapshot
+          : undefined
+      const next = entry.cumulativeAmount + resolved.amount
+      const snapshotRequired = snapshot ? BigInt(snapshot.requiredCumulative) : next
+      const required = snapshotRequired > next ? snapshotRequired : next
+      const snapshotDeposit = snapshot ? BigInt(snapshot.deposit) : entry.deposit
+      const deposit = snapshotDeposit > entry.deposit ? snapshotDeposit : entry.deposit
+      if (required <= deposit) return true
+      // A voucher adds no funds: an exhausted channel pays only where the caller tops it up first
+      // (`fetch`, not MCP), within `maxDeposit`, from MACH the payer can still deposit. A top-up
+      // whose outcome is still unknown blocks the next one.
+      if (
+        !preparesChallenge ||
+        entry.uncertainTopUp ||
+        (maxDeposit !== undefined && required > maxDeposit)
+      )
+        return false
+      return canFund(
+        resolveAutomaticTopUp({
+          deposit,
+          maxDeposit,
+          requiredCumulative: required,
+          suggestedDeposit:
+            resolved.suggestedDepositRaw === undefined
+              ? undefined
+              : BigInt(resolved.suggestedDepositRaw),
+          topUpAmount,
+        }),
+      )
+    }
+    for (const offer of challenges) {
+      if (offer === challenge || !isTip1034SessionChallenge(offer)) continue
+      const other = await resolveOffer(offer).catch(() => undefined)
+      if (other && isSameAddress(other.payee, payee) && (await store.get(other.key))?.opened)
+        return false
+    }
+    return canFund(
+      resolveOpeningDeposit({
+        contextDepositRaw: sessionContext?.depositRaw,
+        maxDeposit,
+        requestAmount: resolved.amount,
+        suggestedDepositRaw: resolved.suggestedDepositRaw,
+      }),
+    )
+  }
+
   return MethodResponse.register(
-    method,
+    AcceptPayment.withPreference(method, preferMachineToken),
     async ({
       challenge,
       context,
