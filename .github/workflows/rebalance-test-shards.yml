@@ -52,7 +52,7 @@ jobs:
           pnpm exec vp fmt --write test/runtime/tempo-suites.ts
 
       - name: Open rebalance pull request
-        uses: wevm/actions/vendor/peter-evans/create-pull-request/v8.1.1@b518cf981b50a4c745a8b7335fc693f34b108a75
+        uses: wevm/actions/vendor/peter-evans/create-pull-request/v8.1.1@e0e99cfdac7c74eadc3ee7281015c0bf0496d6ac
         with:
           branch: chore/rebalance-test-shards
           base: main
