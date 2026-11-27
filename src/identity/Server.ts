@@ -37,6 +37,7 @@ export function anyOf(
   const verifier: Types.Verifier<AnyOfValue> = Object.freeze({
     // A member that reads Authorization makes the whole set need requiresAuth.
     ...(verifiers.some((member) => member.authorization) ? { authorization: true } : {}),
+    headers: headersOf(verifiers),
     async verify(request) {
       // Every member runs, so each presented proof's replay nonce is consumed even when an
       // earlier member already verified.
@@ -417,6 +418,29 @@ export function results(state: State): Types.Results {
 export type RouteConfig = {
   readonly request: readonly Types.Verifier[]
   readonly payment: Types.PaymentCheck | undefined
+}
+
+/**
+ * Returns the protocol headers declared by identity verifiers and payment checks, lowercased and
+ * deduplicated, such as for a proxy to strip. Throws a `TypeError` for a name that is not an HTTP
+ * field name, checked before lowercasing so a Unicode name cannot fold into an ASCII one.
+ */
+export function headersOf(
+  checks: readonly (Types.Verifier | Types.PaymentCheck | undefined)[],
+): Required<{ [key in keyof Types.ProtocolHeaders]: readonly string[] }> {
+  const names = (key: keyof Types.ProtocolHeaders) =>
+    Object.freeze([
+      ...new Set(
+        checks
+          .flatMap((check) => check?.headers?.[key] ?? [])
+          .map((name) => {
+            if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+              throw new TypeError(`Invalid identity header name: ${JSON.stringify(name)}.`)
+            return name.toLowerCase()
+          }),
+      ),
+    ])
+  return Object.freeze({ request: names('request'), response: names('response') })
 }
 
 /**

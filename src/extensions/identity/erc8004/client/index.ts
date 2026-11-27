@@ -23,6 +23,7 @@ export function prover(config: prover.Config): Identity.Prover {
   })
   return {
     scope: config.scope,
+    headers: [Constants.idHeader.toLowerCase(), Constants.signatureHeader.toLowerCase()],
     async prove(request, { created, nonce }) {
       const signature = await config.account.signMessage({
         message: Agent.message({ created, id, nonce, request }),

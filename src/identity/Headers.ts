@@ -5,8 +5,9 @@
 
 /**
  * Bearer identity request headers. Anyone holding one can replay it until it expires, so it is
- * never sent across origins on a redirect or forwarded upstream by a proxy. Provers declare
- * their own extra sensitive headers in `Prover.headers`.
+ * never sent across origins on a redirect or forwarded upstream by a proxy, even when an app sets
+ * it by hand. Each protocol also declares its own, in `Prover.headers` and on its verifier or
+ * payment check, so a protocol outside mppx is stripped the same way.
  */
 export const request = Object.freeze([
   'agent-id',

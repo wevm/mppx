@@ -1,5 +1,4 @@
 import * as Poppy from 'mppx/extensions/identity/poppy'
-import * as Identity from 'mppx/identity'
 import { describe, expect, test } from 'vp/test'
 
 import * as Jws from './internal/Jws.js'
@@ -312,7 +311,8 @@ describe('Poppy', () => {
     expect(await verifier().verify(combined)).toMatchObject({ status: 'invalid' })
   })
 
-  test('marks Poppy-Session as a bearer identity header', () => {
-    expect(Identity.Headers.request).toContain('poppy-session')
+  test('declares Poppy-Session, so a proxy does not forward it and redirects drop it', async () => {
+    const { verifier } = await setup()
+    expect(verifier().headers).toEqual({ request: ['Poppy-Session'] })
   })
 })

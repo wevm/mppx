@@ -93,6 +93,18 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
+  test('behavior: strips client forwarding headers', () => {
+    const headers = new globalThis.Headers({
+      'CF-Connecting-IP': '1.2.3.4',
+      Forwarded: 'for=1.2.3.4',
+      'True-Client-IP': '1.2.3.4',
+      Via: '1.1 client',
+      'X-Real-IP': '1.2.3.4',
+      'X-Public': 'value',
+    })
+    expect([...Headers.scrub(headers).keys()]).toEqual(['x-public'])
+  })
+
   test('behavior: strips x-forwarded-* headers', () => {
     const headers = new globalThis.Headers({
       'X-Forwarded-For': '127.0.0.1',
@@ -119,6 +131,30 @@ describe('scrub', () => {
     expect(result.get('accept')).toBe('text/html')
     expect(result.get('user-agent')).toBe('test-agent/1.0')
     expect(result.get('x-custom-header')).toBe('value')
+  })
+})
+
+describe('strip', () => {
+  test('behavior: strips extra request headers, case-insensitively', () => {
+    const headers = new globalThis.Headers({
+      'Proof-Response': 'proof',
+      'Content-Type': 'application/json',
+    })
+    const result = Headers.scrub(headers, { request: ['PROOF-RESPONSE'] })
+    expect([...result.keys()]).toEqual(['content-type'])
+  })
+
+  test('behavior: strips extra response headers', () => {
+    const response = new Response('ok', {
+      headers: { 'Proof-Request': 'request', 'Proof-Result': 'error', 'X-Public': 'value' },
+    })
+    const result = Headers.scrubResponse(response, { response: ['proof-request', 'proof-result'] })
+    expect([...result.headers.keys()]).toEqual(['content-type', 'x-public'])
+  })
+
+  test('behavior: keeps headers when nothing extra is listed', () => {
+    const headers = new globalThis.Headers({ 'Proof-Response': 'proof' })
+    expect(Headers.scrub(headers).get('proof-response')).toBe('proof')
   })
 })
 

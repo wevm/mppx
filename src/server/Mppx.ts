@@ -1209,6 +1209,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       ],
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _identity: hasIdentity,
+      _identityHeaders: IdentityServer.headersOf([...identityRoute.request, paymentCheck]),
       _paymentCheck: paymentCheck,
       _stableBinding: stableBinding as never,
       _transport: transport,
@@ -2831,6 +2832,8 @@ type ConfiguredHandler<transport extends Transport.AnyTransport = Transport.Http
     _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
     /** Whether the route requires identity (request-stage verifiers or a payment check). */
     _identity?: boolean | undefined
+    /** Headers the route's identity protocols send, which a proxy strips. */
+    _identityHeaders?: Identity.ProtocolHeaders | undefined
     /** The route's payment check, compared across composed offers. */
     _paymentCheck?: Identity.PaymentCheck | undefined
     _transport: Transport.AnyTransport

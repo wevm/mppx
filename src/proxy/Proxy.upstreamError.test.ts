@@ -311,6 +311,25 @@ describe('onUpstreamError', () => {
     expect(onServiceError).toHaveBeenCalledTimes(1)
   })
 
+  test('gives onUpstreamError the rewritten request, after a failure and after a throw', async () => {
+    const seen: string[] = []
+    const rewriteRequest = (request: Request) =>
+      new Request(request, { headers: { 'X-Rewritten': 'yes' } })
+    const onServiceError = vi.fn((context: Parameters<Service.UpstreamErrorHandler>[0]) => {
+      seen.push(context.upstreamRequest?.headers.get('x-rewritten') ?? 'missing')
+      return seen.length === 1 ? { retry: true as const } : { retry: false as const }
+    })
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      if (++calls === 1) return new Response('unavailable', { status: 503 })
+      throw new Error('network down')
+    }) as typeof globalThis.fetch
+    const proxy = createPaidProxy({ fetch, onServiceError, rewriteRequest })
+
+    await expect(proxy.fetch(paidRequest())).rejects.toThrow('network down')
+    expect(seen).toEqual(['yes', 'yes'])
+  })
+
   test('stops a delayed retry when the client aborts', async () => {
     const controller = new AbortController()
     let handlerCalled: (() => void) | undefined

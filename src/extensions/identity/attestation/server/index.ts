@@ -48,6 +48,7 @@ export function verifier(config: verifier.Config): Identity.Verifier<Types.Verif
     ]),
   })
   return {
+    headers: { request: [Constants.header], response: [Constants.requiredHeader] },
     async verify(request) {
       const audience = origin(
         typeof config.audience === 'function' ? config.audience(request) : config.audience,
