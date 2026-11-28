@@ -3,6 +3,46 @@
     {
       "issue": "wevm/mppx#752",
       "path": ".agents/friction-log/20260803102657-pnpm-install-warns/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#757",
+      "path": ".agents/friction-log/20260803114519-vp-test-positional/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#758",
+      "path": ".agents/friction-log/20260803121247-test-coverage-is/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#759",
+      "path": ".agents/friction-log/20260803141825-dependency-audit-pins/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#761",
+      "path": ".agents/friction-log/20260803161432-concurrent-html-builds/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#790",
+      "path": ".agents/friction-log/20260813082951-focused-tests-require/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#833",
+      "path": ".agents/friction-log/20260824144733-changesets-v3-crashes/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#837",
+      "path": ".agents/friction-log/20260820124001-pnpm-checks-abort/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#868",
+      "path": ".agents/friction-log/20260904114247-focused-tests-fail/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#928",
+      "path": ".agents/friction-log/20260928094030-package-check-cleanup/friction.md"
+    },
+    {
+      "issue": "wevm/mppx#940",
+      "path": ".agents/friction-log/20260929083251-repeated-wire-methods/friction.md"
     }
   ],
   "version": 1
